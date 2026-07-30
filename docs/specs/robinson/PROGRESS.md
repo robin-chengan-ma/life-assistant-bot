@@ -15,7 +15,7 @@ updated: 2026-07-30
 
 ## 目前階段
 
-**Phase 1（MVP）進行中 — Step 1.1（通關密碼驗證＋Owner 對話式設定＋`/rule`／`/function`）已完成，下一步 Step 1.2（功能開關系統）**
+**Phase 1（MVP）進行中 — Step 1.1、Step 1.2（功能開關系統：`/my_toggles`／`/set_toggle`）已完成，下一步 Step 1.3（Gemini 對話核心）**
 
 ## 目標時程（2026-07-30 更新：改為三週制，因新增多模態影像/語音處理架構）
 
@@ -90,6 +90,7 @@ updated: 2026-07-30
 | 2026-07-30 | **Phase 1 Step 1.1 完成**：通關密碼驗證、Owner `/set_invite_codes` 對話式設定流程、FR-6d 歡迎訊息、`/rule`／`/function` 內建指令，展開為獨立 [docs/specs/platform-auth/SPEC.md](../platform-auth/SPEC.md)；新增 ADR-1（webhook 改用原生 JSON 解析、移除 `python-telegram-bot`）、ADR-2（對話狀態存記憶體不落地資料庫）；新增 `src/bot/`（`state.py`／`auth.py`／`templates.py`／`commands.py`／`router.py`／`webhook.py`），49 個測試全過、覆蓋率 100%；新增 `requirements-dev.txt`／`pytest.ini` |
 | 2026-07-30 | 測試通過後，Robin 提出多模態與人格化語氣的大改版需求：新增四把 Gemini Key＋Groq `VOICE_API_KEY`（ADR-12，語音改用 Groq Whisper，取代 FR-25b 原「一律用 Gemini」決策）；新增 ADR-13（影像/語音先上雲端、`Pillow` 壓縮、統一命名、URL 入庫）；FR-17 開放一般圖片辨識並新增個資警語/不確定需確認/飲食誤差聲明（FR-17a～FR-17c）；FR-56 全面改版為總覽＋按需深入＋情境範例（FR-56a～FR-56d，記帳範例已由 Robin 提供）；`src/bot/templates.py` 附錄 A 文字同步更新；新增 `src/migrations/0006_seed_persona_and_family_knowledge.sql` 寫入 Robinson 人格背景與家人背景資料；時程由兩週延長為三週（8/12 → 8/18），Phase 1 目標日期順延至 8/7 |
 | 2026-07-30 | Robin 確認 Render 部署 log 顯示 `0006` migration 套用成功，Robinson 人格背景與 Robin 家人背景已寫入 Neon `knowledge_base` 表，供未來人格化回覆（FR-56c）讀取 |
+| 2026-07-30 | Robin 確認 Step 1.2 功能開關權限模型（FR-2a：使用者可自管、Owner 可代管），展開為獨立 [docs/specs/feature-toggles/SPEC.md](../feature-toggles/SPEC.md)（ADR-1：對話狀態 dict 新增 `flow` 欄位）；**Phase 1 Step 1.2 完成**：新增 `src/bot/toggles.py`、`/my_toggles`（自管）、`/set_toggle`（Owner 代管）；家人第一次綁定成功時自動建立 8 筆預設開啟的 `feature_toggles`；`src/bot/` 全部 78 個測試全過、覆蓋率 100% |
 
 ## 待決事項
 
@@ -102,6 +103,6 @@ updated: 2026-07-30
 
 ## 下一步
 
-1. **Phase 0 僅剩 Step 0.5**：依 ADR-10／ADR-11 流程，逐一提出使用者表、通關密碼表、知識庫表、對話紀錄表、功能開關表的 `CREATE TABLE` SQL 草案與設計理由給 Robin 審核，核准後存成 `src/migrations/` 檔案並 commit+push，由 Render 自動部署套用
-2. Phase 0 完成後，為 Phase 1 各功能（Owner 通關密碼設定對話流、歡迎訊息、`/rule`／`/function`／`/complaint`、功能開關、對話核心、語音、個資遮蔽、待辦事項、心情小記、客訴收集）視需要展開個別 `docs/specs/<slug>/SPEC.md` 並進入 TDD 循環，屆時一併補上 `submodules/` 的單元測試
-3. 每天對照「建議每日分配」檢查進度，落後時優先保住 Phase 1 核心體驗（通關密碼、對話核心、待辦、心情小記），Step 1.9 客訴收集等次要 Step 可延後不必硬趕
+1. **Step 1.3：Gemini 對話核心**——整合四類知識庫與資安隔離（FR-9～FR-12）、四把 Gemini Key 依用途分流（ADR-12）、人格化語氣基礎（FR-56c，先參考人格背景知識庫再回覆），這是後續 Step 1.3a／1.3b 的前置依賴
+2. Step 1.3 完成後接續 Step 1.3a（`/function` 依 FR-56 改版為總覽＋按需深入＋情境範例）、Step 1.3b（影像辨識基礎流程：Drive 上傳＋Pillow 壓縮＋雙 Key 隨機辨識）
+3. 每天對照「建議每日分配」檢查進度，落後時優先保住 Phase 1 核心體驗（對話核心、待辦、心情小記），Step 1.9 客訴收集等次要 Step 可延後不必硬趕

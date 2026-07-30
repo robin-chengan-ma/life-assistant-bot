@@ -101,3 +101,25 @@
 **對應 FR**：FR-6a～FR-6c
 
 **備註**：進入引導式設定對話流（狀態機），詳見 ADR-8；狀態存於記憶體，不落地資料庫（見 platform-auth SPEC.md ADR-2）。
+
+---
+
+### `/my_toggles`（內部路由，非對外 HTTP 端點）
+
+**狀態**：已實作（`src/bot/commands.py::start_my_toggles`／`handle_toggle_step`）
+**觸發方式**：使用者於對話框輸入「我的功能設定」或 `/my_toggles`
+**權限**：任何已驗證使用者（Robin 或家人），僅能操作自己的開關
+**對應 FR**：FR-2、FR-2a（見 [feature-toggles SPEC.md](../../docs/specs/feature-toggles/SPEC.md) FR-1）
+
+**備註**：首次觸發會先補齊 8 個功能模組的預設開關資料（`is_enabled=TRUE`），列出附編號的清單；下一則訊息輸入有效編號即切換該項開關。狀態存於記憶體，共用 `src/bot/state.py` 的 `ConversationStateStore`。
+
+---
+
+### `/set_toggle`（內部路由，非對外 HTTP 端點）
+
+**狀態**：已實作（`src/bot/commands.py::start_set_toggle`／`handle_toggle_step`）
+**觸發方式**：Robin 輸入 `/set_toggle` 或「設定家人功能開關」
+**權限**：僅 Owner（Robin）
+**對應 FR**：FR-2a（見 feature-toggles SPEC.md FR-2）
+
+**備註**：先列出所有已綁定的非 Owner 使用者供選擇，選定後進入與 `/my_toggles` 相同的編號切換畫面，但改的是該使用者的開關；目前沒有任何家人綁定時回覆提示訊息，不進入設定模式。
