@@ -89,6 +89,7 @@ updated: 2026-07-30
 | 2026-07-30 | Robin 於 Render 部署 log 確認 5 筆 migration 全數套用成功（`0001`～`0005` 皆有「套用／完成」紀錄）。**Phase 0（專案基礎建設）全部 Step 完成**：Step 0.1～0.1b、0.2～0.5 皆已完成，可正式進入 Phase 1（MVP） |
 | 2026-07-30 | **Phase 1 Step 1.1 完成**：通關密碼驗證、Owner `/set_invite_codes` 對話式設定流程、FR-6d 歡迎訊息、`/rule`／`/function` 內建指令，展開為獨立 [docs/specs/platform-auth/SPEC.md](../platform-auth/SPEC.md)；新增 ADR-1（webhook 改用原生 JSON 解析、移除 `python-telegram-bot`）、ADR-2（對話狀態存記憶體不落地資料庫）；新增 `src/bot/`（`state.py`／`auth.py`／`templates.py`／`commands.py`／`router.py`／`webhook.py`），49 個測試全過、覆蓋率 100%；新增 `requirements-dev.txt`／`pytest.ini` |
 | 2026-07-30 | 測試通過後，Robin 提出多模態與人格化語氣的大改版需求：新增四把 Gemini Key＋Groq `VOICE_API_KEY`（ADR-12，語音改用 Groq Whisper，取代 FR-25b 原「一律用 Gemini」決策）；新增 ADR-13（影像/語音先上雲端、`Pillow` 壓縮、統一命名、URL 入庫）；FR-17 開放一般圖片辨識並新增個資警語/不確定需確認/飲食誤差聲明（FR-17a～FR-17c）；FR-56 全面改版為總覽＋按需深入＋情境範例（FR-56a～FR-56d，記帳範例已由 Robin 提供）；`src/bot/templates.py` 附錄 A 文字同步更新；新增 `src/migrations/0006_seed_persona_and_family_knowledge.sql` 寫入 Robinson 人格背景與家人背景資料；時程由兩週延長為三週（8/12 → 8/18），Phase 1 目標日期順延至 8/7 |
+| 2026-07-30 | Robin 確認 Render 部署 log 顯示 `0006` migration 套用成功，Robinson 人格背景與 Robin 家人背景已寫入 Neon `knowledge_base` 表，供未來人格化回覆（FR-56c）讀取 |
 
 ## 待決事項
 
