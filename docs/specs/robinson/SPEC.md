@@ -54,6 +54,7 @@ Robinson 是一個以 Telegram 為前台介面的家庭生活小助手，Robin �
 
 - [ ] FR-1：Telegram Bot 接收文字與語音訊息，語音需先轉文字再進入對話流程
 - [ ] FR-2：每個功能模組（待辦、求職、記帳、體態、技能成長、心情小記、好友模式、重要通知）皆有獨立開關，全關時僅保留純聊天能力
+  - [ ] FR-2a：權限模型——一般使用者可自行開關「自己」的功能（例如對 Robinson 說「幫我關掉記帳」）；Owner 額外擁有代管權限，可調整任何使用者（含自己）的功能開關（**2026-07-30 決定**，見 Step 1.2 討論）
 - [ ] FR-3：提供 `/healthz`（或等義）極簡 API，供 cron-job 每 10 分鐘呼叫，防止 Render 休眠
 - [ ] FR-4：所有 AI 功能統一呼叫 Gemini API，模型固定 `gemini-flash-latest`，全體使用者共用同一組對話 Token，圖像解析使用另一組獨立 Token
 
@@ -691,3 +692,4 @@ FR-56 的 `/function` 路由目前只定義了「回傳範圍」（所有功能�
 | 2026-07-30 | ADR-10 新增第 5 點決策：所有建表 SQL 必須用 `COMMENT ON TABLE`／`COMMENT ON COLUMN` 附上中文說明，直接寫在 SQL 裡，適用所有未來資料表 | Robin |
 | 2026-07-30 | Phase 1 Step 1.1 完成：通關密碼驗證、Owner 對話式設定流程、`/rule`／`/function` 內建指令，展開為獨立 [docs/specs/platform-auth/SPEC.md](../platform-auth/SPEC.md)（含 ADR-1：Webhook 改用原生 JSON 解析、移除 `python-telegram-bot`；ADR-2：對話狀態存記憶體不落地資料庫）；49 個測試全過、`src/bot/` 覆蓋率 100% | Claude（依 Robin「請開始吧」指示） |
 | 2026-07-30 | 大改版（多模態與人格化語氣）：① 新增四把 Gemini Key（`GEMINI_API_BOT_KEY`／`GEMINI_API_IMAGE_KEY1`／`GEMINI_API_IMAGE_KEY2`／`GEMINI_API_TEXT_KEY`，原 `GEMINI_API_TOEIC_KEY` 更名為 `GEMINI_API_IMAGE_KEY2`）與 `VOICE_API_KEY`（Groq Whisper），新增 ADR-12（依用途分流四把 Key＋語音改用 Groq Whisper，取代 FR-25b 原「一律用 Gemini」的決策）② 新增 ADR-13（影像/語音「先上雲端、後壓縮、再辨識」流程，`Pillow` 壓縮至 1024×1024／JPEG 80%，統一命名規則與 URL 入庫），`requirements.txt` 新增 `Pillow` ③ FR-17 全面修訂：開放一般圖片辨識（不再限定證照題目），新增 FR-17a（個資影像警語）、FR-17b（不確定內容須詢問使用者）、FR-17c（飲食分析誤差聲明）④ FR-56 全面改版：`/function` 由一次性完整清單改為「總覽＋按需深入＋情境範例」，新增 FR-56a～FR-56d（含 Robin 提供的記帳情境範例），並新增 FR-56c 人格化語氣規則（一般對話回覆須先參考人格背景知識庫，不可逐字照搬模板）⑤ Phase 1 新增 Step 1.3a（`/function` 改版）、Step 1.3b（影像辨識基礎流程）⑥ 附錄 A 同步更新使用限制條文（開放圖片/語音格式、新增個資警語），並同步更新 `src/bot/templates.py` 與對應測試 ⑦ 新增 `src/migrations/0006_seed_persona_and_family_knowledge.sql`，寫入 Robin 提供的 Robinson 人格背景與家人背景至 `knowledge_base` ⑧ 時程由兩週延長為三週（8/12 → 8/18），Phase 5 順延至 8/18 之後 | Robin |
+| 2026-07-30 | 新增 FR-2a：確認 Step 1.2 功能開關權限模型——使用者可自行開關自己的功能，Owner 額外擁有代管權限可調整任何人的開關 | Robin |
