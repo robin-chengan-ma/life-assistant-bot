@@ -33,7 +33,7 @@
 
 ### `GET /healthz`
 
-**狀態**：計畫中
+**狀態**：已實作，已部署上線（`https://life-assistant-bot-yhkm.onrender.com/healthz`）
 **觸發方式**：cron-job.org 每 10 分鐘呼叫一次
 **權限**：無需驗證（公開，僅回應健康狀態，不回傳任何使用者資料）
 **對應 FR**：FR-3

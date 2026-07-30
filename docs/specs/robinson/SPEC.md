@@ -391,6 +391,7 @@ Robinson 是一個以 Telegram 為前台介面的家庭生活小助手，Robin �
 2. 執行完成後，立即把該次的建表 SQL 與設計理由同步記錄到 `src/schema/db_schema.md`
 3. 所有 API 路由（含 Telegram webhook 與內建指令如 `/rule`、`/function`、`/complaint`）統一記錄於 `src/schema/api_schema.md`，兩份文件皆隨開發進度持續更新，視為與 spec 同等重要的活文件
 4. 因兩份文件都稱作「schema.md」但同資料夾不能重名，命名為 `db_schema.md`（資料表）與 `api_schema.md`（API），皆放在 `src/schema/` 底下
+5. 每張表與每個欄位都必須用 `COMMENT ON TABLE` / `COMMENT ON COLUMN` 附上中文說明，直接寫在 `CREATE TABLE` 的 SQL 語法裡（而不是只寫在 `db_schema.md` 的設計理由段落）；這樣即使未來直接連 Neon 用其他工具查表，不需要回頭翻文件也能看懂每個欄位的用途，此規則適用所有未來新增/修改的資料表
 
 **理由**：比照 FR-19e 的 Human-in-the-Loop 精神 —— AI 可以自主產生方案（這裡是 SQL 設計），但正式對資料庫執行變更前一定要有人核准；把 schema 文件與程式碼放在同一個 repo（`src/schema/`）而不是只寫在 spec 裡，是因為未來實際寫 CRUD 程式碼時，工程師（或 AI agent）會直接在程式碼目錄找答案，比回頭翻 spec 更直覺。
 
@@ -439,8 +440,8 @@ Robinson 是一個以 Telegram 為前台介面的家庭生活小助手，Robin �
 - [x] Step 0.1a：建立 `submodules/` 共用子模組骨架，統一四檔案結構（`llm/`、`cloudsql/`、`telegram/`，各自僅含 `client.py`/`README.md`/`requirements.txt`/`.env.example`），詳見 [docs/specs/submodules-core/SPEC.md](../submodules-core/SPEC.md)
 - [x] Step 0.1b：建立 `src/schema/` 骨架（`db_schema.md`、`api_schema.md`），訂定記錄格式與 ADR-10 審核流程
 - [ ] Step 0.2：申請並串接外部服務金鑰（Telegram Bot Token、Neon 連線、Google Service Account、Gemini x2、Gmail 應用程式密碼、GitHub Personal Access Token、YouTube Data API Key）
-- [ ] Step 0.3：`main.py` 提供 keep-alive 健康檢查端點，並部署到 Render
-- [ ] Step 0.4：於 cron-job.org 設定每 10 分鐘呼叫健康檢查端點
+- [x] Step 0.3：`main.py` 提供 keep-alive 健康檢查端點，並部署到 Render —— 已確認上線：`https://life-assistant-bot-yhkm.onrender.com`
+- [x] Step 0.4：於 cron-job.org 設定每 10 分鐘呼叫健康檢查端點 —— Robin 已設定完成並確認 API 正常
 - [x] Step 0.5a：建立 `src/migrations/` 骨架與 `main.py` 的 migration runner（開機掃描未套用檔案、`schema_migrations` 追蹤表、自動執行），依 ADR-11
 - [ ] Step 0.5：Neon 資料庫初始化 —— 依 ADR-10／ADR-11 流程，逐一提出使用者表、通關密碼表、知識庫表、對話紀錄表、功能開關表的建表 SQL 草案與設計理由給 Robin 審核，核准後存成 migration 檔並 commit+push，由 Render 自動部署套用，完成後記錄到 `src/schema/db_schema.md`
 
@@ -619,3 +620,4 @@ FR-56 的 `/function` 路由目前只定義了「回傳範圍」（所有功能�
 | 2026-07-30 | 新增「YouTube 技術情報模組」：FR-57（輕量 API 擷取）、FR-58（三層 Top 3 篩選：格式過濾/相關度評分/歷史去重）、FR-59（每週四排程、配額控管、Fallback 降級），新增 ADR-9（輕量規則式篩選 vs ML/向量推薦）；新增 NFR-11「排程收集資料一律 ETL 去重」通則，回頭補上 FR-34d（104 職缺 ETL 去重）並於 FR-23、FR-25f 加註對應；新增 `YOUTUBE_API_KEY` 金鑰；Phase 3 新增 Step 3.4，時程順延 1 天 | Robin |
 | 2026-07-30 | 概要新增「使用性質聲明」（個人非商業用途），新增 NFR-13；新增 ADR-10（資料庫 Schema 建立採先審核後執行流程）與 NFR-12，建立 `src/schema/db_schema.md`、`src/schema/api_schema.md` 骨架；新增客訴收集功能 FR-60～FR-63（`/complaint` 路由、客訴記錄、Gemini 分析私訊 Robin、人工決策），新增 Phase 1 Step 1.9、Phase 0 Step 0.1b；附錄 A 開頭語句改為「📋 以下是羅賓森的使用須知：」並補上「我要客訴你」提示語；同步更新測試策略、風險表 | Robin |
 | 2026-07-30 | 新增 ADR-11：確認 Cowork sandbox 連不到 Neon/Telegram/GitHub REST API/Google API/Notion API（皆被 proxy 白名單擋下），但 `github.com`（git 協定）可連線且 `git push` 實測成功；因此 ADR-10 的執行機制改為「Migration 檔案（`src/migrations/`）+ Robin 同意後 Claude 自動 commit+push + Render 偵測 main 分支自動部署 + `main.py` 開機自動套用」，Robin 確認 Render 已開啟 push-to-main 自動部署；新增 Phase 0 Step 0.5a | Robin |
+| 2026-07-30 | ADR-10 新增第 5 點決策：所有建表 SQL 必須用 `COMMENT ON TABLE`／`COMMENT ON COLUMN` 附上中文說明，直接寫在 SQL 裡，適用所有未來資料表 | Robin |

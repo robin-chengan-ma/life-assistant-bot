@@ -78,6 +78,9 @@ updated: 2026-07-30
 | 2026-07-30 | 附錄 A 開頭語句改為「📋 以下是羅賓森的使用須知：」（原「🎉 通關密碼驗證成功！」在 `/rule` 場景語意不通順），並補上「我要客訴你」觸發提示 |
 | 2026-07-30 | Phase 0 啟動連線驗證時，測試腳本意外將 `TELEGRAM_BOT_TOKEN`、`YOUTUBE_API_KEY` 明文印出於對話紀錄中（原因：`requests` 例外訊息包含完整請求 URL，兩者金鑰恰好嵌在 URL 裡）；Robin 已於當天完成兩把金鑰重新產生，逐項覆核確認無其他金鑰外洩（`ROBIN_TELEGRAM_TOKEN` 部分曝光但經 Robin 確認為 Telegram 使用者 ID、非機密憑證，且僅曝光數字 ID 本身）；已修正 `submodules/telegram/README.md` 對 `ROBIN_TELEGRAM_TOKEN` 用途的錯誤描述 |
 | 2026-07-30 | 發現 Cowork sandbox 對外部服務有網路白名單限制：連不到 Neon／Telegram／`api.github.com`／Google 與 YouTube API／Notion API；但 `github.com`（git 協定）可連線，並實測 `git push`（搭配 `GITHUB_TOKEN` + credential helper）可成功。新增 ADR-11：ADR-10 的執行機制改為「提出 SQL → Robin 同意 → Claude 建立 `src/migrations/` 檔案並 commit+push → Render 偵測 main 分支自動部署 → `main.py` 開機自動套用」；Robin 確認 Render 已開啟 push-to-main 自動部署，此方案可行；Phase 0 新增 Step 0.5a |
+| 2026-07-30 | Step 0.5a 完成：建立 `src/migrations/`（runner.py + README）、`CloudSQLClient` 新增 `execute()`、`main.py` 整合開機自動套用；完成首次 commit + push 到 GitHub main（`5f60602..776802f`），觸發 Render 自動部署，待 Robin 於 Render 確認 `/healthz` 可正常連線後即完成 Step 0.3 |
+| 2026-07-30 | Step 0.3 完成：Robin 於 Render Dashboard 確認部署成功（`Your service is live`），正式網址 `https://life-assistant-bot-yhkm.onrender.com`；下一步由 Robin 把 `/healthz` 端點加到 cron-job.org（Step 0.4） |
+| 2026-07-30 | Step 0.4 完成：Robin 已於 cron-job.org 設定每 10 分鐘呼叫 `/healthz`，確認 API 正常。**Phase 0 僅剩 Step 0.5（Neon 資料庫初始化）**，其餘全數完成 |
 
 ## 待決事項
 
@@ -85,11 +88,11 @@ updated: 2026-07-30
 
 - [x] 確認外部服務金鑰已全數申請完成（Telegram Bot Token、Neon 連線字串、Google Service Account JSON + Drive Folder ID、Gemini x2 Token、Gmail 帳密、GitHub Personal Access Token、YouTube Data API Key）——已於 `.env` 逐項核對存在；`TELEGRAM_BOT_TOKEN`／`YOUTUBE_API_KEY` 已於本次金鑰外洩事故後重新產生
 - [ ] `/function` 路由的實際文字模板（分類方式、每個功能的說明文字、是否附操作提示）待有產品原型後由 Robin 補充，見 SPEC.md 附錄 B（不阻塞 Phase 1，FR-56 可先用最簡單的清單格式實作，之後再美化文案）
-- [ ] Step 0.5a（`src/migrations/` + migration runner）尚未實作，為目前 Step 0.5 建表流程的前置依賴
+- [x] Step 0.5a（`src/migrations/` + migration runner）已實作
+- [x] Step 0.4：Robin 已完成 cron-job.org 設定，確認 API 正常
 
 ## 下一步
 
-1. 實作 Step 0.5a（`src/migrations/` 骨架 + `main.py` migration runner），完成後才能開始跑 Step 0.5 的建表流程
-2. 依 Phase 0 的 Step 0.2～0.5 完成剩餘基礎建設（keep-alive 端點程式碼已完成，待 push 部署；cron-job.org 排程為 Robin 手動設定；DB 初始化依 ADR-10／ADR-11 流程逐一提案）
-3. Phase 0 完成後，為 Phase 1 各功能（Owner 通關密碼設定對話流、歡迎訊息、`/rule`／`/function`／`/complaint`、功能開關、對話核心、語音、個資遮蔽、待辦事項、心情小記、客訴收集）視需要展開個別 `docs/specs/<slug>/SPEC.md` 並進入 TDD 循環，屆時一併補上 `submodules/` 的單元測試
-4. 每天對照「建議每日分配」檢查進度，落後時優先保住 Phase 1 核心體驗（通關密碼、對話核心、待辦、心情小記），Step 1.9 客訴收集等次要 Step 可延後不必硬趕
+1. **Phase 0 僅剩 Step 0.5**：依 ADR-10／ADR-11 流程，逐一提出使用者表、通關密碼表、知識庫表、對話紀錄表、功能開關表的 `CREATE TABLE` SQL 草案與設計理由給 Robin 審核，核准後存成 `src/migrations/` 檔案並 commit+push，由 Render 自動部署套用
+2. Phase 0 完成後，為 Phase 1 各功能（Owner 通關密碼設定對話流、歡迎訊息、`/rule`／`/function`／`/complaint`、功能開關、對話核心、語音、個資遮蔽、待辦事項、心情小記、客訴收集）視需要展開個別 `docs/specs/<slug>/SPEC.md` 並進入 TDD 循環，屆時一併補上 `submodules/` 的單元測試
+3. 每天對照「建議每日分配」檢查進度，落後時優先保住 Phase 1 核心體驗（通關密碼、對話核心、待辦、心情小記），Step 1.9 客訴收集等次要 Step 可延後不必硬趕
