@@ -17,12 +17,12 @@ updated: 2026-07-30
 
 **Phase 1（MVP）進行中 — Step 1.1（通關密碼驗證＋Owner 對話式設定＋`/rule`／`/function`）已完成，下一步 Step 1.2（功能開關系統）**
 
-## 目標時程（2026-07-30 更新：兩週制，因新增 YouTube 模組再順延 1 天）
+## 目標時程（2026-07-30 更新：改為三週制，因新增多模態影像/語音處理架構）
 
-- **Phase 0～4：2026-07-29 ～ 2026-08-12（兩週＋1 天緩衝）**，不含 Notion 後台
-- **Phase 5（Notion 後台）：2026-08-12 之後再排**
+- **Phase 0～4：2026-07-29 ～ 2026-08-18（三週）**，不含 Notion 後台
+- **Phase 5（Notion 後台）：2026-08-18 之後再排**
 
-原訂一週（7/29～8/4）完成 Phase 0～4，因新增大量內容（Owner 對話式設定通關密碼、`/rule`／`/function` 內建指令、TOEIC 雙軌題庫 Pipeline、104 爬蟲、FR-19 全套自主診斷＋GitHub PR 治理機制＋分級降級＋重試機制）先改為兩週（7/29～8/11）。今天又新增「YouTube 技術情報模組」（FR-57～FR-59）與跨模組的 ETL 去重通則（NFR-11），Phase 3 的工作量再增加，因此把 Phase 3 從 2 天延長為 3 天，其餘 Phase 順延，整體收尾日往後移 1 天到 8/12。
+原本兩週＋1 天緩衝（7/29～8/12）的規劃，因本次新增大量架構性內容而順延至三週：① 四把 Gemini Key 依用途分流＋語音改用 Groq Whisper（ADR-12）② 影像/語音「先上雲端、後壓縮、再辨識」的完整處理流程與命名規則（ADR-13）③ `/function` 全面改版為「總覽＋按需深入＋情境範例」＋所有對話回覆需符合人格化語氣（FR-56～FR-56d）④ 影像辨識的個資警語、不確定需詢問、飲食誤差聲明（FR-17～FR-17c）。這些改動主要集中在 Phase 1 Step 1.3（Gemini 對話核心）附近，新增 Step 1.3a／1.3b，工作量顯著增加，Robin 已同意延長至三週（若進度超前則不用真的用滿三週）。
 
 ### 建議每日分配（僅供參考，Robin 可依實際進度調整）
 
@@ -30,26 +30,30 @@ updated: 2026-07-30
 | --- | --- |
 | 7/28（已完成） | 專案緣起：服務註冊/API 申請、Telegram Bot 基礎設定、Gemini 腦力激盪收斂 PRD 雛形（非 Claude Code 協作範圍） |
 | 7/29（已完成） | Phase 0：`submodules/` 骨架、規格書初版確認 |
-| 7/30（今天） | Phase 0 收尾（Step 0.1b：`src/schema/` 骨架已完成；Step 0.2～0.5：金鑰串接含新增的 GitHub Token、YouTube API Key、依 ADR-10 流程建表、keep-alive 端點） |
-| 7/31 | Phase 1：Step 1.1（通關密碼驗證＋Owner 設定對話流＋歡迎訊息＋`/rule`／`/function`）、Step 1.2～1.3（功能開關、對話核心） |
-| 8/1～8/2 | Phase 1 收尾（語音、個資遮蔽、基礎錯誤處理、待辦事項、心情小記、Step 1.9 客訴收集），力求 Phase 1 當週可用；若 8/2 做不完，優先延後 Step 1.9（客訴收集非核心體驗，可挪到 Phase 2 之後補） |
-| 8/3～8/4 | Phase 2：記帳、體態管理、重要通知 |
-| 8/5～8/6 | Phase 2：Step 2.4～2.6（GitHub PR 自主診斷、重試機制、分級降級），技術複雜度最高，獨立預留兩天 |
-| 8/7～8/9 | Phase 3：技能成長（TOEIC 雙軌 Pipeline＋YouTube 技術情報模組）、好友模式（新增 YouTube 模組後由 2 天延長為 3 天） |
-| 8/10～8/11 | Phase 4：104 求職爬蟲＋整合測試 |
-| 8/12 | 全 Phase 整合測試／緩衝日 |
-| 8/12 之後 | Phase 5：Notion 後台 |
+| 7/30（已完成） | Phase 0 全部完成（金鑰串接、DB 建表、`/healthz` 上線、cron-job.org）；Phase 1 Step 1.1（通關密碼驗證＋Owner 設定對話流＋歡迎訊息＋`/rule`／`/function`）完成；新增四把 Gemini Key／Groq Key 與影像/語音處理架構（ADR-12、ADR-13） |
+| 7/31 | Step 1.2（功能開關系統） |
+| 8/1～8/3 | Step 1.3（Gemini 對話核心＋四把 Key 分流＋人格化語氣）、Step 1.3a（`/function` 改版）、Step 1.3b（影像辨識基礎流程：GDrive 上傳＋Pillow 壓縮＋雙 Key 隨機辨識），內容較多獨立抓 3 天 |
+| 8/4 | Step 1.4（語音轉文字改用 Groq Whisper＋GDrive 備份＋10 分鐘上限＋15 分鐘文字修正限制） |
+| 8/5 | Step 1.5（個資偵測與刪除機制） |
+| 8/6 | Step 1.6（基礎錯誤處理層）＋ Step 1.7（待辦事項模組） |
+| 8/7 | Step 1.8（心情小記）＋ Step 1.9（客訴收集），若進度落後可將 Step 1.9 挪到 Phase 2 之後 |
+| 8/8～8/9 | Phase 2：記帳、體態管理（含飲食誤差聲明 FR-17c）、重要通知 |
+| 8/10～8/11 | Phase 2：Step 2.4～2.6（GitHub PR 自主診斷、重試機制、分級降級），技術複雜度最高，獨立預留兩天 |
+| 8/12～8/14 | Phase 3：技能成長（TOEIC 雙軌 Pipeline，語音改用 Groq Whisper）＋ YouTube 技術情報模組 ＋ 好友模式 |
+| 8/15～8/16 | Phase 4：104 求職爬蟲＋整合測試 |
+| 8/17～8/18 | 全 Phase 整合測試／緩衝日 |
+| 8/18 之後 | Phase 5：Notion 後台 |
 
 ## 階段總覽
 
 | Phase | 內容 | 狀態 | 目標日期 | 備註 |
 | --- | --- | --- | --- | --- |
 | Phase 0 | 專案基礎建設（repo 結構、金鑰串接、Render/Neon/cron-job、DB 初始化） | 🟢 已完成 | 7/29～7/30 | 全部 Step 完成：`submodules/`、`src/schema/`、`src/migrations/`（ADR-11）骨架就緒；`/healthz` 已部署上線並掛上 cron-job.org；第一批 5 張表（`users`／`invite_codes`／`knowledge_base`／`conversation_logs`／`feature_toggles`）已核准並套用成功 |
-| Phase 1（MVP） | 核心平台（通關密碼對話式設定、歡迎訊息、`/rule`／`/function`／`/complaint` 內建指令、功能開關、Gemini 對話+知識庫、語音、個資遮蔽、基礎錯誤處理）＋待辦事項＋心情小記＋客訴收集 | 🟡 進行中 | 7/31～8/2 | Step 1.1 完成；新增 FR-6d（歡迎訊息）、FR-55（`/rule`）、FR-56（`/function`，文字模板待補，見附錄 B）、FR-60～FR-63（客訴收集，Step 1.9） |
-| Phase 2 | 記帳＋體態管理＋重要通知＋異常自主診斷與 GitHub PR 治理＋重試機制＋分級降級 | ⚪ 未開始 | 8/3～8/6 | Step 2.4～2.6 為新增範圍，技術複雜度最高，已獨立預留兩天 |
-| Phase 3 | 個人技能成長（TOEIC 雙軌題庫 Pipeline＋YouTube 技術情報模組，僅 Robin）＋好友模式 | ⚪ 未開始 | 8/7～8/9 | 新增 YouTube 模組（FR-57～FR-59，見 ADR-9），Phase 3 由 2 天延長為 3 天 |
-| Phase 4 | 求職模組（104 爬蟲＋評分） | ⚪ 未開始 | 8/10～8/11 | 爬蟲策略已定案：每週一次、AJAX API、無登入態、禮貌性延遲、ETL 去重（FR-34a～FR-34d） |
-| Phase 5 | Notion 後台 | ⚪ 未開始 | 8/12 之後 | 獨立拆出的最終階段，須等 Phase 0～4（含 FR-19 治理機制）穩定後才開始；期間僅維持資料層 API 抽象化彈性 |
+| Phase 1（MVP） | 核心平台（通關密碼對話式設定、歡迎訊息、`/rule`／`/function`／`/complaint` 內建指令、功能開關、Gemini 對話+知識庫、影像辨識、語音、個資遮蔽、基礎錯誤處理）＋待辦事項＋心情小記＋客訴收集 | 🟡 進行中 | 7/31～8/7 | Step 1.1 完成；新增 Step 1.3a（`/function` 改版）、Step 1.3b（影像辨識流程，ADR-13）；FR-56 全面改版為總覽＋按需深入＋情境範例（FR-56a～FR-56d） |
+| Phase 2 | 記帳＋體態管理＋重要通知＋異常自主診斷與 GitHub PR 治理＋重試機制＋分級降級 | ⚪ 未開始 | 8/8～8/11 | Step 2.4～2.6 為新增範圍，技術複雜度最高，已獨立預留兩天；體態模組飲食分析需附誤差聲明（FR-17c） |
+| Phase 3 | 個人技能成長（TOEIC 雙軌題庫 Pipeline＋YouTube 技術情報模組，僅 Robin）＋好友模式 | ⚪ 未開始 | 8/12～8/14 | 新增 YouTube 模組（FR-57～FR-59，見 ADR-9）；TOEIC 語音處理改用 Groq Whisper（ADR-12） |
+| Phase 4 | 求職模組（104 爬蟲＋評分） | ⚪ 未開始 | 8/15～8/16 | 爬蟲策略已定案：每週一次、AJAX API、無登入態、禮貌性延遲、ETL 去重（FR-34a～FR-34d） |
+| Phase 5 | Notion 後台 | ⚪ 未開始 | 8/18 之後 | 獨立拆出的最終階段，須等 Phase 0～4（含 FR-19 治理機制）穩定後才開始；期間僅維持資料層 API 抽象化彈性 |
 
 狀態圖例：⚪ 未開始　🟡 進行中／規劃中　🟢 已完成　🔴 阻塞
 
@@ -84,6 +88,7 @@ updated: 2026-07-30
 | 2026-07-30 | Step 0.5 第一批 5 張表核准並 push：`users`／`invite_codes`／`knowledge_base`／`conversation_logs`／`feature_toggles`（`776802f..e440b7c`），已記錄到 `src/schema/db_schema.md`；ADR-10 新增第 5 點：所有建表 SQL 必須用 `COMMENT ON TABLE`／`COMMENT ON COLUMN` 附中文說明 |
 | 2026-07-30 | Robin 於 Render 部署 log 確認 5 筆 migration 全數套用成功（`0001`～`0005` 皆有「套用／完成」紀錄）。**Phase 0（專案基礎建設）全部 Step 完成**：Step 0.1～0.1b、0.2～0.5 皆已完成，可正式進入 Phase 1（MVP） |
 | 2026-07-30 | **Phase 1 Step 1.1 完成**：通關密碼驗證、Owner `/set_invite_codes` 對話式設定流程、FR-6d 歡迎訊息、`/rule`／`/function` 內建指令，展開為獨立 [docs/specs/platform-auth/SPEC.md](../platform-auth/SPEC.md)；新增 ADR-1（webhook 改用原生 JSON 解析、移除 `python-telegram-bot`）、ADR-2（對話狀態存記憶體不落地資料庫）；新增 `src/bot/`（`state.py`／`auth.py`／`templates.py`／`commands.py`／`router.py`／`webhook.py`），49 個測試全過、覆蓋率 100%；新增 `requirements-dev.txt`／`pytest.ini` |
+| 2026-07-30 | 測試通過後，Robin 提出多模態與人格化語氣的大改版需求：新增四把 Gemini Key＋Groq `VOICE_API_KEY`（ADR-12，語音改用 Groq Whisper，取代 FR-25b 原「一律用 Gemini」決策）；新增 ADR-13（影像/語音先上雲端、`Pillow` 壓縮、統一命名、URL 入庫）；FR-17 開放一般圖片辨識並新增個資警語/不確定需確認/飲食誤差聲明（FR-17a～FR-17c）；FR-56 全面改版為總覽＋按需深入＋情境範例（FR-56a～FR-56d，記帳範例已由 Robin 提供）；`src/bot/templates.py` 附錄 A 文字同步更新；新增 `src/migrations/0006_seed_persona_and_family_knowledge.sql` 寫入 Robinson 人格背景與家人背景資料；時程由兩週延長為三週（8/12 → 8/18），Phase 1 目標日期順延至 8/7 |
 
 ## 待決事項
 

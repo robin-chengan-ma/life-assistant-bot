@@ -8,7 +8,7 @@ LLM 通用 Client，目前串接 Gemini API（官方 `google-genai` SDK），模
 
 | 變數 | 說明 |
 | --- | --- |
-| `LLM_API_KEY` | Gemini API Key。本模組不主動讀取這個變數，只是給獨立測試/reuse 時參考；正式串接時由呼叫端決定要傳哪一組 Key（Robinson 專案對話與圖像解析使用兩把不同的 Key，見主專案 `.env.example` 的 `GEMINI_API_BOT_KEY` / `GEMINI_API_TOEIC_KEY`） |
+| `LLM_API_KEY` | Gemini API Key。本模組不主動讀取這個變數，只是給獨立測試/reuse 時參考；正式串接時由呼叫端決定要傳哪一組 Key（Robinson 專案依用途拆成四把：一般問答 `GEMINI_API_BOT_KEY`、影像辨識 `GEMINI_API_IMAGE_KEY1`/`GEMINI_API_IMAGE_KEY2`（每次隨機擇一）、長文生成 `GEMINI_API_TEXT_KEY`，見主專案 `.env.example` 與 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) ADR-12） |
 
 ## 安裝
 
@@ -24,7 +24,9 @@ from submodules.llm.client import LLMClient
 chat_client = LLMClient(api_key="<GEMINI_API_BOT_KEY>")
 reply = chat_client.generate_text("幫我用一句話總結今天的待辦事項")
 
-image_client = LLMClient(api_key="<GEMINI_API_TOEIC_KEY>")
+import random
+image_key = random.choice(["<GEMINI_API_IMAGE_KEY1>", "<GEMINI_API_IMAGE_KEY2>"])
+image_client = LLMClient(api_key=image_key)
 with open("cert_question.jpg", "rb") as f:
     answer = image_client.generate_with_image(
         prompt="請解析這張證照題目截圖的題目與選項",
