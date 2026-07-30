@@ -58,19 +58,19 @@ Robinson 是一個以 Telegram 為前台介面的家庭生活小助手，Robin �
 
 ### 功能性需求 — 使用者與權限
 
-- [ ] FR-5：Robin 免通關密碼直接視為管理者兼使用者；其他使用者第一次互動須輸入通關密碼才能啟用
-- [ ] FR-6：通關密碼由 Robin 私訊逐一告知家人，每組密碼僅能被使用一次（用過標記 `is_used=1`），密碼與使用者為一對一綁定；設定方式採「僅限 Owner 觸發的引導式設定對話流」（Conversation State Machine），不提供任何後台表單：
-  - [ ] FR-6a：觸發方式 — 僅 Robin 可傳送 `/set_invite_codes` 指令或「設定通關密碼」文字，觸發 Robinson 進入設定模式；其他使用者觸發此指令一律無效
-  - [ ] FR-6b：對話式設定流程 — Robinson 詢問「請問要設定哪一位家人的稱謂？（例如：爸爸）」→ Robin 回覆稱謂 → Robinson 追問「收到，請輸入『<稱謂>』專屬的通關密碼：」→ Robin 輸入密碼 → Robinson 將 `(role, invite_code)` 寫入 Neon DB 並回覆「已寫入！請問還有其他家人要設定嗎？」→ 循環直到 Robin 輸入「沒有了」或「結束」，Robinson 確認並退出設定模式
-  - [ ] FR-6c：家人綁定機制 — 家人私訊 Bot 輸入正確密碼後，系統自動將其 `telegram_user_id` 與對應稱謂（role）綁定並開通使用者權限，同時把該密碼標記 `is_used=1`
-  - [ ] FR-6d：歡迎訊息 — FR-6c 綁定成功的當下，Robinson 立即回傳固定的歡迎訊息範本（不經過 LLM 生成，純靜態文字，節省 Token），內容見「附錄 A：規範文本」；**假設**：此訊息目前僅設計給家人在完成通關密碼綁定時觸發，Robin 本人因免密碼直接視為管理者，不會走這個綁定流程，若 Robin 也想在第一次互動時收到這則訊息，需另外確認觸發時機
+- [x] FR-5：Robin 免通關密碼直接視為管理者兼使用者；其他使用者第一次互動須輸入通關密碼才能啟用
+- [x] FR-6：通關密碼由 Robin 私訊逐一告知家人，每組密碼僅能被使用一次（用過標記 `is_used=1`），密碼與使用者為一對一綁定；設定方式採「僅限 Owner 觸發的引導式設定對話流」（Conversation State Machine），不提供任何後台表單：
+  - [x] FR-6a：觸發方式 — 僅 Robin 可傳送 `/set_invite_codes` 指令或「設定通關密碼」文字，觸發 Robinson 進入設定模式；其他使用者觸發此指令一律無效
+  - [x] FR-6b：對話式設定流程 — Robinson 詢問「請問要設定哪一位家人的稱謂？（例如：爸爸）」→ Robin 回覆稱謂 → Robinson 追問「收到，請輸入『<稱謂>』專屬的通關密碼：」→ Robin 輸入密碼 → Robinson 將 `(role, invite_code)` 寫入 Neon DB 並回覆「已寫入！請問還有其他家人要設定嗎？」→ 循環直到 Robin 輸入「沒有了」或「結束」，Robinson 確認並退出設定模式
+  - [x] FR-6c：家人綁定機制 — 家人私訊 Bot 輸入正確密碼後，系統自動將其 `telegram_user_id` 與對應稱謂（role）綁定並開通使用者權限，同時把該密碼標記 `is_used=1`
+  - [x] FR-6d：歡迎訊息 — FR-6c 綁定成功的當下，Robinson 立即回傳固定的歡迎訊息範本（不經過 LLM 生成，純靜態文字，節省 Token），內容見「附錄 A：規範文本」；**假設**：此訊息目前僅設計給家人在完成通關密碼綁定時觸發，Robin 本人因免密碼直接視為管理者，不會走這個綁定流程，若 Robin 也想在第一次互動時收到這則訊息，需另外確認觸發時機
 - [ ] FR-7：每位使用者有唯一 ID；家人若要新增/調整功能或排程（待辦通知排程除外），必須經 Robin 手動設定，Robinson 不自行開放
 - [ ] FR-8：待辦事項的推播排程是唯一允許使用者自行調整的排程項目
 
 ### 功能性需求 — 內建說明指令
 
-- [ ] FR-55：`/rule` 路由 — 使用者在對話框輸入「我要看使用規則」（或直接輸入 `/rule`）時，直接觸發 `/rule` 路由，回傳與 FR-6d 相同的「附錄 A：規範文本」，不經過 LLM 生成，任何身分（Robin 或家人）皆可觸發
-- [ ] FR-56：`/function` 路由 — 使用者在對話框輸入「我要看所有功能」（或直接輸入 `/function`）時，直接觸發 `/function` 路由，回傳 Robinson 目前所有可執行的功能清單，並註記哪些功能為 Owner（Robin）專屬、哪些是所有使用者皆可用。**目前尚未看到產品原型，實際回覆的文字模板暫不設計**，先以 FR 記錄需求範圍（功能清單需涵蓋本 spec 所有已定義的功能模組），待後續有原型/UI 雛形後再由 Robin 補上模板內容並更新本 FR
+- [x] FR-55：`/rule` 路由 — 使用者在對話框輸入「我要看使用規則」（或直接輸入 `/rule`）時，直接觸發 `/rule` 路由，回傳與 FR-6d 相同的「附錄 A：規範文本」，不經過 LLM 生成，任何身分（Robin 或家人）皆可觸發
+- [x] FR-56：`/function` 路由（MVP 簡易版，正式文案待產品原型後補上） — 使用者在對話框輸入「我要看所有功能」（或直接輸入 `/function`）時，直接觸發 `/function` 路由，回傳 Robinson 目前所有可執行的功能清單，並註記哪些功能為 Owner（Robin）專屬、哪些是所有使用者皆可用。**目前尚未看到產品原型，實際回覆的文字模板暫不設計**，先以 FR 記錄需求範圍（功能清單需涵蓋本 spec 所有已定義的功能模組），待後續有原型/UI 雛形後再由 Robin 補上模板內容並更新本 FR
 
 ### 功能性需求 — 客訴收集
 
@@ -447,7 +447,7 @@ Robinson 是一個以 Telegram 為前台介面的家庭生活小助手，Robin �
 
 ### Phase 1（MVP）：核心平台 + 待辦事項 + 心情小記
 
-- [ ] Step 1.1：通關密碼驗證流程 + Owner 專屬引導式設定對話流 + 綁定成功歡迎訊息 + `/rule`、`/function` 內建指令（FR-5～FR-8、FR-6a～FR-6d、FR-55、FR-56，見 ADR-8、附錄 A/B）
+- [x] Step 1.1：通關密碼驗證流程 + Owner 專屬引導式設定對話流 + 綁定成功歡迎訊息 + `/rule`、`/function` 內建指令（FR-5、FR-6～FR-6d、FR-55、FR-56，見 ADR-8、附錄 A/B；FR-7／FR-8 涉及排程調整權限，留待對應功能模組實作時處理）。獨立展開為 [docs/specs/platform-auth/SPEC.md](../platform-auth/SPEC.md)，49 個測試全過、`src/bot/` 覆蓋率 100%
 - [ ] Step 1.2：功能開關系統（FR-2），全關時退化為純聊天
 - [ ] Step 1.3：Gemini 對話核心，整合四類知識庫與資安隔離（FR-9～FR-12）
 - [ ] Step 1.4：語音轉文字流程 + 10 分鐘上限 + 15 分鐘內文字修正限制（FR-14、FR-15）
@@ -621,3 +621,4 @@ FR-56 的 `/function` 路由目前只定義了「回傳範圍」（所有功能�
 | 2026-07-30 | 概要新增「使用性質聲明」（個人非商業用途），新增 NFR-13；新增 ADR-10（資料庫 Schema 建立採先審核後執行流程）與 NFR-12，建立 `src/schema/db_schema.md`、`src/schema/api_schema.md` 骨架；新增客訴收集功能 FR-60～FR-63（`/complaint` 路由、客訴記錄、Gemini 分析私訊 Robin、人工決策），新增 Phase 1 Step 1.9、Phase 0 Step 0.1b；附錄 A 開頭語句改為「📋 以下是羅賓森的使用須知：」並補上「我要客訴你」提示語；同步更新測試策略、風險表 | Robin |
 | 2026-07-30 | 新增 ADR-11：確認 Cowork sandbox 連不到 Neon/Telegram/GitHub REST API/Google API/Notion API（皆被 proxy 白名單擋下），但 `github.com`（git 協定）可連線且 `git push` 實測成功；因此 ADR-10 的執行機制改為「Migration 檔案（`src/migrations/`）+ Robin 同意後 Claude 自動 commit+push + Render 偵測 main 分支自動部署 + `main.py` 開機自動套用」，Robin 確認 Render 已開啟 push-to-main 自動部署；新增 Phase 0 Step 0.5a | Robin |
 | 2026-07-30 | ADR-10 新增第 5 點決策：所有建表 SQL 必須用 `COMMENT ON TABLE`／`COMMENT ON COLUMN` 附上中文說明，直接寫在 SQL 裡，適用所有未來資料表 | Robin |
+| 2026-07-30 | Phase 1 Step 1.1 完成：通關密碼驗證、Owner 對話式設定流程、`/rule`／`/function` 內建指令，展開為獨立 [docs/specs/platform-auth/SPEC.md](../platform-auth/SPEC.md)（含 ADR-1：Webhook 改用原生 JSON 解析、移除 `python-telegram-bot`；ADR-2：對話狀態存記憶體不落地資料庫）；49 個測試全過、`src/bot/` 覆蓋率 100% | Claude（依 Robin「請開始吧」指示） |

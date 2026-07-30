@@ -1,5 +1,4 @@
 flask
-python-telegram-bot
 requests
 psycopg2-binary
 google-genai

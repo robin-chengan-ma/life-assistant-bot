@@ -3,10 +3,13 @@ import os
 
 from flask import Flask, jsonify
 
+from src.bot.webhook import bot_bp
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("robinson.main")
 
 app = Flask(__name__)
+app.register_blueprint(bot_bp)
 
 
 def _run_startup_migrations() -> None:

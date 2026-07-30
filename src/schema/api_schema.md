@@ -49,18 +49,18 @@
 
 ### `POST /telegram/webhook`
 
-**狀態**：計畫中
+**狀態**：已實作（見 [platform-auth SPEC.md](../../docs/specs/platform-auth/SPEC.md)，`src/bot/webhook.py`）
 **觸發方式**：Telegram Bot API 主動推送使用者訊息
 **權限**：依訊息內容與使用者身分於內部再判斷（通關密碼驗證、功能開關等）
 **對應 FR**：FR-1、FR-2、FR-5～FR-8
 
-**備註**：所有使用者文字/語音訊息的統一入口，內部再依內容路由到 `/rule`、`/function`、`/complaint` 或各功能模組的處理邏輯。
+**備註**：所有使用者文字/語音訊息的統一入口，內部再依內容路由到 `/rule`、`/function`、`/complaint` 或各功能模組的處理邏輯。目前僅處理純文字訊息，貼圖/照片等非文字更新一律忽略（Step 1.1 範圍外）。
 
 ---
 
 ### `/rule`（內部路由，非對外 HTTP 端點）
 
-**狀態**：計畫中
+**狀態**：已實作（`src/bot/commands.py::handle_rule`）
 **觸發方式**：使用者於對話框輸入「我要看使用規則」或 `/rule`
 **權限**：任何已驗證使用者（Robin 或家人）
 **對應 FR**：FR-6d、FR-55
@@ -71,7 +71,7 @@
 
 ### `/function`（內部路由，非對外 HTTP 端點）
 
-**狀態**：計畫中
+**狀態**：已實作（`src/bot/commands.py::handle_function`），文案為 MVP 簡易版
 **觸發方式**：使用者於對話框輸入「我要看所有功能」或 `/function`
 **權限**：任何已驗證使用者（Robin 或家人）
 **對應 FR**：FR-56
@@ -95,9 +95,9 @@
 
 ### `/set_invite_codes`（內部路由，非對外 HTTP 端點）
 
-**狀態**：計畫中
+**狀態**：已實作（`src/bot/commands.py::start_set_invite_codes`／`handle_set_invite_codes_step`）
 **觸發方式**：Robin 輸入 `/set_invite_codes` 或「設定通關密碼」
 **權限**：僅 Owner（Robin）
 **對應 FR**：FR-6a～FR-6c
 
-**備註**：進入引導式設定對話流（狀態機），詳見 ADR-8。
+**備註**：進入引導式設定對話流（狀態機），詳見 ADR-8；狀態存於記憶體，不落地資料庫（見 platform-auth SPEC.md ADR-2）。

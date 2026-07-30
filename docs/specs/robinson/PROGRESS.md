@@ -15,7 +15,7 @@ updated: 2026-07-30
 
 ## 目前階段
 
-**Phase 0 — 專案基礎建設（已完成）→ 即將進入 Phase 1（MVP）**
+**Phase 1（MVP）進行中 — Step 1.1（通關密碼驗證＋Owner 對話式設定＋`/rule`／`/function`）已完成，下一步 Step 1.2（功能開關系統）**
 
 ## 目標時程（2026-07-30 更新：兩週制，因新增 YouTube 模組再順延 1 天）
 
@@ -45,7 +45,7 @@ updated: 2026-07-30
 | Phase | 內容 | 狀態 | 目標日期 | 備註 |
 | --- | --- | --- | --- | --- |
 | Phase 0 | 專案基礎建設（repo 結構、金鑰串接、Render/Neon/cron-job、DB 初始化） | 🟢 已完成 | 7/29～7/30 | 全部 Step 完成：`submodules/`、`src/schema/`、`src/migrations/`（ADR-11）骨架就緒；`/healthz` 已部署上線並掛上 cron-job.org；第一批 5 張表（`users`／`invite_codes`／`knowledge_base`／`conversation_logs`／`feature_toggles`）已核准並套用成功 |
-| Phase 1（MVP） | 核心平台（通關密碼對話式設定、歡迎訊息、`/rule`／`/function`／`/complaint` 內建指令、功能開關、Gemini 對話+知識庫、語音、個資遮蔽、基礎錯誤處理）＋待辦事項＋心情小記＋客訴收集 | 🟡 即將開始 | 7/31～8/2 | 新增 FR-6d（歡迎訊息）、FR-55（`/rule`）、FR-56（`/function`，文字模板待補，見附錄 B）、FR-60～FR-63（客訴收集，Step 1.9） |
+| Phase 1（MVP） | 核心平台（通關密碼對話式設定、歡迎訊息、`/rule`／`/function`／`/complaint` 內建指令、功能開關、Gemini 對話+知識庫、語音、個資遮蔽、基礎錯誤處理）＋待辦事項＋心情小記＋客訴收集 | 🟡 進行中 | 7/31～8/2 | Step 1.1 完成；新增 FR-6d（歡迎訊息）、FR-55（`/rule`）、FR-56（`/function`，文字模板待補，見附錄 B）、FR-60～FR-63（客訴收集，Step 1.9） |
 | Phase 2 | 記帳＋體態管理＋重要通知＋異常自主診斷與 GitHub PR 治理＋重試機制＋分級降級 | ⚪ 未開始 | 8/3～8/6 | Step 2.4～2.6 為新增範圍，技術複雜度最高，已獨立預留兩天 |
 | Phase 3 | 個人技能成長（TOEIC 雙軌題庫 Pipeline＋YouTube 技術情報模組，僅 Robin）＋好友模式 | ⚪ 未開始 | 8/7～8/9 | 新增 YouTube 模組（FR-57～FR-59，見 ADR-9），Phase 3 由 2 天延長為 3 天 |
 | Phase 4 | 求職模組（104 爬蟲＋評分） | ⚪ 未開始 | 8/10～8/11 | 爬蟲策略已定案：每週一次、AJAX API、無登入態、禮貌性延遲、ETL 去重（FR-34a～FR-34d） |
@@ -83,6 +83,7 @@ updated: 2026-07-30
 | 2026-07-30 | Step 0.4 完成：Robin 已於 cron-job.org 設定每 10 分鐘呼叫 `/healthz`，確認 API 正常。**Phase 0 僅剩 Step 0.5（Neon 資料庫初始化）**，其餘全數完成 |
 | 2026-07-30 | Step 0.5 第一批 5 張表核准並 push：`users`／`invite_codes`／`knowledge_base`／`conversation_logs`／`feature_toggles`（`776802f..e440b7c`），已記錄到 `src/schema/db_schema.md`；ADR-10 新增第 5 點：所有建表 SQL 必須用 `COMMENT ON TABLE`／`COMMENT ON COLUMN` 附中文說明 |
 | 2026-07-30 | Robin 於 Render 部署 log 確認 5 筆 migration 全數套用成功（`0001`～`0005` 皆有「套用／完成」紀錄）。**Phase 0（專案基礎建設）全部 Step 完成**：Step 0.1～0.1b、0.2～0.5 皆已完成，可正式進入 Phase 1（MVP） |
+| 2026-07-30 | **Phase 1 Step 1.1 完成**：通關密碼驗證、Owner `/set_invite_codes` 對話式設定流程、FR-6d 歡迎訊息、`/rule`／`/function` 內建指令，展開為獨立 [docs/specs/platform-auth/SPEC.md](../platform-auth/SPEC.md)；新增 ADR-1（webhook 改用原生 JSON 解析、移除 `python-telegram-bot`）、ADR-2（對話狀態存記憶體不落地資料庫）；新增 `src/bot/`（`state.py`／`auth.py`／`templates.py`／`commands.py`／`router.py`／`webhook.py`），49 個測試全過、覆蓋率 100%；新增 `requirements-dev.txt`／`pytest.ini` |
 
 ## 待決事項
 
