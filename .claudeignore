@@ -1,0 +1,11 @@
+# 絕對不讓 Claude Code / AI Agent 讀取的真實 Key
+.env
+.env.*
+!.env.example
+google_service_account.json
+*.json
+!package.json
+
+# 資料庫與大型日誌檔案
+*.log
+*.sqlite

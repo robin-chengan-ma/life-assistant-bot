@@ -1,10 +1,36 @@
+# 1. 敏感資安與金鑰 (絕對不能打包進 Image)
+.env
+.env.*
+!.env.example
+google_service_account.json
+*.pem
+*.key
+
+# 2. 版本控制與 AI 設定檔
 .git
+.github
 .gitignore
-__pycache__
+.claude
+.claudeignore
+AGENTS.md
+CLAUDE.md
+
+# 3. 文件與說明檔 (雲端運行不需要)
+docs/
+README.md
+LICENSE
+
+# 4. Python 快取、虛擬環境與測試資料
+__pycache__/
 *.pyc
 *.pyo
 *.pyd
-.env
-.venv
-venv
-ENV
+.venv/
+venv/
+.pytest_cache/
+*.log
+
+# 5. 系統產物
+.DS_Store
+Dockerfile
+.dockerignore
