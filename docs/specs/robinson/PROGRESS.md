@@ -81,6 +81,7 @@ updated: 2026-07-30
 | 2026-07-30 | Step 0.5a 完成：建立 `src/migrations/`（runner.py + README）、`CloudSQLClient` 新增 `execute()`、`main.py` 整合開機自動套用；完成首次 commit + push 到 GitHub main（`5f60602..776802f`），觸發 Render 自動部署，待 Robin 於 Render 確認 `/healthz` 可正常連線後即完成 Step 0.3 |
 | 2026-07-30 | Step 0.3 完成：Robin 於 Render Dashboard 確認部署成功（`Your service is live`），正式網址 `https://life-assistant-bot-yhkm.onrender.com`；下一步由 Robin 把 `/healthz` 端點加到 cron-job.org（Step 0.4） |
 | 2026-07-30 | Step 0.4 完成：Robin 已於 cron-job.org 設定每 10 分鐘呼叫 `/healthz`，確認 API 正常。**Phase 0 僅剩 Step 0.5（Neon 資料庫初始化）**，其餘全數完成 |
+| 2026-07-30 | Step 0.5 第一批 5 張表核准並 push：`users`／`invite_codes`／`knowledge_base`／`conversation_logs`／`feature_toggles`（`776802f..e440b7c`），已記錄到 `src/schema/db_schema.md`；ADR-10 新增第 5 點：所有建表 SQL 必須用 `COMMENT ON TABLE`／`COMMENT ON COLUMN` 附中文說明；待 Robin 於 Render 部署 log 確認 migration 實際套用成功，**Phase 0 全部 Step 完成**（僅待此項最終確認） |
 
 ## 待決事項
 

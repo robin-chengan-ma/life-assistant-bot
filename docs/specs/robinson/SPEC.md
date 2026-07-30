@@ -443,7 +443,7 @@ Robinson 是一個以 Telegram 為前台介面的家庭生活小助手，Robin �
 - [x] Step 0.3：`main.py` 提供 keep-alive 健康檢查端點，並部署到 Render —— 已確認上線：`https://life-assistant-bot-yhkm.onrender.com`
 - [x] Step 0.4：於 cron-job.org 設定每 10 分鐘呼叫健康檢查端點 —— Robin 已設定完成並確認 API 正常
 - [x] Step 0.5a：建立 `src/migrations/` 骨架與 `main.py` 的 migration runner（開機掃描未套用檔案、`schema_migrations` 追蹤表、自動執行），依 ADR-11
-- [ ] Step 0.5：Neon 資料庫初始化 —— 依 ADR-10／ADR-11 流程，逐一提出使用者表、通關密碼表、知識庫表、對話紀錄表、功能開關表的建表 SQL 草案與設計理由給 Robin 審核，核准後存成 migration 檔並 commit+push，由 Render 自動部署套用，完成後記錄到 `src/schema/db_schema.md`
+- [x] Step 0.5：Neon 資料庫初始化 —— 第一批 5 張表（`users`／`invite_codes`／`knowledge_base`／`conversation_logs`／`feature_toggles`）已經 Robin 審核核准並記錄到 `src/schema/db_schema.md`，migration 檔案已 commit+push（`776802f..e440b7c`），待 Robin 於 Render 部署 log 確認實際套用成功；後續其他模組（記帳、體態、TOEIC、YouTube、客訴等）的資料表待對應 Phase 展開時比照本流程逐一提案
 
 ### Phase 1（MVP）：核心平台 + 待辦事項 + 心情小記
 
