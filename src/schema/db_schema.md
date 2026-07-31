@@ -200,7 +200,7 @@ COMMENT ON COLUMN feature_toggles.updated_at IS '最後變更時間';
 
 ### conversation_summaries
 
-**建立日期**：2026-07-30
+**建立日期**：2026-07-31
 **用途**：長記憶滾動摘要，對應 [chat-core SPEC.md](../../docs/specs/chat-core/SPEC.md) ADR-3。
 **Migration 檔案**：`src/migrations/0007_create_conversation_summaries_table.sql`
 

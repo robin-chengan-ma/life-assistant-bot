@@ -50,7 +50,8 @@ def test_webhook_ignores_non_text_updates(client, monkeypatch):
 
 def test_webhook_routes_valid_message_and_sends_reply(client, monkeypatch):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
-    monkeypatch.setenv("GEMINI_API_BOT_KEY", "fake-gemini-key")
+    monkeypatch.setenv("GEMINI_API_BOT_KEY", "fake-gemini-bot-key")
+    monkeypatch.setenv("GEMINI_API_TEXT_KEY", "fake-gemini-text-key")
 
     mock_handle_message = MagicMock(return_value="哈囉！")
     monkeypatch.setattr(webhook, "handle_message", mock_handle_message)
@@ -59,8 +60,13 @@ def test_webhook_routes_valid_message_and_sends_reply(client, monkeypatch):
     mock_cloudsql_client_cls = MagicMock(return_value=mock_db_instance)
     monkeypatch.setattr(webhook, "CloudSQLClient", mock_cloudsql_client_cls)
 
-    mock_llm_instance = MagicMock()
-    mock_llm_client_cls = MagicMock(return_value=mock_llm_instance)
+    mock_bot_llm_instance = MagicMock()
+    mock_text_llm_instance = MagicMock()
+
+    def _fake_llm_client(api_key):
+        return mock_bot_llm_instance if api_key == "fake-gemini-bot-key" else mock_text_llm_instance
+
+    mock_llm_client_cls = MagicMock(side_effect=_fake_llm_client)
     monkeypatch.setattr(webhook, "LLMClient", mock_llm_client_cls)
 
     mock_telegram_instance = MagicMock()
@@ -71,9 +77,15 @@ def test_webhook_routes_valid_message_and_sends_reply(client, monkeypatch):
     response = client.post("/telegram/webhook", json=payload)
 
     assert response.status_code == 200
-    mock_llm_client_cls.assert_called_once_with(api_key="fake-gemini-key")
+    mock_llm_client_cls.assert_any_call(api_key="fake-gemini-bot-key")
+    mock_llm_client_cls.assert_any_call(api_key="fake-gemini-text-key")
     mock_handle_message.assert_called_once_with(
-        mock_db_instance, webhook._state_store, 123, "/rule", llm_client=mock_llm_instance
+        mock_db_instance,
+        webhook._state_store,
+        123,
+        "/rule",
+        llm_client=mock_bot_llm_instance,
+        text_llm_client=mock_text_llm_instance,
     )
     mock_db_instance.close.assert_called_once()
     mock_telegram_instance.send_text.assert_called_once_with(chat_id=123, text="哈囉！")

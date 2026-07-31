@@ -1,7 +1,7 @@
 ---
 title: Robinson 產品開發階段紀錄
 spec: docs/specs/robinson/SPEC.md
-updated: 2026-07-30
+updated: 2026-07-31
 ---
 
 # Robinson 產品開發階段紀錄
@@ -91,7 +91,8 @@ updated: 2026-07-30
 | 2026-07-30 | 測試通過後，Robin 提出多模態與人格化語氣的大改版需求：新增四把 Gemini Key＋Groq `VOICE_API_KEY`（ADR-12，語音改用 Groq Whisper，取代 FR-25b 原「一律用 Gemini」決策）；新增 ADR-13（影像/語音先上雲端、`Pillow` 壓縮、統一命名、URL 入庫）；FR-17 開放一般圖片辨識並新增個資警語/不確定需確認/飲食誤差聲明（FR-17a～FR-17c）；FR-56 全面改版為總覽＋按需深入＋情境範例（FR-56a～FR-56d，記帳範例已由 Robin 提供）；`src/bot/templates.py` 附錄 A 文字同步更新；新增 `src/migrations/0006_seed_persona_and_family_knowledge.sql` 寫入 Robinson 人格背景與家人背景資料；時程由兩週延長為三週（8/12 → 8/18），Phase 1 目標日期順延至 8/7 |
 | 2026-07-30 | Robin 確認 Render 部署 log 顯示 `0006` migration 套用成功，Robinson 人格背景與 Robin 家人背景已寫入 Neon `knowledge_base` 表，供未來人格化回覆（FR-56c）讀取 |
 | 2026-07-30 | Robin 確認 Step 1.2 功能開關權限模型（FR-2a：使用者可自管、Owner 可代管），展開為獨立 [docs/specs/feature-toggles/SPEC.md](../feature-toggles/SPEC.md)（ADR-1：對話狀態 dict 新增 `flow` 欄位）；**Phase 1 Step 1.2 完成**：新增 `src/bot/toggles.py`、`/my_toggles`（自管）、`/set_toggle`（Owner 代管）；家人第一次綁定成功時自動建立 8 筆預設開啟的 `feature_toggles`；`src/bot/` 全部 78 個測試全過、覆蓋率 100% |
-| 2026-07-30 | Robin 確認查無答案時採「單次 API 呼叫＋Google Search grounding」（見 chat-core SPEC.md ADR-1），展開為獨立 [docs/specs/chat-core/SPEC.md](../chat-core/SPEC.md)（ADR-2：`pending_kb_save` 狀態流程）；**Phase 1 Step 1.3 完成**：一般聊天訊息正式交給 Gemini 處理（取代 `_PLACEHOLDER_REPLY`），新增 `src/bot/knowledge.py`（知識庫查詢/寫入、資安隔離）、`src/bot/chat.py`（對話核心、存檔確認流程），`submodules/llm/client.py` 新增 `generate_with_search()` 並補上單元測試；全專案 104 個測試全過、覆蓋率 100% |
+| 2026-07-31 | Robin 確認查無答案時採「單次 API 呼叫＋Google Search grounding」（見 chat-core SPEC.md ADR-1），展開為獨立 [docs/specs/chat-core/SPEC.md](../chat-core/SPEC.md)（ADR-2：`pending_kb_save` 狀態流程）；**Phase 1 Step 1.3 完成**：一般聊天訊息正式交給 Gemini 處理（取代 `_PLACEHOLDER_REPLY`），新增 `src/bot/knowledge.py`（知識庫查詢/寫入、資安隔離）、`src/bot/chat.py`（對話核心、存檔確認流程），`submodules/llm/client.py` 新增 `generate_with_search()` 並補上單元測試；全專案 104 個測試全過、覆蓋率 100% |
+| 2026-07-31 | Robin 指出短記憶會忘記久遠對話，確認記憶架構改為「長記憶＋短記憶＋知識庫＋上網查資料」四部分並核准 `conversation_summaries` 建表 SQL；新增 ADR-3（滾動式摘要）：新增 `src/bot/memory.py`（backlog ≥10 則觸發、呼叫 `GEMINI_API_TEXT_KEY`），`chat.py`／`router.py`／`webhook.py` 整合第二把 Gemini Key；全專案 117 個測試全過、覆蓋率 100% |
 
 ## 待決事項
 

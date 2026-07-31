@@ -15,6 +15,18 @@ class _FakeLLMClient:
         return self.response_text, self.used_search
 
 
+class _FakeTextLLMClient:
+    """模擬長記憶摘要用的 LLMClient，記錄呼叫次數供測試斷言。"""
+
+    def __init__(self, response_text="摘要"):
+        self.response_text = response_text
+        self.call_count = 0
+
+    def generate_text(self, prompt):
+        self.call_count += 1
+        return self.response_text
+
+
 def _seed_general(fake_db):
     fake_db.insert("knowledge_base", {"category": "general_persona", "user_id": None, "content": "我是羅賓森"})
     fake_db.insert("knowledge_base", {"category": "general_family", "user_id": None, "content": "家人背景"})
@@ -23,9 +35,12 @@ def _seed_general(fake_db):
 def test_handle_chat_message_returns_reply_when_no_search_used(fake_db):
     _seed_general(fake_db)
     llm_client = _FakeLLMClient(response_text="記帳功能可以記錄每日花費喔！", used_search=False)
+    text_llm_client = _FakeTextLLMClient()
     store = ConversationStateStore()
 
-    reply = chat.handle_chat_message(fake_db, llm_client, store, telegram_user_id=1, user_id=1, text="記帳功能是什麼？")
+    reply = chat.handle_chat_message(
+        fake_db, llm_client, text_llm_client, store, telegram_user_id=1, user_id=1, text="記帳功能是什麼？"
+    )
 
     assert reply == "記帳功能可以記錄每日花費喔！"
     assert store.get(1) is None
@@ -34,9 +49,10 @@ def test_handle_chat_message_returns_reply_when_no_search_used(fake_db):
 def test_handle_chat_message_logs_user_and_assistant_turns(fake_db):
     _seed_general(fake_db)
     llm_client = _FakeLLMClient(response_text="好的！", used_search=False)
+    text_llm_client = _FakeTextLLMClient()
     store = ConversationStateStore()
 
-    chat.handle_chat_message(fake_db, llm_client, store, telegram_user_id=1, user_id=1, text="早安")
+    chat.handle_chat_message(fake_db, llm_client, text_llm_client, store, telegram_user_id=1, user_id=1, text="早安")
 
     logs = fake_db.select("conversation_logs", where="user_id = %s", params=(1,))
     assert len(logs) == 2
@@ -49,21 +65,68 @@ def test_handle_chat_message_logs_user_and_assistant_turns(fake_db):
 def test_handle_chat_message_prompt_includes_persona_and_user_message(fake_db):
     _seed_general(fake_db)
     llm_client = _FakeLLMClient()
+    text_llm_client = _FakeTextLLMClient()
     store = ConversationStateStore()
 
-    chat.handle_chat_message(fake_db, llm_client, store, telegram_user_id=1, user_id=1, text="今天天氣如何？")
+    chat.handle_chat_message(
+        fake_db, llm_client, text_llm_client, store, telegram_user_id=1, user_id=1, text="今天天氣如何？"
+    )
 
     assert "我是羅賓森" in llm_client.last_prompt
     assert "家人背景" in llm_client.last_prompt
     assert "今天天氣如何？" in llm_client.last_prompt
 
 
+def test_handle_chat_message_prompt_includes_long_memory_summary(fake_db):
+    _seed_general(fake_db)
+    fake_db.insert(
+        "conversation_summaries",
+        {"user_id": 1, "summary": "很久以前提過喜歡打籃球", "summarized_up_to_log_id": 3},
+    )
+    llm_client = _FakeLLMClient()
+    text_llm_client = _FakeTextLLMClient()
+    store = ConversationStateStore()
+
+    chat.handle_chat_message(fake_db, llm_client, text_llm_client, store, telegram_user_id=1, user_id=1, text="嗨")
+
+    assert "很久以前提過喜歡打籃球" in llm_client.last_prompt
+
+
+def test_handle_chat_message_triggers_memory_update_after_reply(fake_db):
+    _seed_general(fake_db)
+    # 先塞 19 則舊對話，這次對話會補上第 20 則使用者訊息 + 第 21 則回覆，backlog 應達門檻觸發摘要
+    from datetime import datetime, timedelta, timezone
+
+    base = datetime.now(timezone.utc)
+    for i in range(19):
+        fake_db.insert(
+            "conversation_logs",
+            {
+                "user_id": 1,
+                "role": "user" if i % 2 == 0 else "assistant",
+                "content": f"msg-{i}",
+                "created_at": base + timedelta(seconds=i),
+                "deleted_at": None,
+            },
+        )
+    llm_client = _FakeLLMClient(response_text="回覆")
+    text_llm_client = _FakeTextLLMClient()
+    store = ConversationStateStore()
+
+    chat.handle_chat_message(fake_db, llm_client, text_llm_client, store, telegram_user_id=1, user_id=1, text="嗨")
+
+    assert text_llm_client.call_count == 1
+
+
 def test_handle_chat_message_appends_save_prompt_and_sets_pending_state_when_search_used(fake_db):
     _seed_general(fake_db)
     llm_client = _FakeLLMClient(response_text="今天台北是晴天", used_search=True)
+    text_llm_client = _FakeTextLLMClient()
     store = ConversationStateStore()
 
-    reply = chat.handle_chat_message(fake_db, llm_client, store, telegram_user_id=1, user_id=1, text="今天天氣如何？")
+    reply = chat.handle_chat_message(
+        fake_db, llm_client, text_llm_client, store, telegram_user_id=1, user_id=1, text="今天天氣如何？"
+    )
 
     assert "今天台北是晴天" in reply
     assert "記錄" in reply

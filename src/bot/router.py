@@ -17,12 +17,14 @@ def handle_message(
     telegram_user_id: int,
     text: str | None,
     llm_client=None,
+    text_llm_client=None,
 ) -> str:
     """處理一則來自 Telegram 的文字訊息，回傳要回覆的文字。
 
-    `llm_client` 只有在訊息最終落入一般聊天核心（見 docs/specs/chat-core/SPEC.md）時才會用到，
-    其餘指令/對話流程分支都不需要；正式環境一律由 webhook.py 注入，這裡預設 None 只是為了讓
-    不涉及聊天核心的既有測試不用逐一補上假的 LLM Client。
+    `llm_client`（`GEMINI_API_BOT_KEY`）與 `text_llm_client`（`GEMINI_API_TEXT_KEY`，長記憶摘要用，
+    見 chat-core SPEC.md ADR-3）只有在訊息最終落入一般聊天核心時才會用到，其餘指令/對話流程分支
+    都不需要；正式環境一律由 webhook.py 注入，這裡預設 None 只是為了讓不涉及聊天核心的既有測試
+    不用逐一補上假的 LLM Client。
     """
     text = (text or "").strip()
 
@@ -65,7 +67,9 @@ def handle_message(
     if text in _FUNCTION_TRIGGERS:
         return commands.handle_function()
 
-    return chat.handle_chat_message(db, llm_client, state_store, telegram_user_id, user_id, text)
+    return chat.handle_chat_message(
+        db, llm_client, text_llm_client, state_store, telegram_user_id, user_id, text
+    )
 
 
 def _dispatch_active_flow(
