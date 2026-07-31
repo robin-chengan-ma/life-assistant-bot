@@ -36,7 +36,8 @@ def handle_message(
         state = state_store.get(telegram_user_id)
         if state is not None:
             return _dispatch_active_flow(
-                db, state_store, telegram_user_id, text, state.get("flow"), image_llm_clients
+                db, state_store, telegram_user_id, text, state,
+                llm_client, text_llm_client, image_llm_clients,
             )
 
         if text in _SET_INVITE_CODES_TRIGGERS:
@@ -62,7 +63,8 @@ def handle_message(
         state = state_store.get(telegram_user_id)
         if state is not None:
             return _dispatch_active_flow(
-                db, state_store, telegram_user_id, text, state.get("flow"), image_llm_clients
+                db, state_store, telegram_user_id, text, state,
+                llm_client, text_llm_client, image_llm_clients,
             )
 
         user_id = user["id"]
@@ -128,14 +130,22 @@ def _dispatch_active_flow(
     state_store: ConversationStateStore,
     telegram_user_id: int,
     text: str,
-    flow: str | None,
+    state: dict,
+    llm_client=None,
+    text_llm_client=None,
     image_llm_clients: list | None = None,
 ) -> str:
     """依進行中對話流程的 `flow` 標記分派到對應處理函式（見各 flow 對應 spec 的 ADR）。"""
+    flow = state.get("flow")
     if flow == "set_invite_codes":
         return commands.handle_set_invite_codes_step(db, state_store, telegram_user_id, text)
     if flow == "pending_user_knowledge":
-        return chat.handle_pending_user_knowledge_step(db, state_store, telegram_user_id, text)
+        # 2026-07-31（ADR-6）：不再無條件把這則訊息當成答案存檔，改由同一次 LLM 呼叫判斷
+        # 這是在提供答案、拒絕記錄、還是問了個無關的新問題，見 chat.handle_chat_message。
+        return chat.handle_chat_message(
+            db, llm_client, text_llm_client, state_store, telegram_user_id,
+            state["target_user_id"], text, pending_question=state.get("original_question"),
+        )
     if flow == "pending_image_confirm":
         return image.handle_image_confirm_step(image_llm_clients, state_store, telegram_user_id, text)
     return commands.handle_toggle_step(db, state_store, telegram_user_id, text)

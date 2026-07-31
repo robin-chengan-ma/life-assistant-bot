@@ -139,12 +139,12 @@
 
 ### `pending_user_knowledge`（內部路由，非對外 HTTP 端點）
 
-**狀態**：已實作（`src/bot/chat.py::handle_pending_user_knowledge_step`，2026-07-31 取代 `pending_kb_save`／`handle_pending_kb_save_step`，見 chat-core SPEC.md ADR-5）
+**狀態**：已實作（`src/bot/chat.py::handle_chat_message`，帶 `pending_question` 參數；2026-07-31 取代 `pending_kb_save`／`handle_pending_kb_save_step`，見 chat-core SPEC.md ADR-5；**2026-07-31 再修正見 ADR-6**：不再有獨立的 `handle_pending_user_knowledge_step()`，功能整併進 `handle_chat_message()`）
 **觸發方式**：一般聊天核心回覆「不知道」後，下一則訊息自動進入此狀態
 **權限**：任何已驗證使用者，僅能存入自己的客製知識庫
 **對應 FR**：FR-4（見 chat-core SPEC.md）
 
-**備註**：不需要 yes/no 確認，下一則訊息直接視為要存入的內容，寫入 `knowledge_base`（`category='custom'`）。
+**備註**：不再無條件把下一則訊息當成答案。同一次 LLM 呼叫會先判斷這則新訊息是「提供答案」（回覆含 `【SAVE_ANSWER】`，才寫入 `knowledge_base`，`category='custom'`）、「拒絕記錄」（回覆含 `【DECLINE_SAVE】`，不寫入）、還是「其實問了個無關的新問題」（不含任何標記，照一般聊天規則正常回答，並清除 pending 狀態，不殘留卡住下一輪）。狀態內容為 `{"flow": "pending_user_knowledge", "target_user_id": <int>, "original_question": <str>}`，`original_question` 供下一輪判斷 prompt 使用。
 
 ---
 

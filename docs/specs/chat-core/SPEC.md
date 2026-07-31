@@ -30,7 +30,7 @@ owner: Robin
 - [x] FR-1：路由層最終 fallback（不是任何已知指令、也沒有進行中的對話流程）改為呼叫對話核心，取代 `_PLACEHOLDER_REPLY`
 - [x] FR-2：Context 組裝 —— 每次呼叫固定帶上：① `general_persona`、② `general_family`（全體共用，不分使用者）、③ 該使用者自己的 `custom` 知識庫（依 FR-10 資安隔離，只查自己的 `user_id`）、④ 該使用者最近 10 則 `conversation_logs`（依時間排序，避免 prompt 無上限成長）
 - [x] FR-3：System Prompt 規則 —— 明確指示模型：(a) 用 Robinson 的人格語氣回答，不要照本宣科；(b) 只根據提供的知識庫內容回答，明確告知模型自己沒有查詢網路的能力；(c) 知識庫沒有答案時必須誠實回報不知道（2026-07-31 修正，見 ADR-5）；(d)（2026-07-31 追加）真實日期由伺服器本地算出（`Asia/Taipei` 時區）直接塞進 prompt，日期／星期問題一律以此為準，不可自行推算或憑印象亂猜；除 prompt 內明確提供的資料外絕對不能捏造具體事實（例如生日、事件細節、數字）——起因是 Robin 回報問「今天幾月幾號」時模型瞎掰錯誤日期並編造「剛好是我生日」，LLM 本身沒有即時時鐘，移除 grounding 後更無管道查證，日期屬於伺服器本地就能算出的資訊，不需要任何外部 API；(e)（2026-07-31 追加）代名詞（他／她／牠／它）追問一律理解成【最近對話紀錄】裡使用者剛剛在問的主體，不能因為上一輪回答內容裡順便提到其他人名就誤判指涉對象；使用者明確糾正時要針對正確對象重新回答原本的問題，不能只重複貼舊答案；真的無法判斷就反問使用者；年齡等數值計算一律用「現在的日期」與知識庫裡的正確生日相減——起因是 Robin 回報問「小布丁是誰」後追問「他大概幾歲」，Robinson 誤把「他」理解成上一輪回答裡順便提到的照顧者（爺爺）並算出爺爺的年齡，使用者糾正「我說小布丁啦」後又只是重複貼一模一樣的舊答案，沒有真的回答年齡
-- [x] FR-4：查無答案時的處理（對應 FR-12，2026-07-31 修正，見 ADR-5，supersede 原本的 Google Search grounding 設計）—— 單次 API 呼叫（`generate_text`，不掛任何工具）；prompt 指示模型在資料不足以回答時，於回覆最後加上固定標記 `【NOT_FOUND】`；`chat.py` 偵測到標記後，去除標記並附加「你可以先自行上網查詢，查到後把答案打給我，我會幫你記錄到知識庫喔！」，同時進入等待使用者提供答案的狀態（`flow: pending_user_knowledge`）；使用者下一則訊息直接視為要存入的內容，寫入 `knowledge_base`（`category='custom'`，`user_id=`該使用者），不需要額外的 yes/no 確認（使用者已被明確告知「下一則輸入會被記錄」）
+- [x] FR-4：查無答案時的處理（對應 FR-12，2026-07-31 修正，見 ADR-5，supersede 原本的 Google Search grounding 設計）—— 單次 API 呼叫（`generate_text`，不掛任何工具）；prompt 指示模型在資料不足以回答時，於回覆最後加上固定標記 `【NOT_FOUND】`；`chat.py` 偵測到標記後，去除標記並附加「你可以先自行上網查詢，查到後把答案打給我，我會幫你記錄到知識庫喔！」，同時進入等待使用者提供答案的狀態（`flow: pending_user_knowledge`，含 `original_question` 欄位）。**2026-07-31 再修正，見 ADR-6**：下一則訊息不再無條件視為答案存檔——同一次 LLM 呼叫會先判斷這則新訊息是「提供答案」（輸出 `【SAVE_ANSWER】`，才寫入 `knowledge_base`，`category='custom'`，`user_id=`該使用者）、「拒絕記錄」（輸出 `【DECLINE_SAVE】`，不寫入）、還是「其實是問了個無關的新問題」（不輸出任何標記，照一般規則正常回答，並清除 pending 狀態）
 - [x] FR-5：對話紀錄 —— 只有真正進入一般聊天核心的訊息才記錄：使用者原始輸入寫一筆（`role='user'`），Robinson 的回覆寫一筆（`role='assistant'`）；指令觸發（`/rule`、`/my_toggles` 等）與確認存檔流程本身的輸入/輸出不計入對話紀錄
 - [x] FR-6：長記憶查詢 —— Context 組裝時額外帶上該使用者的 `conversation_summaries.summary`（查無資料視為空字串），與短記憶/知識庫一起放進 prompt
 - [x] FR-7：長記憶更新（滾動式摘要，對應 ADR-3）—— 每次聊天核心處理完一輪對話後，計算「比短記憶更早、且 `id` 大於 `summarized_up_to_log_id` 」的 backlog 對話則數；backlog ≥ 10 則時，把 backlog 內容連同既有摘要一起丟給 `GEMINI_API_TEXT_KEY`（長文生成用途，見 ADR-12），產出新摘要覆蓋回 `conversation_summaries.summary`，並把 `summarized_up_to_log_id` 推進到 backlog 最新一筆的 `id`；backlog 未達門檻則不觸發，維持原摘要不變
@@ -139,6 +139,32 @@ owner: Robin
 - `src/bot/router.py`：`_dispatch_active_flow` 的 `pending_kb_save` 分支改為 `pending_user_knowledge`
 - 相關測試全數更新（`test_client.py`／`test_chat.py`／`test_router.py`）
 
+**狀態**：`pending_user_knowledge` 的「下一則輸入無條件視為答案」機制部分 superseded by ADR-6（2026-07-31，同一天 Robin 實測就回報這個假設太天真：換問題、拒絕記錄都會被誤存），其餘（移除 grounding、誠實回報不知道）維持 accepted
+
+### ADR-6：`pending_user_knowledge` 改由同一次 LLM 呼叫判斷「答案／拒絕／新問題」，不再無條件存檔（部分 supersede ADR-5）
+
+**背景**：ADR-5 上線當天 Robin 實測回報三個問題，全部源自同一個天真假設——「使用者下一則輸入＝要存的答案」：
+1. 問「陳東東是誰」被回不知道後，換問一個完全無關的新問題「吳凱吉是誰」，結果被當成「陳東東」的答案存進知識庫，新問題本身也沒被回答，直接被吞掉
+2. 問「吳鎧吉是誰」（同音字打錯，知識庫其實有「吳凱吉」）被誤判不知道；換句話說 prompt 對「使用者打字可能有誤植」這件事完全沒有容錯
+3. 使用者明確回「不用紀錄啦」表示拒絕，還是被存進知識庫；另外還發現模型會把之前已經回覆過、寫進 `conversation_logs` 的建議句從對話紀錄裡複誦出來，跟程式碼另外補的同一句建議疊在一起變成重複兩次
+
+**選項**：
+| 方案 | 優點 | 缺點 |
+|------|------|------|
+| A：關鍵字比對——維護一組「拒絕詞」（不用／算了／不需要）比對使用者輸入，符合就不存，其餘一律當答案存 | 零額外 API 呼叫、實作單純 | 只解決拒絕詞問題（問題3），完全沒解決「換了新問題」（問題1）這種無法用關鍵字窮舉的情況；本質上只是把天真假設的破口從「全部」縮小到「大部分」，治標不治本 |
+| B：同一次 LLM 呼叫裡讓模型先判斷這則新訊息是「提供答案」「拒絕記錄」還是「問了個無關的新問題」，三種情況分別輸出對應標記（`【SAVE_ANSWER】`／`【DECLINE_SAVE】`／無標記=正常回答），Python 依標記決定要不要存檔 | 不额外多打一次 API（跟原本判斷「知不知道」共用同一次呼叫）、能處理關鍵字窮舉不了的「換問題」情境，泛化能力最好 | 判斷準確度依賴模型的語言理解能力，不是規則式 100% 可控（但這跟 ADR-1 一貫的取捨邏輯一致） |
+
+**決策**：採方案 B。同時，順手把 ADR-5 的 prompt 再補兩條規則：(a) 遇到跟知識庫人名高度相似（同音字/形似字，例如「鎧」vs「凱」）的名字，先假設是打字誤植、用最相近的知識庫人名回答，不要直接判定不知道；(b) 附加建議句之前，先把回覆文字裡「可能已經存在」的同一句建議去掉，再統一補一份，避免重複兩次。
+
+**理由**：方案 A 治標不治本——本次三個問題裡最嚴重的「換問題被吞掉」根本不是關鍵字能解的，因為使用者換的新問題內容無法窮舉；方案 B 沒有增加 API 呼叫次數（原本這一步就是要呼叫一次 LLM 判斷「知不知道」，現在只是多帶一段情境、多判斷一件事），符合 ADR-1 一貫「單次呼叫換取簡單實作」的原則，且泛化能力明顯更好。
+
+**後果**：
+- `src/bot/chat.py`：`handle_chat_message()` 新增 `pending_question: str | None = None` 參數；不是 None 時 `_build_prompt()` 會多帶一段「特別狀況」情境，並依回覆是否含 `【SAVE_ANSWER】`／`【DECLINE_SAVE】`／`【NOT_FOUND】` 三種標記分流；三種都沒有的話代表模型判斷是無關新問題，照一般規則回答並清除舊的 pending 狀態，不再殘留卡住下一輪
+- 刪除 `handle_pending_user_knowledge_step()`——其功能完全併入 `handle_chat_message()`，不再是獨立的「無條件存檔」函式
+- `pending_user_knowledge` 狀態新增 `original_question` 欄位（記錄使用者原本問的問題，供下一輪的判斷 prompt 使用）
+- `src/bot/router.py`：`_dispatch_active_flow` 簽章改吃整包 `state` dict（取代原本只吃 `flow` 字串），並新增 `llm_client`／`text_llm_client` 參數，`pending_user_knowledge` 分支改呼叫 `chat.handle_chat_message()` 而非已刪除的舊函式
+- 相關測試全數更新（`test_chat.py`／`test_router.py`）
+
 **狀態**：accepted
 
 ## 實作計畫
@@ -202,3 +228,4 @@ owner: Robin
 | 2026-07-31 | **移除 Google Search grounding**：Robin 排查一把新產生的 `GEMINI_API_BOT_KEY` 時發現 `gemini-2.5-flash` 對新專案回傳 404「no longer available to new users」，Gemini 2.5 世代已對新專案關閉存取（見 submodules-core SPEC.md ADR-8），Robin 指示「把所有會用到上網查詢的部分移除，若真的不知道答案就回不知道，並建議使用者自行查詢後提供答案存檔」；新增 ADR-5（supersede ADR-1／ADR-2）：`client.py` 刪除 `generate_with_search()`；`chat.py` 改呼叫 `generate_text()`，prompt 加入 `【NOT_FOUND】` 標記機制，新增 `handle_pending_user_knowledge_step()` 取代 `handle_pending_kb_save_step()`；`router.py` flow 更名為 `pending_user_knowledge`；全專案 174 個測試全過、覆蓋率 100% | Claude（依 Robin 指示） |
 | 2026-07-31 | Robin 回報問「今天幾月幾號」時模型瞎掰了錯誤日期，還編造「剛好是我生日」這種知識庫沒有的內容；補充 FR-3(d)：`chat.py` 新增 `_now()`／`_current_date_text()`（`Asia/Taipei` 時區，伺服器本地算出，不需外部 API），prompt 加入真實日期區塊並加強「不可捏造具體事實」規則；全專案 176 個測試全過、覆蓋率 100% | Claude（依 Robin 回報指示） |
 | 2026-07-31 | Robin 回報問「小布丁是誰」後追問「他大概幾歲」，Robinson 誤把「他」理解成上一輪回答裡順便提到的照顧者（爺爺）並算出爺爺的年齡，糾正「我說小布丁啦」後又只是重複貼舊答案；補充 FR-3(e)：prompt 加入代名詞指涉規則（不要因為上一輪回答順便提到其他人名就誤判、使用者糾正要重新回答原問題、不確定就反問）與年齡計算規則；全專案 177 個測試全過、覆蓋率 100% | Claude（依 Robin 回報指示） |
+| 2026-07-31 | Robin 回報 `pending_user_knowledge` 三個問題：(1) 問「陳東東是誰」被回不知道後換問完全無關的「吳凱吉是誰」，被誤存成陳東東的答案，新問題也沒被回答 (2) 「吳鎧吉」（同音字打錯，知識庫其實有「吳凱吉」）被誤判不知道，正常人一看就知道在找誰 (3) 明確說「不用紀錄啦」還是被存進知識庫，且建議句重複出現兩次；新增 ADR-6（部分 supersede ADR-5）：改由同一次 LLM 呼叫判斷「答案／拒絕／新問題」（`【SAVE_ANSWER】`／`【DECLINE_SAVE】`／無標記），不再無條件存檔；`handle_pending_user_knowledge_step()` 整併進 `handle_chat_message()`；prompt 加入同音字/形似字容錯規則；`router.py` `_dispatch_active_flow` 改吃整包 `state` 並新增 `llm_client`／`text_llm_client` 參數；全專案 184 個測試全過、覆蓋率 100% | Claude（依 Robin 回報指示） |

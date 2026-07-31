@@ -209,17 +209,135 @@ def test_handle_chat_message_appends_self_search_suggestion_and_sets_pending_sta
     assert "這個我目前不知道耶" in reply
     assert "【NOT_FOUND】" not in reply  # 標記不應該外露給使用者
     assert "自行上網查詢" in reply
-    assert store.get(1) == {"flow": "pending_user_knowledge", "target_user_id": 1}
+    assert store.get(1) == {
+        "flow": "pending_user_knowledge",
+        "target_user_id": 1,
+        "original_question": "國道現在塞車嗎？",
+    }
 
 
-def test_handle_pending_user_knowledge_step_saves_user_provided_answer(fake_db):
+def test_handle_chat_message_deduplicates_suggestion_when_model_already_echoed_it(fake_db):
+    # Robin 實測遇過：模型看了對話紀錄裡自己之前回覆過的建議句，有樣學樣把同一句話
+    # 也寫進這次的回答裡，導致 code 又補一次，使用者收到重複兩次的建議句。
+    _seed_general(fake_db)
+    echoed = "我不知道耶。\n\n你可以先自行上網查詢，查到後把答案打給我，我會幫你記錄到知識庫喔！【NOT_FOUND】"
+    llm_client = _FakeLLMClient(response_text=echoed)
+    text_llm_client = _FakeTextLLMClient()
     store = ConversationStateStore()
-    store.set(1, {"flow": "pending_user_knowledge", "target_user_id": 1})
 
-    reply = chat.handle_pending_user_knowledge_step(fake_db, store, telegram_user_id=1, text="威靈頓牛排食譜是...")
+    reply = chat.handle_chat_message(
+        fake_db, llm_client, text_llm_client, store, telegram_user_id=1, user_id=1, text="吳鎧吉是誰"
+    )
 
-    assert "記錄" in reply
+    assert reply.count("你可以先自行上網查詢") == 1
+
+
+def test_handle_chat_message_prompt_includes_fuzzy_name_matching_rule(fake_db):
+    # Robin 回報：知識庫存的是「吳凱吉」，打成「吳鎧吉」（同音字誤植）就直接被判定不知道，
+    # 正常人類看了也知道在找誰；prompt 要指示模型合理假設打字誤植、別急著說不知道。
+    _seed_general(fake_db)
+    llm_client = _FakeLLMClient()
+    text_llm_client = _FakeTextLLMClient()
+    store = ConversationStateStore()
+
+    chat.handle_chat_message(
+        fake_db, llm_client, text_llm_client, store, telegram_user_id=1, user_id=1, text="吳鎧吉是誰"
+    )
+
+    assert "打字誤植" in llm_client.last_prompt
+
+
+def test_handle_chat_message_saves_answer_when_llm_returns_save_marker(fake_db):
+    # ADR-6：pending_user_knowledge 狀態下，是否要存檔改由同一次 LLM 呼叫判斷，
+    # 不再無條件把下一則訊息當成答案。
+    _seed_general(fake_db)
+    llm_client = _FakeLLMClient(response_text="【SAVE_ANSWER】")
+    text_llm_client = _FakeTextLLMClient()
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_user_knowledge", "target_user_id": 1, "original_question": "陳東東是誰"})
+
+    reply = chat.handle_chat_message(
+        fake_db, llm_client, text_llm_client, store, telegram_user_id=1, user_id=1,
+        text="陳東東是我朋友，住台北", pending_question="陳東東是誰",
+    )
+
+    assert reply == "已經幫你記錄到知識庫囉！"
     assert store.get(1) is None
     rows = fake_db.select("knowledge_base", where="category = %s AND user_id = %s", params=("custom", 1))
     assert len(rows) == 1
-    assert rows[0]["content"] == "威靈頓牛排食譜是..."
+    assert rows[0]["content"] == "陳東東是我朋友，住台北"
+    # prompt 必須把待確認的問題帶進去，模型才有判斷依據
+    assert "陳東東是誰" in llm_client.last_prompt
+    assert "【SAVE_ANSWER】" in llm_client.last_prompt
+
+
+def test_handle_chat_message_declines_when_llm_returns_decline_marker(fake_db):
+    # Robin 回報：明確說「不用紀錄啦」還是被存進知識庫，改由模型判斷拒絕意圖。
+    _seed_general(fake_db)
+    llm_client = _FakeLLMClient(response_text="【DECLINE_SAVE】")
+    text_llm_client = _FakeTextLLMClient()
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_user_knowledge", "target_user_id": 1, "original_question": "陳東東是誰"})
+
+    reply = chat.handle_chat_message(
+        fake_db, llm_client, text_llm_client, store, telegram_user_id=1, user_id=1,
+        text="不用紀錄啦", pending_question="陳東東是誰",
+    )
+
+    assert reply == "好的，這次就不記錄囉！"
+    assert store.get(1) is None
+    rows = fake_db.select("knowledge_base", where="category = %s AND user_id = %s", params=("custom", 1))
+    assert len(rows) == 0
+
+
+def test_handle_chat_message_treats_unrelated_new_question_normally_when_pending(fake_db):
+    # Robin 回報：問「陳東東是誰」被回不知道後，換問「吳凱吉是誰」（全新問題），
+    # 結果被無條件當成「陳東東」的答案存檔。模型若判斷是無關新問題，不應輸出任何標記，
+    # 直接照一般規則回答，且不該把答案存錯地方，也要清掉舊的 pending 狀態。
+    _seed_general(fake_db)
+    llm_client = _FakeLLMClient(response_text="吳凱吉是 Robin 的妹夫喔！")
+    text_llm_client = _FakeTextLLMClient()
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_user_knowledge", "target_user_id": 1, "original_question": "陳東東是誰"})
+
+    reply = chat.handle_chat_message(
+        fake_db, llm_client, text_llm_client, store, telegram_user_id=1, user_id=1,
+        text="吳凱吉是誰", pending_question="陳東東是誰",
+    )
+
+    assert reply == "吳凱吉是 Robin 的妹夫喔！"
+    assert store.get(1) is None
+    rows = fake_db.select("knowledge_base", where="category = %s AND user_id = %s", params=("custom", 1))
+    assert len(rows) == 0
+
+
+def test_handle_chat_message_replaces_pending_state_when_still_unknown_while_pending(fake_db):
+    # 使用者在 pending_user_knowledge 狀態下又問了另一個知識庫沒有的新問題，
+    # 應該用新問題覆蓋舊的 pending 狀態，而不是卡在原本那題。
+    _seed_general(fake_db)
+    llm_client = _FakeLLMClient(response_text="這個也不知道耶【NOT_FOUND】")
+    text_llm_client = _FakeTextLLMClient()
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_user_knowledge", "target_user_id": 1, "original_question": "陳東東是誰"})
+
+    chat.handle_chat_message(
+        fake_db, llm_client, text_llm_client, store, telegram_user_id=1, user_id=1,
+        text="林小明是誰", pending_question="陳東東是誰",
+    )
+
+    assert store.get(1) == {
+        "flow": "pending_user_knowledge",
+        "target_user_id": 1,
+        "original_question": "林小明是誰",
+    }
+
+
+def test_build_prompt_includes_pending_question_block_only_when_provided(fake_db):
+    _seed_general(fake_db)
+    llm_client = _FakeLLMClient()
+    text_llm_client = _FakeTextLLMClient()
+    store = ConversationStateStore()
+
+    chat.handle_chat_message(fake_db, llm_client, text_llm_client, store, telegram_user_id=1, user_id=1, text="嗨")
+
+    assert "特別狀況" not in llm_client.last_prompt
