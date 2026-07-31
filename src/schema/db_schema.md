@@ -225,3 +225,35 @@ COMMENT ON COLUMN conversation_summaries.updated_at IS '最後一次摘要更新
 - 每人一筆（`UNIQUE user_id`），用 `UPDATE` 覆蓋既有摘要，不累積多筆歷史版本，維持表格輕量（對應 NFR-3 容量考量）
 - `summarized_up_to_log_id` 是進度記號：只有「比短記憶（最近 10 則）更早、且 id 大於這個記號」的對話才算尚未摘要的 backlog；backlog 累積到 10 則以上才觸發一次摘要更新，避免每則訊息都多打一次 API
 - 摘要呼叫使用 `GEMINI_API_TEXT_KEY`（長文生成類用途，見 ADR-12），不是一般問答用的 `GEMINI_API_BOT_KEY`
+
+---
+
+### media_uploads
+
+**建立日期**：2026-07-31
+**用途**：圖片/語音上傳的 Google Drive 網址記錄，對應 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) ADR-13。
+**Migration 檔案**：`src/migrations/0008_create_media_uploads_table.sql`
+
+```sql
+CREATE TABLE media_uploads (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id),
+    media_type TEXT NOT NULL CHECK (media_type IN ('image', 'audio')),
+    gdrive_url TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_media_uploads_user_id ON media_uploads (user_id);
+
+COMMENT ON TABLE media_uploads IS '使用者上傳的圖片/語音檔案 Google Drive 網址記錄，對應 ADR-13';
+COMMENT ON COLUMN media_uploads.id IS '內部主鍵';
+COMMENT ON COLUMN media_uploads.user_id IS '上傳者，對應 users.id';
+COMMENT ON COLUMN media_uploads.media_type IS '檔案類型：image（圖片）或 audio（語音），Step 1.4 語音功能上線後會共用這張表';
+COMMENT ON COLUMN media_uploads.gdrive_url IS '原始檔案的 Google Drive 網址（圖片壓縮只在辨識前即時處理，不另外存壓縮版）';
+COMMENT ON COLUMN media_uploads.created_at IS '上傳時間';
+```
+
+**設計理由**：
+- `media_type` 用 `CHECK` 限制 `image`／`audio` 兩種，Step 1.3b（影像）先用到 `image`，Step 1.4（語音）上線後共用同一張表寫入 `audio`，不必屆時另外提案建表
+- 只存 `gdrive_url`（原始檔）：Robin 2026-07-31 確認壓縮版圖片只在餵給 Gemini 前於記憶體內即時處理，不落地存回 Google Drive，因此表裡不需要壓縮版欄位（原提案的 `compressed_gdrive_url` 已移除，`original_gdrive_url` 更名為 `gdrive_url`）
+- `user_id` 索引對應最常見查詢「查某人上傳過的檔案」

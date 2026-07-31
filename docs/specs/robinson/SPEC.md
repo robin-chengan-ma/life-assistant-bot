@@ -491,11 +491,11 @@ Robinson 是一個以 Telegram 為前台介面的家庭生活小助手，Robin �
 
 **決策**：
 1. 使用者上傳的圖片與語音檔案，一律先上傳至 Google Drive（`GDRIVE_FOLDER_ID` 指定資料夾），取得檔案 URL 後才進行後續處理
-2. 圖片在餵給 AI 辨識前，統一用 `Pillow` 強制縮放至 1024×1024 以下、轉存為 JPEG 品質 80%，降低傳給 Gemini 的 Payload 大小與 Token 消耗；壓縮後的版本才是實際送給 AI 辨識的版本，原始檔與壓縮版皆保留在 Google Drive
+2. 圖片在餵給 AI 辨識前，統一用 `Pillow` 強制縮放至 1024×1024 以下、轉存為 JPEG 品質 80%，降低傳給 Gemini 的 Payload 大小與 Token 消耗；壓縮後的版本才是實際送給 AI 辨識的版本。**2026-07-31 更新（Robin 確認）**：壓縮僅發生在記憶體內、即時處理，不另外把壓縮版存回 Google Drive——Google Drive 只保留原始檔，避免多一份檔案與多一個欄位的維護成本
 3. 檔名規則：
    - 多益相關的圖片與音檔（含錄音切割後的小檔案）：檔名內須包含 `toeic` 字樣，供後續程式辨識歸類（沿用 FR-25b 既有的檔名比對邏輯）
    - 其餘一般使用者上傳的檔案：檔名採「使用者稱呼（`users.role`）＋當下時間戳記＋用途」組合（例如 `爸爸_20260731153000_飲食紀錄.jpg`）
-4. 不論哪一類檔案，Google Drive 的檔案 URL 一律寫入 Neon 資料庫對應資料列（後續實作對應資料表時，須包含 `gdrive_url` 或等義欄位，依 ADR-10 流程另行提案建表）
+4. 不論哪一類檔案，Google Drive 的檔案 URL 一律寫入 Neon 資料庫對應資料列。**2026-07-31 確定**：建立共用的 `media_uploads` 表（`user_id`、`media_type`〔`image`／`audio`〕、`gdrive_url`、`created_at`），Step 1.3b（影像）與 Step 1.4（語音）共用同一張表，依 ADR-10 流程經 Robin 核准 SQL 後建立（見 `src/schema/db_schema.md`）
 5. 使用者上傳的語音檔本身（不含語音轉出來的文字內容）也要上傳至 Google Drive 保存原始音檔
 
 **理由**：先壓縮再辨識可以直接降低 Gemini 呼叫的 Token 成本，符合 NFR-7 的節流原則；統一檔名規則讓之後不論是人工到 Google Drive 檢查、或程式自動掃描比對，都有一致的邏輯可以依循，不需要每個功能各自發明一套命名慣例；URL 一律入庫是延續 NFR-3「圖片不進資料庫、只存 URL」的既有原則，此處只是把它明確化為所有影像/語音上傳功能的共同義務
@@ -715,3 +715,4 @@ FR-56 的 `/function` 路由目前只定義了「回傳範圍」（所有功能�
 | 2026-07-31 | **Phase 1 Step 1.3a 完成**：`/function` 重新實作為「總覽＋按需深入＋情境範例」，展開為獨立 [docs/specs/chat-core/SPEC.md](../chat-core/SPEC.md) FR-9（含 ADR-4：總覽用獨立小型 LLM 呼叫，細節追問併入既有聊天核心，Robin 確認）；FR-56、FR-56a～FR-56h 全數完成；新增 `knowledge.get_persona_text()`，`commands.handle_function()` 改為 LLM 人格化總覽，`chat.py` prompt 固定附上功能手冊供按需細節追問；全專案 126 個測試全過、覆蓋率 100% | Claude（依 Robin「繼續開發吧」指示） |
 | 2026-07-31 | Robin 實測時撞到 Gemini 429（額度超限），確認四把 Gemini Key 分屬四個獨立 Google Cloud 專案（ADR-12 分流設計有效），但發現 `webhook.py` 未攔截例外會讓 Telegram 自動重送同一則訊息、加速燒光額度；補充 FR-19 說明，新增 platform-auth SPEC.md FR-7（暫時性安全網：`try/except` + 固定安全用語 + 仍回 200），完整分級錯誤處理仍留給 Step 1.6；全專案 127 個測試全過、覆蓋率 100% | Claude（依 Robin「先加上最小安全網」指示） |
 | 2026-07-31 | Robin 要求「該做的防呆要做好，不要因為程式碼關係浪費不必要的額度」，再補兩層防護：① platform-auth SPEC.md FR-7a：`update_id` 去重（LRU 上限 1000 筆），解決「沒出錯但被 Telegram 誤判逾時重送」也會重複打 Gemini 的問題 ② submodules-core SPEC.md FR-7／ADR-5：`LLMClient` 新增本地端節流保護（同一 `api_key` 最近 60 秒超過 8 次呼叫直接擋下、不送出請求，避免明知道會被官方 429 拒絕還是浪費額度嘗試）；FR-7 安全網範圍也擴大涵蓋 DB／LLM Client 建立與 Telegram 傳送失敗；全專案 137 個測試全過、覆蓋率 100% | Claude（依 Robin「該做的防呆要做好」指示） |
+| 2026-07-31 | 確認 429 Traceback 為真實 Gemini 額度超限（非本地端節流誤判），安全網運作正常；Robin 確認 Step 1.3b（影像辨識）設計：新增 `media_uploads` 表統一記錄圖片/語音的 Google Drive 網址（Step 1.4 語音功能上線後共用）；修正 ADR-13 第 2、4 點——壓縮版圖片僅記憶體內即時處理、不落地存回 Google Drive，只保留原始檔 | Robin |
