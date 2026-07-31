@@ -23,7 +23,9 @@ owner: Robin
 - [x] FR-4：Owner 專屬設定對話流（對應 robinson SPEC.md FR-6a～FR-6c）—— 僅 Robin 可觸發 `/set_invite_codes` 或「設定通關密碼」，進入多輪對話：詢問稱謂 → 收到稱謂後暫存於記憶體狀態（尚不寫入資料庫，因為 `invite_codes.code` 是 `NOT NULL`，稱謂單獨一項還無法組成合法的一列）→ 詢問通關密碼 → 收到密碼後，此時稱謂與密碼皆已齊備，一次性建立 `users`（`telegram_user_id=NULL`、`role=<稱謂>`）與 `invite_codes`（`code=<密碼>`、`user_id` 指向剛建立的 `users.id`）→ 回覆「已寫入！請問還有其他家人要設定嗎？」→ 下一則訊息若為「沒有了」或「結束」則退出設定模式，否則視為下一位家人的稱謂，繼續循環
 - [x] FR-5：`/rule` 路由 —— 任何身分輸入「我要看使用規則」或 `/rule`，直接回傳附錄 A 全文，不經過 LLM
 - [x] FR-6：`/function` 路由 —— 任何身分輸入「我要看所有功能」或 `/function`，回傳目前已實作功能的清單（MVP 先用最簡單條列格式，正式文案模板待產品原型後由 Robin 補上，見 robinson SPEC.md 附錄 B）。**2026-07-31 更新**：此 MVP 版本（一次回傳固定條列文字、不經 LLM）已於 Phase 1 Step 1.3a 被取代，改為「總覽＋按需深入＋人格化語氣」設計，見 [chat-core SPEC.md](../chat-core/SPEC.md) FR-9、ADR-4；本條 FR 保留作為 Step 1.1 當時的歷史紀錄，路由觸發字串（`/function`／「我要看所有功能」）本身不變
-- [x] FR-7（暫時性安全網，2026-07-31 新增）：`telegram_webhook()` 對 `handle_message()` 呼叫包 `try/except`，未預期例外（例如 Gemini API 額度超限的 429）一律記錄完整 Traceback（`logging.exception`）並回覆固定安全用語 `"羅賓森好像不太舒服，等一下再試試看喔！"`，**仍然回傳 HTTP 200**。這不是完整的 FR-19（robinson SPEC.md），只解決一個具體的營運風險：Flask 若讓例外往外拋回 500，Telegram Webhook 收不到 200 會自動重送同一則訊息，形成「失敗 → 重試 → 再失敗」的迴圈，把 Gemini 免費額度燒得更快；完整的錯誤分類、Traceback 集中式 log、私訊 Robin、自主診斷仍留給 robinson SPEC.md Step 1.6／FR-19a～FR-19i
+- [x] FR-7（暫時性安全網，2026-07-31 新增，同日再擴大範圍）：`telegram_webhook()` 用 `try/except` 涵蓋「建立 DB Client → 建立 LLM Client → 呼叫 `handle_message()`」整段流程，任何未預期例外（Gemini API 額度超限的 429、本地端節流保護 `LLMQuotaGuardError`、DB 連線失敗等）一律記錄完整 Traceback（`logging.exception`）並回覆固定安全用語 `"羅賓森好像不太舒服，等一下再試試看喔！"`，**仍然回傳 HTTP 200**；傳送回覆給使用者的 `TelegramClient.send_text()` 另外包一層獨立的 `try/except`（傳送失敗是另一種失敗模式，不該連帶讓整個 route 500）。這不是完整的 FR-19（robinson SPEC.md），只解決一個具體的營運風險：Flask 若讓例外往外拋回 500，Telegram Webhook 收不到 200 會自動重送同一則訊息，形成「失敗 → 重試 → 再失敗」的迴圈，把 Gemini 免費額度燒得更快；完整的錯誤分類、Traceback 集中式 log、私訊 Robin、自主診斷仍留給 robinson SPEC.md Step 1.6／FR-19a～FR-19i
+- [x] FR-7a（2026-07-31 新增）：`update_id` 去重 —— `telegram_webhook()` 用一個有上限（1000 筆，LRU 淘汰最舊）的記憶體集合記錄最近處理過的 `update_id`；收到已處理過的 `update_id` 直接短路回 200、不重新呼叫 `handle_message()`。動機：Telegram 在沒收到 200 時會自動重送同一則 Update，這不只發生在我們自己出錯的時候——單純網路延遲讓 Telegram 誤判逾時，也可能造成同一則訊息被重複送達；沒有這層去重，即使 FR-7 的安全網接住了錯誤，仍然可能因為「重送但這次剛好處理成功」而重複打兩次 Gemini
+- [x] FR-7b（2026-07-31 新增）：本地端節流保護 —— `submodules/llm/client.py::LLMClient` 在真正呼叫 Gemini API 之前，先檢查「最近 60 秒內以同一把 `api_key` 呼叫的次數」是否已達門檻（預設 8 次／分鐘，低於官方免費層 RPM 上限保留緩衝），超過門檻直接拋 `LLMQuotaGuardError`、不送出請求，避免明知道會被官方 429 拒絕還是浪費一次額度嘗試；詳見 [submodules-core SPEC.md](../submodules-core/SPEC.md) ADR-5
 
 ### 非功能性需求
 
@@ -99,9 +101,11 @@ owner: Robin
 - [x] 完整 Owner 設定流程：`/set_invite_codes` → 輸入稱謂 → 輸入密碼 → 重複第二輪 → 「沒有了」結束（`test_full_two_family_members_setup_flow`）
 - [x] 家人綁定 + `/rule` + `/function` 全流程
 
-- [x] FR-7：`handle_message()` 拋出未預期例外時，`telegram_webhook()` 仍回傳 200 並回覆安全用語（`test_webhook_swallows_unexpected_exception_and_still_returns_200`）
+- [x] FR-7：`handle_message()` 拋出未預期例外／DB 連線失敗／Telegram 傳送失敗時，`telegram_webhook()` 仍回傳 200 並回覆安全用語（`test_webhook_swallows_unexpected_exception_and_still_returns_200`、`test_webhook_survives_db_construction_failure`、`test_webhook_survives_telegram_send_failure`）
+- [x] FR-7a：`update_id` 去重 —— 同一個 `update_id` 重複送達不會重新呼叫 `handle_message()`；不同 `update_id` 正常各自處理；超過上限時 LRU 淘汰最舊紀錄（`test_webhook_ignores_duplicate_update_id_without_reprocessing`、`test_webhook_processes_different_update_ids_normally`、`test_processed_update_ids_evicts_oldest_beyond_max_len`）
+- [x] FR-7b：本地端節流保護測試放在 [submodules-core SPEC.md](../submodules-core/SPEC.md)（`tests/submodules/llm/test_client.py`），不在本 spec 重複列出
 
-**測試結果**：49 個測試全數通過，`src/bot/` 覆蓋率 100%（`pytest tests/ --cov=src/bot`）。**2026-07-31 補充**：FR-7 安全網新增 1 個測試，隨 Step 1.3a 之後的整體測試套件一起計入 robinson SPEC.md 變更記錄的測試總數。
+**測試結果**：`src/bot/` 相關測試（含 FR-7／FR-7a）2026-07-31 隨 Step 1.3a 之後的整體測試套件一起計入 robinson SPEC.md 變更記錄的測試總數（全專案 137 個測試全過、覆蓋率 100%）。
 
 ## 風險與緩解
 
@@ -110,7 +114,9 @@ owner: Robin
 | Owner 設定流程中途服務重啟導致狀態遺失（ADR-2 已知取捨） | 低 | 低 | Robin 重新輸入 `/set_invite_codes` 即可，不影響資料正確性 |
 | 通關密碼綁定的 race condition（理論上兩人同時搶同一組碼） | 低 | 極低（個人/家用場景） | 不依賴「單一 transaction 包住 select+update」（`CloudSQLClient` 每個方法各自開關連線，無法這樣做），改用「原子性條件 UPDATE」：`UPDATE invite_codes SET is_used=TRUE WHERE id=%s AND is_used=FALSE`，第二個並行請求會影響 0 筆而非誤判成功，已有專屬單元測試覆蓋此分支 |
 | 原生 JSON 解析缺乏型別檢查，欄位打錯字不會在開發期被抓到（ADR-1 已知取捨） | 中 | 中 | Unit test 覆蓋各種缺欄位情境；所有欄位存取用 `.get()` 並在缺欄位時回傳明確錯誤，不讓 `KeyError` 直接讓 process 掛掉 |
-| 外部 API（Gemini／Telegram）呼叫失敗未攔截時，Telegram Webhook 重試機制會不斷重送同一則訊息，加速燒光免費額度（2026-07-31 實測發現，見 FR-7） | 中 | 中 | FR-7 已加上最小安全網（`try/except` + 固定回覆 200），實測時已解決；完整分級處理仍待 robinson SPEC.md Step 1.6 |
+| 外部 API（Gemini／Telegram）呼叫失敗未攔截時，Telegram Webhook 重試機制會不斷重送同一則訊息，加速燒光免費額度（2026-07-31 實測發現，見 FR-7） | 中 | 中 | FR-7 已加上最小安全網（`try/except` 涵蓋 DB／LLM Client 建立與 `handle_message()`，固定回覆 200），實測時已解決；完整分級處理仍待 robinson SPEC.md Step 1.6 |
+| 網路延遲讓 Telegram 誤判逾時、重送本來就處理成功的訊息，即使沒有錯誤也會重複打 Gemini（2026-07-31 發現，FR-7 只解決「出錯後重試」，沒解決「正常但被重送」） | 中 | 低 | FR-7a 加上 `update_id` 去重，重複送達直接短路回 200 不重新處理 |
+| 家人與 Robin 共用同一個 Google Cloud 專案／同一把 `GEMINI_API_BOT_KEY`，多人同時使用時實際額度是大家加總扣，尖峰時段容易撞到分鐘限制 | 低 | 中 | FR-7b 本地端節流保護（8 次/分鐘）先發制人擋下注定失敗的請求，避免浪費額度嘗試；若未來家人使用頻繁到常態性不夠用，需考慮幫該專案開通計費 |
 
 ## 變更記錄
 
@@ -119,3 +125,4 @@ owner: Robin
 | 2026-07-30 | 初版建立，展開 robinson SPEC.md Phase 1 Step 1.1 為獨立 spec | Claude（依 Robin「請開始吧」指示） |
 | 2026-07-30 | ADR-1／ADR-2 經 Robin 確認後完成 TDD 實作：`src/bot/`（`state.py`／`auth.py`／`templates.py`／`commands.py`／`router.py`／`webhook.py`），`requirements.txt` 移除 `python-telegram-bot`，新增 `requirements-dev.txt`／`pytest.ini`；49 個測試全過、覆蓋率 100%；同步更新 `src/schema/api_schema.md` 對應路由狀態 | Claude |
 | 2026-07-31 | Robin 實測 Step 1.3a 時撞到 Gemini 429（額度超限），發現 `webhook.py` 未攔截例外會導致 Telegram 自動重送同一則訊息、加速燒額度；新增 FR-7（暫時性安全網）：`telegram_webhook()` 包 `try/except`，未預期例外一律 log + 回安全用語 + 仍回 200；這不是完整的 FR-19（robinson SPEC.md），只解決重試風暴這個具體風險，完整版留給 Step 1.6 | Claude（依 Robin「先加上最小安全網」指示） |
+| 2026-07-31 | Robin 要求「該做的防呆要做好」，擴大防呆範圍：① FR-7 的 `try/except` 範圍擴大到涵蓋 DB／LLM Client 建立，並額外幫 `TelegramClient.send_text()` 包獨立安全網 ② 新增 FR-7a：`update_id` 去重（LRU、上限 1000 筆），解決「沒出錯但被 Telegram 誤判逾時重送」也會重複打 Gemini 的問題 ③ 新增 FR-7b：`submodules/llm/client.py::LLMClient` 加上本地端節流保護（同一 `api_key` 最近 60 秒超過 8 次呼叫直接擋下、不送出請求），見 [submodules-core SPEC.md](../submodules-core/SPEC.md) ADR-5；全專案 137 個測試全過、覆蓋率 100% | Claude（依 Robin「該做的防呆要做好」指示） |

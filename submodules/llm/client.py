@@ -6,23 +6,69 @@ generate_with_image）維持穩定；未來若要換成其他供應商或新增�
 
 金鑰不寫死在程式碼中，一律由呼叫端在建立 Client 時傳入 api_key。
 """
+import time
+from collections import deque
+
 from google import genai
 from google.genai import types
 
 _DEFAULT_MODEL = "gemini-flash-latest"
 
+# 本地端節流保護（非 Gemini 官方額度機制）：見 docs/specs/submodules-core/SPEC.md ADR-5。
+# 免費層 Gemini Flash 官方 RPM 限制約 10～15 次/分鐘，這裡刻意抓保守一點的預設值，
+# 目的是在明知道會被官方 429 拒絕之前就先攔下來，避免白白浪費一次額度。
+_DEFAULT_MAX_CALLS_PER_MINUTE = 8
+_RATE_LIMIT_WINDOW_SECONDS = 60
+
+
+class LLMQuotaGuardError(RuntimeError):
+    """本地端節流門檻觸發時拋出（不是 Gemini 官方回傳的錯誤）。
+
+    呼叫端（目前是 `src/bot/webhook.py` 的安全網）應該把這個例外當成一般的暫時性錯誤處理，
+    回覆使用者安全用語即可，不需要特別區分。
+    """
+
 
 class LLMClient:
-    """封裝官方 google-genai SDK 的最小 Client。"""
+    """封裝官方 google-genai SDK 的最小 Client。
 
-    def __init__(self, api_key: str, model: str = _DEFAULT_MODEL):
+    節流計數以 `api_key` 為單位共用（class 層級的 `dict`，不是掛在單一 instance 上）：
+    同一把 `api_key` 對應同一個 Google Cloud 專案、共用同一份 Gemini 官方額度（見
+    docs/specs/robinson/SPEC.md ADR-12），即使呼叫端每次請求都重新 `LLMClient(...)`
+    （目前 `webhook.py` 就是這樣用），只要 `api_key` 相同，節流計數仍會正確地跨請求累積。
+    """
+
+    _call_history_by_key: dict[str, "deque[float]"] = {}
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str = _DEFAULT_MODEL,
+        max_calls_per_minute: int = _DEFAULT_MAX_CALLS_PER_MINUTE,
+    ):
         if not api_key:
             raise ValueError("api_key 不可為空")
         self._client = genai.Client(api_key=api_key)
         self._model = model
+        self._api_key = api_key
+        self._max_calls_per_minute = max_calls_per_minute
+
+    def _guard_rate_limit(self) -> None:
+        """呼叫真正的 Gemini API 之前先檢查本地端節流門檻，超過就直接拋例外、不送出請求。"""
+        history = LLMClient._call_history_by_key.setdefault(self._api_key, deque())
+        now = time.monotonic()
+        while history and now - history[0] >= _RATE_LIMIT_WINDOW_SECONDS:
+            history.popleft()
+        if len(history) >= self._max_calls_per_minute:
+            raise LLMQuotaGuardError(
+                f"最近 {_RATE_LIMIT_WINDOW_SECONDS} 秒內已呼叫 {len(history)} 次，"
+                f"超過本地端節流門檻（{self._max_calls_per_minute} 次/分鐘），暫緩呼叫避免浪費額度"
+            )
+        history.append(now)
 
     def generate_text(self, prompt: str) -> str:
         """純文字生成，回傳模型的文字回應。"""
+        self._guard_rate_limit()
         response = self._client.models.generate_content(
             model=self._model,
             contents=prompt,
@@ -36,6 +82,7 @@ class LLMClient:
         mime_type: str = "image/jpeg",
     ) -> str:
         """圖像 + 文字提示的生成呼叫（例如解析證照題目截圖）。"""
+        self._guard_rate_limit()
         image_part = types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
         response = self._client.models.generate_content(
             model=self._model,
@@ -49,6 +96,7 @@ class LLMClient:
         是否要查網路由模型自行判斷（見 docs/specs/chat-core/SPEC.md ADR-1），本方法只負責
         從回應的 grounding_metadata 判讀這次有沒有真的觸發搜尋，不自己額外呼叫第二次 API。
         """
+        self._guard_rate_limit()
         grounding_tool = types.Tool(google_search=types.GoogleSearch())
         config = types.GenerateContentConfig(tools=[grounding_tool])
         response = self._client.models.generate_content(

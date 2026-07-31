@@ -38,6 +38,14 @@ def client(app):
     return app.test_client()
 
 
+@pytest.fixture(autouse=True)
+def _reset_processed_update_ids():
+    # `_processed_update_ids` 是 module 層級的共用狀態，測試之間要清空避免互相汙染
+    webhook._processed_update_ids.clear()
+    yield
+    webhook._processed_update_ids.clear()
+
+
 def test_webhook_ignores_non_text_updates(client, monkeypatch):
     mock_handle_message = MagicMock()
     monkeypatch.setattr(webhook, "handle_message", mock_handle_message)
@@ -116,3 +124,107 @@ def test_webhook_swallows_unexpected_exception_and_still_returns_200(client, mon
     mock_telegram_instance.send_text.assert_called_once_with(
         chat_id=123, text=webhook._UNEXPECTED_ERROR_REPLY
     )
+
+
+# --- update_id 去重（FR-7a）---
+
+
+def test_is_duplicate_update_false_before_marked_true_after():
+    assert webhook._is_duplicate_update(555) is False
+    webhook._mark_update_processed(555)
+    assert webhook._is_duplicate_update(555) is True
+
+
+def test_processed_update_ids_evicts_oldest_beyond_max_len(monkeypatch):
+    # 避免真的塞 1000+ 筆拖慢測試，暫時調小上限來驗證防呆邊界
+    monkeypatch.setattr(webhook, "_PROCESSED_UPDATE_IDS_MAXLEN", 2)
+
+    webhook._mark_update_processed(1)
+    webhook._mark_update_processed(2)
+    webhook._mark_update_processed(3)  # 超過上限 2，應該把最舊的 1 擠出去
+
+    assert webhook._is_duplicate_update(1) is False
+    assert webhook._is_duplicate_update(2) is True
+    assert webhook._is_duplicate_update(3) is True
+
+
+def test_webhook_ignores_duplicate_update_id_without_reprocessing(client, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("GEMINI_API_BOT_KEY", "fake-gemini-bot-key")
+    monkeypatch.setenv("GEMINI_API_TEXT_KEY", "fake-gemini-text-key")
+
+    mock_handle_message = MagicMock(return_value="哈囉！")
+    monkeypatch.setattr(webhook, "handle_message", mock_handle_message)
+    monkeypatch.setattr(webhook, "CloudSQLClient", MagicMock(return_value=MagicMock()))
+    monkeypatch.setattr(webhook, "LLMClient", MagicMock())
+    monkeypatch.setattr(webhook, "TelegramClient", MagicMock(return_value=MagicMock()))
+
+    payload = {"update_id": 9001, "message": {"from": {"id": 123}, "text": "早安"}}
+
+    first_response = client.post("/telegram/webhook", json=payload)
+    second_response = client.post("/telegram/webhook", json=payload)  # 模擬 Telegram 重送同一則
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    mock_handle_message.assert_called_once()  # 第二次應該被短路擋下，不會重新處理
+
+
+def test_webhook_processes_different_update_ids_normally(client, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("GEMINI_API_BOT_KEY", "fake-gemini-bot-key")
+    monkeypatch.setenv("GEMINI_API_TEXT_KEY", "fake-gemini-text-key")
+
+    mock_handle_message = MagicMock(return_value="哈囉！")
+    monkeypatch.setattr(webhook, "handle_message", mock_handle_message)
+    monkeypatch.setattr(webhook, "CloudSQLClient", MagicMock(return_value=MagicMock()))
+    monkeypatch.setattr(webhook, "LLMClient", MagicMock())
+    monkeypatch.setattr(webhook, "TelegramClient", MagicMock(return_value=MagicMock()))
+
+    client.post("/telegram/webhook", json={"update_id": 1, "message": {"from": {"id": 123}, "text": "早安"}})
+    client.post("/telegram/webhook", json={"update_id": 2, "message": {"from": {"id": 123}, "text": "午安"}})
+
+    assert mock_handle_message.call_count == 2
+
+
+# --- 其他失敗模式的安全網 ---
+
+
+def test_webhook_survives_db_construction_failure(client, monkeypatch):
+    # db 連線本身就失敗（例如 Neon 暫時連不上）：不該讓 close() 被呼叫在 None 上炸掉，
+    # 也一樣要吞例外回安全用語 + 200。
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("GEMINI_API_BOT_KEY", "fake-gemini-bot-key")
+    monkeypatch.setenv("GEMINI_API_TEXT_KEY", "fake-gemini-text-key")
+
+    monkeypatch.setattr(webhook, "CloudSQLClient", MagicMock(side_effect=RuntimeError("連不到資料庫")))
+    monkeypatch.setattr(webhook, "handle_message", MagicMock())
+
+    mock_telegram_instance = MagicMock()
+    monkeypatch.setattr(webhook, "TelegramClient", MagicMock(return_value=mock_telegram_instance))
+
+    payload = {"message": {"from": {"id": 123}, "text": "早安"}}
+    response = client.post("/telegram/webhook", json=payload)
+
+    assert response.status_code == 200
+    mock_telegram_instance.send_text.assert_called_once_with(
+        chat_id=123, text=webhook._UNEXPECTED_ERROR_REPLY
+    )
+
+
+def test_webhook_survives_telegram_send_failure(client, monkeypatch):
+    # 傳送回覆本身失敗（Telegram API 出問題）是獨立的失敗模式，不該讓整個 route 500
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("GEMINI_API_BOT_KEY", "fake-gemini-bot-key")
+    monkeypatch.setenv("GEMINI_API_TEXT_KEY", "fake-gemini-text-key")
+
+    monkeypatch.setattr(webhook, "handle_message", MagicMock(return_value="哈囉！"))
+    monkeypatch.setattr(webhook, "CloudSQLClient", MagicMock(return_value=MagicMock()))
+    monkeypatch.setattr(webhook, "LLMClient", MagicMock())
+    monkeypatch.setattr(
+        webhook, "TelegramClient", MagicMock(side_effect=RuntimeError("Telegram API 掛了"))
+    )
+
+    payload = {"message": {"from": {"id": 123}, "text": "早安"}}
+    response = client.post("/telegram/webhook", json=payload)
+
+    assert response.status_code == 200

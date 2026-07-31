@@ -3,7 +3,7 @@ title: Submodules — 共用子模組基礎骨架
 slug: submodules-core
 status: draft
 created: 2026-07-29
-updated: 2026-07-29
+updated: 2026-07-31
 owner: Robin
 ---
 
@@ -44,6 +44,7 @@ submodules/
 - [x] FR-4：三個子模組彼此獨立、互不 import，也不依賴 `backend/` 或本專案任何商業邏輯（單向依賴：上層可以 import submodules，反向禁止）
 - [x] FR-5：所有連線資訊（DB 連線字串、Bot Token、API Key）一律由外部呼叫端注入或讀取環境變數，子模組內部不得寫死任何金鑰
 - [x] FR-6：每個子模組資料夾一律只包含 `client.py`、`README.md`、`requirements.txt`、`.env.example` 四個檔案，不得拆成多個 `.py` 檔、不得加 `__init__.py`（見 ADR-4）
+- [x] FR-7（2026-07-31 新增，見 ADR-5）：`llm.client.LLMClient` 內建本地端節流保護 —— 呼叫 `generate_text`／`generate_with_image`／`generate_with_search` 任一方法前，先檢查「最近 60 秒內以同一把 `api_key` 呼叫的次數」，超過門檻（預設 8 次／分鐘）直接拋 `LLMQuotaGuardError`、不送出請求；門檻可透過建構子 `max_calls_per_minute` 參數調整
 
 ### 非功能性需求
 
@@ -116,6 +117,28 @@ submodules/
 
 **狀態**：accepted
 
+### ADR-5：`LLMClient` 本地端節流保護，計數以 `api_key` 為單位共用（class 層級狀態，不是掛在單一 instance 上）
+
+**背景**：2026-07-31 Robin 實測時撞到 Gemini 429（額度超限），見 [platform-auth SPEC.md](../platform-auth/SPEC.md) FR-7。除了「出錯後不要讓 Telegram 重試風暴放大問題」，還想在「明知道會被官方拒絕」之前就先攔下來，避免浪費呼叫嘗試。難點在於：`webhook.py` 目前是**每次收到請求都重新 `LLMClient(api_key=...)`**（不是整個 process 生命週期只 new 一次），如果節流計數掛在單一 instance 上，每次請求都會拿到一個全新、計數歸零的 instance，節流形同虛設。
+
+**選項**：
+| 方案 | 優點 | 缺點 |
+|------|------|------|
+| A：節流狀態掛在 class 層級，以 `api_key` 字串為 key 的 `dict`（`LLMClient._call_history_by_key`），無論建立幾個 instance，只要 `api_key` 相同就共用同一份計數 | 不需要改 `webhook.py` 的既有建構模式；正確對應「同一把 key＝同一個 Gemini 專案＝同一份官方額度」的真實世界語意 | class 層級的可變狀態需要額外注意測試隔離（多個測試用同一把假 `api_key` 會互相汙染），已用 `tests/submodules/llm/conftest.py` 的 autouse fixture 解決 |
+| B：把 `webhook.py` 改成「app 啟動時只建立一次 `LLMClient`」（lazy singleton），節流狀態改回掛在 instance 上 | 語意更直覺（一個 instance 對應一個長期存在的 Client） | 需要連帶重寫 `webhook.py` 既有的、已經測試覆蓋的建構＋監控模式（多個測試會斷言「每次請求都呼叫 `LLMClient(api_key=...)`」），改動範圍與風險都比方案 A 大，且與本次「小範圍防呆」的目標不成比例 |
+| C：拉一個外部服務（例如 Redis）做跨 process 共用的節流計數 | 未來若真的多 process/多 worker 部署也能正確運作 | 目前 Render 部署方式是單一 Flask process（`app.run()`，非 gunicorn 多 worker），完全用不到跨 process 共用，屬於過度工程 |
+
+**決策**：採方案 A（2026-07-31）
+
+**理由**：方案 A 用最小改動達成目標，不用動 `webhook.py` 既有的、已經穩定跑了好幾個 Step 的請求處理流程；方案 B 技術上更「乾淨」但改動與風險不成比例，且本專案目前部署方式本來就是單一 process，沒有 B 想解決的多 instance 生命週期問題；方案 C 是為了不存在的多 process 場景做的預先優化，違反本專案一貫的「不過度工程」原則。以 `api_key` 而非 instance 作為節流單位，也更準確反映「額度屬於 Google Cloud 專案，不屬於某個 Python 物件」這個事實（見 platform-auth SPEC.md FR-7b 的討論）。
+
+**後果**：
+- `LLMClient` 新增 `LLMQuotaGuardError` 例外類別、`max_calls_per_minute` 建構子參數（預設 8，低於官方免費層 RPM 上限保留緩衝）
+- `tests/submodules/llm/conftest.py` 新增 autouse fixture，每個測試前後清空 `LLMClient._call_history_by_key`，避免測試間互相汙染
+- 若未來真的改成多 process 部署（例如 gunicorn 多 worker），方案 A 的 class 層級狀態會退化成「每個 process 各自一份節流計數」，屆時需要重新評估是否要升級成方案 C
+
+**狀態**：accepted
+
 ## 實作計畫
 
 ### Phase 0（對應 robinson SPEC.md 的 Step 0.1a）：建立子模組骨架
@@ -125,7 +148,7 @@ submodules/
 - [x] Step S.3：建立 `submodules/llm/`（`client.py`、`README.md`、`requirements.txt`、`.env.example`）
 - [x] Step S.4：更新主專案根目錄 `requirements.txt`（新增 `psycopg2-binary`、`google-genai`、`python-dotenv`）
 - [x] Step S.5：改版重構 — 刪除舊版 `neon_postgres/`、`telegram_client/`、`gemini_client/`（含各自的 `__init__.py`、`connection.py`、`crud.py`、`sender.py`），統一為 ADR-4 的四檔案結構，並將三個 Client 改為 class 寫法（`CloudSQLClient`、`TelegramClient`、`LLMClient`）
-- [ ] Step S.6：撰寫對應單元測試（見下方「測試策略」）—— `llm.client.LLMClient` 已於 Phase 1 Step 1.3 補上（2026-07-31）；`cloudsql`／`telegram` 仍待對應功能實際串接時補上
+- [ ] Step S.6：撰寫對應單元測試（見下方「測試策略」）—— `llm.client.LLMClient` 已於 Phase 1 Step 1.3 補上（2026-07-31），並於同日追加 ADR-5 本地端節流保護測試；`cloudsql`／`telegram` 仍待對應功能實際串接時補上
 
 ## 測試策略
 
@@ -135,6 +158,7 @@ submodules/
 - [ ] `cloudsql.client.CloudSQLClient`：mock `psycopg2` 連線，驗證 `select`/`insert`/`update`/`delete` 組出的 SQL 與參數正確；`update()`/`delete()` 未帶 `where` 應拋出 `ValueError`；`dsn` 未提供且無 `DATABASE_URL` 應拋出 `ValueError`
 - [ ] `telegram.client.TelegramClient`：mock `requests.post`，驗證 `send_text`/`send_photo`/`send_chat_action` 組出的 payload 正確；空 `bot_token` 應拋出 `ValueError`
 - [x] `llm.client.LLMClient`：mock `genai.Client`，驗證 `generate_text`/`generate_with_image`/`generate_with_search` 呼叫參數正確；空 `api_key` 應拋出 `ValueError`（2026-07-31，7 個測試，覆蓋率 100%，見 [chat-core SPEC.md](../chat-core/SPEC.md)）
+- [x] `llm.client.LLMClient` 本地端節流保護（ADR-5，2026-07-31，4 個測試）：超過門檻拋 `LLMQuotaGuardError` 且不呼叫底層 SDK／同一 `api_key` 跨 instance 共用計數／不同 `api_key` 互不影響／時間視窗過期後計數重置
 
 ### Integration Tests
 - [ ] `cloudsql`：對測試用 Neon 分支資料庫實際下 CRUD，確認連線池可正常取得/歸還連線
@@ -149,6 +173,7 @@ submodules/
 | `google-genai` SDK 介面未來變動（目前仍持續更新） | 低 | 中 | Client 對外只暴露 `generate_text`/`generate_with_image` 兩個方法，SDK 版本升級只需改內部實作 |
 | CRUD wrapper 被誤用於拼接未信任的 table/column 名稱，產生 SQL Injection | 高 | 低 | table/column 一律由程式內部信任字串提供，不可直接帶入使用者輸入；README 明確註記此限制 |
 | 子模組自己的 `requirements.txt` 與主專案根目錄 `requirements.txt` 版本/內容不同步 | 中 | 中 | ADR-4 已明訂根目錄 `requirements.txt` 為部署權威來源，日後新增/更新子模組依賴時兩邊都要改 |
+| ADR-5 的節流狀態掛在 class 層級（單一 process 內共用），若未來改成多 process/多 worker 部署，各 process 會各自維護一份節流計數，實際節流效果會打折（見 ADR-5 已知取捨） | 低 | 低 | 目前 Render 部署方式是單一 Flask process，不受影響；若未來真的改多 worker，需重新評估升級為外部共用計數（ADR-5 方案 C） |
 
 ## 變更記錄
 
@@ -157,3 +182,4 @@ submodules/
 | 2026-07-29 | 初版建立：3 個子模組骨架（neon_postgres / telegram_client / gemini_client）與對應 ADR | Robin |
 | 2026-07-29 | 依 Robin 指定樣板重構：資料夾更名為 `llm` / `cloudsql` / `telegram`，統一為「四檔案結構」（`client.py`/`README.md`/`requirements.txt`/`.env.example`），移除 `__init__.py` 與多檔案拆分，三個 Client 改寫成 class（`LLMClient`/`CloudSQLClient`/`TelegramClient`），新增 ADR-4、FR-6、NFR-4 | Robin |
 | 2026-07-30 | `CloudSQLClient` 新增 `execute()` 方法，支援執行任意 SQL（主要供 DDL 使用），為 robinson 專案 ADR-11 的 migration 執行機制（`src/migrations/runner.py`）提供底層能力；`select`/`insert`/`update`/`delete` 的參數化保護不受影響，`execute()` 明確標註為「僅供內部信任 SQL 使用」的逃生口 | Claude（依 robinson SPEC.md ADR-11 需求） |
+| 2026-07-31 | Robin 實測撞到 Gemini 429 後要求「該做的防呆要做好」；新增 FR-7、ADR-5：`LLMClient` 加上本地端節流保護（同一 `api_key` 最近 60 秒超過 8 次呼叫直接擋下、不送出請求），節流計數以 class 層級狀態、`api_key` 為單位共用；新增 `tests/submodules/llm/conftest.py` 避免測試間互相汙染；全專案 137 個測試全過、覆蓋率 100% | Claude（依 Robin「該做的防呆要做好」指示） |

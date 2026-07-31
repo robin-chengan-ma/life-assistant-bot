@@ -95,6 +95,8 @@ updated: 2026-07-31
 | 2026-07-31 | Robin 指出短記憶會忘記久遠對話，確認記憶架構改為「長記憶＋短記憶＋知識庫＋上網查資料」四部分並核准 `conversation_summaries` 建表 SQL；新增 ADR-3（滾動式摘要）：新增 `src/bot/memory.py`（backlog ≥10 則觸發、呼叫 `GEMINI_API_TEXT_KEY`），`chat.py`／`router.py`／`webhook.py` 整合第二把 Gemini Key；全專案 117 個測試全過、覆蓋率 100% |
 | 2026-07-31 | Robin 提供待辦事項／求職／體態管理／心情小記情境範例（新增 FR-56e～FR-56h），補充 FR-31a（待辦逾期標記）與 FR-46（身高體重合理範圍檢查）業務規則 |
 | 2026-07-31 | **Phase 1 Step 1.3a 完成**：`/function` 重新實作為「總覽＋按需深入＋情境範例」，展開為 chat-core SPEC.md FR-9／ADR-4（總覽獨立小型 LLM 呼叫，細節追問併入既有聊天核心，Robin 確認）；`commands.handle_function()` 改為 LLM 人格化總覽，`chat.py` prompt 固定附上功能手冊（含 FR-56d～FR-56h 情境範例）供按需回答；全專案 126 個測試全過、覆蓋率 100% |
+| 2026-07-31 | Robin 實測撞到 Gemini 429，發現 `webhook.py` 未攔截例外會讓 Telegram 重試風暴加速燒額度，新增 platform-auth SPEC.md FR-7（安全網：`try/except` + 固定安全用語 + 仍回 200） |
+| 2026-07-31 | Robin 要求「該做的防呆要做好」，再補兩層防護：platform-auth SPEC.md FR-7a（`update_id` 去重，防止「沒出錯但被誤判逾時重送」重複打 Gemini）與 submodules-core SPEC.md FR-7／ADR-5（`LLMClient` 本地端節流保護，同一 `api_key` 最近 60 秒超過 8 次呼叫直接擋下不送出請求）；全專案 137 個測試全過、覆蓋率 100% |
 
 ## 待決事項
 
