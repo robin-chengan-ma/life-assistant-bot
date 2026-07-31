@@ -12,11 +12,14 @@ from collections import deque
 from google import genai
 from google.genai import types
 
-_DEFAULT_MODEL = "gemini-flash-latest"
+_DEFAULT_MODEL = "gemini-3.5-flash-lite"
 
 # 本地端節流保護（非 Gemini 官方額度機制）：見 docs/specs/submodules-core/SPEC.md ADR-5。
-# 免費層 Gemini Flash 官方 RPM 限制約 10～15 次/分鐘，這裡刻意抓保守一點的預設值，
-# 目的是在明知道會被官方 429 拒絕之前就先攔下來，避免白白浪費一次額度。
+# 2026-07-31 實測（AI Studio Rate Limit 頁面）：`gemini-flash-latest` 當時解析到的
+# Gemini 3.6 Flash 免費層只有 RPM 5／RPD 20，遠低於原本假設的 10～15 次/分鐘、1500 次/天，
+# 是造成頻繁 429 的主因；改用明確指定版本的 `gemini-3.5-flash-lite` 後實測為 RPM 15／RPD 500，
+# 這裡的預設值刻意抓保守一點（低於官方 RPM 上限），目的是在明知道會被官方 429 拒絕之前
+# 就先攔下來，避免白白浪費一次額度；注意這裡只防 RPM（每分鐘），還沒有防 RPD（每天）上限。
 _DEFAULT_MAX_CALLS_PER_MINUTE = 8
 _RATE_LIMIT_WINDOW_SECONDS = 60
 

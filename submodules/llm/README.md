@@ -1,6 +1,6 @@
 # llm
 
-LLM 通用 Client，目前串接 Gemini API（官方 `google-genai` SDK），模型固定 `gemini-flash-latest`。
+LLM 通用 Client，目前串接 Gemini API（官方 `google-genai` SDK），模型固定 `gemini-3.5-flash-lite`（**2026-07-31 更新**：原本用 `gemini-flash-latest` 別名，實測發現它解析到的最新模型免費層額度極低（RPM 5／RPD 20），改用明確指定版本的 `gemini-3.5-flash-lite`，免費層實測 RPM 15／RPD 500，詳見 [submodules-core SPEC.md](../../docs/specs/submodules-core/SPEC.md) ADR-6）。
 
 ## 環境變數
 

@@ -40,7 +40,7 @@ submodules/
 
 - [x] FR-1：`submodules/cloudsql` 提供連線池管理與泛用 CRUD 介面（select / insert / update / delete），一律使用參數化查詢；目前實際串接 Neon PostgreSQL，命名為 cloudsql 是為了未來可替換成其他 PostgreSQL 相容服務時介面不變
 - [x] FR-2：`submodules/telegram` 提供 Bot 基礎 HTTP Client（`call(method, payload)`）與常用訊息發送方法（文字、圖片、typing 狀態提示）
-- [x] FR-3：`submodules/llm` 提供 LLM Client 初始化與文字生成 / 圖文生成呼叫；目前實際串接 Gemini API，模型固定 `gemini-flash-latest`，命名為 llm 是為了未來替換或新增供應商時介面不變
+- [x] FR-3：`submodules/llm` 提供 LLM Client 初始化與文字生成 / 圖文生成呼叫；目前實際串接 Gemini API，模型固定 `gemini-3.5-flash-lite`（**2026-07-31 更新**，見 ADR-6），命名為 llm 是為了未來替換或新增供應商時介面不變
 - [x] FR-4：三個子模組彼此獨立、互不 import，也不依賴 `backend/` 或本專案任何商業邏輯（單向依賴：上層可以 import submodules，反向禁止）
 - [x] FR-5：所有連線資訊（DB 連線字串、Bot Token、API Key）一律由外部呼叫端注入或讀取環境變數，子模組內部不得寫死任何金鑰
 - [x] FR-6：每個子模組資料夾一律只包含 `client.py`、`README.md`、`requirements.txt`、`.env.example` 四個檔案，不得拆成多個 `.py` 檔、不得加 `__init__.py`（見 ADR-4）
@@ -89,7 +89,7 @@ submodules/
 
 **背景**：Google 已將舊版 `google-generativeai` 套件標記為 deprecated，統一改用新版 `google-genai`（2025 年 5 月起 GA，涵蓋 Gemini Developer API 與 Vertex AI）。
 
-**決策**：`submodules/llm` 的 `LLMClient` class 使用 `google-genai`（`from google import genai`），模型固定 `gemini-flash-latest`；資料夾命名為 `llm` 而非 `gemini`，讓對外介面（`generate_text` / `generate_with_image`）保持穩定，未來要換/加供應商時呼叫端不用改
+**決策**：`submodules/llm` 的 `LLMClient` class 使用 `google-genai`（`from google import genai`），模型固定 `gemini-3.5-flash-lite`（**2026-07-31 更新**，原為 `gemini-flash-latest`，見 ADR-6）；資料夾命名為 `llm` 而非 `gemini`，讓對外介面（`generate_text` / `generate_with_image`）保持穩定，未來要換/加供應商時呼叫端不用改
 **理由**：官方目前唯一持續維護的 SDK；舊版套件未來可能無法安裝或取得支援
 **替代方案**：`google-generativeai`（已 deprecated，不採用）
 **狀態**：accepted
@@ -139,6 +139,28 @@ submodules/
 
 **狀態**：accepted
 
+### ADR-6：`LLMClient` 預設模型從 `gemini-flash-latest` 別名改為明確指定的 `gemini-3.5-flash-lite`
+
+**背景**：2026-07-31 Robin 持續撞到 Gemini 429，即使 ADR-5 的本地端節流保護（門檻 8 次/分鐘）也擋不住——因為真正的官方免費層額度遠比預期低。Robin 在 AI Studio 的 Rate Limit 頁面實測確認：`gemini-flash-latest` 這個別名當時解析到的是 Gemini 3.6 Flash（Google 最新發布的旗艦模型），免費層只有 **RPM 5、RPD 20**，遠低於 [官方模型文件](https://ai.google.dev/gemini-api/docs/models) 對「Flash 模型」的一般說明（原本假設 10～15 RPM、1500 RPD）。`gemini-flash-latest` 是**別名**（見官方文件「Model version name patterns」），會隨 Google 發布新模型自動熱切換，新模型上線初期免費層配額通常壓得最緊，這是額度異常吃緊的根本原因。
+
+**選項**：
+| 方案 | 優點 | 缺點 |
+|------|------|------|
+| A：改用明確指定版本的 Gemini 模型（`gemini-3.5-flash-lite`），Robin 於 AI Studio 實測免費層 RPM 15／RPD 500 | 同屬 Gemini 家族，SDK 介面、工具支援（Google Search grounding、圖片理解）完全相容，零相容性風險；額度較目前提升 25 倍（RPD）、3 倍（RPM）；仍是官方 Stable 版本 | 額度仍遠低於 Gemma 系列，長期使用量成長後可能還是不夠 |
+| B：改用 Google 開源模型 Gemma 4（`gemma-4-26b-a4b-it`），Robin 於 AI Studio 實測免費層 RPM 30／RPD 14,400 | 額度非常寬裕（是方案 A 的近 30 倍） | 不同模型家族，是否支援我們現在掛的 Google Search grounding 工具尚未驗證，貿然全面切換有請求直接失敗的風險，需要先花額外工序驗證相容性 |
+| C：開通計費帳戶升級付費 Tier 1 | 額度大幅提升，且仍留在 Gemini 家族、相容性風險為零 | 需要 Robin 自行在 AI Studio 綁定信用卡，屬於 Robin 個人帳務決定，AI 不代為執行；即使有 $250 額度緩衝，仍多一層帳務管理成本 |
+
+**決策**：先採方案 A（2026-07-31），Gemma 4（方案 B）與計費升級（方案 C）留待方案 A 的額度仍不夠用時再評估
+
+**理由**：方案 A 是「換了保證能動」的最小風險選擇——同屬 Gemini 家族，不需要額外驗證工具相容性，就能讓 RPD 從 20 提升到 500（25 倍），大機率已經足夠解決目前個人/家庭規模的測試與日常使用量；方案 B 額度雖然誘人，但引入了未驗證的相容性風險，不符合「先用最小改動解決當下問題」的原則；方案 C 涉及 Robin 個人帳務決定，不是技術層面能單方面決定的選項
+
+**後果**：
+- `submodules/llm/client.py` 的 `_DEFAULT_MODEL` 常數改為 `"gemini-3.5-flash-lite"`
+- 本地端節流保護（ADR-5）的 `_DEFAULT_MAX_CALLS_PER_MINUTE`（8）仍低於官方新上限（15），維持保守緩衝，不需調整；但注意本地端節流目前只防 RPM，沒有防 RPD（500/天）上限，若未來單日用量逼近 500 次，仍需要額外補上每日次數的本地端保護
+- 若未來確認 Gemma 系列支援我們需要的工具（Google Search grounding、圖片辨識），可以考慮小規模測試後再評估是否切換
+
+**狀態**：accepted
+
 ## 實作計畫
 
 ### Phase 0（對應 robinson SPEC.md 的 Step 0.1a）：建立子模組骨架
@@ -165,7 +187,7 @@ submodules/
 ### Integration Tests
 - [ ] `cloudsql`：對測試用 Neon 分支資料庫實際下 CRUD，確認連線池可正常取得/歸還連線
 - [ ] `telegram`：對 Telegram 測試 Bot 實際發送訊息，確認 API 回應 `ok: true`
-- [ ] `llm`：對 Gemini API 實際呼叫 `gemini-flash-latest`，確認能取得非空回應（需留意計入免費額度）
+- [ ] `llm`：對 Gemini API 實際呼叫 `gemini-3.5-flash-lite`，確認能取得非空回應（需留意計入免費額度）
 
 ## 風險與緩解
 
@@ -176,6 +198,7 @@ submodules/
 | CRUD wrapper 被誤用於拼接未信任的 table/column 名稱，產生 SQL Injection | 高 | 低 | table/column 一律由程式內部信任字串提供，不可直接帶入使用者輸入；README 明確註記此限制 |
 | 子模組自己的 `requirements.txt` 與主專案根目錄 `requirements.txt` 版本/內容不同步 | 中 | 中 | ADR-4 已明訂根目錄 `requirements.txt` 為部署權威來源，日後新增/更新子模組依賴時兩邊都要改 |
 | ADR-5 的節流狀態掛在 class 層級（單一 process 內共用），若未來改成多 process/多 worker 部署，各 process 會各自維護一份節流計數，實際節流效果會打折（見 ADR-5 已知取捨） | 低 | 低 | 目前 Render 部署方式是單一 Flask process，不受影響；若未來真的改多 worker，需重新評估升級為外部共用計數（ADR-5 方案 C） |
+| ADR-6 只提升了 RPD 上限（20→500），本地端節流保護（ADR-5）目前只防 RPM、沒有防 RPD，單日用量若逼近 500 次仍會被官方 429 擋下 | 中 | 低 | 目前個人/家庭規模用量離 500/天還有很大緩衝；若未來實測發現常態性逼近上限，需要另外補上「每日次數」的本地端節流層 |
 
 ## 變更記錄
 
@@ -186,3 +209,4 @@ submodules/
 | 2026-07-30 | `CloudSQLClient` 新增 `execute()` 方法，支援執行任意 SQL（主要供 DDL 使用），為 robinson 專案 ADR-11 的 migration 執行機制（`src/migrations/runner.py`）提供底層能力；`select`/`insert`/`update`/`delete` 的參數化保護不受影響，`execute()` 明確標註為「僅供內部信任 SQL 使用」的逃生口 | Claude（依 robinson SPEC.md ADR-11 需求） |
 | 2026-07-31 | Robin 實測撞到 Gemini 429 後要求「該做的防呆要做好」；新增 FR-7、ADR-5：`LLMClient` 加上本地端節流保護（同一 `api_key` 最近 60 秒超過 8 次呼叫直接擋下、不送出請求），節流計數以 class 層級狀態、`api_key` 為單位共用；新增 `tests/submodules/llm/conftest.py` 避免測試間互相汙染；全專案 137 個測試全過、覆蓋率 100% | Claude（依 Robin「該做的防呆要做好」指示） |
 | 2026-07-31 | Step 1.3b（影像辨識）需要：新增 Step S.7、`submodules/gdrive/`（`GDriveClient`，僅 `upload_file()`，不做下載/列表/刪除）；`telegram.client.TelegramClient` 補上單元測試並新增 `get_file_bytes()`（Step S.6 telegram 部分完成）；修正 `pytest.ini` 加 `--import-mode=importlib`，解決多個 `submodules/*/test_client.py` 同名模組在同一次 `pytest tests/` 執行時互相衝突的問題 | Claude（依 Robin「你繼續開發你的」指示） |
+| 2026-07-31 | Robin 持續撞到 429，經 AI Studio Rate Limit 頁面實測確認 `gemini-flash-latest` 別名解析到的 Gemini 3.6 Flash 免費層只有 RPM 5／RPD 20，遠低於原本假設；新增 ADR-6：改用明確指定版本的 `gemini-3.5-flash-lite`（實測 RPM 15／RPD 500，同屬 Gemini 家族、零相容性風險），Gemma 4（RPM 30／RPD 14,400）與計費升級留待額度仍不夠用時再評估；`_DEFAULT_MODEL` 改為 `gemini-3.5-flash-lite` | Claude（依 Robin「好啊，麻煩你了」指示） |

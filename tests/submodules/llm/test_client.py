@@ -49,7 +49,7 @@ def test_generate_text_returns_response_text_and_calls_correct_model(monkeypatch
     result = llm_client.generate_text("你好")
 
     assert result == "哈囉！"
-    assert fake_genai_client.models.last_call["model"] == "gemini-flash-latest"
+    assert fake_genai_client.models.last_call["model"] == "gemini-3.5-flash-lite"
     assert fake_genai_client.models.last_call["contents"] == "你好"
 
 

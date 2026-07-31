@@ -11,7 +11,7 @@ owner: Robin
 
 ## 概要
 
-Robinson 是一個以 Telegram 為前台介面的家庭生活小助手，Robin 是產品負責人兼管理者，家人們透過通關密碼取得使用權限。所有 AI 能力統一使用共用的 Gemini API（`gemini-flash-latest`），資料分別存放在 Neon PostgreSQL（結構化資料）與 Google Drive（靜態圖像），Notion 作為視覺化後台（獨立於最終 Phase，可延後）。核心設計理念是「越少 UI 設定越好」，使用者以打字或語音跟 Robinson 對話即可完成大部分操作。
+Robinson 是一個以 Telegram 為前台介面的家庭生活小助手，Robin 是產品負責人兼管理者，家人們透過通關密碼取得使用權限。所有 AI 能力統一使用共用的 Gemini API（`gemini-3.5-flash-lite`，見 submodules-core SPEC.md ADR-6），資料分別存放在 Neon PostgreSQL（結構化資料）與 Google Drive（靜態圖像），Notion 作為視覺化後台（獨立於最終 Phase，可延後）。核心設計理念是「越少 UI 設定越好」，使用者以打字或語音跟 Robinson 對話即可完成大部分操作。
 
 **專案緣起**：2026-07-28 Robin 先自行完成所有外部服務的註冊與 API 金鑰申請、Telegram Bot 基礎設定，並與 Gemini 進行腦力激盪與方案收斂 —— 梳理生活痛點、評估技術可行性、把發散的想法轉化為具體的 PRD 雛形；2026-07-29 才開始與 Claude Code 協作，產出本 spec 與 Codebase 規範等標準文件（詳見 [PROGRESS.md](./PROGRESS.md) 里程碑紀錄）。
 
@@ -32,7 +32,7 @@ Robinson 是一個以 Telegram 為前台介面的家庭生活小助手，Robin �
 | 層級 | 服務 | 角色 |
 | --- | --- | --- |
 | 前台 | Telegram Bot | 唯一使用者介面（文字 + 語音 + 圖片） |
-| AI 層 | Gemini API（`gemini-flash-latest`，依用途拆四把 Key） | `GEMINI_API_BOT_KEY` 跑一般問答、`GEMINI_API_IMAGE_KEY1`／`GEMINI_API_IMAGE_KEY2` 跑影像辨識（每次隨機擇一）、`GEMINI_API_TEXT_KEY` 跑長文生成（見 ADR-12） |
+| AI 層 | Gemini API（`gemini-3.5-flash-lite`，依用途拆四把 Key） | `GEMINI_API_BOT_KEY` 跑一般問答、`GEMINI_API_IMAGE_KEY1`／`GEMINI_API_IMAGE_KEY2` 跑影像辨識（每次隨機擇一）、`GEMINI_API_TEXT_KEY` 跑長文生成（見 ADR-12；模型版本見 submodules-core SPEC.md ADR-6） |
 | AI 層 | Groq API（Whisper） | 語音轉文字（含多益錄音檔切割），對應 `VOICE_API_KEY`（見 ADR-12，取代先前「語音一律用 Gemini」的舊決策） |
 | 資料層 | Neon PostgreSQL | 結構化資料（使用者、知識庫、待辦、記帳…） |
 | 資料層 | Google Drive | 使用者上傳的圖片/語音檔案原始檔（含證照題目截圖），URL 統一記錄於 Neon（見 ADR-13） |
@@ -56,7 +56,7 @@ Robinson 是一個以 Telegram 為前台介面的家庭生活小助手，Robin �
 - [ ] FR-2：每個功能模組（待辦、求職、記帳、體態、技能成長、心情小記、好友模式、重要通知）皆有獨立開關，全關時僅保留純聊天能力
   - [ ] FR-2a：權限模型——一般使用者可自行開關「自己」的功能（例如對 Robinson 說「幫我關掉記帳」）；Owner 額外擁有代管權限，可調整任何使用者（含自己）的功能開關（**2026-07-30 決定**，見 Step 1.2 討論）
 - [ ] FR-3：提供 `/healthz`（或等義）極簡 API，供 cron-job 每 10 分鐘呼叫，防止 Render 休眠
-- [ ] FR-4：所有 AI 功能統一呼叫 Gemini API，模型固定 `gemini-flash-latest`，全體使用者共用同一組對話 Token，圖像解析使用另一組獨立 Token
+- [ ] FR-4：所有 AI 功能統一呼叫 Gemini API，模型固定 `gemini-3.5-flash-lite`（見 submodules-core SPEC.md ADR-6），全體使用者共用同一組對話 Token，圖像解析使用另一組獨立 Token
 
 ### 功能性需求 — 使用者與權限
 
@@ -265,7 +265,7 @@ Robinson 是一個以 Telegram 為前台介面的家庭生活小助手，Robin �
 
 **背景**：全員共用同一組 Token 有機率快速耗盡免費額度，且對話與圖像解析的呼叫模式不同。
 
-**決策**：申請兩組 Gemini API Token —— 一組專用於 Telegram 對話視窗，一組專用於圖像（證照題目）解析；模型統一使用 `gemini-flash-latest`。
+**決策**：申請兩組 Gemini API Token —— 一組專用於 Telegram 對話視窗，一組專用於圖像（證照題目）解析；模型統一使用 `gemini-3.5-flash-lite`（**2026-07-31 更新**，原為 `gemini-flash-latest`，見 submodules-core SPEC.md ADR-6）。
 
 **理由**：分流可降低單一額度被單一功能耗盡的風險，並方便個別監控用量。
 
@@ -717,3 +717,4 @@ FR-56 的 `/function` 路由目前只定義了「回傳範圍」（所有功能�
 | 2026-07-31 | Robin 要求「該做的防呆要做好，不要因為程式碼關係浪費不必要的額度」，再補兩層防護：① platform-auth SPEC.md FR-7a：`update_id` 去重（LRU 上限 1000 筆），解決「沒出錯但被 Telegram 誤判逾時重送」也會重複打 Gemini 的問題 ② submodules-core SPEC.md FR-7／ADR-5：`LLMClient` 新增本地端節流保護（同一 `api_key` 最近 60 秒超過 8 次呼叫直接擋下、不送出請求，避免明知道會被官方 429 拒絕還是浪費額度嘗試）；FR-7 安全網範圍也擴大涵蓋 DB／LLM Client 建立與 Telegram 傳送失敗；全專案 137 個測試全過、覆蓋率 100% | Claude（依 Robin「該做的防呆要做好」指示） |
 | 2026-07-31 | 確認 429 Traceback 為真實 Gemini 額度超限（非本地端節流誤判），安全網運作正常；Robin 確認 Step 1.3b（影像辨識）設計：新增 `media_uploads` 表統一記錄圖片/語音的 Google Drive 網址（Step 1.4 語音功能上線後共用）；修正 ADR-13 第 2、4 點——壓縮版圖片僅記憶體內即時處理、不落地存回 Google Drive，只保留原始檔 | Robin |
 | 2026-07-31 | **Phase 1 Step 1.3b 完成**：影像辨識基礎流程，FR-17／FR-17a～FR-17c 全數完成；新增 `submodules/gdrive/`（Service Account 認證，僅上傳、不含下載/列表能力）、`TelegramClient.get_file_bytes()`（兩段式檔案下載）、`src/bot/image.py`（`Pillow` 壓縮＋隨機挑選影像 Key＋`[NEED_CONFIRM]` 標記慣例反問使用者）；`router.py` 新增 `handle_photo_message()`／`pending_image_confirm` 流程分派，`webhook.py` 新增 `_extract_photo()`／`_extract_unsupported_file()` 完成訊息類型分流；修正 `pytest.ini` 加 `--import-mode=importlib` 解決多個 `submodules/*/test_client.py` 同名模組衝突；全專案 179 個測試全過，`src/bot/`／`submodules/gdrive`／`submodules/telegram`／`submodules/llm` 覆蓋率 100% | Claude（依 Robin「你繼續開發你的，我明天再一次測試」指示） |
+| 2026-07-31 | Robin 持續撞到 429，經 AI Studio Rate Limit 頁面實測發現 `gemini-flash-latest` 別名解析到的 Gemini 3.6 Flash 免費層只有 RPM 5／RPD 20，遠低於原本假設的 10～15 RPM／1500 RPD；新增 submodules-core SPEC.md ADR-6：改用明確指定版本的 `gemini-3.5-flash-lite`（實測 RPM 15／RPD 500，同屬 Gemini 家族、零相容性風險），Gemma 4（實測 RPM 30／RPD 14,400）與開通計費升級留待額度仍不夠用時再評估 | Claude（依 Robin「好啊，麻煩你了」指示） |
