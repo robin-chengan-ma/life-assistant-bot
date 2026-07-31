@@ -30,24 +30,103 @@ APPENDIX_A_TEXT = (
 )
 
 # 對應 FR-56：/function 路由需涵蓋 spec 所有已定義的功能模組；正式文案模板待產品原型後由 Robin 補上
-# （見 robinson SPEC.md 附錄 B），MVP 先用最簡單的條列格式呈現。
+# （見 robinson SPEC.md 附錄 B）。`examples` 為 robinson SPEC.md FR-56d～FR-56h 的情境範例逐字收錄，
+# 尚未有範例的功能先留空清單，等該模組實際實作、Robin 提供範例時再補上，不阻塞 Step 1.3a。
 FEATURE_LIST = [
-    {"key": "todo", "name": "待辦事項", "owner_only": False, "desc": "用自然語言記錄「什麼時候要做什麼事」"},
-    {"key": "job_search", "name": "求職", "owner_only": False, "desc": "104 職缺追蹤與履歷契合度評分"},
-    {"key": "budget", "name": "記帳", "owner_only": False, "desc": "每日記帳與花費預警"},
-    {"key": "body", "name": "體態管理", "owner_only": False, "desc": "身高體重、運動、飲食紀錄"},
-    {"key": "skill_growth", "name": "技能成長（TOEIC／技術情報）", "owner_only": True, "desc": "每日技術摘要、TOEIC 題庫、YouTube 技術影片推薦"},
-    {"key": "mood_journal", "name": "心情小記", "owner_only": False, "desc": "記錄每日心情與隨筆"},
-    {"key": "friend_mode", "name": "好友模式", "owner_only": False, "desc": "以聊天方式呈現心情趨勢並陪伴"},
-    {"key": "important_notify", "name": "重要通知", "owner_only": False, "desc": "節日／生日提醒"},
-    {"key": "complaint", "name": "客訴回饋", "owner_only": False, "desc": "輸入「我要客訴你」告訴我們哪裡需要改進"},
+    {
+        "key": "todo",
+        "name": "待辦事項",
+        "owner_only": False,
+        "desc": "用自然語言記錄「什麼時候要做什麼事」",
+        "examples": [
+            "情境1（單筆快速記錄＋提醒設定）：使用者：「我下午要去買菜」→ Robinson：「要幫你紀錄到待辦事項嗎？」→ 使用者：「好」→ Robinson：「下午幾點呢？」→ 使用者：「三點」→ Robinson：「那要在前 30 分鐘時提醒你嗎？」→ 使用者：「好」",
+            "情境2（模組歸屬歧義判斷＋完整流程）：使用者：「打籃球」→ Robinson：「請問這是紀錄體態管理，還是要紀錄到待辦事項呢？」→ 使用者：「待辦事項」→ Robinson：「好的，請問是什麼時候做呢？」→ 使用者：「明天晚上」→ Robinson：「幾點？」→ 使用者：「7:30」→ Robinson：「已收到 2026/07/31 19:30，明天早上會先通知您一次，若你使用查詢功能，我也會再跟你說一次，需要在前 30 分鐘時提醒你嗎？」→ 使用者：「不用」→ Robinson：「好的」",
+        ],
+    },
+    {
+        "key": "job_search",
+        "name": "求職",
+        "owner_only": False,
+        "desc": "104 職缺追蹤與履歷契合度評分",
+        "examples": [
+            "情境（設定條件＋收集履歷與期望工作，多輪對話）：使用者：「我最近想要找工作了」→ Robinson：「好的，你有什麼特別的需求嗎(找 AI 相關？只在台中市？薪資待遇區間要在 45000 元以上？年資要求在 1-3 年？學歷要求學士以上？)」→ 使用者：「我想找 AI、資料相關的，然後不限地區，薪資待遇區間 50000元以上，其他沒特別要求」→ Robinson：「好的，但我要提醒你一下，這個功能一週只會做一次喔，要等到排程啟動後，我才能給你清單與連結，然後我需要你給我『詳細的履歷敘述(3500字以內)，記得不用給您的個資資訊如電子郵件或手機號碼等』和『未來期望工作敘述(期望工作內容、企業文化、薪資、福利等)』，你準備好了嗎？」→ 使用者：「好了」→ Robinson：「先給我詳細的履歷敘述(3500字以內)！」→ 使用者：「（履歷內容）」→ Robinson：「有需要修正嗎？沒有的話再給我未來期望工作敘述」→ 使用者：「（期望工作內容）」→ Robinson：「有需要修正嗎？沒有的話我直接紀錄喔！」→ 使用者：「好的」",
+        ],
+    },
+    {
+        "key": "budget",
+        "name": "記帳",
+        "owner_only": False,
+        "desc": "每日記帳與花費預警",
+        "examples": [
+            "情境1（單筆快速記帳）：使用者：「早餐花80元」→ Robinson：「好的，幫你記錄好了喔～」",
+            "情境2（設定月度目標，多輪對話）：使用者：「我想要設定這個月目標」→ Robinson：「什麼目標？」→ 使用者：「記帳功能」→ Robinson：「那你這個月的記帳目標是要看支出就好，還是要看能存多少？」→ 使用者：「儲存」→ Robinson：「那你告訴我這個月總收入與要儲存的目標」→ 使用者：「收入50000元，想要存10000元」→ Robinson：「好喔！幫你記錄好了～」",
+        ],
+    },
+    {
+        "key": "body",
+        "name": "體態管理",
+        "owner_only": False,
+        "desc": "身高體重、運動、飲食紀錄",
+        "examples": [
+            "情境1（純紀錄，選擇子功能）：使用者：「體態管理」→ Robinson：「你要純粹紀錄就好，還是想要有一個目標？」→ 使用者：「紀錄就好」→ Robinson：「好的，那你想要使用『身高和體重』、『運動習慣』、『飲食記錄』哪一個功能呢？還是全都用？」→ 使用者：「身高和體重」→ Robinson：「那先告訴我你的身高？」→ 使用者：「173」→ Robinson：「體重呢？」→ 使用者：「80」→ Robinson：「OK，已幫你紀錄」",
+            "情境2（設定目標＋主動給建議，多輪對話）：使用者：「我要設定體態管理目標」→ Robinson：「請問你是要完成哪一種目標？(BMI？完成某項運動挑戰？飲食完美控制？)」→ 使用者：「體重目標」→ Robinson：「請告訴我目標值」→ 使用者：「60 公斤」→ Robinson：「有預計完成時間嗎(例如：三個月內完成)」→ 使用者：「三個月」→ Robinson：「三個月內瘦到 60 KG，已幫你紀錄了，那需要提供建議嗎？」→ 使用者：「好」→ Robinson：「先告訴我你現在的體重」→ 使用者：「75」→ Robinson：「我的建議是……」",
+            "情境3（模組歸屬歧義＋估算免責聲明）：使用者：「我今天有跑步 30 分鐘，大約 5 公里」→ Robinson：「請問這是心情小記紀錄，還是要我幫你紀錄運動習慣呢？」→ 使用者：「運動習慣」→ Robinson：「那你有心率紀錄嗎？」→ 使用者：「沒有」→ Robinson：「OK，那你今天大約消耗了 ... 卡路里，這個數字只是估算值，不會到很準確喔！」",
+        ],
+    },
+    {
+        "key": "skill_growth",
+        "name": "技能成長（TOEIC／技術情報）",
+        "owner_only": True,
+        "desc": "每日技術摘要、TOEIC 題庫、YouTube 技術影片推薦",
+        "examples": [],
+    },
+    {
+        "key": "mood_journal",
+        "name": "心情小記",
+        "owner_only": False,
+        "desc": "記錄每日心情與隨筆",
+        "examples": [
+            "情境（心情分類選單＋日記內容）：使用者：「我想做心情筆記」→ Robinson：「好啊，那你今天的心情狀態如何？請幫我選一個 (生氣/焦慮、難過/低落、疲倦/厭世、普通/平淡、平靜/放鬆、高興/興奮)」→ 使用者：「高興/興奮」→ Robinson：「給我完整的日記內容」→ 使用者：「（日記內容）」→ Robinson：「好的，已經紀錄了」",
+        ],
+    },
+    {"key": "friend_mode", "name": "好友模式", "owner_only": False, "desc": "以聊天方式呈現心情趨勢並陪伴", "examples": []},
+    {"key": "important_notify", "name": "重要通知", "owner_only": False, "desc": "節日／生日提醒", "examples": []},
+    {
+        "key": "complaint",
+        "name": "客訴回饋",
+        "owner_only": False,
+        "desc": "輸入「我要客訴你」告訴我們哪裡需要改進",
+        "examples": [],
+    },
 ]
 
 
-def build_function_list_text() -> str:
-    """組出 /function 路由的簡易條列文字（MVP 版本，未來由 Robin 補正式文案）。"""
-    lines = ["🤖 羅賓森目前的功能清單：", ""]
+def build_function_overview_raw_text() -> str:
+    """組出 /function「總覽」階段要給 LLM 參考的原始素材（功能名稱＋一句話簡述＋權限標記）。
+
+    這不是最終要回給使用者的文字——依 FR-56c，商業邏輯清單只能當內部素材，最終回覆
+    一定要經過 LLM 用 Robinson 人格背景改寫成口語（見 `commands.handle_function`）。
+    """
+    lines = ["羅賓森目前的功能清單：", ""]
     for feature in FEATURE_LIST:
-        tag = "👑 僅 Robin 可用" if feature["owner_only"] else "👨‍👩‍👧‍👦 全體使用者可用"
-        lines.append(f"• {feature['name']}（{tag}）：{feature['desc']}")
+        tag = "僅 Robin 可用" if feature["owner_only"] else "全體使用者可用"
+        lines.append(f"- {feature['name']}（{tag}）：{feature['desc']}")
     return "\n".join(lines)
+
+
+def build_function_manual_text() -> str:
+    """組出完整功能手冊（含情境範例），供一般聊天核心在使用者追問特定功能細節時參考（FR-56a／FR-56b）。
+
+    同樣是內部素材，不可逐字回傳給使用者，須經 LLM 用 Robinson 語氣改寫（FR-56c）。
+    """
+    blocks = []
+    for feature in FEATURE_LIST:
+        tag = "僅 Robin 可用" if feature["owner_only"] else "全體使用者可用"
+        block_lines = [f"【{feature['name']}】（{tag}）", f"能力說明：{feature['desc']}"]
+        if feature["examples"]:
+            block_lines.append("情境範例：")
+            block_lines.extend(f"  - {example}" for example in feature["examples"])
+        else:
+            block_lines.append("情境範例：（此功能尚未實作，暫無範例）")
+        blocks.append("\n".join(block_lines))
+    return "\n\n".join(blocks)

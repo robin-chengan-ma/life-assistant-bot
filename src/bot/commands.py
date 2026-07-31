@@ -1,8 +1,8 @@
 """內建指令與對話式設定流程（對應 docs/specs/platform-auth/SPEC.md FR-4～FR-6、
-docs/specs/feature-toggles/SPEC.md FR-1～FR-2）。"""
+docs/specs/feature-toggles/SPEC.md FR-1～FR-2、docs/specs/chat-core/SPEC.md ADR-4）。"""
 from submodules.cloudsql.client import CloudSQLClient
 
-from src.bot import templates, toggles
+from src.bot import knowledge, templates, toggles
 from src.bot.state import ConversationStateStore
 
 _EXIT_PHRASES = {"沒有了", "結束"}
@@ -13,9 +13,26 @@ def handle_rule() -> str:
     return templates.APPENDIX_A_TEXT
 
 
-def handle_function() -> str:
-    """/function：回傳目前功能清單，不經過 LLM 生成。"""
-    return templates.build_function_list_text()
+def handle_function(db: CloudSQLClient, llm_client) -> str:
+    """/function：回傳「功能總覽」（見 chat-core SPEC.md ADR-4）。
+
+    只回傳功能名稱＋一句話簡述＋權限標記，不展開細節或範例（FR-56）；使用者針對特定
+    功能追問時，改由一般聊天核心處理（見 `chat._build_prompt` 的功能手冊區塊，FR-56a／b）。
+    依 FR-56c，這裡不能把 `templates.build_function_overview_raw_text()` 的原始清單直接
+    回傳給使用者，一定要先參考人格背景、經過一次 LLM 呼叫改寫成口語才回覆。
+    """
+    persona = knowledge.get_persona_text(db)
+    raw_overview = templates.build_function_overview_raw_text()
+    prompt = (
+        "你是 Robinson，請完全依照下方的人格背景設定來回答，用溫暖、自然口語的語氣。\n\n"
+        f"【Robinson 人格背景】\n{persona}\n\n"
+        "以下是目前所有功能的原始清單資料（僅供你參考組織內容，不可逐字照抄）：\n"
+        f"{raw_overview}\n\n"
+        "請把這份清單改寫成給使用者看的『功能總覽』：條列每個功能的名稱與一句話說明，"
+        "並清楚標示哪些功能僅 Robin 本人可用、哪些全體使用者皆可用；不要展開任何功能的細節或範例，"
+        "使用者之後若想深入了解特定功能，可以直接追問。"
+    )
+    return llm_client.generate_text(prompt)
 
 
 def start_set_invite_codes(state_store: ConversationStateStore, telegram_user_id: int) -> str:

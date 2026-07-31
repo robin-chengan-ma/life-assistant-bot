@@ -80,6 +80,16 @@ def test_build_context_limits_recent_logs_to_ten_most_recent(fake_db):
     assert [row["content"] for row in context["recent_logs"]] == [f"msg-{i}" for i in range(5, 15)]
 
 
+def test_get_persona_text_returns_persona_content(fake_db):
+    _seed_general(fake_db)
+
+    assert knowledge.get_persona_text(fake_db) == "我是羅賓森"
+
+
+def test_get_persona_text_returns_empty_string_when_not_seeded(fake_db):
+    assert knowledge.get_persona_text(fake_db) == ""
+
+
 def test_save_custom_knowledge_inserts_custom_category(fake_db):
     knowledge.save_custom_knowledge(fake_db, user_id=1, content="威靈頓牛排食譜")
 

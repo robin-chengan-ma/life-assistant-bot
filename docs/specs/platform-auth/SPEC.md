@@ -22,7 +22,7 @@ owner: Robin
 - [x] FR-3：未知使用者（`users` 表查無對應 `telegram_user_id`）傳送文字時，比對是否為未使用過的 `invite_codes.code`；比對成功則綁定（寫入 `users.telegram_user_id`、標記 `invite_codes.is_used=TRUE` 並更新 `updated_at`），並回傳 FR-6d 的歡迎訊息（附錄 A 全文，純靜態文字，不呼叫 LLM）；比對失敗則回覆制式提示「請輸入通關密碼」，不進入任何其他邏輯
 - [x] FR-4：Owner 專屬設定對話流（對應 robinson SPEC.md FR-6a～FR-6c）—— 僅 Robin 可觸發 `/set_invite_codes` 或「設定通關密碼」，進入多輪對話：詢問稱謂 → 收到稱謂後暫存於記憶體狀態（尚不寫入資料庫，因為 `invite_codes.code` 是 `NOT NULL`，稱謂單獨一項還無法組成合法的一列）→ 詢問通關密碼 → 收到密碼後，此時稱謂與密碼皆已齊備，一次性建立 `users`（`telegram_user_id=NULL`、`role=<稱謂>`）與 `invite_codes`（`code=<密碼>`、`user_id` 指向剛建立的 `users.id`）→ 回覆「已寫入！請問還有其他家人要設定嗎？」→ 下一則訊息若為「沒有了」或「結束」則退出設定模式，否則視為下一位家人的稱謂，繼續循環
 - [x] FR-5：`/rule` 路由 —— 任何身分輸入「我要看使用規則」或 `/rule`，直接回傳附錄 A 全文，不經過 LLM
-- [x] FR-6：`/function` 路由 —— 任何身分輸入「我要看所有功能」或 `/function`，回傳目前已實作功能的清單（MVP 先用最簡單條列格式，正式文案模板待產品原型後由 Robin 補上，見 robinson SPEC.md 附錄 B）
+- [x] FR-6：`/function` 路由 —— 任何身分輸入「我要看所有功能」或 `/function`，回傳目前已實作功能的清單（MVP 先用最簡單條列格式，正式文案模板待產品原型後由 Robin 補上，見 robinson SPEC.md 附錄 B）。**2026-07-31 更新**：此 MVP 版本（一次回傳固定條列文字、不經 LLM）已於 Phase 1 Step 1.3a 被取代，改為「總覽＋按需深入＋人格化語氣」設計，見 [chat-core SPEC.md](../chat-core/SPEC.md) FR-9、ADR-4；本條 FR 保留作為 Step 1.1 當時的歷史紀錄，路由觸發字串（`/function`／「我要看所有功能」）本身不變
 
 ### 非功能性需求
 

@@ -8,7 +8,8 @@ FAMILY_ID_2 = 556
 
 
 class _FakeLLMClient:
-    """模擬 submodules.llm.client.LLMClient，只實作 chat.py 會用到的 generate_with_search。"""
+    """模擬 submodules.llm.client.LLMClient，實作 chat.py 用的 generate_with_search 與
+    commands.handle_function 用的 generate_text。"""
 
     def __init__(self, response_text="這是聊天核心的回答", used_search=False):
         self.response_text = response_text
@@ -16,6 +17,9 @@ class _FakeLLMClient:
 
     def generate_with_search(self, prompt):
         return self.response_text, self.used_search
+
+    def generate_text(self, prompt):
+        return self.response_text
 
 
 def _seed_pending_invite(fake_db, role="爸爸", code="secret123"):
@@ -72,10 +76,11 @@ def test_known_family_member_can_trigger_function_by_natural_language(fake_db, m
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     store = ConversationStateStore()
+    llm_client = _FakeLLMClient(response_text="這是人格化後的功能總覽")
 
-    reply = router.handle_message(fake_db, store, FAMILY_ID, "我要看所有功能")
+    reply = router.handle_message(fake_db, store, FAMILY_ID, "我要看所有功能", llm_client=llm_client)
 
-    assert reply == templates.build_function_list_text()
+    assert reply == "這是人格化後的功能總覽"
 
 
 def test_known_family_member_cannot_trigger_owner_only_setup_flow(fake_db, monkeypatch):
@@ -116,6 +121,16 @@ def test_owner_first_message_creates_owner_row(fake_db, monkeypatch):
     owner_row = fake_db.select("users", where="telegram_user_id = %s", params=(ROBIN_ID,), fetch_one=True)
     assert owner_row is not None
     assert owner_row["is_owner"] is True
+
+
+def test_owner_can_trigger_function_via_slash_command(fake_db, monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
+    store = ConversationStateStore()
+    llm_client = _FakeLLMClient(response_text="這是人格化後的功能總覽")
+
+    reply = router.handle_message(fake_db, store, ROBIN_ID, "/function", llm_client=llm_client)
+
+    assert reply == "這是人格化後的功能總覽"
 
 
 def test_owner_can_trigger_set_invite_codes(fake_db, monkeypatch):

@@ -6,7 +6,7 @@
 """
 from submodules.cloudsql.client import CloudSQLClient
 
-from src.bot import knowledge, memory
+from src.bot import knowledge, memory, templates
 from src.bot.state import ConversationStateStore
 
 _SAVE_CONFIRM_PHRASES = {"要", "好", "記錄", "儲存", "存"}
@@ -84,7 +84,10 @@ def _build_prompt(context: dict, long_memory: str, user_message: str) -> str:
         f"【這位使用者的客製知識庫】\n{custom_text}\n\n"
         f"【長記憶摘要（更早以前聊過的重點，僅供參考，可能不完全精確）】\n{long_memory or '（無）'}\n\n"
         f"【最近對話紀錄】\n{logs_text}\n\n"
+        f"【功能手冊（見 chat-core SPEC.md ADR-4）】\n{templates.build_function_manual_text()}\n\n"
         "回答規則：優先根據以上資料回答；如果以上資料不足以回答，才使用 Google Search 工具查詢網路取得正確資訊，"
-        "並確實根據查到的內容回答。\n\n"
+        "並確實根據查到的內容回答。功能手冊只有在使用者明確詢問「某個功能可以做什麼／怎麼用」時才拿來用，"
+        "回答時要附上至少一組情境範例（若該功能尚無範例就照實說明還沒有範例），並用你自己的口吻改寫，"
+        "不要逐字照抄手冊原文；使用者沒有主動問功能細節時，不要主動提起這份手冊內容。\n\n"
         f"使用者現在說：{user_message}"
     )

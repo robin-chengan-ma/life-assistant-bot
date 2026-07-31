@@ -35,6 +35,9 @@ owner: Robin
 - [x] FR-6：長記憶查詢 —— Context 組裝時額外帶上該使用者的 `conversation_summaries.summary`（查無資料視為空字串），與短記憶/知識庫一起放進 prompt
 - [x] FR-7：長記憶更新（滾動式摘要，對應 ADR-3）—— 每次聊天核心處理完一輪對話後，計算「比短記憶更早、且 `id` 大於 `summarized_up_to_log_id` 」的 backlog 對話則數；backlog ≥ 10 則時，把 backlog 內容連同既有摘要一起丟給 `GEMINI_API_TEXT_KEY`（長文生成用途，見 ADR-12），產出新摘要覆蓋回 `conversation_summaries.summary`，並把 `summarized_up_to_log_id` 推進到 backlog 最新一筆的 `id`；backlog 未達門檻則不觸發，維持原摘要不變
 - [x] FR-8：新使用者第一次進入聊天核心時，若 `conversation_summaries` 尚無對應資料列，自動建立一筆空摘要（`summary=''`、`summarized_up_to_log_id=0`），不需要額外走 Owner 審核流程（資料本身沒有預設內容，純粹是佔位）
+- [x] FR-9：`/function` 改版（Step 1.3a，對應 robinson SPEC.md FR-56、FR-56a～FR-56c，見 ADR-4）—— 「總覽」與「細節追問」兩階段：
+  - [x] FR-9a：總覽 —— 觸發 `/function` 或「我要看所有功能」時，`commands.handle_function(db, llm_client)` 組 prompt（Robinson 人格背景 + `templates.build_function_overview_raw_text()` 原始清單）呼叫一次 LLM，回傳人格化改寫過的功能總覽（僅名稱＋一句話簡述＋權限標記，不展開細節或範例）
+  - [x] FR-9b：細節追問 —— 使用者用自然語言追問特定功能（例如「記帳功能可以做什麼？」）時，不走 `/function` 路由，直接落入一般聊天核心；`chat._build_prompt()` 固定附上 `templates.build_function_manual_text()`（完整功能手冊，含 FR-56d～FR-56h 情境範例），並指示 LLM 只有使用者明確詢問時才依此回答且需附範例，一般聊天不主動提起
 
 ### 非功能性需求
 
@@ -96,6 +99,28 @@ owner: Robin
 
 **狀態**：accepted
 
+### ADR-4：`/function` 改版（Step 1.3a）——總覽獨立小型 LLM 呼叫，細節追問併入既有聊天核心
+
+**背景**：Step 1.1 的 `/function` 是一次性完整清單（`templates.build_function_list_text()`），不符合 FR-56 的「總覽＋按需深入＋情境範例＋人格化語氣」新規格。核心問題是「使用者追問某功能細節時」要怎麼接。
+
+**選項**：
+| 方案 | 優點 | 缺點 |
+|------|------|------|
+| A：併入既有聊天核心 —— `/function` 總覽走獨立小型 LLM 呼叫（不建對話狀態）；細節追問不做新指令，直接讓使用者用自然語言問，沿用 Step 1.3 聊天核心，把功能手冊（含範例）併入 `chat._build_prompt()` 的 context，LLM 自行判斷要不要回答與是否附範例 | 零新增狀態機、複用既有 context 組裝與人格化邏輯、複雜度最低，符合本專案「不過度工程」原則 | 「有沒有精準判斷出使用者在問功能細節」依賴模型自己的判斷，不是規則式 100% 可控 |
+| B：獨立狀態機 —— 仿 `/my_toggles`／`/set_toggle` 的 flow 設計：`/function` 進總覽 → 使用者輸入功能名稱/編號進細節 → 固定指令退出 | 回覆內容更可控（不會被 LLM 誤判成一般聊天） | 多一套新流程與測試，工程量較大；且「功能細節說明」本質上就是問答，用固定選單反而不如自然語言直覺 |
+
+**決策**：採方案 A（2026-07-31 Robin 確認）
+
+**理由**：與 ADR-1／ADR-3 一致的判斷基準——本專案是個人/家用規模的 Bot，方案 B 的可控性提升有限（使用者選單操作本身也可能誤觸），卻要多付一整套新狀態機的實作與維護成本；方案 A 直接利用 Step 1.3 已經做好的「知識庫 context 組裝 + LLM 人格化改寫」機制，`/function` 總覽獨立呼叫是因為總覽在使用者還沒問任何問題時就要主動觸發，無法等一般聊天核心來處理，其餘（細節追問）完全復用既有能力
+
+**後果**：
+- `templates.py` 新增 `build_function_overview_raw_text()`（總覽用，不含範例）與 `build_function_manual_text()`（完整手冊，含 FR-56d～FR-56h 範例），取代原本的 `build_function_list_text()`；`FEATURE_LIST` 每筆功能新增 `examples` 欄位（尚無範例的功能留空清單）
+- `knowledge.py` 新增 `get_persona_text(db)`，從 `build_context()` 拆出，供 `handle_function` 不需要 `user_id` 就能取得人格背景
+- `commands.handle_function(db, llm_client)` 改為需要 `db`／`llm_client` 兩個參數，回傳值不再是純文字模板，而是 LLM 呼叫結果
+- `chat._build_prompt()` 固定附上功能手冊區塊，並加入「僅使用者明確詢問才回答、需附範例、不主動提起」的規則說明
+
+**狀態**：accepted
+
 ## 實作計畫
 
 - [x] Step 1：`submodules/llm/client.py` 新增 `generate_with_search(prompt) -> tuple[str, bool]`，回傳文字與是否使用了 Google Search
@@ -108,6 +133,10 @@ owner: Robin
 - [x] Step 8：`src/bot/memory.py` —— `get_or_create_summary_row()`／`get_summary()`／`maybe_update_summary()`（backlog 計算、門檻觸發、吞例外）
 - [x] Step 9：`chat.py` 新增 `text_llm_client` 參數，改為分別呼叫 `knowledge.build_context()` 取得知識庫/短記憶、`memory.get_summary()` 取得長記憶，`_build_prompt()` 加入長記憶區塊；回覆算完並寫入對話紀錄後才呼叫 `memory.maybe_update_summary()`（實際採用「chat.py 各自呼叫兩個模組」而非「揉進 knowledge.build_context() 的回傳值」，讓 `knowledge.py`／`memory.py` 職責分離，`knowledge.py` 本體與既有測試不受影響）
 - [x] Step 10：`router.py` 新增 `text_llm_client` 參數並透傳；`webhook.py` 額外注入 `LLMClient(GEMINI_API_TEXT_KEY)`
+- [x] Step 11（Step 1.3a／ADR-4）：`templates.py` 新增 `build_function_overview_raw_text()`／`build_function_manual_text()`，`FEATURE_LIST` 補上 `examples` 欄位
+- [x] Step 12：`knowledge.py` 新增 `get_persona_text(db)`；`commands.handle_function(db, llm_client)` 改為 LLM 人格化總覽
+- [x] Step 13：`chat._build_prompt()` 加入功能手冊區塊與「按需回答＋附範例＋不主動提起」規則
+- [x] Step 14：`router.py` 的 `_FUNCTION_TRIGGERS` 分支改呼叫 `commands.handle_function(db, llm_client)`
 
 ## 測試策略
 
@@ -126,8 +155,9 @@ owner: Robin
 
 ### E2E Tests
 - [x] 完整流程：使用者問一個知識庫沒有的問題 → 觸發 Google Search → 附加詢問 → 回覆「要」→ 確認寫入 `custom` 知識庫
+- [x] Step 1.3a：`/function` 觸發後回傳 LLM 人格化總覽；使用者用自然語言追問特定功能時，落入一般聊天核心且 prompt 內含該功能的情境範例
 
-**測試結果**：一般聊天核心（ADR-1/ADR-2）新增 26 個測試，長記憶（ADR-3）再新增 13 個（`test_memory.py` 11 個、`test_chat.py`／`test_webhook.py` 長記憶整合部分共 2 個），全專案總計 117 個測試全過、`src/bot/` 與 `submodules/llm/` 覆蓋率皆維持 100%（`pytest tests/ --cov=src/bot --cov=submodules/llm`）。
+**測試結果**：一般聊天核心（ADR-1/ADR-2）新增 26 個測試，長記憶（ADR-3）再新增 13 個（`test_memory.py` 11 個、`test_chat.py`／`test_webhook.py` 長記憶整合部分共 2 個），Step 1.3a（ADR-4）再新增 9 個測試（分散在 `test_templates.py`／`test_commands.py`／`test_knowledge.py`／`test_chat.py`／`test_router.py`），全專案總計 126 個測試全過、`src/bot/` 與 `submodules/llm/` 覆蓋率皆維持 100%（`pytest tests/ --cov=src/bot --cov=submodules/llm`）。
 
 ## 風險與緩解
 
@@ -147,3 +177,4 @@ owner: Robin
 | 2026-07-31 | ADR-1／ADR-2 完成 TDD 實作：`submodules/llm/client.py` 新增 `generate_with_search()`；新增 `src/bot/knowledge.py`（知識庫查詢/寫入）、`src/bot/chat.py`（對話核心＋存檔確認流程）；`router.py` 最終 fallback 改呼叫聊天核心（移除 `_PLACEHOLDER_REPLY`），`webhook.py` 注入 `LLMClient`（`GEMINI_API_BOT_KEY`）；全專案 104 個測試全過、覆蓋率 100% | Claude |
 | 2026-07-31 | Robin 指出對話記憶只有短記憶會忘記久遠對話，確認記憶架構改為「長記憶＋短記憶＋知識庫＋上網查資料」四部分；新增 ADR-3：長記憶採滾動式摘要（而非全量塞入或向量搜尋），待 Robin 核准 `conversation_summaries` 建表 SQL 後展開實作 | Robin |
 | 2026-07-31 | Robin 核准 `conversation_summaries` 建表 SQL（含中文 comment），完成 ADR-3 TDD 實作：新增 `src/bot/memory.py`（`get_or_create_summary_row`／`get_summary`／`maybe_update_summary`，backlog ≥10 才觸發、呼叫 `GEMINI_API_TEXT_KEY`、吞例外不影響本次回覆）；`chat.py` 整合長記憶到 prompt 並在回覆後觸發摘要更新；`router.py`／`webhook.py` 注入第二把 `GEMINI_API_TEXT_KEY` 的 `LLMClient`；全專案 117 個測試全過、覆蓋率 100% | Claude |
+| 2026-07-31 | **Phase 1 Step 1.3a 完成**：`/function` 改版為「總覽 + 按需深入」（FR-9／FR-9a／FR-9b），新增 ADR-4（總覽用獨立小型 LLM 呼叫，細節追問併入既有聊天核心，Robin 確認）；`templates.py` 新增 `build_function_overview_raw_text()`／`build_function_manual_text()`（`FEATURE_LIST` 補 `examples` 欄位，收錄 FR-56d～FR-56h 情境範例）；`knowledge.py` 新增 `get_persona_text()`；`commands.handle_function()` 改為需要 `db`／`llm_client`；`chat._build_prompt()` 固定附上功能手冊；全專案 126 個測試全過、覆蓋率 100% | Claude（依 Robin「繼續開發吧」指示） |

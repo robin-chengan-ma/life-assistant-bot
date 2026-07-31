@@ -15,7 +15,7 @@ updated: 2026-07-31
 
 ## 目前階段
 
-**Phase 1（MVP）進行中 — Step 1.1、Step 1.2、Step 1.3（Gemini 對話核心）已完成，下一步 Step 1.3a（`/function` 改版）**
+**Phase 1（MVP）進行中 — Step 1.1、Step 1.2、Step 1.3（Gemini 對話核心）、Step 1.3a（`/function` 改版）已完成，下一步 Step 1.3b（影像辨識基礎流程）**
 
 ## 目標時程（2026-07-30 更新：改為三週制，因新增多模態影像/語音處理架構）
 
@@ -93,6 +93,8 @@ updated: 2026-07-31
 | 2026-07-30 | Robin 確認 Step 1.2 功能開關權限模型（FR-2a：使用者可自管、Owner 可代管），展開為獨立 [docs/specs/feature-toggles/SPEC.md](../feature-toggles/SPEC.md)（ADR-1：對話狀態 dict 新增 `flow` 欄位）；**Phase 1 Step 1.2 完成**：新增 `src/bot/toggles.py`、`/my_toggles`（自管）、`/set_toggle`（Owner 代管）；家人第一次綁定成功時自動建立 8 筆預設開啟的 `feature_toggles`；`src/bot/` 全部 78 個測試全過、覆蓋率 100% |
 | 2026-07-31 | Robin 確認查無答案時採「單次 API 呼叫＋Google Search grounding」（見 chat-core SPEC.md ADR-1），展開為獨立 [docs/specs/chat-core/SPEC.md](../chat-core/SPEC.md)（ADR-2：`pending_kb_save` 狀態流程）；**Phase 1 Step 1.3 完成**：一般聊天訊息正式交給 Gemini 處理（取代 `_PLACEHOLDER_REPLY`），新增 `src/bot/knowledge.py`（知識庫查詢/寫入、資安隔離）、`src/bot/chat.py`（對話核心、存檔確認流程），`submodules/llm/client.py` 新增 `generate_with_search()` 並補上單元測試；全專案 104 個測試全過、覆蓋率 100% |
 | 2026-07-31 | Robin 指出短記憶會忘記久遠對話，確認記憶架構改為「長記憶＋短記憶＋知識庫＋上網查資料」四部分並核准 `conversation_summaries` 建表 SQL；新增 ADR-3（滾動式摘要）：新增 `src/bot/memory.py`（backlog ≥10 則觸發、呼叫 `GEMINI_API_TEXT_KEY`），`chat.py`／`router.py`／`webhook.py` 整合第二把 Gemini Key；全專案 117 個測試全過、覆蓋率 100% |
+| 2026-07-31 | Robin 提供待辦事項／求職／體態管理／心情小記情境範例（新增 FR-56e～FR-56h），補充 FR-31a（待辦逾期標記）與 FR-46（身高體重合理範圍檢查）業務規則 |
+| 2026-07-31 | **Phase 1 Step 1.3a 完成**：`/function` 重新實作為「總覽＋按需深入＋情境範例」，展開為 chat-core SPEC.md FR-9／ADR-4（總覽獨立小型 LLM 呼叫，細節追問併入既有聊天核心，Robin 確認）；`commands.handle_function()` 改為 LLM 人格化總覽，`chat.py` prompt 固定附上功能手冊（含 FR-56d～FR-56h 情境範例）供按需回答；全專案 126 個測試全過、覆蓋率 100% |
 
 ## 待決事項
 
@@ -105,6 +107,6 @@ updated: 2026-07-31
 
 ## 下一步
 
-1. **Step 1.3a：`/function` 改版**——依 FR-56 改成「總覽＋按需深入＋情境範例」，取代 Step 1.1 的扁平清單版本，這是第一個實際運用 Step 1.3 聊天核心能力的功能
-2. 接續 Step 1.3b（影像辨識基礎流程：Drive 上傳＋Pillow 壓縮＋雙 Key 隨機辨識），此時才會實際用到 `GEMINI_API_IMAGE_KEY1`／`KEY2`
+1. **Step 1.3b：影像辨識基礎流程**——Drive 上傳＋Pillow 壓縮至 1024×1024／JPEG 80%＋雙 Key（`GEMINI_API_IMAGE_KEY1`／`KEY2`）隨機辨識，不確定內容需詢問使用者（FR-17、FR-17a～FR-17c、ADR-12、ADR-13）
+2. 接續 Step 1.4（語音轉文字，改用 Groq Whisper）
 3. 每天對照「建議每日分配」檢查進度，落後時優先保住 Phase 1 核心體驗（對話核心、待辦、心情小記），Step 1.9 客訴收集等次要 Step 可延後不必硬趕

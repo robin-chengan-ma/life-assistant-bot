@@ -4,12 +4,39 @@ from src.bot import commands, templates, toggles
 from src.bot.state import ConversationStateStore
 
 
+class _FakeLLMClient:
+    """模擬 submodules.llm.client.LLMClient，只實作 handle_function 會用到的 generate_text。"""
+
+    def __init__(self, response_text="人格化後的功能總覽"):
+        self.response_text = response_text
+        self.last_prompt = None
+
+    def generate_text(self, prompt):
+        self.last_prompt = prompt
+        return self.response_text
+
+
 def test_handle_rule_returns_appendix_a_text():
     assert commands.handle_rule() == templates.APPENDIX_A_TEXT
 
 
-def test_handle_function_returns_function_list_text():
-    assert commands.handle_function() == templates.build_function_list_text()
+def test_handle_function_returns_llm_generated_overview(fake_db):
+    llm_client = _FakeLLMClient(response_text="這是總覽")
+
+    reply = commands.handle_function(fake_db, llm_client)
+
+    assert reply == "這是總覽"
+
+
+def test_handle_function_prompt_includes_persona_and_raw_overview(fake_db):
+    fake_db.insert("knowledge_base", {"category": "general_persona", "user_id": None, "content": "我是羅賓森"})
+    llm_client = _FakeLLMClient()
+
+    commands.handle_function(fake_db, llm_client)
+
+    assert "我是羅賓森" in llm_client.last_prompt
+    for feature in templates.FEATURE_LIST:
+        assert feature["name"] in llm_client.last_prompt
 
 
 def test_start_set_invite_codes_sets_awaiting_role_state():

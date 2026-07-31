@@ -71,12 +71,12 @@
 
 ### `/function`（內部路由，非對外 HTTP 端點）
 
-**狀態**：已實作（`src/bot/commands.py::handle_function`），文案為 MVP 簡易版
-**觸發方式**：使用者於對話框輸入「我要看所有功能」或 `/function`
+**狀態**：已實作（`src/bot/commands.py::handle_function`，Step 1.3a／ADR-4 改版，見 chat-core SPEC.md FR-9）
+**觸發方式**：使用者於對話框輸入「我要看所有功能」或 `/function` → 回傳總覽；使用者針對特定功能追問細節時（例如「記帳功能可以做什麼？」）不走此路由，改落入一般聊天核心（見下方 Webhook 路由）
 **權限**：任何已驗證使用者（Robin 或家人）
-**對應 FR**：FR-56
+**對應 FR**：FR-56、FR-56a～FR-56c、chat-core SPEC.md FR-9
 
-**備註**：回傳所有功能清單並註記 Owner 專屬 vs 一般使用者可用；實際文字模板待有產品原型後補上（見 SPEC.md 附錄 B）。
+**備註**：總覽階段組 prompt（Robinson 人格背景 + `templates.build_function_overview_raw_text()`）呼叫一次 LLM（`GEMINI_API_BOT_KEY`）改寫成口語，只列功能名稱＋一句話簡述＋權限標記，不展開細節或範例；細節與情境範例（`templates.build_function_manual_text()`）併入一般聊天核心的 context，由 LLM 依使用者提問自行判斷是否回答。實際文字模板排版待有產品原型後再美化（見 robinson SPEC.md 附錄 B）。
 
 ---
 

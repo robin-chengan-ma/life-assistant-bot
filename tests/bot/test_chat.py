@@ -77,6 +77,20 @@ def test_handle_chat_message_prompt_includes_persona_and_user_message(fake_db):
     assert "今天天氣如何？" in llm_client.last_prompt
 
 
+def test_handle_chat_message_prompt_includes_function_manual(fake_db):
+    # FR-56a／b：使用者追問特定功能細節時，聊天核心要能依此回答並附範例（見 chat-core SPEC.md ADR-4）
+    _seed_general(fake_db)
+    llm_client = _FakeLLMClient()
+    text_llm_client = _FakeTextLLMClient()
+    store = ConversationStateStore()
+
+    chat.handle_chat_message(
+        fake_db, llm_client, text_llm_client, store, telegram_user_id=1, user_id=1, text="記帳功能可以做什麼？"
+    )
+
+    assert "早餐花80元" in llm_client.last_prompt  # 記帳功能情境範例（FR-56d）
+
+
 def test_handle_chat_message_prompt_includes_long_memory_summary(fake_db):
     _seed_general(fake_db)
     fake_db.insert(

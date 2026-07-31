@@ -12,7 +12,6 @@ _RECENT_LOGS_LIMIT = 10
 
 def build_context(db: CloudSQLClient, user_id: int) -> dict:
     """組出對話核心需要的知識庫 context：人格背景、家人背景、自己的客製知識庫、最近對話紀錄。"""
-    persona_rows = db.select("knowledge_base", where="category = %s", params=("general_persona",))
     family_rows = db.select("knowledge_base", where="category = %s", params=("general_family",))
     custom_rows = db.select(
         "knowledge_base",
@@ -21,11 +20,21 @@ def build_context(db: CloudSQLClient, user_id: int) -> dict:
     )
 
     return {
-        "persona": persona_rows[0]["content"] if persona_rows else "",
+        "persona": get_persona_text(db),
         "family": family_rows[0]["content"] if family_rows else "",
         "custom": [row["content"] for row in custom_rows],
         "recent_logs": _get_recent_logs(db, user_id),
     }
+
+
+def get_persona_text(db: CloudSQLClient) -> str:
+    """單獨取出「Robinson 人格背景」（`general_persona`），不需要 user_id。
+
+    供 `commands.handle_function`（FR-56c：/function 總覽也必須用人格語氣改寫）等
+    不需要完整 context 的場景使用，避免每次都要湊一個假的 user_id。
+    """
+    persona_rows = db.select("knowledge_base", where="category = %s", params=("general_persona",))
+    return persona_rows[0]["content"] if persona_rows else ""
 
 
 def _get_recent_logs(db: CloudSQLClient, user_id: int) -> list[dict]:

@@ -65,7 +65,7 @@ def handle_message(
     if text in _RULE_TRIGGERS:
         return commands.handle_rule()
     if text in _FUNCTION_TRIGGERS:
-        return commands.handle_function()
+        return commands.handle_function(db, llm_client)
 
     return chat.handle_chat_message(
         db, llm_client, text_llm_client, state_store, telegram_user_id, user_id, text
