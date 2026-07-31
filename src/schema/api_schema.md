@@ -123,3 +123,25 @@
 **對應 FR**：FR-2a（見 feature-toggles SPEC.md FR-2）
 
 **備註**：先列出所有已綁定的非 Owner 使用者供選擇，選定後進入與 `/my_toggles` 相同的編號切換畫面，但改的是該使用者的開關；目前沒有任何家人綁定時回覆提示訊息，不進入設定模式。
+
+---
+
+### 一般聊天核心（內部路由，非對外 HTTP 端點）
+
+**狀態**：已實作（`src/bot/chat.py::handle_chat_message`）
+**觸發方式**：路由層最終 fallback —— 訊息不是任何已知指令、也沒有進行中的對話流程時觸發
+**權限**：任何已驗證使用者（Robin 或家人）
+**對應 FR**：FR-9～FR-12、FR-56c（見 [chat-core SPEC.md](../../docs/specs/chat-core/SPEC.md)）
+
+**備註**：組 context（人格背景＋家人背景＋自己的客製知識庫＋最近 10 則對話紀錄）→ 呼叫 `GEMINI_API_BOT_KEY` 並開啟 Google Search grounding → 若實際查了網路，回覆後附加詢問是否存入知識庫，進入 `pending_kb_save` 狀態。使用者訊息與 Robinson 回覆皆寫入 `conversation_logs`。這是取代 Step 1.1/1.2 `_PLACEHOLDER_REPLY` 的正式聊天入口。
+
+---
+
+### `pending_kb_save`（內部路由，非對外 HTTP 端點）
+
+**狀態**：已實作（`src/bot/chat.py::handle_pending_kb_save_step`）
+**觸發方式**：一般聊天核心觸發 Google Search 後，下一則訊息自動進入此狀態
+**權限**：任何已驗證使用者，僅能確認存入自己的客製知識庫
+**對應 FR**：FR-4（見 chat-core SPEC.md）
+
+**備註**：同意詞（「要」／「好」／「記錄」／「儲存」／「存」）才寫入 `knowledge_base`（`category='custom'`），其餘輸入一律視為不儲存，不追問第二次。

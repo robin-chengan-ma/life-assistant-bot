@@ -125,7 +125,7 @@ submodules/
 - [x] Step S.3：建立 `submodules/llm/`（`client.py`、`README.md`、`requirements.txt`、`.env.example`）
 - [x] Step S.4：更新主專案根目錄 `requirements.txt`（新增 `psycopg2-binary`、`google-genai`、`python-dotenv`）
 - [x] Step S.5：改版重構 — 刪除舊版 `neon_postgres/`、`telegram_client/`、`gemini_client/`（含各自的 `__init__.py`、`connection.py`、`crud.py`、`sender.py`），統一為 ADR-4 的四檔案結構，並將三個 Client 改為 class 寫法（`CloudSQLClient`、`TelegramClient`、`LLMClient`）
-- [ ] Step S.6：撰寫對應單元測試（見下方「測試策略」，暫緩至 Phase 1 backend 實際串接時一併補上）
+- [ ] Step S.6：撰寫對應單元測試（見下方「測試策略」）—— `llm.client.LLMClient` 已於 Phase 1 Step 1.3 補上（2026-07-30）；`cloudsql`／`telegram` 仍待對應功能實際串接時補上
 
 ## 測試策略
 
@@ -134,7 +134,7 @@ submodules/
 ### Unit Tests
 - [ ] `cloudsql.client.CloudSQLClient`：mock `psycopg2` 連線，驗證 `select`/`insert`/`update`/`delete` 組出的 SQL 與參數正確；`update()`/`delete()` 未帶 `where` 應拋出 `ValueError`；`dsn` 未提供且無 `DATABASE_URL` 應拋出 `ValueError`
 - [ ] `telegram.client.TelegramClient`：mock `requests.post`，驗證 `send_text`/`send_photo`/`send_chat_action` 組出的 payload 正確；空 `bot_token` 應拋出 `ValueError`
-- [ ] `llm.client.LLMClient`：mock `genai.Client`，驗證 `generate_text`/`generate_with_image` 呼叫參數正確；空 `api_key` 應拋出 `ValueError`
+- [x] `llm.client.LLMClient`：mock `genai.Client`，驗證 `generate_text`/`generate_with_image`/`generate_with_search` 呼叫參數正確；空 `api_key` 應拋出 `ValueError`（2026-07-30，7 個測試，覆蓋率 100%，見 [chat-core SPEC.md](../chat-core/SPEC.md)）
 
 ### Integration Tests
 - [ ] `cloudsql`：對測試用 Neon 分支資料庫實際下 CRUD，確認連線池可正常取得/歸還連線

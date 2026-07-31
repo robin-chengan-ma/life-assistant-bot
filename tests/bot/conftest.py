@@ -10,7 +10,13 @@ class FakeCloudSQLClient:
     """記憶體版的假 DB client，只實作 src/bot/ 目前會用到的 select/insert/update 行為。"""
 
     def __init__(self):
-        self._tables: dict[str, list[dict]] = {"users": [], "invite_codes": [], "feature_toggles": []}
+        self._tables: dict[str, list[dict]] = {
+            "users": [],
+            "invite_codes": [],
+            "feature_toggles": [],
+            "knowledge_base": [],
+            "conversation_logs": [],
+        }
         self._id_counter = itertools.count(1)
 
     def select(self, table, columns=("*",), where=None, params=None, fetch_one=False):
@@ -56,6 +62,10 @@ class FakeCloudSQLClient:
             return row.get("user_id") == params[0]
         if where == "user_id = %s AND feature_key = %s":
             return row.get("user_id") == params[0] and row.get("feature_key") == params[1]
+        if where == "category = %s":
+            return row.get("category") == params[0]
+        if where == "category = %s AND user_id = %s":
+            return row.get("category") == params[0] and row.get("user_id") == params[1]
 
         raise NotImplementedError(f"FakeCloudSQLClient 尚未支援這個 where 條件：{where}")
 

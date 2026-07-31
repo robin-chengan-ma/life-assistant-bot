@@ -6,6 +6,7 @@ from flask import Blueprint, jsonify, request
 from src.bot.router import handle_message
 from src.bot.state import ConversationStateStore
 from submodules.cloudsql.client import CloudSQLClient
+from submodules.llm.client import LLMClient
 from submodules.telegram.client import TelegramClient
 
 bot_bp = Blueprint("bot", __name__)
@@ -39,8 +40,11 @@ def telegram_webhook():
     telegram_user_id, text = extracted
 
     db = CloudSQLClient()
+    # 一般問答用的 Key（見 docs/specs/chat-core/SPEC.md ADR-12），只有訊息真的落入
+    # 一般聊天核心時才會被呼叫；其餘指令/對話流程分支不會用到。
+    llm_client = LLMClient(api_key=os.environ["GEMINI_API_BOT_KEY"])
     try:
-        reply = handle_message(db, _state_store, telegram_user_id, text)
+        reply = handle_message(db, _state_store, telegram_user_id, text, llm_client=llm_client)
     finally:
         db.close()
 

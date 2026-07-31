@@ -50,6 +50,7 @@ def test_webhook_ignores_non_text_updates(client, monkeypatch):
 
 def test_webhook_routes_valid_message_and_sends_reply(client, monkeypatch):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("GEMINI_API_BOT_KEY", "fake-gemini-key")
 
     mock_handle_message = MagicMock(return_value="哈囉！")
     monkeypatch.setattr(webhook, "handle_message", mock_handle_message)
@@ -57,6 +58,10 @@ def test_webhook_routes_valid_message_and_sends_reply(client, monkeypatch):
     mock_db_instance = MagicMock()
     mock_cloudsql_client_cls = MagicMock(return_value=mock_db_instance)
     monkeypatch.setattr(webhook, "CloudSQLClient", mock_cloudsql_client_cls)
+
+    mock_llm_instance = MagicMock()
+    mock_llm_client_cls = MagicMock(return_value=mock_llm_instance)
+    monkeypatch.setattr(webhook, "LLMClient", mock_llm_client_cls)
 
     mock_telegram_instance = MagicMock()
     mock_telegram_client_cls = MagicMock(return_value=mock_telegram_instance)
@@ -66,6 +71,9 @@ def test_webhook_routes_valid_message_and_sends_reply(client, monkeypatch):
     response = client.post("/telegram/webhook", json=payload)
 
     assert response.status_code == 200
-    mock_handle_message.assert_called_once_with(mock_db_instance, webhook._state_store, 123, "/rule")
+    mock_llm_client_cls.assert_called_once_with(api_key="fake-gemini-key")
+    mock_handle_message.assert_called_once_with(
+        mock_db_instance, webhook._state_store, 123, "/rule", llm_client=mock_llm_instance
+    )
     mock_db_instance.close.assert_called_once()
     mock_telegram_instance.send_text.assert_called_once_with(chat_id=123, text="哈囉！")

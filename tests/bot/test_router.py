@@ -7,6 +7,17 @@ FAMILY_ID = 555
 FAMILY_ID_2 = 556
 
 
+class _FakeLLMClient:
+    """模擬 submodules.llm.client.LLMClient，只實作 chat.py 會用到的 generate_with_search。"""
+
+    def __init__(self, response_text="這是聊天核心的回答", used_search=False):
+        self.response_text = response_text
+        self.used_search = used_search
+
+    def generate_with_search(self, prompt):
+        return self.response_text, self.used_search
+
+
 def _seed_pending_invite(fake_db, role="爸爸", code="secret123"):
     user_id = fake_db.insert("users", {"telegram_user_id": None, "role": role, "is_owner": False})
     fake_db.insert("invite_codes", {"code": code, "is_used": False, "user_id": user_id})
@@ -68,25 +79,29 @@ def test_known_family_member_can_trigger_function_by_natural_language(fake_db, m
 
 
 def test_known_family_member_cannot_trigger_owner_only_setup_flow(fake_db, monkeypatch):
-    """權限邊界測試：家人輸入 Owner 專屬指令，不應該被授予設定通關密碼的能力。"""
+    """權限邊界測試：家人輸入 Owner 專屬指令，不應該被授予設定通關密碼的能力（改落入一般聊天核心）。"""
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     store = ConversationStateStore()
+    llm_client = _FakeLLMClient(response_text="我不太懂這個指令耶！")
 
-    reply = router.handle_message(fake_db, store, FAMILY_ID, "/set_invite_codes")
+    reply = router.handle_message(fake_db, store, FAMILY_ID, "/set_invite_codes", llm_client=llm_client)
 
-    assert reply == router._PLACEHOLDER_REPLY
+    assert reply == "我不太懂這個指令耶！"
     assert store.get(FAMILY_ID) is None
 
 
-def test_known_family_member_other_text_gets_placeholder(fake_db, monkeypatch):
+def test_known_family_member_other_text_gets_chat_core_reply(fake_db, monkeypatch):
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     store = ConversationStateStore()
+    llm_client = _FakeLLMClient(response_text="今天台北是晴天喔！")
 
-    reply = router.handle_message(fake_db, store, FAMILY_ID, "今天天氣如何")
+    reply = router.handle_message(fake_db, store, FAMILY_ID, "今天天氣如何", llm_client=llm_client)
 
-    assert reply == router._PLACEHOLDER_REPLY
+    assert reply == "今天台北是晴天喔！"
+    logs = fake_db.select("conversation_logs", where="user_id = %s", params=(1,))
+    assert len(logs) == 2
 
 
 # --- Owner（Robin） ---
@@ -174,14 +189,15 @@ def test_known_family_member_toggle_flow_continues_via_router(fake_db, monkeypat
 
 
 def test_known_family_member_cannot_trigger_owner_only_set_toggle(fake_db, monkeypatch):
-    """權限邊界測試：家人輸入 Owner 專屬 /set_toggle，不應被授予代管他人開關的能力。"""
+    """權限邊界測試：家人輸入 Owner 專屬 /set_toggle，不應被授予代管他人開關的能力（改落入一般聊天核心）。"""
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     store = ConversationStateStore()
+    llm_client = _FakeLLMClient(response_text="我不太懂這個指令耶！")
 
-    reply = router.handle_message(fake_db, store, FAMILY_ID, "/set_toggle")
+    reply = router.handle_message(fake_db, store, FAMILY_ID, "/set_toggle", llm_client=llm_client)
 
-    assert reply == router._PLACEHOLDER_REPLY
+    assert reply == "我不太懂這個指令耶！"
     assert store.get(FAMILY_ID) is None
 
 
@@ -220,3 +236,66 @@ def test_owner_can_delegate_toggle_for_family_member(fake_db, monkeypatch):
     assert "切換為" in toggle_reply
     rows = fake_db.select("feature_toggles", where="user_id = %s", params=(dad_id,))
     assert any(not r["is_enabled"] for r in rows)
+
+
+# --- 一般聊天核心（docs/specs/chat-core/SPEC.md）---
+
+
+def test_known_family_member_general_message_routes_to_chat_core(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+    llm_client = _FakeLLMClient(response_text="記帳功能可以幫你記錄每天的花費喔！", used_search=False)
+
+    reply = router.handle_message(fake_db, store, FAMILY_ID, "記帳功能是什麼？", llm_client=llm_client)
+
+    assert reply == "記帳功能可以幫你記錄每天的花費喔！"
+    assert store.get(FAMILY_ID) is None
+
+
+def test_owner_general_message_routes_to_chat_core(fake_db, monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
+    store = ConversationStateStore()
+    llm_client = _FakeLLMClient(response_text="早安！", used_search=False)
+
+    reply = router.handle_message(fake_db, store, ROBIN_ID, "早安", llm_client=llm_client)
+
+    assert reply == "早安！"
+
+
+def test_chat_core_search_reply_sets_pending_kb_save_state(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+    llm_client = _FakeLLMClient(response_text="今天台北是晴天", used_search=True)
+
+    reply = router.handle_message(fake_db, store, FAMILY_ID, "今天天氣如何？", llm_client=llm_client)
+
+    assert "今天台北是晴天" in reply
+    assert store.get(FAMILY_ID) == {"flow": "pending_kb_save", "content": "今天台北是晴天", "target_user_id": user_id}
+
+
+def test_pending_kb_save_flow_continues_via_router(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+    store.set(FAMILY_ID, {"flow": "pending_kb_save", "content": "今天台北是晴天", "target_user_id": user_id})
+
+    reply = router.handle_message(fake_db, store, FAMILY_ID, "要")
+
+    assert "記錄" in reply
+    assert store.get(FAMILY_ID) is None
+    rows = fake_db.select("knowledge_base", where="category = %s AND user_id = %s", params=("custom", user_id))
+    assert len(rows) == 1
+
+
+def test_owner_pending_kb_save_flow_continues_via_router(fake_db, monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
+    store = ConversationStateStore()
+    store.set(ROBIN_ID, {"flow": "pending_kb_save", "content": "答案", "target_user_id": 1})
+
+    reply = router.handle_message(fake_db, store, ROBIN_ID, "不用了")
+
+    assert store.get(ROBIN_ID) is None
+    rows = fake_db.select("knowledge_base", where="category = %s AND user_id = %s", params=("custom", 1))
+    assert len(rows) == 0

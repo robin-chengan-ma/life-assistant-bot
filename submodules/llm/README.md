@@ -37,7 +37,8 @@ with open("cert_question.jpg", "rb") as f:
 ## 設計說明
 
 - 使用 `google-genai`（`from google import genai`），而非已棄用的 `google-generativeai`。
-- 對外只暴露 `generate_text` / `generate_with_image` 兩個方法，未來更換或新增 LLM 供應商時，呼叫端介面不受影響。
+- 對外暴露 `generate_text` / `generate_with_image` / `generate_with_search` 三個方法，未來更換或新增 LLM 供應商時，呼叫端介面不受影響。
+- `generate_with_search(prompt)` 回傳 `(文字, 是否使用了 Google Search)` tuple；是否查網路由模型依 prompt 內容自行判斷（見 [chat-core SPEC.md](../../docs/specs/chat-core/SPEC.md) ADR-1），這裡只負責讀取 `grounding_metadata` 回報有沒有真的觸發搜尋，供呼叫端決定要不要詢問使用者是否存檔。
 
 ## 對應 Spec
 

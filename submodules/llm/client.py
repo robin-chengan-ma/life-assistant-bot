@@ -42,3 +42,28 @@ class LLMClient:
             contents=[image_part, prompt],
         )
         return response.text
+
+    def generate_with_search(self, prompt: str) -> tuple[str, bool]:
+        """帶 Google Search 工具的生成呼叫，回傳 (回應文字, 是否實際使用了 Google Search)。
+
+        是否要查網路由模型自行判斷（見 docs/specs/chat-core/SPEC.md ADR-1），本方法只負責
+        從回應的 grounding_metadata 判讀這次有沒有真的觸發搜尋，不自己額外呼叫第二次 API。
+        """
+        grounding_tool = types.Tool(google_search=types.GoogleSearch())
+        config = types.GenerateContentConfig(tools=[grounding_tool])
+        response = self._client.models.generate_content(
+            model=self._model,
+            contents=prompt,
+            config=config,
+        )
+        return response.text, self._used_search(response)
+
+    @staticmethod
+    def _used_search(response) -> bool:
+        candidates = getattr(response, "candidates", None) or []
+        if not candidates:
+            return False
+        metadata = getattr(candidates[0], "grounding_metadata", None)
+        if metadata is None:
+            return False
+        return bool(getattr(metadata, "web_search_queries", None))
