@@ -1,3 +1,6 @@
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from src.bot import chat
 from src.bot.state import ConversationStateStore
 
@@ -75,6 +78,34 @@ def test_handle_chat_message_prompt_includes_persona_and_user_message(fake_db):
     assert "我是羅賓森" in llm_client.last_prompt
     assert "家人背景" in llm_client.last_prompt
     assert "今天天氣如何？" in llm_client.last_prompt
+
+
+def test_handle_chat_message_prompt_includes_real_current_date(fake_db, monkeypatch):
+    # Robin 回報問「今天幾月幾號」時模型瞎掰錯誤日期＋編造生日，改為把伺服器算好的真實日期
+    # 塞進 prompt，不讓模型自己憑印象亂猜（見 chat.py 模組 docstring 2026-07-31 追加修正）。
+    fixed_now = datetime(2026, 7, 31, 10, 0, tzinfo=ZoneInfo("Asia/Taipei"))
+    monkeypatch.setattr(chat, "_now", lambda: fixed_now)
+    _seed_general(fake_db)
+    llm_client = _FakeLLMClient()
+    text_llm_client = _FakeTextLLMClient()
+    store = ConversationStateStore()
+
+    chat.handle_chat_message(
+        fake_db, llm_client, text_llm_client, store, telegram_user_id=1, user_id=1, text="今天幾月幾號？"
+    )
+
+    assert "2026年7月31日 星期五" in llm_client.last_prompt
+
+
+def test_handle_chat_message_prompt_forbids_fabricating_facts(fake_db):
+    _seed_general(fake_db)
+    llm_client = _FakeLLMClient()
+    text_llm_client = _FakeTextLLMClient()
+    store = ConversationStateStore()
+
+    chat.handle_chat_message(fake_db, llm_client, text_llm_client, store, telegram_user_id=1, user_id=1, text="嗨")
+
+    assert "絕對不能捏造任何具體事實" in llm_client.last_prompt
 
 
 def test_handle_chat_message_prompt_states_no_web_search_capability(fake_db):

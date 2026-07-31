@@ -9,7 +9,16 @@
 supersede ADR-7）——新產生的 Gemini API Key 對 Gemini 2.5 世代模型回傳 404
 「no longer available to new users」，grounding 整條路走不通，改為誠實回答不知道，
 詳見 chat-core SPEC.md ADR-5（supersede ADR-1）。
+
+2026-07-31 追加修正：Robin 回報問「今天幾月幾號」時，模型憑印象瞎掰了一個錯誤日期，還編造
+「剛好是我生日」這種知識庫裡根本沒有的內容——LLM 本身沒有即時時鐘，移除 grounding 後更沒有
+管道查證，只會憑訓練資料的印象亂猜。修正方式：日期是伺服器本地就能算出來的資訊，根本不需要
+呼叫任何外部 API，直接把真實日期算好塞進 prompt，並加強「不可捏造具體事實」的規則，見
+chat-core SPEC.md FR-3 補充。
 """
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from submodules.cloudsql.client import CloudSQLClient
 
 from src.bot import knowledge, memory, templates
@@ -19,6 +28,19 @@ from src.bot.state import ConversationStateStore
 # （prompt 已明確指示模型不要跟使用者解釋這個標記）。
 _UNKNOWN_MARKER = "【NOT_FOUND】"
 _UNKNOWN_SUFFIX = "\n\n你可以先自行上網查詢，查到後把答案打給我，我會幫你記錄到知識庫喔！"
+
+_TAIWAN_TZ = ZoneInfo("Asia/Taipei")
+_WEEKDAY_NAMES = ["一", "二", "三", "四", "五", "六", "日"]
+
+
+def _now() -> datetime:
+    """回傳現在的台灣時間；獨立成函式方便測試用 monkeypatch 固定時間點。"""
+    return datetime.now(_TAIWAN_TZ)
+
+
+def _current_date_text() -> str:
+    now = _now()
+    return f"{now.year}年{now.month}月{now.day}日 星期{_WEEKDAY_NAMES[now.weekday()]}"
 
 
 def handle_chat_message(
@@ -88,15 +110,18 @@ def _build_prompt(context: dict, long_memory: str, user_message: str) -> str:
     return (
         "你是 Robinson，請完全依照下方的人格背景設定來回答，用溫暖、有同理心、邏輯清晰、直入重點的語氣回覆，"
         "不要用條列式照本宣科的方式回答，也不要說自己是語言模型。\n\n"
+        f"【現在的日期（台灣時區，回答日期／星期相關問題一律以此為準）】\n{_current_date_text()}\n\n"
         f"【Robinson 人格背景】\n{context['persona']}\n\n"
         f"【Robin 與家人背景】\n{context['family']}\n\n"
         f"【這位使用者的客製知識庫】\n{custom_text}\n\n"
         f"【長記憶摘要（更早以前聊過的重點，僅供參考，可能不完全精確）】\n{long_memory or '（無）'}\n\n"
         f"【最近對話紀錄】\n{logs_text}\n\n"
         f"【功能手冊（見 chat-core SPEC.md ADR-4）】\n{templates.build_function_manual_text()}\n\n"
-        "回答規則：只根據以上資料回答，你沒有查詢網路的能力；如果以上資料不足以回答使用者的問題，"
-        "你必須誠實地告訴使用者你目前不知道，並且一定要在回覆的最後加上這個固定標記文字："
-        f"「{_UNKNOWN_MARKER}」（這是系統內部用的標記，使用者看不到，不用跟使用者解釋這個標記代表什麼）。"
+        "回答規則：只根據以上資料回答，你沒有查詢網路的能力；日期／星期問題只能依上方「現在的日期」回答，"
+        "不可以自己推算或憑印象亂猜；除了以上資料明確提到的內容，絕對不能捏造任何具體事實"
+        "（例如生日、事件細節、數字），寧可誠實說不知道也不要瞎掰聽起來合理的答案；"
+        "如果以上資料不足以回答使用者的問題，你必須誠實地告訴使用者你目前不知道，並且一定要在回覆的最後"
+        f"加上這個固定標記文字：「{_UNKNOWN_MARKER}」（這是系統內部用的標記，使用者看不到，不用跟使用者解釋這個標記代表什麼）。"
         "功能手冊只有在使用者明確詢問「某個功能可以做什麼／怎麼用」時才拿來用，"
         "回答時要附上至少一組情境範例（若該功能尚無範例就照實說明還沒有範例），並用你自己的口吻改寫，"
         "不要逐字照抄手冊原文；使用者沒有主動問功能細節時，不要主動提起這份手冊內容。\n\n"
