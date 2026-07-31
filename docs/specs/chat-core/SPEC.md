@@ -62,7 +62,7 @@ owner: Robin
 
 **理由**：兩個方案都無法完全避免依賴模型自我判斷，方案 B 只是把「判斷該不該查」換成「判斷該不該回傳約定字串」，可控性沒有實質提升，卻要付兩倍呼叫成本；方案 A 更符合 NFR-1（免費額度優先）與本專案一貫的「不過度工程」原則
 
-**後果**：`submodules/llm/client.py` 新增 `generate_with_search()` 方法，回傳 `(text, used_search)` tuple；`src/bot/chat.py` 依 `used_search` 決定要不要附加詢問存檔的文字並進入 `pending_kb_save` 流程。**2026-07-31 補充**：`generate_with_search()` 內部固定使用 `gemini-2.5-flash-lite`，與其他呼叫用的模型不同——因為 Google Search grounding 免費額度依模型世代分桶，詳見 [submodules-core SPEC.md](../submodules-core/SPEC.md) ADR-7
+**後果**：`submodules/llm/client.py` 新增 `generate_with_search()` 方法，回傳 `(text, used_search)` tuple；`src/bot/chat.py` 依 `used_search` 決定要不要附加詢問存檔的文字並進入 `pending_kb_save` 流程。**2026-07-31 補充**：`generate_with_search()` 內部固定使用 `gemini-2.5-flash`，與其他呼叫用的模型不同——因為 Google Search grounding 免費額度依模型世代分桶，詳見 [submodules-core SPEC.md](../submodules-core/SPEC.md) ADR-7
 
 **狀態**：accepted
 

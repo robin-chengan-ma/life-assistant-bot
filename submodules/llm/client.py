@@ -20,8 +20,10 @@ _DEFAULT_MODEL = "gemini-3.5-flash-lite"
 # grounding 額度是 0（官方定價頁：Gemini 3 使用 grounding 一律計費，免費層不提供），但 Gemini 2.5
 # 世代有 1,500 次/天免費額度。因此帶 Google Search 工具的呼叫必須指定 Gemini 2.5 世代的模型，
 # 其餘不需要查網路的呼叫（純文字/圖片）維持用 `_DEFAULT_MODEL`（額度更好、非停用倒數中的世代）。
+# 原本選 `gemini-2.5-flash-lite`，但 Robin 於 AI Studio 實際測試時這個模型不可選，改用同世代
+# 的 `gemini-2.5-flash`（`gemini-2.5-pro` 較重，非必要不選）。
 # 注意：Gemini 2.5 系列預計 2026-10-16 停用，屆時須重新評估這個模型是否要換。
-_SEARCH_MODEL = "gemini-2.5-flash-lite"
+_SEARCH_MODEL = "gemini-2.5-flash"
 
 # 本地端節流保護（非 Gemini 官方額度機制）：見 docs/specs/submodules-core/SPEC.md ADR-5。
 # 2026-07-31 實測（AI Studio Rate Limit 頁面）：`gemini-flash-latest` 當時解析到的
