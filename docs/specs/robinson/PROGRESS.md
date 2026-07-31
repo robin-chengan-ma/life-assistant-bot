@@ -99,6 +99,7 @@ updated: 2026-07-31
 | 2026-07-31 | Robin 要求「該做的防呆要做好」，再補兩層防護：platform-auth SPEC.md FR-7a（`update_id` 去重，防止「沒出錯但被誤判逾時重送」重複打 Gemini）與 submodules-core SPEC.md FR-7／ADR-5（`LLMClient` 本地端節流保護，同一 `api_key` 最近 60 秒超過 8 次呼叫直接擋下不送出請求）；全專案 137 個測試全過、覆蓋率 100% |
 | 2026-07-31 | Robin 確認 429 為真實額度超限（安全網運作正常），並確認 Step 1.3b 設計：`media_uploads` 表統一記錄圖片/語音 Drive 網址、壓縮版圖片僅記憶體內處理不落地存 Drive（修正 ADR-13）；建立 `media_uploads` migration 並 push |
 | 2026-07-31 | **Phase 1 Step 1.3b 完成**：影像辨識基礎流程，FR-17／FR-17a～FR-17c 全數完成；新增 `submodules/gdrive/`（僅上傳、Service Account 認證）、`TelegramClient.get_file_bytes()`、`src/bot/image.py`（`Pillow` 壓縮＋隨機挑選影像 Key＋`[NEED_CONFIRM]` 標記反問使用者）；`router.py`／`webhook.py` 完成圖片訊息與不支援格式的整合；全專案 179 個測試全過、覆蓋率 100% |
+| 2026-07-31 | Robin 換用新產生的 `GEMINI_API_BOT_KEY` 後，`generate_with_search()` 固定使用的 `gemini-2.5-flash` 回傳 404；排查後確認 Gemini 2.5 世代已對新專案關閉存取（用 curl 直測 `generateContent` 驗證，跟掛不掛 Google Search 工具無關），非額度問題；Robin 指示「移除所有會用到上網查詢的部分，查無答案就誠實回不知道，並建議使用者自行查詢後提供答案存檔」；新增 chat-core SPEC.md ADR-5（supersede ADR-1／ADR-2）、submodules-core SPEC.md ADR-8（supersede ADR-7）：`generate_with_search()` 全數移除，`pending_kb_save` 流程更名為 `pending_user_knowledge` 且不再需要 yes/no 確認；全專案 174 個測試全過、覆蓋率 100% |
 
 ## 待決事項
 

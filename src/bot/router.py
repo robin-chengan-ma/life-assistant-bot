@@ -134,8 +134,8 @@ def _dispatch_active_flow(
     """依進行中對話流程的 `flow` 標記分派到對應處理函式（見各 flow 對應 spec 的 ADR）。"""
     if flow == "set_invite_codes":
         return commands.handle_set_invite_codes_step(db, state_store, telegram_user_id, text)
-    if flow == "pending_kb_save":
-        return chat.handle_pending_kb_save_step(db, state_store, telegram_user_id, text)
+    if flow == "pending_user_knowledge":
+        return chat.handle_pending_user_knowledge_step(db, state_store, telegram_user_id, text)
     if flow == "pending_image_confirm":
         return image.handle_image_confirm_step(image_llm_clients, state_store, telegram_user_id, text)
     return commands.handle_toggle_step(db, state_store, telegram_user_id, text)

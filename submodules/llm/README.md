@@ -1,6 +1,8 @@
 # llm
 
-LLM 通用 Client，目前串接 Gemini API（官方 `google-genai` SDK），一般呼叫模型固定 `gemini-3.5-flash-lite`（**2026-07-31 更新**：原本用 `gemini-flash-latest` 別名，實測發現它解析到的最新模型免費層額度極低（RPM 5／RPD 20），改用明確指定版本的 `gemini-3.5-flash-lite`，免費層實測 RPM 15／RPD 500，詳見 [submodules-core SPEC.md](../../docs/specs/submodules-core/SPEC.md) ADR-6）。**`generate_with_search()` 是例外**：固定改用 `gemini-2.5-flash`，因為 Google Search grounding 的免費額度依模型世代分桶，`gemini-3.5-flash-lite` 所屬的 Gemini 3 世代免費 grounding 額度是 0，Gemini 2.5 世代才有 1,500 次/天免費額度，詳見 ADR-7。
+LLM 通用 Client，目前串接 Gemini API（官方 `google-genai` SDK），一般呼叫模型固定 `gemini-3.5-flash-lite`（**2026-07-31 更新**：原本用 `gemini-flash-latest` 別名，實測發現它解析到的最新模型免費層額度極低（RPM 5／RPD 20），改用明確指定版本的 `gemini-3.5-flash-lite`，免費層實測 RPM 15／RPD 500，詳見 [submodules-core SPEC.md](../../docs/specs/submodules-core/SPEC.md) ADR-6）。
+
+**2026-07-31 移除 `generate_with_search()`（原 ADR-7）**：曾固定改用 `gemini-2.5-flash` 做 Google Search grounding，但 Robin 排查一把新產生的 Gemini API Key 時，發現該模型直接回傳 404「This model ... is no longer available to new users」——Gemini 2.5 世代已對新專案關閉存取，不是額度或選型問題。改為完全移除 grounding 功能，`generate_with_search()` 方法已刪除；查無答案時由呼叫端（`src/bot/chat.py`）改為誠實回覆不知道，並請使用者自行查詢後提供答案存檔，詳見 [submodules-core SPEC.md](../../docs/specs/submodules-core/SPEC.md) ADR-8。
 
 ## 環境變數
 
@@ -37,8 +39,7 @@ with open("cert_question.jpg", "rb") as f:
 ## 設計說明
 
 - 使用 `google-genai`（`from google import genai`），而非已棄用的 `google-generativeai`。
-- 對外暴露 `generate_text` / `generate_with_image` / `generate_with_search` 三個方法，未來更換或新增 LLM 供應商時，呼叫端介面不受影響。
-- `generate_with_search(prompt)` 回傳 `(文字, 是否使用了 Google Search)` tuple；是否查網路由模型依 prompt 內容自行判斷（見 [chat-core SPEC.md](../../docs/specs/chat-core/SPEC.md) ADR-1），這裡只負責讀取 `grounding_metadata` 回報有沒有真的觸發搜尋，供呼叫端決定要不要詢問使用者是否存檔。這個方法固定用 `gemini-2.5-flash`，不受建構子傳入的 `model` 參數影響（見 ADR-7）。
+- 對外暴露 `generate_text` / `generate_with_image` 兩個方法，未來更換或新增 LLM 供應商時，呼叫端介面不受影響。
 
 ## 對應 Spec
 

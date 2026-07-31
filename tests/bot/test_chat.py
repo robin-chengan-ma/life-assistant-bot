@@ -3,16 +3,16 @@ from src.bot.state import ConversationStateStore
 
 
 class _FakeLLMClient:
-    """模擬 submodules.llm.client.LLMClient，只實作 chat.py 會用到的 generate_with_search。"""
+    """模擬 submodules.llm.client.LLMClient，只實作 chat.py 會用到的 generate_text
+    （2026-07-31 移除 generate_with_search，見 chat-core SPEC.md ADR-5）。"""
 
-    def __init__(self, response_text="這是回答", used_search=False):
+    def __init__(self, response_text="這是回答"):
         self.response_text = response_text
-        self.used_search = used_search
         self.last_prompt = None
 
-    def generate_with_search(self, prompt):
+    def generate_text(self, prompt):
         self.last_prompt = prompt
-        return self.response_text, self.used_search
+        return self.response_text
 
 
 class _FakeTextLLMClient:
@@ -32,9 +32,9 @@ def _seed_general(fake_db):
     fake_db.insert("knowledge_base", {"category": "general_family", "user_id": None, "content": "家人背景"})
 
 
-def test_handle_chat_message_returns_reply_when_no_search_used(fake_db):
+def test_handle_chat_message_returns_reply_when_answer_known(fake_db):
     _seed_general(fake_db)
-    llm_client = _FakeLLMClient(response_text="記帳功能可以記錄每日花費喔！", used_search=False)
+    llm_client = _FakeLLMClient(response_text="記帳功能可以記錄每日花費喔！")
     text_llm_client = _FakeTextLLMClient()
     store = ConversationStateStore()
 
@@ -48,7 +48,7 @@ def test_handle_chat_message_returns_reply_when_no_search_used(fake_db):
 
 def test_handle_chat_message_logs_user_and_assistant_turns(fake_db):
     _seed_general(fake_db)
-    llm_client = _FakeLLMClient(response_text="好的！", used_search=False)
+    llm_client = _FakeLLMClient(response_text="好的！")
     text_llm_client = _FakeTextLLMClient()
     store = ConversationStateStore()
 
@@ -75,6 +75,20 @@ def test_handle_chat_message_prompt_includes_persona_and_user_message(fake_db):
     assert "我是羅賓森" in llm_client.last_prompt
     assert "家人背景" in llm_client.last_prompt
     assert "今天天氣如何？" in llm_client.last_prompt
+
+
+def test_handle_chat_message_prompt_states_no_web_search_capability(fake_db):
+    # ADR-5：Gemini 2.5 世代對新 Key 關閉存取，grounding 整個移除，prompt 必須明確告知模型
+    # 自己沒有查網路的能力，不知道就要誠實回報（透過固定標記讓程式碼判斷）。
+    _seed_general(fake_db)
+    llm_client = _FakeLLMClient()
+    text_llm_client = _FakeTextLLMClient()
+    store = ConversationStateStore()
+
+    chat.handle_chat_message(fake_db, llm_client, text_llm_client, store, telegram_user_id=1, user_id=1, text="嗨")
+
+    assert "沒有查詢網路的能力" in llm_client.last_prompt
+    assert "【NOT_FOUND】" in llm_client.last_prompt
 
 
 def test_handle_chat_message_prompt_includes_function_manual(fake_db):
@@ -132,55 +146,31 @@ def test_handle_chat_message_triggers_memory_update_after_reply(fake_db):
     assert text_llm_client.call_count == 1
 
 
-def test_handle_chat_message_appends_save_prompt_and_sets_pending_state_when_search_used(fake_db):
+def test_handle_chat_message_appends_self_search_suggestion_and_sets_pending_state_when_unknown(fake_db):
+    # ADR-5：模型誠實回報不知道（回覆帶固定標記）時，附加建議文字並進入 pending_user_knowledge 狀態
     _seed_general(fake_db)
-    llm_client = _FakeLLMClient(response_text="今天台北是晴天", used_search=True)
+    llm_client = _FakeLLMClient(response_text="這個我目前不知道耶【NOT_FOUND】")
     text_llm_client = _FakeTextLLMClient()
     store = ConversationStateStore()
 
     reply = chat.handle_chat_message(
-        fake_db, llm_client, text_llm_client, store, telegram_user_id=1, user_id=1, text="今天天氣如何？"
+        fake_db, llm_client, text_llm_client, store, telegram_user_id=1, user_id=1, text="國道現在塞車嗎？"
     )
 
-    assert "今天台北是晴天" in reply
-    assert "記錄" in reply
-    assert store.get(1) == {
-        "flow": "pending_kb_save",
-        "content": "今天台北是晴天",
-        "target_user_id": 1,
-    }
+    assert "這個我目前不知道耶" in reply
+    assert "【NOT_FOUND】" not in reply  # 標記不應該外露給使用者
+    assert "自行上網查詢" in reply
+    assert store.get(1) == {"flow": "pending_user_knowledge", "target_user_id": 1}
 
 
-def test_handle_pending_kb_save_step_confirms_and_saves(fake_db):
+def test_handle_pending_user_knowledge_step_saves_user_provided_answer(fake_db):
     store = ConversationStateStore()
-    store.set(1, {"flow": "pending_kb_save", "content": "威靈頓牛排食譜", "target_user_id": 1})
+    store.set(1, {"flow": "pending_user_knowledge", "target_user_id": 1})
 
-    reply = chat.handle_pending_kb_save_step(fake_db, store, telegram_user_id=1, text="要")
+    reply = chat.handle_pending_user_knowledge_step(fake_db, store, telegram_user_id=1, text="威靈頓牛排食譜是...")
 
     assert "記錄" in reply
     assert store.get(1) is None
     rows = fake_db.select("knowledge_base", where="category = %s AND user_id = %s", params=("custom", 1))
     assert len(rows) == 1
-    assert rows[0]["content"] == "威靈頓牛排食譜"
-
-
-def test_handle_pending_kb_save_step_accepts_alternate_confirm_word(fake_db):
-    store = ConversationStateStore()
-    store.set(1, {"flow": "pending_kb_save", "content": "答案", "target_user_id": 1})
-
-    chat.handle_pending_kb_save_step(fake_db, store, telegram_user_id=1, text="好")
-
-    rows = fake_db.select("knowledge_base", where="category = %s AND user_id = %s", params=("custom", 1))
-    assert len(rows) == 1
-
-
-def test_handle_pending_kb_save_step_declines_when_not_confirm_word(fake_db):
-    store = ConversationStateStore()
-    store.set(1, {"flow": "pending_kb_save", "content": "答案", "target_user_id": 1})
-
-    reply = chat.handle_pending_kb_save_step(fake_db, store, telegram_user_id=1, text="不用了")
-
-    assert store.get(1) is None
-    rows = fake_db.select("knowledge_base", where="category = %s AND user_id = %s", params=("custom", 1))
-    assert len(rows) == 0
-    assert "好的" in reply
+    assert rows[0]["content"] == "威靈頓牛排食譜是..."

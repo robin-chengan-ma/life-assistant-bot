@@ -133,18 +133,18 @@
 **權限**：任何已驗證使用者（Robin 或家人）
 **對應 FR**：FR-9～FR-12、FR-56c（見 [chat-core SPEC.md](../../docs/specs/chat-core/SPEC.md)）
 
-**備註**：組 context（人格背景＋家人背景＋自己的客製知識庫＋最近 10 則對話紀錄）→ 呼叫 `GEMINI_API_BOT_KEY` 並開啟 Google Search grounding → 若實際查了網路，回覆後附加詢問是否存入知識庫，進入 `pending_kb_save` 狀態。使用者訊息與 Robinson 回覆皆寫入 `conversation_logs`。這是取代 Step 1.1/1.2 `_PLACEHOLDER_REPLY` 的正式聊天入口。
+**備註**：組 context（人格背景＋家人背景＋自己的客製知識庫＋最近 10 則對話紀錄）→ 呼叫 `GEMINI_API_BOT_KEY`（純文字，不查網路）→ 若回覆含系統標記 `【NOT_FOUND】`（代表模型誠實回報不知道），去除標記並附加自行查詢建議，進入 `pending_user_knowledge` 狀態。使用者訊息與 Robinson 回覆皆寫入 `conversation_logs`。這是取代 Step 1.1/1.2 `_PLACEHOLDER_REPLY` 的正式聊天入口。**2026-07-31 修正**：原本開啟 Google Search grounding，因這把 Key 所屬的新專案對 Gemini 2.5 世代關閉存取已移除，見 [chat-core SPEC.md](../../docs/specs/chat-core/SPEC.md) ADR-5。
 
 ---
 
-### `pending_kb_save`（內部路由，非對外 HTTP 端點）
+### `pending_user_knowledge`（內部路由，非對外 HTTP 端點）
 
-**狀態**：已實作（`src/bot/chat.py::handle_pending_kb_save_step`）
-**觸發方式**：一般聊天核心觸發 Google Search 後，下一則訊息自動進入此狀態
-**權限**：任何已驗證使用者，僅能確認存入自己的客製知識庫
+**狀態**：已實作（`src/bot/chat.py::handle_pending_user_knowledge_step`，2026-07-31 取代 `pending_kb_save`／`handle_pending_kb_save_step`，見 chat-core SPEC.md ADR-5）
+**觸發方式**：一般聊天核心回覆「不知道」後，下一則訊息自動進入此狀態
+**權限**：任何已驗證使用者，僅能存入自己的客製知識庫
 **對應 FR**：FR-4（見 chat-core SPEC.md）
 
-**備註**：同意詞（「要」／「好」／「記錄」／「儲存」／「存」）才寫入 `knowledge_base`（`category='custom'`），其餘輸入一律視為不儲存，不追問第二次。
+**備註**：不需要 yes/no 確認，下一則訊息直接視為要存入的內容，寫入 `knowledge_base`（`category='custom'`）。
 
 ---
 

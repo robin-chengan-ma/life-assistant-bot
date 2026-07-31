@@ -17,7 +17,7 @@ owner: Robin
 1. **短記憶**：最近 10 則 `conversation_logs`，逐字原文
 2. **長記憶**：滾動式摘要（`conversation_summaries`），濃縮更久以前的對話重點，見 ADR-3
 3. **知識庫**：`general_persona`／`general_family`／使用者自己的 `custom` 知識庫
-4. **上網查資料**：知識庫與記憶都沒有答案時，用 Gemini 內建的 Google Search 工具查網路，查到後要先問使用者同不同意存回知識庫
+4. **不知道就誠實說**（2026-07-31 修正，見 ADR-5，supersede ADR-1）：知識庫與記憶都沒有答案時，不再上網查詢（Gemini 2.5 世代已對新專案關閉存取，grounding 整條路走不通），改為誠實回覆不知道，並建議使用者自行查詢後把答案提供給 Robinson 記錄
 
 回覆語氣需先參考 Robinson 人格背景，不能像照本宣科的模板。
 
@@ -29,8 +29,8 @@ owner: Robin
 
 - [x] FR-1：路由層最終 fallback（不是任何已知指令、也沒有進行中的對話流程）改為呼叫對話核心，取代 `_PLACEHOLDER_REPLY`
 - [x] FR-2：Context 組裝 —— 每次呼叫固定帶上：① `general_persona`、② `general_family`（全體共用，不分使用者）、③ 該使用者自己的 `custom` 知識庫（依 FR-10 資安隔離，只查自己的 `user_id`）、④ 該使用者最近 10 則 `conversation_logs`（依時間排序，避免 prompt 無上限成長）
-- [x] FR-3：System Prompt 規則 —— 明確指示模型：(a) 用 Robinson 的人格語氣回答，不要照本宣科；(b) 優先根據提供的知識庫內容回答；(c) 知識庫沒有答案時才使用 Google Search 工具查詢
-- [x] FR-4：查無答案時的處理（對應 FR-12）—— 單次 API 呼叫即開啟 Google Search grounding 工具，讓模型自行判斷需不需要查；回應的 `grounding_metadata.web_search_queries` 非空即代表這次真的查了網路，此時在回覆後面加上詢問「要不要記錄到你的知識庫」，並進入等待確認狀態（`flow: pending_kb_save`）；使用者下一則訊息若為同意詞（「要」／「好」／「記錄」／「儲存」）則寫入 `knowledge_base`（`category='custom'`，`user_id=`該使用者），其餘輸入一律視為不儲存並結束流程（不追問第二次，避免使用者被迫回應是非題以外的內容）
+- [x] FR-3：System Prompt 規則 —— 明確指示模型：(a) 用 Robinson 的人格語氣回答，不要照本宣科；(b) 只根據提供的知識庫內容回答，明確告知模型自己沒有查詢網路的能力；(c) 知識庫沒有答案時必須誠實回報不知道（2026-07-31 修正，見 ADR-5）
+- [x] FR-4：查無答案時的處理（對應 FR-12，2026-07-31 修正，見 ADR-5，supersede 原本的 Google Search grounding 設計）—— 單次 API 呼叫（`generate_text`，不掛任何工具）；prompt 指示模型在資料不足以回答時，於回覆最後加上固定標記 `【NOT_FOUND】`；`chat.py` 偵測到標記後，去除標記並附加「你可以先自行上網查詢，查到後把答案打給我，我會幫你記錄到知識庫喔！」，同時進入等待使用者提供答案的狀態（`flow: pending_user_knowledge`）；使用者下一則訊息直接視為要存入的內容，寫入 `knowledge_base`（`category='custom'`，`user_id=`該使用者），不需要額外的 yes/no 確認（使用者已被明確告知「下一則輸入會被記錄」）
 - [x] FR-5：對話紀錄 —— 只有真正進入一般聊天核心的訊息才記錄：使用者原始輸入寫一筆（`role='user'`），Robinson 的回覆寫一筆（`role='assistant'`）；指令觸發（`/rule`、`/my_toggles` 等）與確認存檔流程本身的輸入/輸出不計入對話紀錄
 - [x] FR-6：長記憶查詢 —— Context 組裝時額外帶上該使用者的 `conversation_summaries.summary`（查無資料視為空字串），與短記憶/知識庫一起放進 prompt
 - [x] FR-7：長記憶更新（滾動式摘要，對應 ADR-3）—— 每次聊天核心處理完一輪對話後，計算「比短記憶更早、且 `id` 大於 `summarized_up_to_log_id` 」的 backlog 對話則數；backlog ≥ 10 則時，把 backlog 內容連同既有摘要一起丟給 `GEMINI_API_TEXT_KEY`（長文生成用途，見 ADR-12），產出新摘要覆蓋回 `conversation_summaries.summary`，並把 `summarized_up_to_log_id` 推進到 backlog 最新一筆的 `id`；backlog 未達門檻則不觸發，維持原摘要不變
@@ -64,7 +64,7 @@ owner: Robin
 
 **後果**：`submodules/llm/client.py` 新增 `generate_with_search()` 方法，回傳 `(text, used_search)` tuple；`src/bot/chat.py` 依 `used_search` 決定要不要附加詢問存檔的文字並進入 `pending_kb_save` 流程。**2026-07-31 補充**：`generate_with_search()` 內部固定使用 `gemini-2.5-flash`，與其他呼叫用的模型不同——因為 Google Search grounding 免費額度依模型世代分桶，詳見 [submodules-core SPEC.md](../submodules-core/SPEC.md) ADR-7
 
-**狀態**：accepted
+**狀態**：superseded by ADR-5（2026-07-31，`gemini-2.5-flash` 對新產生的 Gemini API Key 直接 404「no longer available to new users」，Gemini 2.5 世代已對新專案關閉存取，grounding 整條路走不通，非額度或選型問題）
 
 ### ADR-2：存檔確認流程沿用 `ConversationStateStore`，用 `flow: "pending_kb_save"` 標記
 
@@ -74,7 +74,7 @@ owner: Robin
 
 **理由**：與既有兩種 flow（`set_invite_codes`、`toggle`/`set_toggle`）一致的機制，路由層只需要多一個 `elif` 分支，不需要新增額外的狀態儲存機制
 
-**狀態**：accepted
+**狀態**：superseded by ADR-5（2026-07-31，flow 改名為 `pending_user_knowledge`，且不再需要 yes/no 確認）
 
 ### ADR-3：長記憶採「滾動式摘要」，而非全量塞入或向量搜尋
 
@@ -121,13 +121,33 @@ owner: Robin
 
 **狀態**：accepted
 
+### ADR-5：移除 Google Search grounding，改為誠實回報不知道＋使用者自行提供答案（supersede ADR-1、ADR-2）
+
+**背景**：2026-07-31 Robin 排查一把新產生的 `GEMINI_API_BOT_KEY`（新 Google Cloud 專案）時，發現 `generate_with_search()` 固定使用的 `gemini-2.5-flash` 直接回傳 404「This model ... is no longer available to new users」——用 curl 直接打 `generateContent`（不掛任何工具）也一樣 404，證實不是搜尋工具的問題，而是 Gemini 2.5 這整個世代已經對新專案關閉存取（見 [submodules-core SPEC.md](../submodules-core/SPEC.md) ADR-8）。Gemini 3 世代雖然可用，但免費層 grounding 額度是 0（見 submodules-core SPEC.md ADR-7 背景），要用就得開通計費。Robin 決定不追加成本，直接放棄 grounding 功能。
+
+**決策**：完全移除 `generate_with_search()` 與相關 grounding 邏輯（2026-07-31 Robin「請把所有會用到上網查詢的部分移除」指示）。`chat.py` 改呼叫 `generate_text()`（不掛工具）；prompt 明確告知模型自己沒有查詢網路的能力，資料不足時必須誠實回報不知道，並在回覆最後加上系統標記 `【NOT_FOUND】`；`chat.py` 偵測到標記後，去除標記、附加「你可以先自行上網查詢，查到後把答案打給我，我會幫你記錄到知識庫喔！」，並把 `pending_kb_save` 狀態改名為 `pending_user_knowledge`（不再有 `content` 欄位，因為答案還沒有——是下一則使用者輸入才會有）。使用者下一則輸入直接視為要存入的內容，不需要 yes/no 確認（原本 ADR-2 的確認詞機制拿掉，因為使用者已經被明確告知「下一則輸入會被記錄」，不會有誤觸風險）。
+
+**替代方案**：
+- 方案 A：换回舊專案的 Gemini API Key 專門處理 grounding——技術上可行、免費，但 Robin 判斷「再試下去只是在浪費時間」，且舊 Key 的存續狀態不確定，選擇直接放棄功能，已否決
+- 方案 B：開通計費帳戶，讓 Gemini 3 世代也能用 grounding——涉及 Robin 個人帳務決定，Robin 明確表示不要繼續在這個問題上花時間，已否決
+
+**理由**：Robin 直接指示移除，且盤點後這個功能只影響「一般聊天問到即時性資訊」這個情境，其餘主力功能（待辦/記帳/體態/心情小記等）都不依賴 grounding，功能倒退範圍可控；`robinson SPEC.md` 附錄 A 使用規範文案（「若需要即時上網查詢的資訊，請先自行搜尋」）原本就已經預告了這個使用限制，行為與既有文案一致。
+
+**後果**：
+- `submodules/llm/client.py` 刪除 `generate_with_search()`、`_SEARCH_MODEL`、`_used_search()`
+- `src/bot/chat.py`：`handle_chat_message()` 改呼叫 `generate_text()`；新增 `handle_pending_user_knowledge_step()` 取代 `handle_pending_kb_save_step()`
+- `src/bot/router.py`：`_dispatch_active_flow` 的 `pending_kb_save` 分支改為 `pending_user_knowledge`
+- 相關測試全數更新（`test_client.py`／`test_chat.py`／`test_router.py`）
+
+**狀態**：accepted
+
 ## 實作計畫
 
-- [x] Step 1：`submodules/llm/client.py` 新增 `generate_with_search(prompt) -> tuple[str, bool]`，回傳文字與是否使用了 Google Search
+- [x] Step 1（2026-07-31 由 ADR-5 取代）：`submodules/llm/client.py` 曾新增 `generate_with_search(prompt) -> tuple[str, bool]`，現已刪除
 - [x] Step 2：`src/bot/knowledge.py` —— `build_context(db, user_id)` 組出四類知識庫內容；`save_custom_knowledge(db, user_id, content)` 寫入 `custom` 知識庫
-- [x] Step 3：`src/bot/chat.py` —— `handle_chat_message(db, llm_client, state_store, telegram_user_id, user_id, text)`：組 prompt、呼叫 LLM、寫對話紀錄、判斷是否進入 `pending_kb_save`
-- [x] Step 4：`src/bot/commands.py` 或 `chat.py` 新增 `handle_pending_kb_save_step()` 處理確認存檔的下一則訊息
-- [x] Step 5：`router.py` 整合：`flow == "pending_kb_save"` 的分派、一般訊息 fallback 改呼叫 `chat.handle_chat_message`
+- [x] Step 3（2026-07-31 依 ADR-5 修正）：`src/bot/chat.py` —— `handle_chat_message(db, llm_client, state_store, telegram_user_id, user_id, text)`：組 prompt、呼叫 `generate_text()`、寫對話紀錄、判斷回覆是否含 `【NOT_FOUND】` 標記以決定是否進入 `pending_user_knowledge`
+- [x] Step 4（2026-07-31 依 ADR-5 修正）：`chat.py` 新增 `handle_pending_user_knowledge_step()`（取代 `handle_pending_kb_save_step()`）處理使用者主動提供答案的下一則訊息，直接存入知識庫
+- [x] Step 5（2026-07-31 依 ADR-5 修正）：`router.py` 整合：`flow == "pending_user_knowledge"` 的分派、一般訊息 fallback 改呼叫 `chat.handle_chat_message`
 - [x] Step 6：更新 `src/schema/api_schema.md` 標記對話核心路由狀態
 - [x] Step 7：`conversation_summaries` migration（Robin 已核准，見 ADR-3），`0007_create_conversation_summaries_table.sql`
 - [x] Step 8：`src/bot/memory.py` —— `get_or_create_summary_row()`／`get_summary()`／`maybe_update_summary()`（backlog 計算、門檻觸發、吞例外）
@@ -141,29 +161,30 @@ owner: Robin
 ## 測試策略
 
 ### Unit Tests
-- [x] `llm.client.LLMClient.generate_with_search()`：mock `genai.Client`，驗證有 `grounding_metadata.web_search_queries` 時回傳 `used_search=True`，沒有或為空時回傳 `False`
+- [x]（2026-07-31 移除，見 ADR-5）~~`llm.client.LLMClient.generate_with_search()`~~
 - [x] `knowledge.build_context()`：組出正確的四類內容；只查自己的 `custom`／`conversation_logs`（資安隔離）；對話紀錄只取最近 10 則
 - [x] `knowledge.save_custom_knowledge()`：正確寫入 `category='custom'`、`user_id`
-- [x] `chat.handle_chat_message()`：一般問答（不觸發存檔流程）／觸發 Google Search 後附加詢問文字並設定 `pending_kb_save` 狀態／每次呼叫後對話紀錄各寫入使用者訊息與回覆各一筆
-- [x] `pending_kb_save` 確認流程：同意詞寫入知識庫 / 非同意詞不寫入且結束流程
+- [x] `chat.handle_chat_message()`（2026-07-31 依 ADR-5 修正）：一般問答（不觸發存檔流程）／回覆含 `【NOT_FOUND】` 標記時去除標記、附加自行查詢建議並設定 `pending_user_knowledge` 狀態／每次呼叫後對話紀錄各寫入使用者訊息與回覆各一筆
+- [x] `pending_user_knowledge` 流程（2026-07-31 依 ADR-5 修正）：使用者下一則輸入直接存入知識庫，不需要 yes/no 確認
 - [x] `memory.maybe_update_summary()`：backlog 未達門檻不觸發／達門檻時呼叫 `GEMINI_API_TEXT_KEY` 並正確覆蓋摘要、推進 `summarized_up_to_log_id`／新使用者自動建立空白摘要列（FR-8）／只考慮自己的對話、排除軟刪除、不重複處理已摘要過的部分／呼叫失敗吞例外不往外拋
 - [x] `chat.handle_chat_message()` 整合長記憶：prompt 包含摘要內容；backlog 達門檻時觸發摘要更新
 
 ### Integration Tests
-- [x] `router.py`：一般聊天訊息完整跑過 `chat.handle_chat_message` 並取得回覆；`pending_kb_save` 狀態下一則訊息正確分派
+- [x] `router.py`：一般聊天訊息完整跑過 `chat.handle_chat_message` 並取得回覆；`pending_user_knowledge` 狀態下一則訊息正確分派（2026-07-31 依 ADR-5 更名自 `pending_kb_save`）
 - [x] 連續對話累積超過門檻則數後，自動觸發一次摘要更新（`test_handle_chat_message_triggers_memory_update_after_reply`）
 
 ### E2E Tests
-- [x] 完整流程：使用者問一個知識庫沒有的問題 → 觸發 Google Search → 附加詢問 → 回覆「要」→ 確認寫入 `custom` 知識庫
+- [x]（2026-07-31 依 ADR-5 修正）完整流程：使用者問一個知識庫沒有的問題 → 模型誠實回報不知道（`【NOT_FOUND】`標記）→ 附加自行查詢建議 → 使用者提供答案 → 直接寫入 `custom` 知識庫
 - [x] Step 1.3a：`/function` 觸發後回傳 LLM 人格化總覽；使用者用自然語言追問特定功能時，落入一般聊天核心且 prompt 內含該功能的情境範例
 
-**測試結果**：一般聊天核心（ADR-1/ADR-2）新增 26 個測試，長記憶（ADR-3）再新增 13 個（`test_memory.py` 11 個、`test_chat.py`／`test_webhook.py` 長記憶整合部分共 2 個），Step 1.3a（ADR-4）再新增 9 個測試（分散在 `test_templates.py`／`test_commands.py`／`test_knowledge.py`／`test_chat.py`／`test_router.py`），全專案總計 126 個測試全過、`src/bot/` 與 `submodules/llm/` 覆蓋率皆維持 100%（`pytest tests/ --cov=src/bot --cov=submodules/llm`）。
+**測試結果**：一般聊天核心（ADR-1/ADR-2，2026-07-31 由 ADR-5 取代）新增 26 個測試，長記憶（ADR-3）再新增 13 個（`test_memory.py` 11 個、`test_chat.py`／`test_webhook.py` 長記憶整合部分共 2 個），Step 1.3a（ADR-4）再新增 9 個測試（分散在 `test_templates.py`／`test_commands.py`／`test_knowledge.py`／`test_chat.py`／`test_router.py`），ADR-5（移除 grounding）調整既有測試、全專案總計 174 個測試全過、`src/bot/` 與 `submodules/llm/` 覆蓋率皆維持 100%（`pytest tests/ --cov=src/bot --cov=submodules/llm`）。
 
 ## 風險與緩解
 
 | 風險 | 嚴重度 | 機率 | 緩解方案 |
 |------|--------|------|----------|
-| 模型判斷「要不要查網路」不夠精準（ADR-1 已知取捨） | 低 | 中 | 這是刻意接受的簡化取捨，且 System Prompt 已明確要求優先用知識庫；後續若發現誤判頻繁，再評估升級為方案 B |
+| （2026-07-31 已移除 grounding，此風險隨 ADR-1 一併 superseded）~~模型判斷「要不要查網路」不夠精準~~ | — | — | 見 ADR-5：直接移除 grounding，不再需要判斷是否查網路 |
+| 移除 grounding 後，使用者問即時性資訊會被回覆不知道，可能感覺功能倒退（ADR-5 已知取捨） | 低 | 中 | Robin 明確指示移除且盤點過影響範圍可控；`robinson SPEC.md` 附錄 A 使用規範已預告此限制，且提供「自行查詢後提供答案存檔」的替代路徑 |
 | 對話紀錄視窗固定 10 則，可能漏掉更早的重要上下文 | 低 | 低 | 對應 NFR-3 的成本考量，屬於刻意取捨；若之後發現使用者常提到更早的內容，可再評估加大視窗或摘要機制 |
 | Gemini 呼叫失敗（額度用盡、網路錯誤等）目前直接拋例外，使用者會看到不友善的錯誤 | 中 | 中 | 已在 NFR-1 明確排除在本階段範圍外，Step 1.6 會補上統一的錯誤處理與「生病了」友善提示 |
 | 長記憶摘要多次滾動濃縮後可能失真或遺漏細節（ADR-3 已知取捨） | 低 | 中 | 短記憶（最近 10 則原文）與知識庫仍保有精確資訊，摘要只補「更早以前」的粗略脈絡，不是唯一資訊來源；若之後發現失真嚴重，可再評估升級為向量搜尋（ADR-3 方案 C） |
@@ -178,3 +199,4 @@ owner: Robin
 | 2026-07-31 | Robin 指出對話記憶只有短記憶會忘記久遠對話，確認記憶架構改為「長記憶＋短記憶＋知識庫＋上網查資料」四部分；新增 ADR-3：長記憶採滾動式摘要（而非全量塞入或向量搜尋），待 Robin 核准 `conversation_summaries` 建表 SQL 後展開實作 | Robin |
 | 2026-07-31 | Robin 核准 `conversation_summaries` 建表 SQL（含中文 comment），完成 ADR-3 TDD 實作：新增 `src/bot/memory.py`（`get_or_create_summary_row`／`get_summary`／`maybe_update_summary`，backlog ≥10 才觸發、呼叫 `GEMINI_API_TEXT_KEY`、吞例外不影響本次回覆）；`chat.py` 整合長記憶到 prompt 並在回覆後觸發摘要更新；`router.py`／`webhook.py` 注入第二把 `GEMINI_API_TEXT_KEY` 的 `LLMClient`；全專案 117 個測試全過、覆蓋率 100% | Claude |
 | 2026-07-31 | **Phase 1 Step 1.3a 完成**：`/function` 改版為「總覽 + 按需深入」（FR-9／FR-9a／FR-9b），新增 ADR-4（總覽用獨立小型 LLM 呼叫，細節追問併入既有聊天核心，Robin 確認）；`templates.py` 新增 `build_function_overview_raw_text()`／`build_function_manual_text()`（`FEATURE_LIST` 補 `examples` 欄位，收錄 FR-56d～FR-56h 情境範例）；`knowledge.py` 新增 `get_persona_text()`；`commands.handle_function()` 改為需要 `db`／`llm_client`；`chat._build_prompt()` 固定附上功能手冊；全專案 126 個測試全過、覆蓋率 100% | Claude（依 Robin「繼續開發吧」指示） |
+| 2026-07-31 | **移除 Google Search grounding**：Robin 排查一把新產生的 `GEMINI_API_BOT_KEY` 時發現 `gemini-2.5-flash` 對新專案回傳 404「no longer available to new users」，Gemini 2.5 世代已對新專案關閉存取（見 submodules-core SPEC.md ADR-8），Robin 指示「把所有會用到上網查詢的部分移除，若真的不知道答案就回不知道，並建議使用者自行查詢後提供答案存檔」；新增 ADR-5（supersede ADR-1／ADR-2）：`client.py` 刪除 `generate_with_search()`；`chat.py` 改呼叫 `generate_text()`，prompt 加入 `【NOT_FOUND】` 標記機制，新增 `handle_pending_user_knowledge_step()` 取代 `handle_pending_kb_save_step()`；`router.py` flow 更名為 `pending_user_knowledge`；全專案 174 個測試全過、覆蓋率 100% | Claude（依 Robin 指示） |

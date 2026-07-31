@@ -12,15 +12,11 @@ FAMILY_ID_2 = 556
 
 
 class _FakeLLMClient:
-    """模擬 submodules.llm.client.LLMClient，實作 chat.py 用的 generate_with_search 與
-    commands.handle_function 用的 generate_text。"""
+    """模擬 submodules.llm.client.LLMClient，實作 chat.py 與 commands.handle_function 用的
+    generate_text（2026-07-31 移除 generate_with_search，見 chat-core SPEC.md ADR-5）。"""
 
-    def __init__(self, response_text="這是聊天核心的回答", used_search=False):
+    def __init__(self, response_text="這是聊天核心的回答"):
         self.response_text = response_text
-        self.used_search = used_search
-
-    def generate_with_search(self, prompt):
-        return self.response_text, self.used_search
 
     def generate_text(self, prompt):
         return self.response_text
@@ -264,7 +260,7 @@ def test_known_family_member_general_message_routes_to_chat_core(fake_db, monkey
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     store = ConversationStateStore()
-    llm_client = _FakeLLMClient(response_text="記帳功能可以幫你記錄每天的花費喔！", used_search=False)
+    llm_client = _FakeLLMClient(response_text="記帳功能可以幫你記錄每天的花費喔！")
 
     reply = router.handle_message(fake_db, store, FAMILY_ID, "記帳功能是什麼？", llm_client=llm_client)
 
@@ -275,49 +271,52 @@ def test_known_family_member_general_message_routes_to_chat_core(fake_db, monkey
 def test_owner_general_message_routes_to_chat_core(fake_db, monkeypatch):
     monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
     store = ConversationStateStore()
-    llm_client = _FakeLLMClient(response_text="早安！", used_search=False)
+    llm_client = _FakeLLMClient(response_text="早安！")
 
     reply = router.handle_message(fake_db, store, ROBIN_ID, "早安", llm_client=llm_client)
 
     assert reply == "早安！"
 
 
-def test_chat_core_search_reply_sets_pending_kb_save_state(fake_db, monkeypatch):
+def test_chat_core_unknown_reply_sets_pending_user_knowledge_state(fake_db, monkeypatch):
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     store = ConversationStateStore()
-    llm_client = _FakeLLMClient(response_text="今天台北是晴天", used_search=True)
+    llm_client = _FakeLLMClient(response_text="這個我目前不知道耶【NOT_FOUND】")
 
     reply = router.handle_message(fake_db, store, FAMILY_ID, "今天天氣如何？", llm_client=llm_client)
 
-    assert "今天台北是晴天" in reply
-    assert store.get(FAMILY_ID) == {"flow": "pending_kb_save", "content": "今天台北是晴天", "target_user_id": user_id}
+    assert "這個我目前不知道耶" in reply
+    assert "自行上網查詢" in reply
+    assert store.get(FAMILY_ID) == {"flow": "pending_user_knowledge", "target_user_id": user_id}
 
 
-def test_pending_kb_save_flow_continues_via_router(fake_db, monkeypatch):
+def test_pending_user_knowledge_flow_continues_via_router(fake_db, monkeypatch):
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     store = ConversationStateStore()
-    store.set(FAMILY_ID, {"flow": "pending_kb_save", "content": "今天台北是晴天", "target_user_id": user_id})
+    store.set(FAMILY_ID, {"flow": "pending_user_knowledge", "target_user_id": user_id})
 
-    reply = router.handle_message(fake_db, store, FAMILY_ID, "要")
+    reply = router.handle_message(fake_db, store, FAMILY_ID, "今天台北是晴天")
 
     assert "記錄" in reply
     assert store.get(FAMILY_ID) is None
     rows = fake_db.select("knowledge_base", where="category = %s AND user_id = %s", params=("custom", user_id))
     assert len(rows) == 1
+    assert rows[0]["content"] == "今天台北是晴天"
 
 
-def test_owner_pending_kb_save_flow_continues_via_router(fake_db, monkeypatch):
+def test_owner_pending_user_knowledge_flow_continues_via_router(fake_db, monkeypatch):
     monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
     store = ConversationStateStore()
-    store.set(ROBIN_ID, {"flow": "pending_kb_save", "content": "答案", "target_user_id": 1})
+    store.set(ROBIN_ID, {"flow": "pending_user_knowledge", "target_user_id": 1})
 
-    reply = router.handle_message(fake_db, store, ROBIN_ID, "不用了")
+    reply = router.handle_message(fake_db, store, ROBIN_ID, "答案")
 
+    assert "記錄" in reply
     assert store.get(ROBIN_ID) is None
     rows = fake_db.select("knowledge_base", where="category = %s AND user_id = %s", params=("custom", 1))
-    assert len(rows) == 0
+    assert len(rows) == 1
 
 
 # --- 圖片辨識（docs/specs/robinson/SPEC.md FR-17、ADR-13）---
@@ -407,7 +406,7 @@ def test_handle_photo_message_clears_stale_pending_flow_first(fake_db, monkeypat
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     store = ConversationStateStore()
-    store.set(FAMILY_ID, {"flow": "pending_kb_save", "content": "舊的", "target_user_id": 1})
+    store.set(FAMILY_ID, {"flow": "pending_user_knowledge", "target_user_id": 1})
     llm_client = _FakeImageLLMClient(response_text="新的一張圖")
 
     reply = router.handle_photo_message(

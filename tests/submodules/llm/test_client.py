@@ -2,6 +2,8 @@
 現在 Step 1.3 開始真的呼叫這個 Client，所以在這裡一併補齊）。
 
 不呼叫真正的 Gemini API，一律 mock `google.genai.Client`。
+
+2026-07-31：移除 `generate_with_search()` 相關測試（見 docs/specs/submodules-core/SPEC.md ADR-8）。
 """
 from types import SimpleNamespace
 
@@ -62,53 +64,6 @@ def test_generate_with_image_passes_image_part_and_prompt(monkeypatch):
     assert result == "這是一張貓的照片"
     contents = fake_genai_client.models.last_call["contents"]
     assert contents[1] == "這是什麼？"
-
-
-def test_generate_with_search_returns_text_and_true_when_search_used(monkeypatch):
-    metadata = SimpleNamespace(web_search_queries=["今天天氣"])
-    candidate = SimpleNamespace(grounding_metadata=metadata)
-    response = SimpleNamespace(text="今天晴天", candidates=[candidate])
-    llm_client, fake_genai_client = _make_client(monkeypatch, response)
-
-    text, used_search = llm_client.generate_with_search("今天天氣如何？")
-
-    assert text == "今天晴天"
-    assert used_search is True
-    # 確認有把 Google Search 工具帶進 config
-    assert "config" in fake_genai_client.models.last_call
-    # ADR-7：grounding 免費額度依模型世代分桶，Gemini 3 世代（_DEFAULT_MODEL）額度是 0，
-    # generate_with_search 必須固定改用有免費額度的 Gemini 2.5 世代模型，不能用 self._model
-    assert fake_genai_client.models.last_call["model"] == "gemini-2.5-flash"
-
-
-def test_generate_with_search_returns_false_when_no_search_queries(monkeypatch):
-    metadata = SimpleNamespace(web_search_queries=[])
-    candidate = SimpleNamespace(grounding_metadata=metadata)
-    response = SimpleNamespace(text="知識庫就有答案", candidates=[candidate])
-    llm_client, _ = _make_client(monkeypatch, response)
-
-    text, used_search = llm_client.generate_with_search("記帳功能怎麼用？")
-
-    assert used_search is False
-
-
-def test_generate_with_search_returns_false_when_no_grounding_metadata(monkeypatch):
-    candidate = SimpleNamespace(grounding_metadata=None)
-    response = SimpleNamespace(text="正常回答", candidates=[candidate])
-    llm_client, _ = _make_client(monkeypatch, response)
-
-    _, used_search = llm_client.generate_with_search("隨便問點什麼")
-
-    assert used_search is False
-
-
-def test_generate_with_search_returns_false_when_no_candidates(monkeypatch):
-    response = SimpleNamespace(text="正常回答", candidates=[])
-    llm_client, _ = _make_client(monkeypatch, response)
-
-    _, used_search = llm_client.generate_with_search("隨便問點什麼")
-
-    assert used_search is False
 
 
 # --- 本地端節流保護（避免明知道會被 Gemini 429 拒絕還是送出請求）---

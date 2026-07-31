@@ -182,6 +182,28 @@ submodules/
 - Gemini 2.5 系列預計 2026-10-16 停用，屆時 `_SEARCH_MODEL` 需要重新評估（可能屆時 Gemini 3 世代已開放免費 grounding，或需要換其他仍在維護的世代）
 - 這次排錯過程也確認了一件重要的事：AI Studio 消費者版 Rate Limit 頁面的資訊比純猜測／網路文章可靠得多，未來遇到類似額度問題應優先去該頁面核對實際數字，而不是憑經驗猜測
 
+**狀態**：superseded by ADR-8（2026-07-31，`gemini-2.5-flash` 對新產生的 `GEMINI_API_BOT_KEY` 直接 404「no longer available to new users」，Gemini 2.5 世代整個對新專案關閉存取，非額度或選型問題，這把 Key 上此方案已無法成立）
+
+### ADR-8：Gemini 2.5 世代對新專案關閉存取，`generate_with_search()` 直接移除（supersede ADR-7）
+
+**背景**：2026-07-31 Robin 換用新的 `GEMINI_API_BOT_KEY`（前次排查 429 時重新產生的全新 Google Cloud 專案）後，`generate_with_search()`（ADR-7 固定用的 `gemini-2.5-flash`）開始回傳 `INFO:httpx: ... 404 Not Found`。逐步排查：
+1. 先懷疑是「新專案沒開放 2.5 世代」→ 用 `curl .../v1beta/models?key=...` 列出這把 Key 實際可用的模型清單，結果 `models/gemini-2.5-flash`／`models/gemini-2.5-flash-lite`／`models/gemini-2.5-pro` 都在清單裡，代表 ListModels 層級是「看得到」的
+2. 懷疑是 Render 部署的 Key 跟本機測試的 Key 不一致 → 逐把比對 `GEMINI_API_BOT_KEY`／`GEMINI_API_IMAGE_KEY1`／`GEMINI_API_IMAGE_KEY2`／`GEMINI_API_TEXT_KEY` 後幾碼，四把都對得上，排除此可能
+3. 懷疑是「掛了 Google Search 工具」這個組合本身被擋 → 直接用 curl 打 `generateContent`，分別測「不掛工具的純文字請求」與「掛 `google_search` 工具的請求」，**兩者結果一模一樣**，都回傳明確錯誤訊息：`"This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use a newer model for the latest features and improvements."`
+4. 結論：**模型「看得到」（ListModels）不代表「呼叫得到」（generateContent）**——Google 已經對新建立的專案關閉 Gemini 2.5 世代模型的實際呼叫權限（Gemini 2.5 系列預計 2026-10-16 停用，Google 顯然已提前不讓新專案存取這個世代），跟掛不掛搜尋工具無關，換 `gemini-2.5-pro` 大機率也是同樣結果（同世代）
+
+**決策**：不再嘗試在這把新 Key 上挽救 Gemini 2.5 世代的存取權，直接移除 `generate_with_search()`／grounding 功能（Robin 明確指示「再試下去只是在浪費時間」）。查無答案時由呼叫端改為誠實回答不知道，詳見 [chat-core SPEC.md](../chat-core/SPEC.md) ADR-5。
+
+**替代方案**：
+- 方案 A：換回舊專案的 Key 專門處理 `generate_with_search()`——舊 Key 是否仍保有 Gemini 2.5 存取權未經驗證，且 Robin 選擇不再花時間排查，已否決
+- 方案 B：開通計費，讓 Gemini 3 世代也能用 grounding——涉及個人帳務決定，Robin 明確表示不考慮，已否決
+
+**理由**：這是本次排錯過程中第一個「不依賴猜測、有 Google API 明確錯誤訊息佐證」的結論，沒有其他模型選型或設定調整能繞過「整個世代被關閉」這件事；繼續在同一個問題上嘗試不同 2.5 系列模型只是重複驗證同一個已知結論，不符合 AGENTS.md 效率紀律「不做無意義 retry」。
+
+**後果**：
+- `submodules/llm/client.py` 刪除 `generate_with_search()`、`_SEARCH_MODEL`、`_used_search()`
+- 排錯過程也再次確認：Google API 的 `ListModels`（`GET /v1beta/models`）只反映「這個模型存在於目錄中」，不代表這把 Key／專案有權限實際呼叫 `generateContent`；未來遇到類似「清單看得到但呼叫失敗」的狀況，應直接用 curl 打實際的 `generateContent` 驗證，不能只看 ListModels 結果
+
 **狀態**：accepted
 
 ## 實作計畫
@@ -203,7 +225,7 @@ submodules/
 ### Unit Tests
 - [ ] `cloudsql.client.CloudSQLClient`：mock `psycopg2` 連線，驗證 `select`/`insert`/`update`/`delete` 組出的 SQL 與參數正確；`update()`/`delete()` 未帶 `where` 應拋出 `ValueError`；`dsn` 未提供且無 `DATABASE_URL` 應拋出 `ValueError`
 - [x] `telegram.client.TelegramClient`：mock `requests.post`/`requests.get`，驗證 `send_text`/`send_photo`/`send_chat_action` 組出的 payload 正確、`get_file_bytes` 兩段式下載（`getFile` 換 `file_path` 再打檔案專屬網域）正確；空 `bot_token` 應拋出 `ValueError`（2026-07-31，6 個測試，覆蓋率 100%）
-- [x] `llm.client.LLMClient`：mock `genai.Client`，驗證 `generate_text`/`generate_with_image`/`generate_with_search` 呼叫參數正確；空 `api_key` 應拋出 `ValueError`（2026-07-31，7 個測試，覆蓋率 100%，見 [chat-core SPEC.md](../chat-core/SPEC.md)）
+- [x] `llm.client.LLMClient`：mock `genai.Client`，驗證 `generate_text`/`generate_with_image` 呼叫參數正確；空 `api_key` 應拋出 `ValueError`（2026-07-31 依 ADR-8 移除 `generate_with_search` 測試，見 [chat-core SPEC.md](../chat-core/SPEC.md)）
 - [x] `llm.client.LLMClient` 本地端節流保護（ADR-5，2026-07-31，4 個測試）：超過門檻拋 `LLMQuotaGuardError` 且不呼叫底層 SDK／同一 `api_key` 跨 instance 共用計數／不同 `api_key` 互不影響／時間視窗過期後計數重置
 - [x] `gdrive.client.GDriveClient`：mock `service_account.Credentials.from_service_account_file`／`googleapiclient.discovery.build`，驗證 `upload_file()` 帶正確 `filename`/`parents`/`mimetype`，回傳 `webViewLink`；空 `key_file_path`／`folder_id` 應拋出 `ValueError`（2026-07-31，4 個測試，覆蓋率 100%）
 
@@ -235,3 +257,4 @@ submodules/
 | 2026-07-31 | Robin 持續撞到 429，經 AI Studio Rate Limit 頁面實測確認 `gemini-flash-latest` 別名解析到的 Gemini 3.6 Flash 免費層只有 RPM 5／RPD 20，遠低於原本假設；新增 ADR-6：改用明確指定版本的 `gemini-3.5-flash-lite`（實測 RPM 15／RPD 500，同屬 Gemini 家族、零相容性風險），Gemma 4（RPM 30／RPD 14,400）與計費升級留待額度仍不夠用時再評估；`_DEFAULT_MODEL` 改為 `gemini-3.5-flash-lite` | Claude（依 Robin「好啊，麻煩你了」指示） |
 | 2026-07-31 | 換模型後 `generate_with_search()` 仍持續 429；逐步排查（新 Key／新專案測純文字成功、掛搜尋工具後同樣 429）後，Robin 於 AI Studio「Tools」區塊發現 Google Search grounding 免費額度依模型世代分桶：Gemini 2／2.5 世代有 1,500 次/天免費額度，**Gemini 3 世代（含 `gemini-3.5-flash-lite`）免費額度是 0**（官方定價頁證實：Gemini 3 使用 grounding 一律計費，免費層不提供）；新增 ADR-7：`generate_with_search()` 固定改用 `gemini-2.5-flash-lite`，其餘方法維持 ADR-6 的 `gemini-3.5-flash-lite`；同時盤點所有功能模組，確認只有一般聊天核心依賴 grounding，104／YouTube 走各自獨立官方 API 不受影響 | Claude（依 Robin「好，麻煩你了」指示） |
 | 2026-07-31 | Robin 實測發現 `gemini-2.5-flash-lite` 在 AI Studio 不可選用，修正 ADR-7：`_SEARCH_MODEL` 改為 `gemini-2.5-flash`（同世代、享有相同的 1,500 次/天免費 grounding 額度） | Claude（依 Robin 回報指示） |
+| 2026-07-31 | Robin 換用新產生的 `GEMINI_API_BOT_KEY` 後 `gemini-2.5-flash` 回傳 404，排查後確認為 Gemini 2.5 世代對新專案關閉存取（非額度／掛工具問題），新增 ADR-8（supersede ADR-7）：`generate_with_search()`／`_SEARCH_MODEL`／`_used_search()` 全數移除；相關測試更新，全專案 174 個測試全過、覆蓋率 100%（見 [chat-core SPEC.md](../chat-core/SPEC.md) ADR-5） | Claude（依 Robin「移除所有上網查詢的部分」指示） |

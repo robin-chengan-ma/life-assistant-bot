@@ -1,16 +1,24 @@
 """Gemini 對話核心（對應 docs/specs/chat-core/SPEC.md FR-1～FR-8）。
 
 一般聊天訊息（不是任何已知指令、也沒有進行中的對話流程）的最終處理邏輯：
-組 prompt（短記憶＋長記憶＋知識庫） → 呼叫 LLM（帶 Google Search 工具） →
-視情況詢問是否存檔 → 寫入對話紀錄 → 視 backlog 情況更新長記憶摘要。
+組 prompt（短記憶＋長記憶＋知識庫） → 呼叫 LLM（純文字，不查網路） →
+若模型誠實回報不知道，附加「請自行查詢後提供答案」的建議並進入 `pending_user_knowledge` 狀態 →
+寫入對話紀錄 → 視 backlog 情況更新長記憶摘要。
+
+2026-07-31：移除 Google Search grounding（見 docs/specs/submodules-core/SPEC.md ADR-8，
+supersede ADR-7）——新產生的 Gemini API Key 對 Gemini 2.5 世代模型回傳 404
+「no longer available to new users」，grounding 整條路走不通，改為誠實回答不知道，
+詳見 chat-core SPEC.md ADR-5（supersede ADR-1）。
 """
 from submodules.cloudsql.client import CloudSQLClient
 
 from src.bot import knowledge, memory, templates
 from src.bot.state import ConversationStateStore
 
-_SAVE_CONFIRM_PHRASES = {"要", "好", "記錄", "儲存", "存"}
-_SAVE_PROMPT_SUFFIX = "\n\n這個答案我剛剛上網查的，要不要幫你記錄到你的知識庫呢？（回覆「要」即可）"
+# 系統內部標記，只用來讓程式碼判斷「模型誠實回報不知道」，不會出現在使用者看到的回覆裡
+# （prompt 已明確指示模型不要跟使用者解釋這個標記）。
+_UNKNOWN_MARKER = "【NOT_FOUND】"
+_UNKNOWN_SUFFIX = "\n\n你可以先自行上網查詢，查到後把答案打給我，我會幫你記錄到知識庫喔！"
 
 
 def handle_chat_message(
@@ -30,15 +38,15 @@ def handle_chat_message(
     context = knowledge.build_context(db, user_id)
     long_memory = memory.get_summary(db, user_id)
     prompt = _build_prompt(context, long_memory, text)
-    reply_text, used_search = llm_client.generate_with_search(prompt)
+    reply_text = llm_client.generate_text(prompt)
 
     knowledge.log_message(db, user_id, "user", text)
 
-    if used_search:
-        final_reply = reply_text + _SAVE_PROMPT_SUFFIX
+    if _UNKNOWN_MARKER in reply_text:
+        final_reply = reply_text.replace(_UNKNOWN_MARKER, "").rstrip() + _UNKNOWN_SUFFIX
         state_store.set(
             telegram_user_id,
-            {"flow": "pending_kb_save", "content": reply_text, "target_user_id": user_id},
+            {"flow": "pending_user_knowledge", "target_user_id": user_id},
         )
     else:
         final_reply = reply_text
@@ -52,21 +60,22 @@ def handle_chat_message(
     return final_reply
 
 
-def handle_pending_kb_save_step(
+def handle_pending_user_knowledge_step(
     db: CloudSQLClient,
     state_store: ConversationStateStore,
     telegram_user_id: int,
     text: str,
 ) -> str:
-    """處理「要不要存檔」詢問的下一則回覆（FR-4）。"""
+    """處理「不知道答案」後，使用者主動提供答案的下一則回覆（chat-core SPEC.md ADR-5）。
+
+    不需要額外的 yes/no 確認：使用者會被明確告知「查到後把答案打給我」，
+    所以下一則訊息本身就是要存進客製知識庫的內容。
+    """
     state = state_store.get(telegram_user_id)
     state_store.clear(telegram_user_id)
 
-    if text in _SAVE_CONFIRM_PHRASES:
-        knowledge.save_custom_knowledge(db, state["target_user_id"], state["content"])
-        return "已經幫你記錄到知識庫囉！"
-
-    return "好的，這次就不記錄囉！"
+    knowledge.save_custom_knowledge(db, state["target_user_id"], text)
+    return "已經幫你記錄到知識庫囉！"
 
 
 def _build_prompt(context: dict, long_memory: str, user_message: str) -> str:
@@ -85,8 +94,10 @@ def _build_prompt(context: dict, long_memory: str, user_message: str) -> str:
         f"【長記憶摘要（更早以前聊過的重點，僅供參考，可能不完全精確）】\n{long_memory or '（無）'}\n\n"
         f"【最近對話紀錄】\n{logs_text}\n\n"
         f"【功能手冊（見 chat-core SPEC.md ADR-4）】\n{templates.build_function_manual_text()}\n\n"
-        "回答規則：優先根據以上資料回答；如果以上資料不足以回答，才使用 Google Search 工具查詢網路取得正確資訊，"
-        "並確實根據查到的內容回答。功能手冊只有在使用者明確詢問「某個功能可以做什麼／怎麼用」時才拿來用，"
+        "回答規則：只根據以上資料回答，你沒有查詢網路的能力；如果以上資料不足以回答使用者的問題，"
+        "你必須誠實地告訴使用者你目前不知道，並且一定要在回覆的最後加上這個固定標記文字："
+        f"「{_UNKNOWN_MARKER}」（這是系統內部用的標記，使用者看不到，不用跟使用者解釋這個標記代表什麼）。"
+        "功能手冊只有在使用者明確詢問「某個功能可以做什麼／怎麼用」時才拿來用，"
         "回答時要附上至少一組情境範例（若該功能尚無範例就照實說明還沒有範例），並用你自己的口吻改寫，"
         "不要逐字照抄手冊原文；使用者沒有主動問功能細節時，不要主動提起這份手冊內容。\n\n"
         f"使用者現在說：{user_message}"

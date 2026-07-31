@@ -462,7 +462,7 @@ Robinson 是一個以 Telegram 為前台介面的家庭生活小助手，Robin �
 
 **決策**：
 1. 依用途拆成四把 Gemini Key，各自獨立計費與額度：
-   - `GEMINI_API_BOT_KEY`：使用者一般問答（FR-9～FR-12 知識庫問答）；知識庫查無答案時，統一改為上網查詢取得正確資訊，查到後主動詢問使用者是否要存回資料庫，使用者同意才寫入
+   - `GEMINI_API_BOT_KEY`：使用者一般問答（FR-9～FR-12 知識庫問答）；知識庫查無答案時，Robinson 誠實回覆不知道，並建議使用者自行查詢後把答案提供給 Robinson，下一則輸入即存回資料庫（**2026-07-31 修正**：原本規劃上網查詢後詢問存檔，因這把 Key 所屬的新 Google Cloud 專案對 Gemini 2.5 世代關閉存取、grounding 功能整條路走不通，已移除，見 [chat-core SPEC.md](../chat-core/SPEC.md) ADR-5、[submodules-core SPEC.md](../submodules-core/SPEC.md) ADR-8）
    - `GEMINI_API_IMAGE_KEY1` / `GEMINI_API_IMAGE_KEY2`：所有影像辨識工作（含 FR-25 證照題目圖片解析），**每次執行隨機擇一使用**，達到簡易的額度分攤效果
    - `GEMINI_API_TEXT_KEY`：長文/生成類文字工作（多益英翻中題目生成、語音轉文字後的重點整理、使用者要求的文案優化/改寫等）
 2. 語音一律改用 Groq 的 Whisper API（`VOICE_API_KEY`）做語音轉文字，取代原本規劃的 Gemini STT；多益錄音檔的切割與辨識同樣改走這個管道
@@ -527,7 +527,7 @@ Robinson 是一個以 Telegram 為前台介面的家庭生活小助手，Robin �
 
 - [x] Step 1.1：通關密碼驗證流程 + Owner 專屬引導式設定對話流 + 綁定成功歡迎訊息 + `/rule`、`/function` 內建指令（FR-5、FR-6～FR-6d、FR-55、FR-56，見 ADR-8、附錄 A/B；FR-7／FR-8 涉及排程調整權限，留待對應功能模組實作時處理）。獨立展開為 [docs/specs/platform-auth/SPEC.md](../platform-auth/SPEC.md)，49 個測試全過、`src/bot/` 覆蓋率 100%；**2026-07-30 更新**：`/function`（FR-56）因人格化語氣與按需展開的新規則（FR-56a～FR-56d），MVP 版本待 Step 1.3 整合 Gemini 後需重新實作，詳見 Step 1.3a
 - [x] Step 1.2：功能開關系統（FR-2、FR-2a），展開為獨立 [docs/specs/feature-toggles/SPEC.md](../feature-toggles/SPEC.md)；`/my_toggles`（自管）、`/set_toggle`（Owner 代管）已完成 TDD 實作；實際攔截對話的邏輯待 Step 1.3 生效
-- [x] Step 1.3：Gemini 對話核心，整合四類知識庫與資安隔離（FR-9～FR-12）、人格化語氣（FR-56c），展開為獨立 [docs/specs/chat-core/SPEC.md](../chat-core/SPEC.md)；查無答案時單次呼叫＋Google Search grounding，查到後詢問使用者是否存入客製知識庫；`GEMINI_API_IMAGE_KEY1`/`KEY2`/`GEMINI_API_TEXT_KEY` 三把 Key 依用途分流（ADR-12）留待 Step 1.3b／未來文字生成類功能實際用到時才接上
+- [x] Step 1.3：Gemini 對話核心，整合四類知識庫與資安隔離（FR-9～FR-12）、人格化語氣（FR-56c），展開為獨立 [docs/specs/chat-core/SPEC.md](../chat-core/SPEC.md)；查無答案時單次呼叫誠實回報不知道，建議使用者自行查詢後提供答案存入客製知識庫（**2026-07-31 修正**：原本為 Google Search grounding，已移除，見 chat-core SPEC.md ADR-5）；`GEMINI_API_IMAGE_KEY1`/`KEY2`/`GEMINI_API_TEXT_KEY` 三把 Key 依用途分流（ADR-12）留待 Step 1.3b／未來文字生成類功能實際用到時才接上
 - [x] Step 1.3a：`/function` 重新實作為「總覽 + 按需深入 + 情境範例」（FR-56、FR-56a～FR-56h），展開為獨立 [docs/specs/chat-core/SPEC.md](../chat-core/SPEC.md) FR-9／ADR-4；取代 Step 1.1 的扁平清單版本；全專案 126 個測試全過、`src/bot/` 覆蓋率 100%
 - [x] Step 1.3b：影像辨識基礎流程（FR-17、FR-17a～FR-17c）——先上傳 Google Drive、`Pillow` 壓縮至 1024×1024 內／JPEG 80%、影像雙 Key 隨機辨識（ADR-12、ADR-13）、不確定內容需詢問使用者、非圖片/音檔格式的友善提示；新增 `submodules/gdrive/`、`TelegramClient.get_file_bytes`、`src/bot/image.py`，`webhook.py`/`router.py` 完成整合；全專案 179 個測試全過、`src/bot/`／`submodules/gdrive`／`submodules/telegram`／`submodules/llm` 覆蓋率 100%
 - [ ] Step 1.4：語音轉文字流程（改用 Groq Whisper，`VOICE_API_KEY`，見 ADR-12）+ 10 分鐘上限 + 15 分鐘內文字修正限制（FR-14、FR-15）+ 語音檔上傳 Google Drive 備份（ADR-13）
