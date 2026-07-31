@@ -128,6 +128,8 @@ COMMENT ON COLUMN knowledge_base.updated_at IS '最後更新時間';
 
 **種子資料**：`general_persona`（Robinson 人格背景）與 `general_family`（Robin 與家人背景故事）兩筆初始資料，由 Robin 於 2026-07-30 提供內容，透過 `src/migrations/0006_seed_persona_and_family_knowledge.sql` 寫入，逐字採用未經改寫。
 
+**2026-07-31 資料修正**：Robin 回報問「小布丁的生日年」時 Robinson 答錯（回 2013 年，正確為 2024 年）。追查發現 `general_family` 內容中，馬筱雯／馬筱媛家庭段落的幾筆日期（訂婚/結婚/子女出生）只寫了民國年（如「113/12/11」），沒有像其他家人一樣附上「(西元年)」對照，LLM 沒有可靠的曆法換算能力才會憑印象亂算。透過 `src/migrations/0009_fix_family_knowledge_roc_year_conversion.sql` 用 `UPDATE` 補上西元年對照（113→2024、114→2025、115→2026），其餘內容不變。
+
 ---
 
 ### conversation_logs
