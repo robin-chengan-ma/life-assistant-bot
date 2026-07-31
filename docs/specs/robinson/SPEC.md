@@ -35,7 +35,7 @@ Robinson 是一個以 Telegram 為前台介面的家庭生活小助手，Robin �
 | AI 層 | Gemini API（`gemini-flash-latest`，依用途拆四把 Key） | `GEMINI_API_BOT_KEY` 跑一般問答、`GEMINI_API_IMAGE_KEY1`／`GEMINI_API_IMAGE_KEY2` 跑影像辨識（每次隨機擇一）、`GEMINI_API_TEXT_KEY` 跑長文生成（見 ADR-12） |
 | AI 層 | Groq API（Whisper） | 語音轉文字（含多益錄音檔切割），對應 `VOICE_API_KEY`（見 ADR-12，取代先前「語音一律用 Gemini」的舊決策） |
 | 資料層 | Neon PostgreSQL | 結構化資料（使用者、知識庫、待辦、記帳…） |
-| 資料層 | Google Drive | 使用者上傳的圖片/語音檔案原始檔與壓縮後版本（含證照題目截圖），URL 統一記錄於 Neon（見 ADR-13） |
+| 資料層 | Google Drive | 使用者上傳的圖片/語音檔案原始檔（含證照題目截圖），URL 統一記錄於 Neon（見 ADR-13） |
 | 後台 | Notion（Phase 5，全專案最終階段） | 視覺化圖表 / 表格檢視 |
 | 排程 | cron-job.org | 每 10 分鐘打一次 keep-alive API，避免 Render 睡眠 |
 | 部署 | Render（免費方案，750 hr/月） | 應用程式 Host |
@@ -118,10 +118,10 @@ Robinson 是一個以 Telegram 為前台介面的家庭生活小助手，Robin �
 - [ ] FR-14：語音訊息超過 10 分鐘強制中斷處理，並提醒使用者語音長度限制
 - [ ] FR-15：語音轉文字結果如需修正，僅能用打字編輯；自該筆語音訊息送出起 15 分鐘內，若使用者仍嘗試用語音修正，Robinson 需拒絕並提醒改用打字，不得執行語音轉文字；超過 15 分鐘後，語音模式恢復可用，不再限制
 - [ ] FR-16：Robinson 不自行腦補做決策，涉及寫入/修改資料庫的操作前一律先與使用者確認
-- [ ] FR-17：開放接受一般圖片供 Robinson 辨識使用（不再侷限於「證照題目」用途），但僅支援圖片與音檔兩種檔案類型；使用者上傳 PDF、Excel、PPT 等其他格式檔案時，模型無法直接處理，須明確告知使用者「這個檔案格式我沒辦法處理喔，只能看懂圖片和音檔」並說明原因，不可靜默忽略或誤導使用者以為已處理：
-  - [ ] FR-17a：個資影像警語 — 使用者上傳任何影像前，必須被告知「不准上傳包含個人資料的影像，後果需自行承擔」，此警語記錄於附錄A使用須知，供使用者事前知悉
-  - [ ] FR-17b：不確定內容須詢問使用者 — 影像辨識若有無法判斷的部分（例如：使用者上傳一道菜的照片，但部分食材被遮住看不清楚），Robinson 不可盲目猜測，必須明確詢問使用者以確認內容後才繼續分析
-  - [ ] FR-17c：飲食分析誤差聲明 — 只要是飲食成分分析（不論透過影像、語音或文字方式取得），一律必須告知使用者分析結果存在部分誤差，不可讓使用者誤以為是精確數值
+- [x] FR-17：開放接受一般圖片供 Robinson 辨識使用（不再侷限於「證照題目」用途），但僅支援圖片與音檔兩種檔案類型；使用者上傳 PDF、Excel、PPT 等其他格式檔案時，模型無法直接處理，須明確告知使用者「這個檔案格式我沒辦法處理喔，只能看懂圖片和音檔」並說明原因，不可靜默忽略或誤導使用者以為已處理（**2026-07-31 完成**：`webhook.py` 的 `_extract_unsupported_file` 偵測 document/video/video_note/animation/sticker 直接回拒絕文案；voice/audio 依規格本來就該支援，暫沿用忽略不回覆，留給 Step 1.4 補上）：
+  - [x] FR-17a：個資影像警語 — 使用者上傳任何影像前，必須被告知「不准上傳包含個人資料的影像，後果需自行承擔」，此警語記錄於附錄A使用須知，供使用者事前知悉
+  - [x] FR-17b：不確定內容須詢問使用者 — 影像辨識若有無法判斷的部分（例如：使用者上傳一道菜的照片，但部分食材被遮住看不清楚），Robinson 不可盲目猜測，必須明確詢問使用者以確認內容後才繼續分析（**2026-07-31 完成**：`src/bot/image.py` 用 `[NEED_CONFIRM]` 標記慣例讓 LLM 主動回報不確定處，`pending_image_confirm` 對話流程接住使用者的澄清後重新分析一次）
+  - [x] FR-17c：飲食分析誤差聲明 — 只要是飲食成分分析（不論透過影像、語音或文字方式取得），一律必須告知使用者分析結果存在部分誤差，不可讓使用者誤以為是精確數值（**2026-07-31 完成**：內嵌於 `image.py` 的 Prompt 規則中，由 LLM 依情境自行判斷是否適用）
 - [ ] FR-18：不接受用於錄製會議或長篇演講的長語音（見 FR-14 十分鐘上限）
 
 ### 功能性需求 — 服務健康與治理
@@ -529,7 +529,7 @@ Robinson 是一個以 Telegram 為前台介面的家庭生活小助手，Robin �
 - [x] Step 1.2：功能開關系統（FR-2、FR-2a），展開為獨立 [docs/specs/feature-toggles/SPEC.md](../feature-toggles/SPEC.md)；`/my_toggles`（自管）、`/set_toggle`（Owner 代管）已完成 TDD 實作；實際攔截對話的邏輯待 Step 1.3 生效
 - [x] Step 1.3：Gemini 對話核心，整合四類知識庫與資安隔離（FR-9～FR-12）、人格化語氣（FR-56c），展開為獨立 [docs/specs/chat-core/SPEC.md](../chat-core/SPEC.md)；查無答案時單次呼叫＋Google Search grounding，查到後詢問使用者是否存入客製知識庫；`GEMINI_API_IMAGE_KEY1`/`KEY2`/`GEMINI_API_TEXT_KEY` 三把 Key 依用途分流（ADR-12）留待 Step 1.3b／未來文字生成類功能實際用到時才接上
 - [x] Step 1.3a：`/function` 重新實作為「總覽 + 按需深入 + 情境範例」（FR-56、FR-56a～FR-56h），展開為獨立 [docs/specs/chat-core/SPEC.md](../chat-core/SPEC.md) FR-9／ADR-4；取代 Step 1.1 的扁平清單版本；全專案 126 個測試全過、`src/bot/` 覆蓋率 100%
-- [ ] Step 1.3b：影像辨識基礎流程（FR-17、FR-17a～FR-17c）——先上傳 Google Drive、`Pillow` 壓縮至 1024×1024 內／JPEG 80%、影像雙 Key 隨機辨識（ADR-12、ADR-13）、不確定內容需詢問使用者、非圖片/音檔格式的友善提示
+- [x] Step 1.3b：影像辨識基礎流程（FR-17、FR-17a～FR-17c）——先上傳 Google Drive、`Pillow` 壓縮至 1024×1024 內／JPEG 80%、影像雙 Key 隨機辨識（ADR-12、ADR-13）、不確定內容需詢問使用者、非圖片/音檔格式的友善提示；新增 `submodules/gdrive/`、`TelegramClient.get_file_bytes`、`src/bot/image.py`，`webhook.py`/`router.py` 完成整合；全專案 179 個測試全過、`src/bot/`／`submodules/gdrive`／`submodules/telegram`／`submodules/llm` 覆蓋率 100%
 - [ ] Step 1.4：語音轉文字流程（改用 Groq Whisper，`VOICE_API_KEY`，見 ADR-12）+ 10 分鐘上限 + 15 分鐘內文字修正限制（FR-14、FR-15）+ 語音檔上傳 Google Drive 備份（ADR-13）
 - [ ] Step 1.5：個資偵測與刪除機制，Regex 硬規則 + LLM 語意雙層防線（FR-13、FR-13a～FR-13d）
 - [ ] Step 1.6：基礎錯誤處理層 —— 對外「生病了」/「我康復了」用語、捕獲異常＋完整 Traceback 記錄、私訊 Robin 原始 log（FR-19a、FR-20、FR-21；FR-19b～FR-19i 的 AI 自主診斷、分級降級、重試機制延後至 Phase 2，見 Step 2.4 與 ADR-7）
@@ -716,3 +716,4 @@ FR-56 的 `/function` 路由目前只定義了「回傳範圍」（所有功能�
 | 2026-07-31 | Robin 實測時撞到 Gemini 429（額度超限），確認四把 Gemini Key 分屬四個獨立 Google Cloud 專案（ADR-12 分流設計有效），但發現 `webhook.py` 未攔截例外會讓 Telegram 自動重送同一則訊息、加速燒光額度；補充 FR-19 說明，新增 platform-auth SPEC.md FR-7（暫時性安全網：`try/except` + 固定安全用語 + 仍回 200），完整分級錯誤處理仍留給 Step 1.6；全專案 127 個測試全過、覆蓋率 100% | Claude（依 Robin「先加上最小安全網」指示） |
 | 2026-07-31 | Robin 要求「該做的防呆要做好，不要因為程式碼關係浪費不必要的額度」，再補兩層防護：① platform-auth SPEC.md FR-7a：`update_id` 去重（LRU 上限 1000 筆），解決「沒出錯但被 Telegram 誤判逾時重送」也會重複打 Gemini 的問題 ② submodules-core SPEC.md FR-7／ADR-5：`LLMClient` 新增本地端節流保護（同一 `api_key` 最近 60 秒超過 8 次呼叫直接擋下、不送出請求，避免明知道會被官方 429 拒絕還是浪費額度嘗試）；FR-7 安全網範圍也擴大涵蓋 DB／LLM Client 建立與 Telegram 傳送失敗；全專案 137 個測試全過、覆蓋率 100% | Claude（依 Robin「該做的防呆要做好」指示） |
 | 2026-07-31 | 確認 429 Traceback 為真實 Gemini 額度超限（非本地端節流誤判），安全網運作正常；Robin 確認 Step 1.3b（影像辨識）設計：新增 `media_uploads` 表統一記錄圖片/語音的 Google Drive 網址（Step 1.4 語音功能上線後共用）；修正 ADR-13 第 2、4 點——壓縮版圖片僅記憶體內即時處理、不落地存回 Google Drive，只保留原始檔 | Robin |
+| 2026-07-31 | **Phase 1 Step 1.3b 完成**：影像辨識基礎流程，FR-17／FR-17a～FR-17c 全數完成；新增 `submodules/gdrive/`（Service Account 認證，僅上傳、不含下載/列表能力）、`TelegramClient.get_file_bytes()`（兩段式檔案下載）、`src/bot/image.py`（`Pillow` 壓縮＋隨機挑選影像 Key＋`[NEED_CONFIRM]` 標記慣例反問使用者）；`router.py` 新增 `handle_photo_message()`／`pending_image_confirm` 流程分派，`webhook.py` 新增 `_extract_photo()`／`_extract_unsupported_file()` 完成訊息類型分流；修正 `pytest.ini` 加 `--import-mode=importlib` 解決多個 `submodules/*/test_client.py` 同名模組衝突；全專案 179 個測試全過，`src/bot/`／`submodules/gdrive`／`submodules/telegram`／`submodules/llm` 覆蓋率 100% | Claude（依 Robin「你繼續開發你的，我明天再一次測試」指示） |

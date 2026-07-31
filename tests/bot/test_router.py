@@ -1,3 +1,7 @@
+from io import BytesIO
+
+from PIL import Image
+
 from src.bot import router, templates
 from src.bot.state import ConversationStateStore
 
@@ -314,3 +318,125 @@ def test_owner_pending_kb_save_flow_continues_via_router(fake_db, monkeypatch):
     assert store.get(ROBIN_ID) is None
     rows = fake_db.select("knowledge_base", where="category = %s AND user_id = %s", params=("custom", 1))
     assert len(rows) == 0
+
+
+# --- 圖片辨識（docs/specs/robinson/SPEC.md FR-17、ADR-13）---
+
+
+class _FakeImageLLMClient:
+    def __init__(self, response_text="這是一張貓咪的照片"):
+        self.response_text = response_text
+        self.last_prompt = None
+        self.last_image_bytes = None
+
+    def generate_with_image(self, prompt, image_bytes, mime_type="image/jpeg"):
+        self.last_prompt = prompt
+        self.last_image_bytes = image_bytes
+        return self.response_text
+
+
+class _FakeGDriveClient:
+    def __init__(self, url="https://drive.google.com/file/d/fake/view"):
+        self.url = url
+
+    def upload_file(self, filename, content, mime_type):
+        return self.url
+
+
+def _make_test_image_bytes() -> bytes:
+    image_obj = Image.new("RGB", (200, 150), color=(255, 0, 0))
+    buffer = BytesIO()
+    image_obj.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+class _FakeTelegramClient:
+    def __init__(self, file_bytes=None):
+        self.file_bytes = file_bytes if file_bytes is not None else _make_test_image_bytes()
+        self.last_file_id = None
+
+    def get_file_bytes(self, file_id):
+        self.last_file_id = file_id
+        return self.file_bytes
+
+
+def test_handle_photo_message_rejects_unbound_family_member(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    store = ConversationStateStore()
+
+    reply = router.handle_photo_message(
+        fake_db, store, FAMILY_ID, "file123", None, _FakeTelegramClient(), _FakeGDriveClient(), []
+    )
+
+    assert "通關密碼" in reply
+
+
+def test_handle_photo_message_happy_path_for_known_family_member(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+    telegram_client = _FakeTelegramClient()
+    llm_client = _FakeImageLLMClient(response_text="這是一盤義大利麵")
+
+    reply = router.handle_photo_message(
+        fake_db, store, FAMILY_ID, "file123", "這是什麼？", telegram_client, _FakeGDriveClient(), [llm_client]
+    )
+
+    assert reply == "這是一盤義大利麵"
+    assert telegram_client.last_file_id == "file123"
+    rows = fake_db.select("media_uploads")
+    assert len(rows) == 1
+    assert rows[0]["media_type"] == "image"
+
+
+def test_handle_photo_message_works_for_owner(fake_db, monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
+    store = ConversationStateStore()
+    llm_client = _FakeImageLLMClient(response_text="這是羅賓森本人")
+
+    reply = router.handle_photo_message(
+        fake_db, store, ROBIN_ID, "file999", None, _FakeTelegramClient(), _FakeGDriveClient(), [llm_client]
+    )
+
+    assert reply == "這是羅賓森本人"
+    owner_row = fake_db.select("users", where="telegram_user_id = %s", params=(ROBIN_ID,), fetch_one=True)
+    assert owner_row is not None
+
+
+def test_handle_photo_message_clears_stale_pending_flow_first(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+    store.set(FAMILY_ID, {"flow": "pending_kb_save", "content": "舊的", "target_user_id": 1})
+    llm_client = _FakeImageLLMClient(response_text="新的一張圖")
+
+    reply = router.handle_photo_message(
+        fake_db, store, FAMILY_ID, "file123", None, _FakeTelegramClient(), _FakeGDriveClient(), [llm_client]
+    )
+
+    assert reply == "新的一張圖"
+    assert store.get(FAMILY_ID) is None
+
+
+def test_pending_image_confirm_flow_continues_via_router(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+    llm_client = _FakeImageLLMClient(response_text="確認後：這是茄子")
+    store.set(
+        FAMILY_ID,
+        {
+            "flow": "pending_image_confirm",
+            "image_bytes": b"fake-compressed-bytes",
+            "original_caption": "這是什麼食材？",
+            "target_user_id": 1,
+            "llm_client_index": 0,
+        },
+    )
+
+    reply = router.handle_message(
+        fake_db, store, FAMILY_ID, "是紫色的那個", image_llm_clients=[llm_client]
+    )
+
+    assert reply == "確認後：這是茄子"
+    assert store.get(FAMILY_ID) is None

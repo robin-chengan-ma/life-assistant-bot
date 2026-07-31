@@ -7,7 +7,9 @@ Webhook 接收 / 訊息路由等較複雜的邏輯，交給 backend 層自行決
 import requests
 
 _TELEGRAM_API_BASE = "https://api.telegram.org/bot{token}/{method}"
+_TELEGRAM_FILE_BASE = "https://api.telegram.org/file/bot{token}/{file_path}"
 _DEFAULT_TIMEOUT_SECONDS = 10
+_FILE_DOWNLOAD_TIMEOUT_SECONDS = 30
 
 
 class TelegramClient:
@@ -42,3 +44,16 @@ class TelegramClient:
         """發送「正在輸入…」等狀態提示，讓使用者知道 Robinson 正在處理。"""
         payload = {"chat_id": chat_id, "action": action}
         return self.call("sendChatAction", payload)
+
+    def get_file_bytes(self, file_id: str) -> bytes:
+        """下載使用者上傳的檔案（圖片/語音等），回傳原始 bytes。
+
+        分兩步：先呼叫 `getFile` 用 `file_id` 換取 `file_path`，再從 Telegram 的
+        檔案下載端點（跟一般 Bot API 端點不同網域路徑）實際抓取內容。
+        """
+        file_info = self.call("getFile", {"file_id": file_id})
+        file_path = file_info["result"]["file_path"]
+        url = _TELEGRAM_FILE_BASE.format(token=self._token, file_path=file_path)
+        response = requests.get(url, timeout=_FILE_DOWNLOAD_TIMEOUT_SECONDS)
+        response.raise_for_status()
+        return response.content

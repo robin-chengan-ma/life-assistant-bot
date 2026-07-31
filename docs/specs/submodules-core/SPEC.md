@@ -148,7 +148,8 @@ submodules/
 - [x] Step S.3：建立 `submodules/llm/`（`client.py`、`README.md`、`requirements.txt`、`.env.example`）
 - [x] Step S.4：更新主專案根目錄 `requirements.txt`（新增 `psycopg2-binary`、`google-genai`、`python-dotenv`）
 - [x] Step S.5：改版重構 — 刪除舊版 `neon_postgres/`、`telegram_client/`、`gemini_client/`（含各自的 `__init__.py`、`connection.py`、`crud.py`、`sender.py`），統一為 ADR-4 的四檔案結構，並將三個 Client 改為 class 寫法（`CloudSQLClient`、`TelegramClient`、`LLMClient`）
-- [ ] Step S.6：撰寫對應單元測試（見下方「測試策略」）—— `llm.client.LLMClient` 已於 Phase 1 Step 1.3 補上（2026-07-31），並於同日追加 ADR-5 本地端節流保護測試；`cloudsql`／`telegram` 仍待對應功能實際串接時補上
+- [ ] Step S.6：撰寫對應單元測試（見下方「測試策略」）—— `llm.client.LLMClient` 已於 Phase 1 Step 1.3 補上（2026-07-31），並於同日追加 ADR-5 本地端節流保護測試；`telegram.client.TelegramClient` 已於 Step 1.3b 補上（2026-07-31，6 個測試，覆蓋率 100%，含 `get_file_bytes`）；`cloudsql` 仍待對應功能實際串接時補上
+- [x] Step S.7：建立 `submodules/gdrive/`（`client.py`、`README.md`、`requirements.txt`、`.env.example`），Step 1.3b 影像辨識需要（2026-07-31）——刻意只暴露 `upload_file()`，不做下載/列表/刪除，避免建置用不到的能力
 
 ## 測試策略
 
@@ -156,9 +157,10 @@ submodules/
 
 ### Unit Tests
 - [ ] `cloudsql.client.CloudSQLClient`：mock `psycopg2` 連線，驗證 `select`/`insert`/`update`/`delete` 組出的 SQL 與參數正確；`update()`/`delete()` 未帶 `where` 應拋出 `ValueError`；`dsn` 未提供且無 `DATABASE_URL` 應拋出 `ValueError`
-- [ ] `telegram.client.TelegramClient`：mock `requests.post`，驗證 `send_text`/`send_photo`/`send_chat_action` 組出的 payload 正確；空 `bot_token` 應拋出 `ValueError`
+- [x] `telegram.client.TelegramClient`：mock `requests.post`/`requests.get`，驗證 `send_text`/`send_photo`/`send_chat_action` 組出的 payload 正確、`get_file_bytes` 兩段式下載（`getFile` 換 `file_path` 再打檔案專屬網域）正確；空 `bot_token` 應拋出 `ValueError`（2026-07-31，6 個測試，覆蓋率 100%）
 - [x] `llm.client.LLMClient`：mock `genai.Client`，驗證 `generate_text`/`generate_with_image`/`generate_with_search` 呼叫參數正確；空 `api_key` 應拋出 `ValueError`（2026-07-31，7 個測試，覆蓋率 100%，見 [chat-core SPEC.md](../chat-core/SPEC.md)）
 - [x] `llm.client.LLMClient` 本地端節流保護（ADR-5，2026-07-31，4 個測試）：超過門檻拋 `LLMQuotaGuardError` 且不呼叫底層 SDK／同一 `api_key` 跨 instance 共用計數／不同 `api_key` 互不影響／時間視窗過期後計數重置
+- [x] `gdrive.client.GDriveClient`：mock `service_account.Credentials.from_service_account_file`／`googleapiclient.discovery.build`，驗證 `upload_file()` 帶正確 `filename`/`parents`/`mimetype`，回傳 `webViewLink`；空 `key_file_path`／`folder_id` 應拋出 `ValueError`（2026-07-31，4 個測試，覆蓋率 100%）
 
 ### Integration Tests
 - [ ] `cloudsql`：對測試用 Neon 分支資料庫實際下 CRUD，確認連線池可正常取得/歸還連線
@@ -183,3 +185,4 @@ submodules/
 | 2026-07-29 | 依 Robin 指定樣板重構：資料夾更名為 `llm` / `cloudsql` / `telegram`，統一為「四檔案結構」（`client.py`/`README.md`/`requirements.txt`/`.env.example`），移除 `__init__.py` 與多檔案拆分，三個 Client 改寫成 class（`LLMClient`/`CloudSQLClient`/`TelegramClient`），新增 ADR-4、FR-6、NFR-4 | Robin |
 | 2026-07-30 | `CloudSQLClient` 新增 `execute()` 方法，支援執行任意 SQL（主要供 DDL 使用），為 robinson 專案 ADR-11 的 migration 執行機制（`src/migrations/runner.py`）提供底層能力；`select`/`insert`/`update`/`delete` 的參數化保護不受影響，`execute()` 明確標註為「僅供內部信任 SQL 使用」的逃生口 | Claude（依 robinson SPEC.md ADR-11 需求） |
 | 2026-07-31 | Robin 實測撞到 Gemini 429 後要求「該做的防呆要做好」；新增 FR-7、ADR-5：`LLMClient` 加上本地端節流保護（同一 `api_key` 最近 60 秒超過 8 次呼叫直接擋下、不送出請求），節流計數以 class 層級狀態、`api_key` 為單位共用；新增 `tests/submodules/llm/conftest.py` 避免測試間互相汙染；全專案 137 個測試全過、覆蓋率 100% | Claude（依 Robin「該做的防呆要做好」指示） |
+| 2026-07-31 | Step 1.3b（影像辨識）需要：新增 Step S.7、`submodules/gdrive/`（`GDriveClient`，僅 `upload_file()`，不做下載/列表/刪除）；`telegram.client.TelegramClient` 補上單元測試並新增 `get_file_bytes()`（Step S.6 telegram 部分完成）；修正 `pytest.ini` 加 `--import-mode=importlib`，解決多個 `submodules/*/test_client.py` 同名模組在同一次 `pytest tests/` 執行時互相衝突的問題 | Claude（依 Robin「你繼續開發你的」指示） |

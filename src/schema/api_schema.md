@@ -52,9 +52,9 @@
 **狀態**：已實作（見 [platform-auth SPEC.md](../../docs/specs/platform-auth/SPEC.md)，`src/bot/webhook.py`）
 **觸發方式**：Telegram Bot API 主動推送使用者訊息
 **權限**：依訊息內容與使用者身分於內部再判斷（通關密碼驗證、功能開關等）
-**對應 FR**：FR-1、FR-2、FR-5～FR-8
+**對應 FR**：FR-1、FR-2、FR-5～FR-8、FR-17
 
-**備註**：所有使用者文字/語音訊息的統一入口，內部再依內容路由到 `/rule`、`/function`、`/complaint` 或各功能模組的處理邏輯。目前僅處理純文字訊息，貼圖/照片等非文字更新一律忽略（Step 1.1 範圍外）。**2026-07-31 新增（platform-auth SPEC.md FR-7）**：`handle_message()` 拋出未預期例外時（例如 Gemini API 額度超限），一律記錄 Traceback、回覆固定安全用語，並仍回傳 HTTP 200——避免 Telegram 因收不到 200 而重送同一則訊息，形成重試風暴加速燒 API 額度；完整錯誤分級處理仍待 robinson SPEC.md Step 1.6。
+**備註**：所有使用者文字/圖片訊息的統一入口，內部依訊息類型分三路：① `document`/`video`/`video_note`/`animation`/`sticker` 等不支援格式 → 直接回覆固定拒絕文案，不進入 DB/Gemini 流程；② 圖片訊息（`message.photo`）→ 呼叫 `router.handle_photo_message()`（見下方「圖片訊息」路由）；③ 其餘文字訊息 → 依內容路由到 `/rule`、`/function`、`/complaint` 或各功能模組的處理邏輯。`voice`/`audio` 依規格本來就該支援，Step 1.4 實作前暫沿用「忽略、不回覆」的既有行為。**2026-07-31 新增（platform-auth SPEC.md FR-7）**：`handle_message()`／`handle_photo_message()` 拋出未預期例外時（例如 Gemini API 額度超限），一律記錄 Traceback、回覆固定安全用語，並仍回傳 HTTP 200——避免 Telegram 因收不到 200 而重送同一則訊息，形成重試風暴加速燒 API 額度；完整錯誤分級處理仍待 robinson SPEC.md Step 1.6。
 
 ---
 
@@ -145,3 +145,25 @@
 **對應 FR**：FR-4（見 chat-core SPEC.md）
 
 **備註**：同意詞（「要」／「好」／「記錄」／「儲存」／「存」）才寫入 `knowledge_base`（`category='custom'`），其餘輸入一律視為不儲存，不追問第二次。
+
+---
+
+### 圖片訊息（內部路由，非對外 HTTP 端點）
+
+**狀態**：已實作（`src/bot/router.py::handle_photo_message`、`src/bot/image.py::handle_image_message`，Step 1.3b，見 robinson SPEC.md FR-17、ADR-13）
+**觸發方式**：使用者傳送圖片訊息（`message.photo`），`webhook.py::_extract_photo` 取出最高解析度的 `file_id` 與 `caption`
+**權限**：任何已驗證使用者（Robin 或家人）；未綁定通關密碼者直接回覆提示訊息，不消耗任何 Drive/Gemini 額度
+**對應 FR**：FR-17、FR-17a～FR-17c
+
+**備註**：先透過 `TelegramClient.get_file_bytes()` 下載原始圖片 → 上傳原始檔到 Google Drive（`submodules/gdrive/`）並寫入 `media_uploads`（`media_type='image'`）→ `Pillow` 壓縮至 1024×1024 內／JPEG 80%（僅記憶體內處理，不落地存回 Drive）→ 從 `GEMINI_API_IMAGE_KEY1`／`KEY2` 隨機挑一把呼叫 `generate_with_image()`。若 LLM 回覆帶有 `[NEED_CONFIRM]` 標記（表示有看不清楚的地方），進入 `pending_image_confirm` 狀態並把反問文字回給使用者；使用者傳來原有對話流程未完成、又傳新圖片時，會直接清除舊流程狀態、以新圖片為準。
+
+---
+
+### `pending_image_confirm`（內部路由，非對外 HTTP 端點）
+
+**狀態**：已實作（`src/bot/image.py::handle_image_confirm_step`）
+**觸發方式**：圖片辨識回覆帶 `[NEED_CONFIRM]` 標記後，下一則文字訊息自動進入此狀態
+**權限**：任何已驗證使用者，僅能針對自己剛上傳的圖片澄清
+**對應 FR**：FR-17b
+
+**備註**：帶著使用者的澄清文字，重新呼叫同一把 LLM Key、用同一份已壓縮的圖片 bytes（記憶體內狀態，不重新下載）分析一次，這次 prompt 明確要求不能再要求澄清、必須給出最終答案。

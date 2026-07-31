@@ -23,6 +23,67 @@ def test_extract_message_returns_user_id_and_text_for_valid_message():
     assert webhook.extract_message(payload) == (123, "/rule")
 
 
+# --- _extract_photo：純函式 ---
+
+
+def test_extract_photo_returns_none_when_no_photo():
+    assert webhook._extract_photo({"message": {"from": {"id": 123}, "text": "hi"}}) is None
+
+
+def test_extract_photo_picks_highest_resolution_and_caption():
+    payload = {
+        "message": {
+            "from": {"id": 123},
+            "photo": [{"file_id": "small"}, {"file_id": "large"}],
+            "caption": "這是什麼？",
+        }
+    }
+    assert webhook._extract_photo(payload) == (123, "large", "這是什麼？")
+
+
+def test_extract_photo_returns_none_when_photo_list_empty():
+    payload = {"message": {"from": {"id": 123}, "photo": []}}
+    assert webhook._extract_photo(payload) is None
+
+
+def test_extract_photo_returns_none_when_file_id_missing():
+    payload = {"message": {"from": {"id": 123}, "photo": [{}]}}
+    assert webhook._extract_photo(payload) is None
+
+
+def test_extract_photo_without_caption_returns_none_caption():
+    payload = {"message": {"from": {"id": 123}, "photo": [{"file_id": "abc"}]}}
+    assert webhook._extract_photo(payload) == (123, "abc", None)
+
+
+# --- _extract_unsupported_file：純函式 ---
+
+
+def test_extract_unsupported_file_returns_none_for_text_message():
+    assert webhook._extract_unsupported_file({"message": {"from": {"id": 123}, "text": "hi"}}) is None
+
+
+def test_extract_unsupported_file_returns_none_for_photo_message():
+    payload = {"message": {"from": {"id": 123}, "photo": [{"file_id": "abc"}]}}
+    assert webhook._extract_unsupported_file(payload) is None
+
+
+def test_extract_unsupported_file_detects_document():
+    payload = {"message": {"from": {"id": 123}, "document": {"file_id": "doc1"}}}
+    assert webhook._extract_unsupported_file(payload) == 123
+
+
+def test_extract_unsupported_file_detects_sticker():
+    payload = {"message": {"from": {"id": 123}, "sticker": {"file_id": "sticker1"}}}
+    assert webhook._extract_unsupported_file(payload) == 123
+
+
+def test_extract_unsupported_file_ignores_voice():
+    # voice/audio 依 FR-17 本來就該支援，只是 Step 1.4 還沒實作，沿用「忽略、不回覆」的既有行為
+    payload = {"message": {"from": {"id": 123}, "voice": {"file_id": "voice1"}}}
+    assert webhook._extract_unsupported_file(payload) is None
+
+
 # --- Flask route：mock 掉 DB / Telegram / router，只驗證接線邏輯 ---
 
 @pytest.fixture
@@ -206,6 +267,114 @@ def test_webhook_survives_db_construction_failure(client, monkeypatch):
     response = client.post("/telegram/webhook", json=payload)
 
     assert response.status_code == 200
+    mock_telegram_instance.send_text.assert_called_once_with(
+        chat_id=123, text=webhook._UNEXPECTED_ERROR_REPLY
+    )
+
+
+# --- 不支援的檔案格式（robinson SPEC.md FR-17）---
+
+
+def test_webhook_rejects_unsupported_file_without_touching_db(client, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+
+    mock_db_cls = MagicMock()
+    monkeypatch.setattr(webhook, "CloudSQLClient", mock_db_cls)
+    mock_handle_message = MagicMock()
+    monkeypatch.setattr(webhook, "handle_message", mock_handle_message)
+
+    mock_telegram_instance = MagicMock()
+    monkeypatch.setattr(webhook, "TelegramClient", MagicMock(return_value=mock_telegram_instance))
+
+    payload = {"message": {"from": {"id": 123}, "document": {"file_id": "doc1"}}}
+    response = client.post("/telegram/webhook", json=payload)
+
+    assert response.status_code == 200
+    mock_telegram_instance.send_text.assert_called_once_with(
+        chat_id=123, text=webhook._UNSUPPORTED_FORMAT_REPLY
+    )
+    mock_db_cls.assert_not_called()
+    mock_handle_message.assert_not_called()
+
+
+def test_webhook_survives_unsupported_file_reply_send_failure(client, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+    monkeypatch.setattr(webhook, "TelegramClient", MagicMock(side_effect=RuntimeError("Telegram API 掛了")))
+
+    payload = {"message": {"from": {"id": 123}, "sticker": {"file_id": "s1"}}}
+    response = client.post("/telegram/webhook", json=payload)
+
+    assert response.status_code == 200
+
+
+# --- 圖片訊息（robinson SPEC.md FR-17、ADR-13）---
+
+
+def _set_photo_env(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("GDRIVE_KEY_FILE_PATH", "fake-key.json")
+    monkeypatch.setenv("GDRIVE_FOLDER_ID", "fake-folder-id")
+    monkeypatch.setenv("GEMINI_API_IMAGE_KEY1", "fake-image-key1")
+    monkeypatch.setenv("GEMINI_API_IMAGE_KEY2", "fake-image-key2")
+
+
+def test_webhook_routes_photo_message_and_sends_reply(client, monkeypatch):
+    _set_photo_env(monkeypatch)
+
+    mock_handle_photo_message = MagicMock(return_value="這是一盤義大利麵")
+    monkeypatch.setattr(webhook, "handle_photo_message", mock_handle_photo_message)
+
+    mock_db_instance = MagicMock()
+    monkeypatch.setattr(webhook, "CloudSQLClient", MagicMock(return_value=mock_db_instance))
+
+    mock_gdrive_instance = MagicMock()
+    mock_gdrive_cls = MagicMock(return_value=mock_gdrive_instance)
+    monkeypatch.setattr(webhook, "GDriveClient", mock_gdrive_cls)
+
+    mock_telegram_instance = MagicMock()
+    monkeypatch.setattr(webhook, "TelegramClient", MagicMock(return_value=mock_telegram_instance))
+
+    mock_llm_client_cls = MagicMock()
+    monkeypatch.setattr(webhook, "LLMClient", mock_llm_client_cls)
+
+    payload = {"message": {"from": {"id": 123}, "photo": [{"file_id": "abc"}], "caption": "這是什麼？"}}
+    response = client.post("/telegram/webhook", json=payload)
+
+    assert response.status_code == 200
+    mock_gdrive_cls.assert_called_once_with(key_file_path="fake-key.json", folder_id="fake-folder-id")
+    assert mock_llm_client_cls.call_count == 2
+    mock_llm_client_cls.assert_any_call(api_key="fake-image-key1")
+    mock_llm_client_cls.assert_any_call(api_key="fake-image-key2")
+    mock_handle_photo_message.assert_called_once()
+    call_args = mock_handle_photo_message.call_args.args
+    assert call_args[0] is mock_db_instance
+    assert call_args[1] is webhook._state_store
+    assert call_args[2] == 123
+    assert call_args[3] == "abc"
+    assert call_args[4] == "這是什麼？"
+    mock_db_instance.close.assert_called_once()
+    mock_telegram_instance.send_text.assert_called_once_with(chat_id=123, text="這是一盤義大利麵")
+
+
+def test_webhook_photo_message_swallows_unexpected_exception(client, monkeypatch):
+    _set_photo_env(monkeypatch)
+
+    monkeypatch.setattr(
+        webhook, "handle_photo_message", MagicMock(side_effect=RuntimeError("429 RESOURCE_EXHAUSTED"))
+    )
+    mock_db_instance = MagicMock()
+    monkeypatch.setattr(webhook, "CloudSQLClient", MagicMock(return_value=mock_db_instance))
+    monkeypatch.setattr(webhook, "GDriveClient", MagicMock())
+    monkeypatch.setattr(webhook, "LLMClient", MagicMock())
+
+    mock_telegram_instance = MagicMock()
+    monkeypatch.setattr(webhook, "TelegramClient", MagicMock(return_value=mock_telegram_instance))
+
+    payload = {"message": {"from": {"id": 123}, "photo": [{"file_id": "abc"}]}}
+    response = client.post("/telegram/webhook", json=payload)
+
+    assert response.status_code == 200
+    mock_db_instance.close.assert_called_once()
     mock_telegram_instance.send_text.assert_called_once_with(
         chat_id=123, text=webhook._UNEXPECTED_ERROR_REPLY
     )

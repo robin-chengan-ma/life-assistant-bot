@@ -5,9 +5,10 @@ from collections import OrderedDict
 
 from flask import Blueprint, jsonify, request
 
-from src.bot.router import handle_message
+from src.bot.router import handle_message, handle_photo_message
 from src.bot.state import ConversationStateStore
 from submodules.cloudsql.client import CloudSQLClient
+from submodules.gdrive.client import GDriveClient
 from submodules.llm.client import LLMClient
 from submodules.telegram.client import TelegramClient
 
@@ -21,6 +22,12 @@ _logger = logging.getLogger(__name__)
 # Step 1.6（FR-19）完整版之前的暫時性安全網文案：任何未預期例外（例如 Gemini 429 額度超限）
 # 都回這句，不揭露技術細節；正式的「生病了」人格化用語與 Robin 私訊通知留給 Step 1.6 一併做。
 _UNEXPECTED_ERROR_REPLY = "羅賓森好像不太舒服，等一下再試試看喔！"
+
+# 目前只支援文字與圖片，收到其他格式（文件/影片/貼圖等）直接回這句拒絕，不進入 DB/Gemini 流程。
+# 刻意不含 voice/audio：FR-17 規格上語音本來就該支援，只是 Step 1.4 還沒做，沿用既有的
+# 「直接忽略、不回覆」行為，留給 Step 1.4 一併補上。
+_UNSUPPORTED_FORMAT_REPLY = "這個檔案格式我沒辦法處理喔，只能看懂圖片和音檔！"
+_UNSUPPORTED_FILE_KEYS = ("document", "video", "video_note", "animation", "sticker")
 
 # 見 docs/specs/platform-auth/SPEC.md FR-7a：Telegram 在沒收到 200 時會自動重送同一則
 # update（不只發生在我們自己出錯的時候，網路延遲也可能讓 Telegram 誤判逾時而重送），
@@ -55,6 +62,40 @@ def extract_message(payload: dict) -> tuple[int, str] | None:
     return telegram_user_id, text
 
 
+def _extract_photo(payload: dict) -> tuple[int, str, str | None] | None:
+    """從 Telegram Update JSON 取出 (telegram_user_id, file_id, caption)。
+
+    `message.photo` 是同一張圖多種解析度的陣列（由小到大排序），取最後一筆（解析度最高）
+    的 file_id 送去做辨識；caption 是使用者隨圖片附帶的文字說明，可能沒有。
+    """
+    message = payload.get("message") or {}
+    from_user = message.get("from") or {}
+    telegram_user_id = from_user.get("id")
+    photo_sizes = message.get("photo")
+    if telegram_user_id is None or not photo_sizes:
+        return None
+    file_id = photo_sizes[-1].get("file_id")
+    if not file_id:
+        return None
+    return telegram_user_id, file_id, message.get("caption")
+
+
+def _extract_unsupported_file(payload: dict) -> int | None:
+    """偵測目前不支援的檔案類型（文件/影片/貼圖等），有的話回傳寄件者 telegram_user_id。
+
+    刻意不含 voice/audio：FR-17 規格上語音本來就該支援，只是 Step 1.4 還沒實作，沿用既有的
+    「直接忽略、不回覆」行為，留給 Step 1.4 一併補上，不在這裡當成不支援格式擋掉。
+    """
+    message = payload.get("message") or {}
+    from_user = message.get("from") or {}
+    telegram_user_id = from_user.get("id")
+    if telegram_user_id is None:
+        return None
+    if any(key in message for key in _UNSUPPORTED_FILE_KEYS):
+        return telegram_user_id
+    return None
+
+
 @bot_bp.route("/telegram/webhook", methods=["POST"])
 def telegram_webhook():
     payload = request.get_json(silent=True) or {}
@@ -63,31 +104,64 @@ def telegram_webhook():
     if update_id is not None and _is_duplicate_update(update_id):
         return jsonify({"ok": True}), 200
 
-    extracted = extract_message(payload)
-    if extracted is None:
+    unsupported_user_id = _extract_unsupported_file(payload)
+    photo_extracted = None if unsupported_user_id is not None else _extract_photo(payload)
+    text_extracted = None if (unsupported_user_id is not None or photo_extracted is not None) else extract_message(
+        payload
+    )
+
+    if unsupported_user_id is None and photo_extracted is None and text_extracted is None:
         return jsonify({"ok": True}), 200
-
-    if update_id is not None:
-        _mark_update_processed(update_id)
-
-    telegram_user_id, text = extracted
 
     # 一旦決定要處理這則訊息，就先標記 update_id 已處理：無論後面成不成功，都不希望
     # Telegram 因為收不到 200（或單純網路延遲誤判逾時）而重送同一則訊息、重打一次 Gemini。
     if update_id is not None:
         _mark_update_processed(update_id)
 
+    if unsupported_user_id is not None:
+        try:
+            telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
+            telegram_client.send_text(chat_id=unsupported_user_id, text=_UNSUPPORTED_FORMAT_REPLY)
+        except Exception:
+            _logger.exception("傳送不支援格式提示失敗（telegram_user_id=%s）", unsupported_user_id)
+        return jsonify({"ok": True}), 200
+
+    telegram_user_id = photo_extracted[0] if photo_extracted is not None else text_extracted[0]
+
     reply = _UNEXPECTED_ERROR_REPLY
     db = None
     try:
         db = CloudSQLClient()
-        # 一般問答用的 Key（見 docs/specs/chat-core/SPEC.md ADR-12）與長記憶摘要用的 Key（ADR-3），
-        # 只有訊息真的落入一般聊天核心時才會被呼叫；其餘指令/對話流程分支不會用到。
-        llm_client = LLMClient(api_key=os.environ["GEMINI_API_BOT_KEY"])
-        text_llm_client = LLMClient(api_key=os.environ["GEMINI_API_TEXT_KEY"])
-        reply = handle_message(
-            db, _state_store, telegram_user_id, text, llm_client=llm_client, text_llm_client=text_llm_client
-        )
+        if photo_extracted is not None:
+            _, file_id, caption = photo_extracted
+            telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
+            # 影像辨識用的兩把 Key（見 robinson SPEC.md ADR-13），隨機挑一把使用，分散額度消耗。
+            gdrive_client = GDriveClient(
+                key_file_path=os.environ["GDRIVE_KEY_FILE_PATH"], folder_id=os.environ["GDRIVE_FOLDER_ID"]
+            )
+            image_llm_clients = [
+                LLMClient(api_key=os.environ["GEMINI_API_IMAGE_KEY1"]),
+                LLMClient(api_key=os.environ["GEMINI_API_IMAGE_KEY2"]),
+            ]
+            reply = handle_photo_message(
+                db,
+                _state_store,
+                telegram_user_id,
+                file_id,
+                caption,
+                telegram_client,
+                gdrive_client,
+                image_llm_clients,
+            )
+        else:
+            _, text = text_extracted
+            # 一般問答用的 Key（見 docs/specs/chat-core/SPEC.md ADR-12）與長記憶摘要用的 Key（ADR-3），
+            # 只有訊息真的落入一般聊天核心時才會被呼叫；其餘指令/對話流程分支不會用到。
+            llm_client = LLMClient(api_key=os.environ["GEMINI_API_BOT_KEY"])
+            text_llm_client = LLMClient(api_key=os.environ["GEMINI_API_TEXT_KEY"])
+            reply = handle_message(
+                db, _state_store, telegram_user_id, text, llm_client=llm_client, text_llm_client=text_llm_client
+            )
     except Exception:
         # 暫時性安全網（Step 1.6／FR-19a 完整版之前）：任何未預期例外（例如 Gemini 429 額度超限、
         # 本地端節流保護 LLMQuotaGuardError、DB 連線失敗等）都要在這裡吞掉，改回安全用語並仍然

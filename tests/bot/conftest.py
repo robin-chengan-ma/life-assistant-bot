@@ -17,6 +17,7 @@ class FakeCloudSQLClient:
             "knowledge_base": [],
             "conversation_logs": [],
             "conversation_summaries": [],
+            "media_uploads": [],
         }
         self._id_counter = itertools.count(1)
 
