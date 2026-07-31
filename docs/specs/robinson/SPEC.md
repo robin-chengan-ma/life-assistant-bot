@@ -126,7 +126,7 @@ Robinson 是一個以 Telegram 為前台介面的家庭生活小助手，Robin �
 
 ### 功能性需求 — 服務健康與治理
 
-- [ ] FR-19：服務發生例外或錯誤時，對所有使用者僅回覆「生病了」等安全用語、不揭露技術細節；同時 Robinson 需依序走過以下「自主診斷 → 人工核准」流程，不得跳步，也不得在未經 Robin 同意前擅自變更系統：
+- [ ] FR-19：服務發生例外或錯誤時，對所有使用者僅回覆「生病了」等安全用語、不揭露技術細節；同時 Robinson 需依序走過以下「自主診斷 → 人工核准」流程，不得跳步，也不得在未經 Robin 同意前擅自變更系統。**2026-07-31 補充**：Step 1.3a 上線後實測撞到 Gemini 429 額度超限，發現 `webhook.py` 未攔截例外會讓 Telegram 重試風暴加速燒額度，已提前補上最小安全網（見 [platform-auth SPEC.md](../platform-auth/SPEC.md) FR-7）；這只解決「重試風暴」這個具體風險，不是本條 FR-19 的完整實作，FR-19a～FR-19i 仍待 Step 1.6／Step 2.4～2.6：
   - [ ] FR-19a：捕獲異常與 Log — 完整記錄系統錯誤 Traceback 與發生情境（觸發功能、使用者輸入摘要、時間戳記等），寫入集中式 log
   - [ ] FR-19b：自主診斷與搜尋 — AI 需自動根據 Error Traceback 與情境上網查詢可能原因（如套件 API 變更、連線 Timeout、SQL 語法錯誤等）；此為系統自我除錯用途，與 FR-12「不主動 Web Search 回答使用者問題」是不同情境，僅限診斷錯誤原因時使用
   - [ ] FR-19c：衝擊評估（Impact Assessment）— 評估修正此問題對現有系統的最小影響方案，以最小變動、最低風險為原則，避免破壞性重構
@@ -713,3 +713,4 @@ FR-56 的 `/function` 路由目前只定義了「回傳範圍」（所有功能�
 | 2026-07-31 | Robin 指出短記憶會忘記久遠對話，確認記憶架構改為「長記憶＋短記憶＋知識庫＋上網查資料」四部分並核准 `conversation_summaries` 建表 SQL；新增 ADR-3（見 chat-core SPEC.md）：長記憶採滾動式摘要，backlog ≥10 則觸發、呼叫 `GEMINI_API_TEXT_KEY`；新增 `src/bot/memory.py`；全專案 117 個測試全過、覆蓋率 100% | Robin |
 | 2026-07-31 | Robin 提供待辦事項／求職／體態管理／心情小記四項功能的情境範例，新增 FR-56e～FR-56h（比照 FR-56d 格式逐字收錄）；同步補充相關業務規則：FR-31 新增模組歸屬歧義需反問使用者、新增 FR-31a（待辦逾期或使用者告知完成/取消時標記結束）、FR-32 補充提醒與否由記錄當下決定；FR-46 新增身高體重合理範圍檢查（成人身高約 140～220 公分、體重約 40 公斤以上）| Robin |
 | 2026-07-31 | **Phase 1 Step 1.3a 完成**：`/function` 重新實作為「總覽＋按需深入＋情境範例」，展開為獨立 [docs/specs/chat-core/SPEC.md](../chat-core/SPEC.md) FR-9（含 ADR-4：總覽用獨立小型 LLM 呼叫，細節追問併入既有聊天核心，Robin 確認）；FR-56、FR-56a～FR-56h 全數完成；新增 `knowledge.get_persona_text()`，`commands.handle_function()` 改為 LLM 人格化總覽，`chat.py` prompt 固定附上功能手冊供按需細節追問；全專案 126 個測試全過、覆蓋率 100% | Claude（依 Robin「繼續開發吧」指示） |
+| 2026-07-31 | Robin 實測時撞到 Gemini 429（額度超限），確認四把 Gemini Key 分屬四個獨立 Google Cloud 專案（ADR-12 分流設計有效），但發現 `webhook.py` 未攔截例外會讓 Telegram 自動重送同一則訊息、加速燒光額度；補充 FR-19 說明，新增 platform-auth SPEC.md FR-7（暫時性安全網：`try/except` + 固定安全用語 + 仍回 200），完整分級錯誤處理仍留給 Step 1.6；全專案 127 個測試全過、覆蓋率 100% | Claude（依 Robin「先加上最小安全網」指示） |

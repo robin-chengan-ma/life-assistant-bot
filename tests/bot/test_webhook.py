@@ -89,3 +89,30 @@ def test_webhook_routes_valid_message_and_sends_reply(client, monkeypatch):
     )
     mock_db_instance.close.assert_called_once()
     mock_telegram_instance.send_text.assert_called_once_with(chat_id=123, text="哈囉！")
+
+
+def test_webhook_swallows_unexpected_exception_and_still_returns_200(client, monkeypatch):
+    # 暫時性安全網（Step 1.6 完整版之前）：handle_message 拋例外（例如 Gemini 429）時，
+    # webhook 仍要回 200，否則 Telegram 會重送同一則訊息，形成「失敗→重試→再失敗」的額度燒錢迴圈。
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("GEMINI_API_BOT_KEY", "fake-gemini-bot-key")
+    monkeypatch.setenv("GEMINI_API_TEXT_KEY", "fake-gemini-text-key")
+
+    mock_handle_message = MagicMock(side_effect=RuntimeError("429 RESOURCE_EXHAUSTED"))
+    monkeypatch.setattr(webhook, "handle_message", mock_handle_message)
+
+    mock_db_instance = MagicMock()
+    monkeypatch.setattr(webhook, "CloudSQLClient", MagicMock(return_value=mock_db_instance))
+    monkeypatch.setattr(webhook, "LLMClient", MagicMock())
+
+    mock_telegram_instance = MagicMock()
+    monkeypatch.setattr(webhook, "TelegramClient", MagicMock(return_value=mock_telegram_instance))
+
+    payload = {"message": {"from": {"id": 123}, "text": "今天天氣如何？"}}
+    response = client.post("/telegram/webhook", json=payload)
+
+    assert response.status_code == 200
+    mock_db_instance.close.assert_called_once()
+    mock_telegram_instance.send_text.assert_called_once_with(
+        chat_id=123, text=webhook._UNEXPECTED_ERROR_REPLY
+    )

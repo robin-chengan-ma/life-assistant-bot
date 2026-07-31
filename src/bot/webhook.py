@@ -1,4 +1,5 @@
 """Telegram Webhook 入口（對應 docs/specs/platform-auth/SPEC.md FR-1）。"""
+import logging
 import os
 
 from flask import Blueprint, jsonify, request
@@ -13,6 +14,12 @@ bot_bp = Blueprint("bot", __name__)
 
 # Owner /set_invite_codes 對話狀態，整個 process 生命週期內共用一份（ADR-2：僅存於記憶體）。
 _state_store = ConversationStateStore()
+
+_logger = logging.getLogger(__name__)
+
+# Step 1.6（FR-19）完整版之前的暫時性安全網文案：任何未預期例外（例如 Gemini 429 額度超限）
+# 都回這句，不揭露技術細節；正式的「生病了」人格化用語與 Robin 私訊通知留給 Step 1.6 一併做。
+_UNEXPECTED_ERROR_REPLY = "羅賓森好像不太舒服，等一下再試試看喔！"
 
 
 def extract_message(payload: dict) -> tuple[int, str] | None:
@@ -48,6 +55,15 @@ def telegram_webhook():
         reply = handle_message(
             db, _state_store, telegram_user_id, text, llm_client=llm_client, text_llm_client=text_llm_client
         )
+    except Exception:
+        # 暫時性安全網（Step 1.6／FR-19a 完整版之前）：任何未預期例外（例如 Gemini 429 額度超限）
+        # 都要在這裡吞掉，改回安全用語並仍然回 200——否則 Flask 會回 500，Telegram 收不到 200
+        # 就會自動重送同一則訊息，變成「失敗 → 重試 → 再失敗」的迴圈，把 API 額度燒得更快。
+        _logger.exception(
+            "處理 Telegram 訊息時發生未預期例外（telegram_user_id=%s），已回覆安全用語並停止重試",
+            telegram_user_id,
+        )
+        reply = _UNEXPECTED_ERROR_REPLY
     finally:
         db.close()
 

@@ -3,7 +3,7 @@ title: 平台核心入口 — 通關密碼驗證、Owner 對話式設定、/rule
 slug: platform-auth
 status: implemented
 created: 2026-07-30
-updated: 2026-07-30
+updated: 2026-07-31
 owner: Robin
 ---
 
@@ -23,6 +23,7 @@ owner: Robin
 - [x] FR-4：Owner 專屬設定對話流（對應 robinson SPEC.md FR-6a～FR-6c）—— 僅 Robin 可觸發 `/set_invite_codes` 或「設定通關密碼」，進入多輪對話：詢問稱謂 → 收到稱謂後暫存於記憶體狀態（尚不寫入資料庫，因為 `invite_codes.code` 是 `NOT NULL`，稱謂單獨一項還無法組成合法的一列）→ 詢問通關密碼 → 收到密碼後，此時稱謂與密碼皆已齊備，一次性建立 `users`（`telegram_user_id=NULL`、`role=<稱謂>`）與 `invite_codes`（`code=<密碼>`、`user_id` 指向剛建立的 `users.id`）→ 回覆「已寫入！請問還有其他家人要設定嗎？」→ 下一則訊息若為「沒有了」或「結束」則退出設定模式，否則視為下一位家人的稱謂，繼續循環
 - [x] FR-5：`/rule` 路由 —— 任何身分輸入「我要看使用規則」或 `/rule`，直接回傳附錄 A 全文，不經過 LLM
 - [x] FR-6：`/function` 路由 —— 任何身分輸入「我要看所有功能」或 `/function`，回傳目前已實作功能的清單（MVP 先用最簡單條列格式，正式文案模板待產品原型後由 Robin 補上，見 robinson SPEC.md 附錄 B）。**2026-07-31 更新**：此 MVP 版本（一次回傳固定條列文字、不經 LLM）已於 Phase 1 Step 1.3a 被取代，改為「總覽＋按需深入＋人格化語氣」設計，見 [chat-core SPEC.md](../chat-core/SPEC.md) FR-9、ADR-4；本條 FR 保留作為 Step 1.1 當時的歷史紀錄，路由觸發字串（`/function`／「我要看所有功能」）本身不變
+- [x] FR-7（暫時性安全網，2026-07-31 新增）：`telegram_webhook()` 對 `handle_message()` 呼叫包 `try/except`，未預期例外（例如 Gemini API 額度超限的 429）一律記錄完整 Traceback（`logging.exception`）並回覆固定安全用語 `"羅賓森好像不太舒服，等一下再試試看喔！"`，**仍然回傳 HTTP 200**。這不是完整的 FR-19（robinson SPEC.md），只解決一個具體的營運風險：Flask 若讓例外往外拋回 500，Telegram Webhook 收不到 200 會自動重送同一則訊息，形成「失敗 → 重試 → 再失敗」的迴圈，把 Gemini 免費額度燒得更快；完整的錯誤分類、Traceback 集中式 log、私訊 Robin、自主診斷仍留給 robinson SPEC.md Step 1.6／FR-19a～FR-19i
 
 ### 非功能性需求
 
@@ -98,7 +99,9 @@ owner: Robin
 - [x] 完整 Owner 設定流程：`/set_invite_codes` → 輸入稱謂 → 輸入密碼 → 重複第二輪 → 「沒有了」結束（`test_full_two_family_members_setup_flow`）
 - [x] 家人綁定 + `/rule` + `/function` 全流程
 
-**測試結果**：49 個測試全數通過，`src/bot/` 覆蓋率 100%（`pytest tests/ --cov=src/bot`）。
+- [x] FR-7：`handle_message()` 拋出未預期例外時，`telegram_webhook()` 仍回傳 200 並回覆安全用語（`test_webhook_swallows_unexpected_exception_and_still_returns_200`）
+
+**測試結果**：49 個測試全數通過，`src/bot/` 覆蓋率 100%（`pytest tests/ --cov=src/bot`）。**2026-07-31 補充**：FR-7 安全網新增 1 個測試，隨 Step 1.3a 之後的整體測試套件一起計入 robinson SPEC.md 變更記錄的測試總數。
 
 ## 風險與緩解
 
@@ -107,6 +110,7 @@ owner: Robin
 | Owner 設定流程中途服務重啟導致狀態遺失（ADR-2 已知取捨） | 低 | 低 | Robin 重新輸入 `/set_invite_codes` 即可，不影響資料正確性 |
 | 通關密碼綁定的 race condition（理論上兩人同時搶同一組碼） | 低 | 極低（個人/家用場景） | 不依賴「單一 transaction 包住 select+update」（`CloudSQLClient` 每個方法各自開關連線，無法這樣做），改用「原子性條件 UPDATE」：`UPDATE invite_codes SET is_used=TRUE WHERE id=%s AND is_used=FALSE`，第二個並行請求會影響 0 筆而非誤判成功，已有專屬單元測試覆蓋此分支 |
 | 原生 JSON 解析缺乏型別檢查，欄位打錯字不會在開發期被抓到（ADR-1 已知取捨） | 中 | 中 | Unit test 覆蓋各種缺欄位情境；所有欄位存取用 `.get()` 並在缺欄位時回傳明確錯誤，不讓 `KeyError` 直接讓 process 掛掉 |
+| 外部 API（Gemini／Telegram）呼叫失敗未攔截時，Telegram Webhook 重試機制會不斷重送同一則訊息，加速燒光免費額度（2026-07-31 實測發現，見 FR-7） | 中 | 中 | FR-7 已加上最小安全網（`try/except` + 固定回覆 200），實測時已解決；完整分級處理仍待 robinson SPEC.md Step 1.6 |
 
 ## 變更記錄
 
@@ -114,3 +118,4 @@ owner: Robin
 |------|----------|--------|
 | 2026-07-30 | 初版建立，展開 robinson SPEC.md Phase 1 Step 1.1 為獨立 spec | Claude（依 Robin「請開始吧」指示） |
 | 2026-07-30 | ADR-1／ADR-2 經 Robin 確認後完成 TDD 實作：`src/bot/`（`state.py`／`auth.py`／`templates.py`／`commands.py`／`router.py`／`webhook.py`），`requirements.txt` 移除 `python-telegram-bot`，新增 `requirements-dev.txt`／`pytest.ini`；49 個測試全過、覆蓋率 100%；同步更新 `src/schema/api_schema.md` 對應路由狀態 | Claude |
+| 2026-07-31 | Robin 實測 Step 1.3a 時撞到 Gemini 429（額度超限），發現 `webhook.py` 未攔截例外會導致 Telegram 自動重送同一則訊息、加速燒額度；新增 FR-7（暫時性安全網）：`telegram_webhook()` 包 `try/except`，未預期例外一律 log + 回安全用語 + 仍回 200；這不是完整的 FR-19（robinson SPEC.md），只解決重試風暴這個具體風險，完整版留給 Step 1.6 | Claude（依 Robin「先加上最小安全網」指示） |
