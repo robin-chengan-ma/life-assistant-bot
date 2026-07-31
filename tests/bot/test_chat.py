@@ -108,6 +108,24 @@ def test_handle_chat_message_prompt_forbids_fabricating_facts(fake_db):
     assert "絕對不能捏造任何具體事實" in llm_client.last_prompt
 
 
+def test_handle_chat_message_prompt_includes_pronoun_resolution_rule(fake_db):
+    # Robin 回報：問「小布丁是誰」後接著問「他大概幾歲」，Robinson 誤把「他」理解成
+    # 上一輪回答裡順便提到的照顧者（爺爺），而不是真正在討論的小布丁；使用者糾正
+    # 「我說小布丁啦」後，Robinson 又只是重複貼一模一樣的舊答案，沒有真的回答年齡。
+    # 加一條代名詞指涉規則，避免同樣的誤判再發生。
+    _seed_general(fake_db)
+    llm_client = _FakeLLMClient()
+    text_llm_client = _FakeTextLLMClient()
+    store = ConversationStateStore()
+
+    chat.handle_chat_message(
+        fake_db, llm_client, text_llm_client, store, telegram_user_id=1, user_id=1, text="那他大概幾歲啊"
+    )
+
+    assert "不要因為上一輪回答內容裡「順便提到」了其他人名" in llm_client.last_prompt
+    assert "不能只是重複貼上一輪答過的舊內容" in llm_client.last_prompt
+
+
 def test_handle_chat_message_prompt_states_no_web_search_capability(fake_db):
     # ADR-5：Gemini 2.5 世代對新 Key 關閉存取，grounding 整個移除，prompt 必須明確告知模型
     # 自己沒有查網路的能力，不知道就要誠實回報（透過固定標記讓程式碼判斷）。
