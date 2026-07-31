@@ -161,6 +161,29 @@ submodules/
 
 **狀態**：accepted
 
+### ADR-7：`generate_with_search()` 固定改用 `gemini-2.5-flash-lite`，不沿用 `_DEFAULT_MODEL`
+
+**背景**：ADR-6 換成 `gemini-3.5-flash-lite` 後，Robin 仍持續撞到 429，且僅限於 `chat.py` 呼叫的 `generate_with_search()`（帶 Google Search 工具）——單純文字/圖片呼叫完全正常。逐步排除以下可能性後才找到真正原因：
+1. 懷疑是舊專案本身被限制 → Robin 重新產生一把全新 Key（全新 Google Cloud 專案）測試，純文字呼叫（curl 直測，不掛工具）成功，證明新專案本身沒問題
+2. 用同一把新 Key、同一個模型，改成帶 `google_search` 工具再測一次 → 依然 429，證明問題出在「掛了搜尋工具」這件事本身，跟專案、跟額度用完與否都無關
+3. Robin 於 AI Studio Rate Limit 頁面「Tools」區塊發現：Google Search grounding 的免費額度是**依 Gemini 模型世代分桶**，不是每個模型共用同一包額度——Gemini 2 世代與 Gemini 2.5 世代皆有 1,500 次/天免費額度，但 **Gemini 3 世代（含 `gemini-3.5-flash-lite`）免費額度是 0**
+4. 對照官方定價頁確認：Gemini 3 模型使用 Grounding with Google Search 一律照搜尋次數計費，免費層完全不提供；Gemini 2.5 或更早的模型才有免費配額
+
+**決策**：`generate_with_search()` 內部固定改用 `gemini-2.5-flash-lite`（Gemini 2.5 世代，享有 1,500 次/天免費 grounding 額度），忽略建構子傳入的 `model` 參數；`generate_text()`／`generate_with_image()` 等不需要查網路的方法維持用 `_DEFAULT_MODEL`（`gemini-3.5-flash-lite`，ADR-6）
+
+**理由**：這是唯一不需要移除既有搜尋功能、也不需要開通計費就能解決問題的方案——同一把 Key、同一個專案即可，純粹是呼叫時指定的模型世代問題；`generate_text`／`generate_with_image` 不涉及 grounding，繼續用額度更好（RPD 500 vs 1,500，但 RPM/穩定性更好、非停用倒數中）的 `gemini-3.5-flash-lite` 沒有理由改動
+
+**替代方案**：
+- 方案 A：從 `chat.py` 移除 Google Search grounding 功能（改回 ADR-1 之前純知識庫回答）——會犧牲「查無答案時上網查」這個既有能力，且盤點後發現待辦/記帳/體態/心情小記等主力功能都不依賴 grounding，只有一般聊天在使用者問即時性資訊時受影響，影響範圍雖可控但仍是功能倒退，已否決
+- 方案 B：開通計費帳戶，讓 Gemini 3 世代也能用 grounding——技術上可行，但涉及 Robin 個人帳務決定，且本次找到的方案（改用 Gemini 2.5 世代）完全免費、改動範圍更小，已否決
+
+**後果**：
+- `submodules/llm/client.py` 新增 `_SEARCH_MODEL = "gemini-2.5-flash-lite"` 常數，`generate_with_search()` 呼叫 `generate_content` 時改傳 `model=_SEARCH_MODEL`，不再用 `self._model`
+- Gemini 2.5 系列預計 2026-10-16 停用，屆時 `_SEARCH_MODEL` 需要重新評估（可能屆時 Gemini 3 世代已開放免費 grounding，或需要換其他仍在維護的世代）
+- 這次排錯過程也確認了一件重要的事：AI Studio 消費者版 Rate Limit 頁面的資訊比純猜測／網路文章可靠得多，未來遇到類似額度問題應優先去該頁面核對實際數字，而不是憑經驗猜測
+
+**狀態**：accepted
+
 ## 實作計畫
 
 ### Phase 0（對應 robinson SPEC.md 的 Step 0.1a）：建立子模組骨架
@@ -210,3 +233,4 @@ submodules/
 | 2026-07-31 | Robin 實測撞到 Gemini 429 後要求「該做的防呆要做好」；新增 FR-7、ADR-5：`LLMClient` 加上本地端節流保護（同一 `api_key` 最近 60 秒超過 8 次呼叫直接擋下、不送出請求），節流計數以 class 層級狀態、`api_key` 為單位共用；新增 `tests/submodules/llm/conftest.py` 避免測試間互相汙染；全專案 137 個測試全過、覆蓋率 100% | Claude（依 Robin「該做的防呆要做好」指示） |
 | 2026-07-31 | Step 1.3b（影像辨識）需要：新增 Step S.7、`submodules/gdrive/`（`GDriveClient`，僅 `upload_file()`，不做下載/列表/刪除）；`telegram.client.TelegramClient` 補上單元測試並新增 `get_file_bytes()`（Step S.6 telegram 部分完成）；修正 `pytest.ini` 加 `--import-mode=importlib`，解決多個 `submodules/*/test_client.py` 同名模組在同一次 `pytest tests/` 執行時互相衝突的問題 | Claude（依 Robin「你繼續開發你的」指示） |
 | 2026-07-31 | Robin 持續撞到 429，經 AI Studio Rate Limit 頁面實測確認 `gemini-flash-latest` 別名解析到的 Gemini 3.6 Flash 免費層只有 RPM 5／RPD 20，遠低於原本假設；新增 ADR-6：改用明確指定版本的 `gemini-3.5-flash-lite`（實測 RPM 15／RPD 500，同屬 Gemini 家族、零相容性風險），Gemma 4（RPM 30／RPD 14,400）與計費升級留待額度仍不夠用時再評估；`_DEFAULT_MODEL` 改為 `gemini-3.5-flash-lite` | Claude（依 Robin「好啊，麻煩你了」指示） |
+| 2026-07-31 | 換模型後 `generate_with_search()` 仍持續 429；逐步排查（新 Key／新專案測純文字成功、掛搜尋工具後同樣 429）後，Robin 於 AI Studio「Tools」區塊發現 Google Search grounding 免費額度依模型世代分桶：Gemini 2／2.5 世代有 1,500 次/天免費額度，**Gemini 3 世代（含 `gemini-3.5-flash-lite`）免費額度是 0**（官方定價頁證實：Gemini 3 使用 grounding 一律計費，免費層不提供）；新增 ADR-7：`generate_with_search()` 固定改用 `gemini-2.5-flash-lite`，其餘方法維持 ADR-6 的 `gemini-3.5-flash-lite`；同時盤點所有功能模組，確認只有一般聊天核心依賴 grounding，104／YouTube 走各自獨立官方 API 不受影響 | Claude（依 Robin「好，麻煩你了」指示） |

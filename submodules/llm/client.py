@@ -14,6 +14,15 @@ from google.genai import types
 
 _DEFAULT_MODEL = "gemini-3.5-flash-lite"
 
+# `generate_with_search()` 專用模型：見 docs/specs/submodules-core/SPEC.md ADR-7。
+# 2026-07-31 實測（AI Studio Rate Limit 頁面「Tools」區塊）：Google Search grounding 的免費額度
+# 是「依模型世代」分桶計算，不是每個模型都有——Gemini 3 世代（含 `gemini-3.5-flash-lite`）免費
+# grounding 額度是 0（官方定價頁：Gemini 3 使用 grounding 一律計費，免費層不提供），但 Gemini 2.5
+# 世代有 1,500 次/天免費額度。因此帶 Google Search 工具的呼叫必須指定 Gemini 2.5 世代的模型，
+# 其餘不需要查網路的呼叫（純文字/圖片）維持用 `_DEFAULT_MODEL`（額度更好、非停用倒數中的世代）。
+# 注意：Gemini 2.5 系列預計 2026-10-16 停用，屆時須重新評估這個模型是否要換。
+_SEARCH_MODEL = "gemini-2.5-flash-lite"
+
 # 本地端節流保護（非 Gemini 官方額度機制）：見 docs/specs/submodules-core/SPEC.md ADR-5。
 # 2026-07-31 實測（AI Studio Rate Limit 頁面）：`gemini-flash-latest` 當時解析到的
 # Gemini 3.6 Flash 免費層只有 RPM 5／RPD 20，遠低於原本假設的 10～15 次/分鐘、1500 次/天，
@@ -98,12 +107,16 @@ class LLMClient:
 
         是否要查網路由模型自行判斷（見 docs/specs/chat-core/SPEC.md ADR-1），本方法只負責
         從回應的 grounding_metadata 判讀這次有沒有真的觸發搜尋，不自己額外呼叫第二次 API。
+
+        刻意不用 `self._model`（見 ADR-7）：Google Search grounding 的免費額度依模型世代分桶，
+        `_DEFAULT_MODEL` 所屬的 Gemini 3 世代免費額度是 0，這裡固定改用有免費額度的
+        `_SEARCH_MODEL`（Gemini 2.5 世代），避免每次掛搜尋工具都直接被 Google 判 429。
         """
         self._guard_rate_limit()
         grounding_tool = types.Tool(google_search=types.GoogleSearch())
         config = types.GenerateContentConfig(tools=[grounding_tool])
         response = self._client.models.generate_content(
-            model=self._model,
+            model=_SEARCH_MODEL,
             contents=prompt,
             config=config,
         )

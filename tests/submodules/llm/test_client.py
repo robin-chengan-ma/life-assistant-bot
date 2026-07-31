@@ -76,6 +76,9 @@ def test_generate_with_search_returns_text_and_true_when_search_used(monkeypatch
     assert used_search is True
     # 確認有把 Google Search 工具帶進 config
     assert "config" in fake_genai_client.models.last_call
+    # ADR-7：grounding 免費額度依模型世代分桶，Gemini 3 世代（_DEFAULT_MODEL）額度是 0，
+    # generate_with_search 必須固定改用有免費額度的 Gemini 2.5 世代模型，不能用 self._model
+    assert fake_genai_client.models.last_call["model"] == "gemini-2.5-flash-lite"
 
 
 def test_generate_with_search_returns_false_when_no_search_queries(monkeypatch):
