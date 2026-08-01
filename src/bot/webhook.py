@@ -24,10 +24,9 @@ _logger = logging.getLogger(__name__)
 # 都回這句，不揭露技術細節；正式的「生病了」人格化用語與 Robin 私訊通知留給 Step 1.6 一併做。
 _UNEXPECTED_ERROR_REPLY = "羅賓森好像不太舒服，等一下再試試看喔！"
 
-# 目前支援文字、圖片、語音（voice），收到其他格式（文件/影片/貼圖等）直接回這句拒絕，
-# 不進入 DB/Gemini 流程。刻意不含 audio（使用者上傳的音樂/錄音檔，非錄音鍵語音訊息）：
-# FR-14／FR-15 規格上只討論「語音訊息」（Telegram 的 voice 物件），audio 沿用「直接忽略、
-# 不回覆」的既有行為，之後有明確需求再評估。
+# 目前支援文字、圖片、語音（voice 與 audio 兩種訊息類型都算，見 _extract_voice），
+# 收到其他格式（文件/影片/貼圖等）直接回這句拒絕，不進入 DB/Gemini 流程，符合 FR-17
+# 「僅支援圖片與音檔兩種格式」的承諾。
 _UNSUPPORTED_FORMAT_REPLY = "這個檔案格式我沒辦法處理喔，只能看懂圖片和音檔！"
 _UNSUPPORTED_FILE_KEYS = ("document", "video", "video_note", "animation", "sticker")
 
@@ -82,32 +81,35 @@ def _extract_photo(payload: dict) -> tuple[int, str, str | None] | None:
     return telegram_user_id, file_id, message.get("caption")
 
 
-def _extract_voice(payload: dict) -> tuple[int, str, int | None] | None:
-    """從 Telegram Update JSON 取出 (telegram_user_id, file_id, duration_seconds)。
+def _extract_voice(payload: dict) -> tuple[int, str, int | None, str] | None:
+    """從 Telegram Update JSON 取出 (telegram_user_id, file_id, duration_seconds, mime_type)。
 
-    `message.voice` 是使用者按錄音鍵傳送的語音訊息（OGG/OPUS），本身就帶 `duration`
-    （秒），讓 FR-14 的 10 分鐘上限判斷不需要先下載檔案就能做（見 robinson SPEC.md
-    FR-14、src/bot/voice.py）。刻意不處理 `message.audio`（使用者上傳的音樂/錄音檔），
-    見上方 `_UNSUPPORTED_FILE_KEYS` 註解。
+    2026-08-01 修正（見 robinson SPEC.md FR-17）：涵蓋 `message.voice`（使用者按錄音鍵
+    傳送的語音訊息，固定 OGG/OPUS）與 `message.audio`（使用者上傳的音檔，可能是
+    MP3/M4A/WAV 等格式）——FR-17 承諾「圖片與音檔兩種格式都支援」，不是只有錄音鍵那種，
+    先前只處理 `voice` 是範圍沒抓對，這裡補齊。兩者都帶 `duration`（秒），讓 FR-14 的
+    10 分鐘上限判斷不需要先下載檔案就能做；`mime_type` 由 Telegram 回報，供
+    `src/bot/voice.py` 決定正確的 Drive 副檔名與轉錄請求格式，`voice` 訊息缺少時
+    fallback 為 `audio/ogg`。
     """
     message = payload.get("message") or {}
     from_user = message.get("from") or {}
     telegram_user_id = from_user.get("id")
-    voice = message.get("voice")
-    if telegram_user_id is None or not voice:
+    media = message.get("voice") or message.get("audio")
+    if telegram_user_id is None or not media:
         return None
-    file_id = voice.get("file_id")
+    file_id = media.get("file_id")
     if not file_id:
         return None
-    return telegram_user_id, file_id, voice.get("duration")
+    mime_type = media.get("mime_type") or "audio/ogg"
+    return telegram_user_id, file_id, media.get("duration"), mime_type
 
 
 def _extract_unsupported_file(payload: dict) -> int | None:
     """偵測目前不支援的檔案類型（文件/影片/貼圖等），有的話回傳寄件者 telegram_user_id。
 
-    2026-08-01（Step 1.4）起 `voice`（語音訊息）已正式支援，不再落在這個判斷內，見
-    `_extract_voice()`；`audio`（使用者上傳的音樂/錄音檔）仍沿用「直接忽略、不回覆」的
-    既有行為，不在這裡當成不支援格式擋掉，也還沒有明確需求要處理它。
+    2026-08-01（Step 1.4，後續修正涵蓋 `audio`）起 `voice`／`audio`（語音訊息與使用者
+    上傳的音檔）都已正式支援，不再落在這個判斷內，見 `_extract_voice()`。
     """
     message = payload.get("message") or {}
     from_user = message.get("from") or {}
@@ -192,7 +194,7 @@ def telegram_webhook():
                 image_llm_clients,
             )
         elif voice_extracted is not None:
-            _, file_id, duration_seconds = voice_extracted
+            _, file_id, duration_seconds, mime_type = voice_extracted
             telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
             gdrive_client = GDriveClient(
                 key_file_path=os.environ["GDRIVE_KEY_FILE_PATH"], folder_id=os.environ["GDRIVE_FOLDER_ID"]
@@ -213,6 +215,7 @@ def telegram_webhook():
                 voice_client,
                 llm_client=llm_client,
                 text_llm_client=text_llm_client,
+                mime_type=mime_type,
             )
         else:
             _, text = text_extracted

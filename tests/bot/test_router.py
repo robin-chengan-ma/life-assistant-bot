@@ -645,9 +645,13 @@ class _FakeVoiceClient:
     def __init__(self, response_text="/rule"):
         self.response_text = response_text
         self.last_audio_bytes = None
+        self.last_filename = None
+        self.last_mime_type = None
 
     def transcribe(self, audio_bytes, filename="audio.ogg", mime_type="audio/ogg"):
         self.last_audio_bytes = audio_bytes
+        self.last_filename = filename
+        self.last_mime_type = mime_type
         return self.response_text
 
 
@@ -723,6 +727,23 @@ def test_handle_voice_message_transcribes_and_routes_as_text(fake_db, monkeypatc
     rows = fake_db.select("media_uploads")
     assert len(rows) == 1
     assert rows[0]["media_type"] == "audio"
+
+
+def test_handle_voice_message_passes_through_mime_type_for_uploaded_audio(fake_db, monkeypatch):
+    # message.audio（上傳的音檔，例如 MP3）走同一支函式，mime_type 要正確透傳到轉錄請求
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+    voice_client = _FakeVoiceClient(response_text="/rule")
+
+    router.handle_voice_message(
+        fake_db, store, FAMILY_ID, "audio123", 180,
+        _FakeTelegramClient(b"raw-mp3-bytes"), _FakeGDriveClient(), voice_client,
+        mime_type="audio/mpeg",
+    )
+
+    assert voice_client.last_mime_type == "audio/mpeg"
+    assert voice_client.last_filename == "voice.mp3"
 
 
 def test_handle_voice_message_works_for_owner(fake_db, monkeypatch):

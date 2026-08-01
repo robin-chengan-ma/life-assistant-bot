@@ -102,6 +102,7 @@ updated: 2026-08-01
 | 2026-07-31 | Robin 換用新產生的 `GEMINI_API_BOT_KEY` 後，`generate_with_search()` 固定使用的 `gemini-2.5-flash` 回傳 404；排查後確認 Gemini 2.5 世代已對新專案關閉存取（用 curl 直測 `generateContent` 驗證，跟掛不掛 Google Search 工具無關），非額度問題；Robin 指示「移除所有會用到上網查詢的部分，查無答案就誠實回不知道，並建議使用者自行查詢後提供答案存檔」；新增 chat-core SPEC.md ADR-5（supersede ADR-1／ADR-2）、submodules-core SPEC.md ADR-8（supersede ADR-7）：`generate_with_search()` 全數移除，`pending_kb_save` 流程更名為 `pending_user_knowledge` 且不再需要 yes/no 確認；全專案 174 個測試全過、覆蓋率 100% |
 | 2026-08-01 | Robin 陸續回報並確認多項 chat-core 修正與新功能（日期幻覺、代名詞指涉、打字誤植先反問確認、`/clean-all-dialog`／`/clean-target-dialog`、主動新增知識等，詳見 [chat-core SPEC.md](../chat-core/SPEC.md) 變更記錄 ADR-6～ADR-8），全專案累計到 219 個測試、覆蓋率 100% |
 | 2026-08-01 | **Phase 1 Step 1.4 完成**：語音轉文字流程，FR-14／FR-15 全數完成；新增 `submodules/voice/`（`VoiceClient`，`requests` 直打 Groq Whisper OpenAI 相容 REST API，見 submodules-core SPEC.md ADR-9）、`src/bot/voice.py`（10 分鐘上限／15 分鐘修正窗口檢查、上傳 Drive＋轉文字）；架構決策：轉出來的文字直接呼叫既有 `router.handle_message()` 走完整文字流程，不重複指令/對話流程分派邏輯；`src/bot/media.py` 從 `image.py` 抽出共用的 `save_media_upload()`；全專案 252 個測試全過、`src/bot/`／`submodules/llm`／`submodules/voice` 覆蓋率 100% |
+| 2026-08-01 | **Step 1.4 追加修正**：Robin 回報「除了照片和音檔外的檔案格式才無效」，發現 Step 1.4 完成當下只處理了 `message.voice`（錄音鍵語音訊息），漏了 `message.audio`（使用者上傳的音檔，如 MP3）——FR-17 原文早就承諾「圖片與音檔兩種檔案類型」都支援，這是範圍沒抓對，不是新功能；修正 `webhook._extract_voice()` 同時偵測 `voice`／`audio` 並透傳 `mime_type`，新增 `voice._infer_extension()` 依實際格式決定 Drive 副檔名與 Groq 轉錄格式，避免把上傳的 MP3/M4A/WAV 誤標成 `.ogg`；全專案 262 個測試全過、`src/bot/`／`submodules/llm`／`submodules/voice` 覆蓋率 100% |
 
 ## 待決事項
 

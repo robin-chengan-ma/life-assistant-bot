@@ -84,16 +84,24 @@ def test_extract_unsupported_file_ignores_voice():
     assert webhook._extract_unsupported_file(payload) is None
 
 
-# --- _extract_voice：純函式 ---
+def test_extract_unsupported_file_ignores_audio():
+    # audio（上傳的音檔）FR-17 也支援，走 _extract_voice()，不落在「不支援格式」判斷內
+    payload = {"message": {"from": {"id": 123}, "audio": {"file_id": "audio1"}}}
+    assert webhook._extract_unsupported_file(payload) is None
 
 
-def test_extract_voice_returns_none_when_no_voice():
+# --- _extract_voice：純函式（涵蓋 voice／audio 兩種類型，見 robinson SPEC.md FR-17）---
+
+
+def test_extract_voice_returns_none_when_no_voice_or_audio():
     assert webhook._extract_voice({"message": {"from": {"id": 123}, "text": "hi"}}) is None
 
 
-def test_extract_voice_returns_file_id_and_duration():
-    payload = {"message": {"from": {"id": 123}, "voice": {"file_id": "v1", "duration": 42}}}
-    assert webhook._extract_voice(payload) == (123, "v1", 42)
+def test_extract_voice_returns_file_id_duration_and_mime_type_for_voice():
+    payload = {
+        "message": {"from": {"id": 123}, "voice": {"file_id": "v1", "duration": 42, "mime_type": "audio/ogg"}}
+    }
+    assert webhook._extract_voice(payload) == (123, "v1", 42, "audio/ogg")
 
 
 def test_extract_voice_returns_none_when_file_id_missing():
@@ -101,9 +109,37 @@ def test_extract_voice_returns_none_when_file_id_missing():
     assert webhook._extract_voice(payload) is None
 
 
-def test_extract_voice_returns_none_duration_when_missing():
+def test_extract_voice_defaults_duration_and_mime_type_when_missing():
     payload = {"message": {"from": {"id": 123}, "voice": {"file_id": "v1"}}}
-    assert webhook._extract_voice(payload) == (123, "v1", None)
+    assert webhook._extract_voice(payload) == (123, "v1", None, "audio/ogg")
+
+
+def test_extract_voice_handles_uploaded_audio_message():
+    # message.audio：使用者上傳的音檔（非錄音鍵語音訊息），FR-17 承諾一樣要支援
+    payload = {
+        "message": {
+            "from": {"id": 123},
+            "audio": {"file_id": "a1", "duration": 180, "mime_type": "audio/mpeg"},
+        }
+    }
+    assert webhook._extract_voice(payload) == (123, "a1", 180, "audio/mpeg")
+
+
+def test_extract_voice_defaults_mime_type_for_audio_without_mime_type():
+    payload = {"message": {"from": {"id": 123}, "audio": {"file_id": "a1", "duration": 180}}}
+    assert webhook._extract_voice(payload) == (123, "a1", 180, "audio/ogg")
+
+
+def test_extract_voice_prefers_voice_when_both_present():
+    # 正常情況 Telegram 不會同時給兩者，但防呆一下：voice 優先
+    payload = {
+        "message": {
+            "from": {"id": 123},
+            "voice": {"file_id": "v1", "duration": 10},
+            "audio": {"file_id": "a1", "duration": 180},
+        }
+    }
+    assert webhook._extract_voice(payload)[1] == "v1"
 
 
 # --- Flask route：mock 掉 DB / Telegram / router，只驗證接線邏輯 ---
@@ -434,7 +470,9 @@ def test_webhook_routes_voice_message_and_sends_reply(client, monkeypatch):
     mock_llm_client_cls = MagicMock()
     monkeypatch.setattr(webhook, "LLMClient", mock_llm_client_cls)
 
-    payload = {"message": {"from": {"id": 123}, "voice": {"file_id": "voice1", "duration": 42}}}
+    payload = {
+        "message": {"from": {"id": 123}, "voice": {"file_id": "voice1", "duration": 42, "mime_type": "audio/ogg"}}
+    }
     response = client.post("/telegram/webhook", json=payload)
 
     assert response.status_code == 200
@@ -450,8 +488,34 @@ def test_webhook_routes_voice_message_and_sends_reply(client, monkeypatch):
     assert call_args[2] == 123
     assert call_args[3] == "voice1"
     assert call_args[4] == 42
+    assert mock_handle_voice_message.call_args.kwargs["mime_type"] == "audio/ogg"
     mock_db_instance.close.assert_called_once()
     mock_telegram_instance.send_text.assert_called_once_with(chat_id=123, text="好的，已經記下來了！")
+
+
+def test_webhook_routes_uploaded_audio_message_with_correct_mime_type(client, monkeypatch):
+    # message.audio（使用者上傳的音檔，例如 MP3）也要走同一條路，見 robinson SPEC.md FR-17
+    _set_voice_env(monkeypatch)
+
+    mock_handle_voice_message = MagicMock(return_value="好的，已經記下來了！")
+    monkeypatch.setattr(webhook, "handle_voice_message", mock_handle_voice_message)
+    monkeypatch.setattr(webhook, "CloudSQLClient", MagicMock(return_value=MagicMock()))
+    monkeypatch.setattr(webhook, "GDriveClient", MagicMock())
+    monkeypatch.setattr(webhook, "VoiceClient", MagicMock())
+    monkeypatch.setattr(webhook, "LLMClient", MagicMock())
+    monkeypatch.setattr(webhook, "TelegramClient", MagicMock(return_value=MagicMock()))
+
+    payload = {
+        "message": {"from": {"id": 123}, "audio": {"file_id": "audio1", "duration": 180, "mime_type": "audio/mpeg"}}
+    }
+    response = client.post("/telegram/webhook", json=payload)
+
+    assert response.status_code == 200
+    mock_handle_voice_message.assert_called_once()
+    call_args = mock_handle_voice_message.call_args
+    assert call_args.args[3] == "audio1"
+    assert call_args.args[4] == 180
+    assert call_args.kwargs["mime_type"] == "audio/mpeg"
 
 
 def test_webhook_voice_message_swallows_unexpected_exception(client, monkeypatch):

@@ -162,14 +162,20 @@ def handle_voice_message(
     voice_client,
     llm_client=None,
     text_llm_client=None,
+    mime_type: str = "audio/ogg",
 ) -> str:
-    """處理使用者傳來的語音訊息（對應 robinson SPEC.md FR-14、FR-15、ADR-12、ADR-13）。
+    """處理使用者傳來的語音/音檔訊息（對應 robinson SPEC.md FR-14、FR-15、FR-17、ADR-12、ADR-13）。
+
+    涵蓋 Telegram 的 `voice`（錄音鍵語音訊息）與 `audio`（使用者上傳的音檔）兩種類型，
+    FR-17 承諾「圖片與音檔」都支援，不限定只有錄音鍵那種；`mime_type` 由呼叫端
+    （webhook.py）依實際訊息類型傳入，供 `voice.transcribe_and_upload()` 決定正確的
+    Drive 副檔名與轉錄請求格式（見 src/bot/voice.py 模組 docstring）。
 
     FR-14（10 分鐘上限）／FR-15（15 分鐘修正窗口）刻意排在下載語音檔之前檢查，通過後才
-    下載、上傳 Drive、記錄 media_uploads、呼叫 Groq Whisper 轉文字（見 src/bot/voice.py
-    模組 docstring）。轉出來的文字不會另外走一套獨立流程，而是直接當成使用者「打字輸入」，
-    呼叫既有的 `handle_message()` 走完整的指令/pending flow/一般聊天分派——這是 Step 1.4
-    刻意的架構選擇：語音只負責「變成文字」，「文字要怎麼處理」全部復用既有邏輯，不重複。
+    下載、上傳 Drive、記錄 media_uploads、呼叫 Groq Whisper 轉文字。轉出來的文字不會
+    另外走一套獨立流程，而是直接當成使用者「打字輸入」，呼叫既有的 `handle_message()`
+    走完整的指令/pending flow/一般聊天分派——這是 Step 1.4 刻意的架構選擇：語音只負責
+    「變成文字」，「文字要怎麼處理」全部復用既有邏輯，不重複。
     """
     user = _get_identified_user(db, telegram_user_id)
     if user is None:
@@ -185,7 +191,7 @@ def handle_voice_message(
 
     voice_bytes = telegram_client.get_file_bytes(file_id)
     transcribed_text = voice.transcribe_and_upload(
-        db, gdrive_client, voice_client, user["id"], user["role"], voice_bytes
+        db, gdrive_client, voice_client, user["id"], user["role"], voice_bytes, mime_type=mime_type
     )
 
     return handle_message(
