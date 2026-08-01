@@ -11,6 +11,7 @@ from io import BytesIO
 
 from PIL import Image
 
+from src.bot.media import save_media_upload
 from src.bot.state import ConversationStateStore
 from submodules.cloudsql.client import CloudSQLClient
 
@@ -45,11 +46,6 @@ def build_upload_filename(user_role: str, purpose: str = "圖片辨識", now: da
     """依 ADR-13 命名規則：使用者稱呼＋當下時間戳記＋用途。"""
     timestamp = (now or datetime.now(timezone.utc)).strftime("%Y%m%d%H%M%S")
     return f"{user_role}_{timestamp}_{purpose}.jpg"
-
-
-def save_media_upload(db: CloudSQLClient, user_id: int, media_type: str, gdrive_url: str) -> None:
-    """寫入一筆 media_uploads 記錄（ADR-13）。"""
-    db.insert("media_uploads", {"user_id": user_id, "media_type": media_type, "gdrive_url": gdrive_url})
 
 
 def handle_image_message(

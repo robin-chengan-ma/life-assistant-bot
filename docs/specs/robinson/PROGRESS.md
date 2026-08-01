@@ -15,7 +15,7 @@ updated: 2026-08-01
 
 ## 目前階段
 
-**Phase 1（MVP）進行中 — Step 1.1、Step 1.2、Step 1.3（Gemini 對話核心）、Step 1.3a（`/function` 改版）、Step 1.3b（影像辨識基礎流程）已完成，下一步 Step 1.4（語音轉文字）**
+**Phase 1（MVP）進行中 — Step 1.1、Step 1.2、Step 1.3（Gemini 對話核心）、Step 1.3a（`/function` 改版）、Step 1.3b（影像辨識基礎流程）、Step 1.4（語音轉文字）已完成，下一步 Step 1.5（個資偵測與刪除機制）**
 
 ## 目標時程（2026-07-30 更新：改為三週制，因新增多模態影像/語音處理架構）
 
@@ -49,7 +49,7 @@ updated: 2026-08-01
 | Phase | 內容 | 狀態 | 目標日期 | 備註 |
 | --- | --- | --- | --- | --- |
 | Phase 0 | 專案基礎建設（repo 結構、金鑰串接、Render/Neon/cron-job、DB 初始化） | 🟢 已完成 | 7/29～7/30 | 全部 Step 完成：`submodules/`、`src/schema/`、`src/migrations/`（ADR-11）骨架就緒；`/healthz` 已部署上線並掛上 cron-job.org；第一批 5 張表（`users`／`invite_codes`／`knowledge_base`／`conversation_logs`／`feature_toggles`）已核准並套用成功 |
-| Phase 1（MVP） | 核心平台（通關密碼對話式設定、歡迎訊息、`/rule`／`/function`／`/complaint` 內建指令、功能開關、Gemini 對話+知識庫、影像辨識、語音、個資遮蔽、基礎錯誤處理）＋待辦事項＋心情小記＋客訴收集 | 🟡 進行中 | 7/31～8/7 | Step 1.1、1.2、1.3、1.3a、1.3b 完成；FR-56 全面改版為總覽＋按需深入＋情境範例（FR-56a～FR-56d） |
+| Phase 1（MVP） | 核心平台（通關密碼對話式設定、歡迎訊息、`/rule`／`/function`／`/complaint` 內建指令、功能開關、Gemini 對話+知識庫、影像辨識、語音、個資遮蔽、基礎錯誤處理）＋待辦事項＋心情小記＋客訴收集 | 🟡 進行中 | 7/31～8/7 | Step 1.1、1.2、1.3、1.3a、1.3b、1.4 完成；FR-56 全面改版為總覽＋按需深入＋情境範例（FR-56a～FR-56d） |
 | Phase 2 | 記帳＋體態管理＋重要通知＋異常自主診斷與 GitHub PR 治理＋重試機制＋分級降級 | ⚪ 未開始 | 8/8～8/11 | Step 2.4～2.6 為新增範圍，技術複雜度最高，已獨立預留兩天；體態模組飲食分析需附誤差聲明（FR-17c） |
 | Phase 3 | 個人技能成長（TOEIC 雙軌題庫 Pipeline＋YouTube 技術情報模組，僅 Robin）＋好友模式 | ⚪ 未開始 | 8/12～8/14 | 新增 YouTube 模組（FR-57～FR-59，見 ADR-9）；TOEIC 語音處理改用 Groq Whisper（ADR-12） |
 | Phase 4 | 求職模組（104 爬蟲＋評分） | ⚪ 未開始 | 8/15～8/16 | 爬蟲策略已定案：每週一次、AJAX API、無登入態、禮貌性延遲、ETL 去重（FR-34a～FR-34d） |
@@ -100,6 +100,8 @@ updated: 2026-08-01
 | 2026-07-31 | Robin 確認 429 為真實額度超限（安全網運作正常），並確認 Step 1.3b 設計：`media_uploads` 表統一記錄圖片/語音 Drive 網址、壓縮版圖片僅記憶體內處理不落地存 Drive（修正 ADR-13）；建立 `media_uploads` migration 並 push |
 | 2026-07-31 | **Phase 1 Step 1.3b 完成**：影像辨識基礎流程，FR-17／FR-17a～FR-17c 全數完成；新增 `submodules/gdrive/`（僅上傳、Service Account 認證）、`TelegramClient.get_file_bytes()`、`src/bot/image.py`（`Pillow` 壓縮＋隨機挑選影像 Key＋`[NEED_CONFIRM]` 標記反問使用者）；`router.py`／`webhook.py` 完成圖片訊息與不支援格式的整合；全專案 179 個測試全過、覆蓋率 100% |
 | 2026-07-31 | Robin 換用新產生的 `GEMINI_API_BOT_KEY` 後，`generate_with_search()` 固定使用的 `gemini-2.5-flash` 回傳 404；排查後確認 Gemini 2.5 世代已對新專案關閉存取（用 curl 直測 `generateContent` 驗證，跟掛不掛 Google Search 工具無關），非額度問題；Robin 指示「移除所有會用到上網查詢的部分，查無答案就誠實回不知道，並建議使用者自行查詢後提供答案存檔」；新增 chat-core SPEC.md ADR-5（supersede ADR-1／ADR-2）、submodules-core SPEC.md ADR-8（supersede ADR-7）：`generate_with_search()` 全數移除，`pending_kb_save` 流程更名為 `pending_user_knowledge` 且不再需要 yes/no 確認；全專案 174 個測試全過、覆蓋率 100% |
+| 2026-08-01 | Robin 陸續回報並確認多項 chat-core 修正與新功能（日期幻覺、代名詞指涉、打字誤植先反問確認、`/clean-all-dialog`／`/clean-target-dialog`、主動新增知識等，詳見 [chat-core SPEC.md](../chat-core/SPEC.md) 變更記錄 ADR-6～ADR-8），全專案累計到 219 個測試、覆蓋率 100% |
+| 2026-08-01 | **Phase 1 Step 1.4 完成**：語音轉文字流程，FR-14／FR-15 全數完成；新增 `submodules/voice/`（`VoiceClient`，`requests` 直打 Groq Whisper OpenAI 相容 REST API，見 submodules-core SPEC.md ADR-9）、`src/bot/voice.py`（10 分鐘上限／15 分鐘修正窗口檢查、上傳 Drive＋轉文字）；架構決策：轉出來的文字直接呼叫既有 `router.handle_message()` 走完整文字流程，不重複指令/對話流程分派邏輯；`src/bot/media.py` 從 `image.py` 抽出共用的 `save_media_upload()`；全專案 252 個測試全過、`src/bot/`／`submodules/llm`／`submodules/voice` 覆蓋率 100% |
 
 ## 待決事項
 
@@ -112,6 +114,6 @@ updated: 2026-08-01
 
 ## 下一步
 
-1. **Step 1.4：語音轉文字流程**——改用 Groq Whisper（`VOICE_API_KEY`）、10 分鐘上限、15 分鐘內文字修正限制、語音檔上傳 Google Drive 備份（沿用 Step 1.3b 建好的 `media_uploads` 表，`media_type='audio'`）（FR-14、FR-15、ADR-12、ADR-13）
-2. 接續 Step 1.5（個資偵測與刪除機制）
+1. **Step 1.5：個資偵測與刪除機制**——Regex 硬規則 + LLM 語意雙層防線（FR-13、FR-13a～FR-13d）
+2. 接續 Step 1.6（基礎錯誤處理層）
 3. 每天對照「建議每日分配」檢查進度，落後時優先保住 Phase 1 核心體驗（對話核心、待辦、心情小記），Step 1.9 客訴收集等次要 Step 可延後不必硬趕

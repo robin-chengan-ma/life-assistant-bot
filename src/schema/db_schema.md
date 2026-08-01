@@ -268,3 +268,5 @@ COMMENT ON COLUMN media_uploads.created_at IS '上傳時間';
 - `media_type` 用 `CHECK` 限制 `image`／`audio` 兩種，Step 1.3b（影像）先用到 `image`，Step 1.4（語音）上線後共用同一張表寫入 `audio`，不必屆時另外提案建表
 - 只存 `gdrive_url`（原始檔）：Robin 2026-07-31 確認壓縮版圖片只在餵給 Gemini 前於記憶體內即時處理，不落地存回 Google Drive，因此表裡不需要壓縮版欄位（原提案的 `compressed_gdrive_url` 已移除，`original_gdrive_url` 更名為 `gdrive_url`）
 - `user_id` 索引對應最常見查詢「查某人上傳過的檔案」
+
+**2026-08-01 補充（Step 1.4）**：`media_type='audio'` 正式開始寫入（語音辨識，見 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) FR-14／FR-15）；`created_at` 除了記錄上傳時間，也是 FR-15「15 分鐘修正窗口」判斷的依據——查該使用者最近一筆 `audio` 記錄的 `created_at`，未滿 15 分鐘則拒絕新的語音訊息，見 `src/bot/voice.py` 的 `is_within_correction_window()`；沒有新增欄位，沿用既有 schema。

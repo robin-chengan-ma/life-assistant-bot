@@ -85,16 +85,7 @@ def test_build_upload_filename_accepts_custom_purpose():
     assert filename == "媽媽_20260731153000_飲食紀錄.jpg"
 
 
-# --- save_media_upload ---
-
-
-def test_save_media_upload_inserts_correct_row(fake_db):
-    image.save_media_upload(fake_db, user_id=1, media_type="image", gdrive_url="https://drive/x")
-
-    rows = fake_db.select("media_uploads", where="user_id = %s", params=(1,))
-    assert len(rows) == 1
-    assert rows[0]["media_type"] == "image"
-    assert rows[0]["gdrive_url"] == "https://drive/x"
+# --- save_media_upload：2026-08-01 已抽到 src/bot/media.py，見 test_media.py ---
 
 
 # --- handle_image_message ---

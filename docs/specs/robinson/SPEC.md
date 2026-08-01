@@ -3,7 +3,7 @@ title: Robinson — Robin 與家人們的生活小助手
 slug: robinson
 status: draft
 created: 2026-07-29
-updated: 2026-07-30
+updated: 2026-08-01
 owner: Robin
 ---
 
@@ -115,8 +115,8 @@ Robinson 是一個以 Telegram 為前台介面的家庭生活小助手，Robin �
   - [ ] FR-13b：LLM 語意辨識作為第二道防線，補足 Regex 無法涵蓋的變形寫法或上下文語意判斷
   - [ ] FR-13c：排除項目 — 生日與 LINE ID 不需遮蔽（生日作為背景邏輯資料使用，LINE ID 無輸入需求）
   - [ ] FR-13d：處理時機 — 凡符合上述 Regex 條件或經 LLM 語意判定為敏感個資者，在寫入 Log 或傳送至外部 API 前，一律強制轉換為星號遮蔽（Masking）
-- [ ] FR-14：語音訊息超過 10 分鐘強制中斷處理，並提醒使用者語音長度限制
-- [ ] FR-15：語音轉文字結果如需修正，僅能用打字編輯；自該筆語音訊息送出起 15 分鐘內，若使用者仍嘗試用語音修正，Robinson 需拒絕並提醒改用打字，不得執行語音轉文字；超過 15 分鐘後，語音模式恢復可用，不再限制
+- [x] FR-14：語音訊息超過 10 分鐘強制中斷處理，並提醒使用者語音長度限制（2026-08-01 完成，見 `src/bot/voice.py` 的 `exceeds_duration_limit()`：用 Telegram 訊息本身就帶的 `duration` 秒數判斷，不需要先下載檔案就能擋下，避免浪費 Drive／Groq 額度）
+- [x] FR-15：語音轉文字結果如需修正，僅能用打字編輯；自該筆語音訊息送出起 15 分鐘內，若使用者仍嘗試用語音修正，Robinson 需拒絕並提醒改用打字，不得執行語音轉文字；超過 15 分鐘後，語音模式恢復可用，不再限制（2026-08-01 完成，見 `src/bot/voice.py` 的 `is_within_correction_window()`：查該使用者 `media_uploads` 最近一筆 `audio` 記錄的時間判斷，不需要額外的資料表或記憶體狀態；被擋下的嘗試不會產生新記錄、不會延長窗口）
 - [ ] FR-16：Robinson 不自行腦補做決策，涉及寫入/修改資料庫的操作前一律先與使用者確認
 - [x] FR-17：開放接受一般圖片供 Robinson 辨識使用（不再侷限於「證照題目」用途），但僅支援圖片與音檔兩種檔案類型；使用者上傳 PDF、Excel、PPT 等其他格式檔案時，模型無法直接處理，須明確告知使用者「這個檔案格式我沒辦法處理喔，只能看懂圖片和音檔」並說明原因，不可靜默忽略或誤導使用者以為已處理（**2026-07-31 完成**：`webhook.py` 的 `_extract_unsupported_file` 偵測 document/video/video_note/animation/sticker 直接回拒絕文案；voice/audio 依規格本來就該支援，暫沿用忽略不回覆，留給 Step 1.4 補上）：
   - [x] FR-17a：個資影像警語 — 使用者上傳任何影像前，必須被告知「不准上傳包含個人資料的影像，後果需自行承擔」，此警語記錄於附錄A使用須知，供使用者事前知悉
@@ -530,7 +530,7 @@ Robinson 是一個以 Telegram 為前台介面的家庭生活小助手，Robin �
 - [x] Step 1.3：Gemini 對話核心，整合四類知識庫與資安隔離（FR-9～FR-12）、人格化語氣（FR-56c），展開為獨立 [docs/specs/chat-core/SPEC.md](../chat-core/SPEC.md)；查無答案時單次呼叫誠實回報不知道，建議使用者自行查詢後提供答案存入客製知識庫（**2026-07-31 修正**：原本為 Google Search grounding，已移除，見 chat-core SPEC.md ADR-5）；`GEMINI_API_IMAGE_KEY1`/`KEY2`/`GEMINI_API_TEXT_KEY` 三把 Key 依用途分流（ADR-12）留待 Step 1.3b／未來文字生成類功能實際用到時才接上
 - [x] Step 1.3a：`/function` 重新實作為「總覽 + 按需深入 + 情境範例」（FR-56、FR-56a～FR-56h），展開為獨立 [docs/specs/chat-core/SPEC.md](../chat-core/SPEC.md) FR-9／ADR-4；取代 Step 1.1 的扁平清單版本；全專案 126 個測試全過、`src/bot/` 覆蓋率 100%
 - [x] Step 1.3b：影像辨識基礎流程（FR-17、FR-17a～FR-17c）——先上傳 Google Drive、`Pillow` 壓縮至 1024×1024 內／JPEG 80%、影像雙 Key 隨機辨識（ADR-12、ADR-13）、不確定內容需詢問使用者、非圖片/音檔格式的友善提示；新增 `submodules/gdrive/`、`TelegramClient.get_file_bytes`、`src/bot/image.py`，`webhook.py`/`router.py` 完成整合；全專案 179 個測試全過、`src/bot/`／`submodules/gdrive`／`submodules/telegram`／`submodules/llm` 覆蓋率 100%
-- [ ] Step 1.4：語音轉文字流程（改用 Groq Whisper，`VOICE_API_KEY`，見 ADR-12）+ 10 分鐘上限 + 15 分鐘內文字修正限制（FR-14、FR-15）+ 語音檔上傳 Google Drive 備份（ADR-13）
+- [x] Step 1.4：語音轉文字流程（改用 Groq Whisper，`VOICE_API_KEY`，見 ADR-12）+ 10 分鐘上限 + 15 分鐘內文字修正限制（FR-14、FR-15）+ 語音檔上傳 Google Drive 備份（ADR-13）——新增 `submodules/voice/`（`VoiceClient`，用 `requests` 直打 Groq OpenAI 相容 REST API）、`src/bot/voice.py`（時長/修正窗口檢查、上傳＋轉文字）；轉出來的文字直接比照一般文字訊息呼叫既有 `handle_message()`，不重複指令/對話流程分派邏輯；`src/bot/media.py` 從 `image.py` 抽出共用的 `save_media_upload()`；全專案 252 個測試全過、`src/bot/`／`submodules/llm`／`submodules/voice` 覆蓋率 100%
 - [ ] Step 1.5：個資偵測與刪除機制，Regex 硬規則 + LLM 語意雙層防線（FR-13、FR-13a～FR-13d）
 - [ ] Step 1.6：基礎錯誤處理層 —— 對外「生病了」/「我康復了」用語、捕獲異常＋完整 Traceback 記錄、私訊 Robin 原始 log（FR-19a、FR-20、FR-21；FR-19b～FR-19i 的 AI 自主診斷、分級降級、重試機制延後至 Phase 2，見 Step 2.4 與 ADR-7）
 - [ ] Step 1.7：待辦事項模組（FR-31、FR-32）
@@ -724,3 +724,4 @@ FR-56 的 `/function` 路由目前只定義了「回傳範圍」（所有功能�
 | 2026-08-01 | Robin 測試又回報四個問題：① `/clean-all-dialog` 沒先確認就直接刪除，補強 chat-core SPEC.md FR-10：先告知目前對話紀錄筆數並反問確認，使用者確認後才真正執行 ② Robin 請 Robinson 把家庭成員背景新增到知識庫，Robinson 謊稱已新增（實際上沒有寫入路徑），新增 FR-3(g) 誠實性規則，禁止在沒有實際寫入的情況下宣稱已記錄 ③ 新增 migration 寫入阿牛（牛牛，Robin 家的狗）與龜龜（Robin 爸爸養的蘇卡達陸龜）兩筆寵物背景至 `general_family` 知識庫 ④ 問「阿牛是誰」被誤反問「你是說『吳凱吉』嗎？」，修正打字誤植反問規則，要求必須帶出資料中真實存在且高度相似的人名 | Robin |
 | 2026-08-01 | Robin 指示「主動記知識的功能、/clean-target-dialog API 現在先開發吧」，展開 chat-core SPEC.md FR-11（主動新增知識）與 FR-12（`/clean-target-dialog`），新增 ADR-8：共用知識庫（`general_family`／`general_persona`）的寫入與刪除一律限定 Robin（Owner），非 Owner 只能操作自己的 `custom` 知識庫與自己的對話紀錄；新增 `knowledge_base.label` 分類/標籤欄位（`0012_add_label_to_knowledge_base.sql`）；沿用 ADR-6/ADR-7 的兩輪反問確認架構；全專案 219 個測試全過、覆蓋率 100% | Robin |
 | 2026-07-31 | Robin 持續撞到 429，經 AI Studio Rate Limit 頁面實測發現 `gemini-flash-latest` 別名解析到的 Gemini 3.6 Flash 免費層只有 RPM 5／RPD 20，遠低於原本假設的 10～15 RPM／1500 RPD；新增 submodules-core SPEC.md ADR-6：改用明確指定版本的 `gemini-3.5-flash-lite`（實測 RPM 15／RPD 500，同屬 Gemini 家族、零相容性風險），Gemma 4（實測 RPM 30／RPD 14,400）與開通計費升級留待額度仍不夠用時再評估 | Claude（依 Robin「好啊，麻煩你了」指示） |
+| 2026-08-01 | **Phase 1 Step 1.4 完成**：語音轉文字流程（FR-14、FR-15），新增 `submodules/voice/`（`VoiceClient`，用 `requests` 直打 Groq OpenAI 相容 REST API `https://api.groq.com/openai/v1/audio/transcriptions`，不安裝官方 `groq` SDK，比照 `submodules/telegram` 的作法）、`src/bot/voice.py`（`exceeds_duration_limit()`／`is_within_correction_window()`／`transcribe_and_upload()`）；架構決策：轉出來的文字不另建獨立流程，直接呼叫既有 `router.handle_message()` 走完整指令/pending flow/一般聊天分派，語音只負責「變成文字」；`src/bot/media.py` 從 `image.py` 抽出共用的 `save_media_upload()`，讓 `voice.py` 不需要依賴 `image.py`；`media_uploads` 表首次真正寫入 `media_type='audio'`（Step 1.3b 時已預留）；全專案 252 個測試全過、`src/bot/`／`submodules/llm`／`submodules/voice` 覆蓋率 100% | Claude（依 Robin「好」指示） |

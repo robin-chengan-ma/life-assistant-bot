@@ -3,10 +3,15 @@ import re
 
 from submodules.cloudsql.client import CloudSQLClient
 
-from src.bot import auth, chat, commands, image, templates, toggles
+from src.bot import auth, chat, commands, image, templates, toggles, voice
 from src.bot.state import ConversationStateStore
 
 _NOT_BOUND_REPLY = "請輸入通關密碼才能開始使用羅賓森喔！"
+
+# 2026-08-01（Step 1.4，robinson SPEC.md FR-14／FR-15）：語音訊息的兩種擋下情境固定文案，
+# 都在下載/上傳/轉文字之前就先擋下，避免浪費 Drive／Groq 額度，見 src/bot/voice.py 模組 docstring。
+_VOICE_DURATION_LIMIT_REPLY = "這則語音超過 10 分鐘囉，我沒辦法處理這麼長的語音，麻煩分段傳送或改用打字喔！"
+_VOICE_CORRECTION_WINDOW_REPLY = "你剛剛才傳過語音，15 分鐘內麻煩先用打字修正或補充喔，超過 15 分鐘語音模式就會自動恢復！"
 
 _SET_INVITE_CODES_TRIGGERS = {"/set_invite_codes", "設定通關密碼"}
 _RULE_TRIGGERS = {"/rule", "我要看使用規則"}
@@ -143,6 +148,49 @@ def handle_photo_message(
         user["role"],
         image_bytes,
         caption,
+    )
+
+
+def handle_voice_message(
+    db: CloudSQLClient,
+    state_store: ConversationStateStore,
+    telegram_user_id: int,
+    file_id: str,
+    duration_seconds: int | None,
+    telegram_client,
+    gdrive_client,
+    voice_client,
+    llm_client=None,
+    text_llm_client=None,
+) -> str:
+    """處理使用者傳來的語音訊息（對應 robinson SPEC.md FR-14、FR-15、ADR-12、ADR-13）。
+
+    FR-14（10 分鐘上限）／FR-15（15 分鐘修正窗口）刻意排在下載語音檔之前檢查，通過後才
+    下載、上傳 Drive、記錄 media_uploads、呼叫 Groq Whisper 轉文字（見 src/bot/voice.py
+    模組 docstring）。轉出來的文字不會另外走一套獨立流程，而是直接當成使用者「打字輸入」，
+    呼叫既有的 `handle_message()` 走完整的指令/pending flow/一般聊天分派——這是 Step 1.4
+    刻意的架構選擇：語音只負責「變成文字」，「文字要怎麼處理」全部復用既有邏輯，不重複。
+    """
+    user = _get_identified_user(db, telegram_user_id)
+    if user is None:
+        return _NOT_BOUND_REPLY
+
+    if voice.exceeds_duration_limit(duration_seconds):
+        return _VOICE_DURATION_LIMIT_REPLY
+    if voice.is_within_correction_window(db, user["id"]):
+        return _VOICE_CORRECTION_WINDOW_REPLY
+
+    # 比照 handle_photo_message：新語音訊息直接覆蓋任何未完成的舊流程狀態，避免卡死。
+    state_store.clear(telegram_user_id)
+
+    voice_bytes = telegram_client.get_file_bytes(file_id)
+    transcribed_text = voice.transcribe_and_upload(
+        db, gdrive_client, voice_client, user["id"], user["role"], voice_bytes
+    )
+
+    return handle_message(
+        db, state_store, telegram_user_id, transcribed_text,
+        llm_client=llm_client, text_llm_client=text_llm_client,
     )
 
 

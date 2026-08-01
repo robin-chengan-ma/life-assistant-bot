@@ -79,9 +79,31 @@ def test_extract_unsupported_file_detects_sticker():
 
 
 def test_extract_unsupported_file_ignores_voice():
-    # voice/audio 依 FR-17 本來就該支援，只是 Step 1.4 還沒實作，沿用「忽略、不回覆」的既有行為
+    # voice（語音訊息）Step 1.4 已支援，走 _extract_voice()，不落在「不支援格式」判斷內
     payload = {"message": {"from": {"id": 123}, "voice": {"file_id": "voice1"}}}
     assert webhook._extract_unsupported_file(payload) is None
+
+
+# --- _extract_voice：純函式 ---
+
+
+def test_extract_voice_returns_none_when_no_voice():
+    assert webhook._extract_voice({"message": {"from": {"id": 123}, "text": "hi"}}) is None
+
+
+def test_extract_voice_returns_file_id_and_duration():
+    payload = {"message": {"from": {"id": 123}, "voice": {"file_id": "v1", "duration": 42}}}
+    assert webhook._extract_voice(payload) == (123, "v1", 42)
+
+
+def test_extract_voice_returns_none_when_file_id_missing():
+    payload = {"message": {"from": {"id": 123}, "voice": {"duration": 42}}}
+    assert webhook._extract_voice(payload) is None
+
+
+def test_extract_voice_returns_none_duration_when_missing():
+    payload = {"message": {"from": {"id": 123}, "voice": {"file_id": "v1"}}}
+    assert webhook._extract_voice(payload) == (123, "v1", None)
 
 
 # --- Flask route：mock 掉 DB / Telegram / router，只驗證接線邏輯 ---
@@ -371,6 +393,83 @@ def test_webhook_photo_message_swallows_unexpected_exception(client, monkeypatch
     monkeypatch.setattr(webhook, "TelegramClient", MagicMock(return_value=mock_telegram_instance))
 
     payload = {"message": {"from": {"id": 123}, "photo": [{"file_id": "abc"}]}}
+    response = client.post("/telegram/webhook", json=payload)
+
+    assert response.status_code == 200
+    mock_db_instance.close.assert_called_once()
+    mock_telegram_instance.send_text.assert_called_once_with(
+        chat_id=123, text=webhook._UNEXPECTED_ERROR_REPLY
+    )
+
+
+def _set_voice_env(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("GDRIVE_KEY_FILE_PATH", "fake-key.json")
+    monkeypatch.setenv("GDRIVE_FOLDER_ID", "fake-folder-id")
+    monkeypatch.setenv("VOICE_API_KEY", "fake-voice-key")
+    monkeypatch.setenv("GEMINI_API_BOT_KEY", "fake-gemini-bot-key")
+    monkeypatch.setenv("GEMINI_API_TEXT_KEY", "fake-gemini-text-key")
+
+
+def test_webhook_routes_voice_message_and_sends_reply(client, monkeypatch):
+    _set_voice_env(monkeypatch)
+
+    mock_handle_voice_message = MagicMock(return_value="好的，已經記下來了！")
+    monkeypatch.setattr(webhook, "handle_voice_message", mock_handle_voice_message)
+
+    mock_db_instance = MagicMock()
+    monkeypatch.setattr(webhook, "CloudSQLClient", MagicMock(return_value=mock_db_instance))
+
+    mock_gdrive_instance = MagicMock()
+    mock_gdrive_cls = MagicMock(return_value=mock_gdrive_instance)
+    monkeypatch.setattr(webhook, "GDriveClient", mock_gdrive_cls)
+
+    mock_voice_instance = MagicMock()
+    mock_voice_cls = MagicMock(return_value=mock_voice_instance)
+    monkeypatch.setattr(webhook, "VoiceClient", mock_voice_cls)
+
+    mock_telegram_instance = MagicMock()
+    monkeypatch.setattr(webhook, "TelegramClient", MagicMock(return_value=mock_telegram_instance))
+
+    mock_llm_client_cls = MagicMock()
+    monkeypatch.setattr(webhook, "LLMClient", mock_llm_client_cls)
+
+    payload = {"message": {"from": {"id": 123}, "voice": {"file_id": "voice1", "duration": 42}}}
+    response = client.post("/telegram/webhook", json=payload)
+
+    assert response.status_code == 200
+    mock_gdrive_cls.assert_called_once_with(key_file_path="fake-key.json", folder_id="fake-folder-id")
+    mock_voice_cls.assert_called_once_with(api_key="fake-voice-key")
+    assert mock_llm_client_cls.call_count == 2
+    mock_llm_client_cls.assert_any_call(api_key="fake-gemini-bot-key")
+    mock_llm_client_cls.assert_any_call(api_key="fake-gemini-text-key")
+    mock_handle_voice_message.assert_called_once()
+    call_args = mock_handle_voice_message.call_args.args
+    assert call_args[0] is mock_db_instance
+    assert call_args[1] is webhook._state_store
+    assert call_args[2] == 123
+    assert call_args[3] == "voice1"
+    assert call_args[4] == 42
+    mock_db_instance.close.assert_called_once()
+    mock_telegram_instance.send_text.assert_called_once_with(chat_id=123, text="好的，已經記下來了！")
+
+
+def test_webhook_voice_message_swallows_unexpected_exception(client, monkeypatch):
+    _set_voice_env(monkeypatch)
+
+    monkeypatch.setattr(
+        webhook, "handle_voice_message", MagicMock(side_effect=RuntimeError("Groq API 掛了"))
+    )
+    mock_db_instance = MagicMock()
+    monkeypatch.setattr(webhook, "CloudSQLClient", MagicMock(return_value=mock_db_instance))
+    monkeypatch.setattr(webhook, "GDriveClient", MagicMock())
+    monkeypatch.setattr(webhook, "VoiceClient", MagicMock())
+    monkeypatch.setattr(webhook, "LLMClient", MagicMock())
+
+    mock_telegram_instance = MagicMock()
+    monkeypatch.setattr(webhook, "TelegramClient", MagicMock(return_value=mock_telegram_instance))
+
+    payload = {"message": {"from": {"id": 123}, "voice": {"file_id": "voice1", "duration": 42}}}
     response = client.post("/telegram/webhook", json=payload)
 
     assert response.status_code == 200

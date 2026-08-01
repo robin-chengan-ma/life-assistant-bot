@@ -237,3 +237,14 @@
 **對應 FR**：FR-17b
 
 **備註**：帶著使用者的澄清文字，重新呼叫同一把 LLM Key、用同一份已壓縮的圖片 bytes（記憶體內狀態，不重新下載）分析一次，這次 prompt 明確要求不能再要求澄清、必須給出最終答案。
+
+---
+
+### 語音訊息（內部路由，非對外 HTTP 端點）
+
+**狀態**：已實作（`src/bot/router.py::handle_voice_message`、`src/bot/voice.py`，Step 1.4，見 robinson SPEC.md FR-14、FR-15、ADR-12、ADR-13）
+**觸發方式**：使用者傳送語音訊息（`message.voice`），`webhook.py::_extract_voice` 取出 `file_id` 與 `duration`（秒）
+**權限**：任何已驗證使用者（Robin 或家人）；未綁定通關密碼者直接回覆提示訊息，不消耗任何 Drive/Groq 額度
+**對應 FR**：FR-14、FR-15
+
+**備註**：FR-14（10 分鐘上限）／FR-15（15 分鐘修正窗口）刻意排在下載語音檔之前檢查（不需要下載/呼叫任何外部服務），避免浪費額度：FR-14 直接用 Telegram 訊息本身帶的 `duration` 秒數判斷；FR-15 查該使用者 `media_uploads` 最近一筆 `audio` 記錄的時間判斷，被擋下的嘗試不會產生新記錄、不會延長窗口。通過檢查後才透過 `TelegramClient.get_file_bytes()` 下載原始語音檔 → 上傳到 Google Drive（`submodules/gdrive/`）並寫入 `media_uploads`（`media_type='audio'`，不落地存壓縮版，語音本身不需要壓縮）→ 呼叫 `submodules/voice/` 的 `VoiceClient`（Groq Whisper）轉出文字。**架構決策**：轉出來的文字不會另外走一套獨立流程，而是直接當成使用者「打字輸入」，呼叫既有的 `handle_message()` 走完整的指令/pending flow/一般聊天分派——語音只負責「變成文字」，「文字要怎麼處理」全部復用既有邏輯。使用者傳來語音時，若原本卡在其他未完成的對話流程，會直接清除舊流程狀態、以這次語音轉出的文字為準（比照圖片訊息的既有慣例）。

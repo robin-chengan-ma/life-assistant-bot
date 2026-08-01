@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from io import BytesIO
 
 from PIL import Image
@@ -634,4 +635,122 @@ def test_pending_image_confirm_flow_continues_via_router(fake_db, monkeypatch):
     )
 
     assert reply == "確認後：這是茄子"
+    assert store.get(FAMILY_ID) is None
+
+
+# --- 語音辨識（robinson SPEC.md FR-14、FR-15、Step 1.4）---
+
+
+class _FakeVoiceClient:
+    def __init__(self, response_text="/rule"):
+        self.response_text = response_text
+        self.last_audio_bytes = None
+
+    def transcribe(self, audio_bytes, filename="audio.ogg", mime_type="audio/ogg"):
+        self.last_audio_bytes = audio_bytes
+        return self.response_text
+
+
+def test_handle_voice_message_rejects_unbound_family_member(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    store = ConversationStateStore()
+
+    reply = router.handle_voice_message(
+        fake_db, store, FAMILY_ID, "voice123", 30,
+        _FakeTelegramClient(b"raw-ogg"), _FakeGDriveClient(), _FakeVoiceClient(),
+    )
+
+    assert "通關密碼" in reply
+
+
+def test_handle_voice_message_rejects_when_over_duration_limit(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+    telegram_client = _FakeTelegramClient(b"raw-ogg")
+
+    reply = router.handle_voice_message(
+        fake_db, store, FAMILY_ID, "voice123", 601,
+        telegram_client, _FakeGDriveClient(), _FakeVoiceClient(),
+    )
+
+    assert reply == router._VOICE_DURATION_LIMIT_REPLY
+    assert telegram_client.last_file_id is None  # 超過上限不該去下載語音檔
+    assert fake_db.select("media_uploads") == []
+
+
+def test_handle_voice_message_rejects_within_correction_window(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    fake_db.insert(
+        "media_uploads",
+        {
+            "user_id": user_id,
+            "media_type": "audio",
+            "gdrive_url": "https://drive/prev",
+            "created_at": datetime.now(timezone.utc),
+        },
+    )
+    store = ConversationStateStore()
+    telegram_client = _FakeTelegramClient(b"raw-ogg")
+
+    reply = router.handle_voice_message(
+        fake_db, store, FAMILY_ID, "voice123", 30,
+        telegram_client, _FakeGDriveClient(), _FakeVoiceClient(),
+    )
+
+    assert reply == router._VOICE_CORRECTION_WINDOW_REPLY
+    assert telegram_client.last_file_id is None  # 修正窗口內不該去下載語音檔
+    assert len(fake_db.select("media_uploads")) == 1  # 沒有新增第二筆
+
+
+def test_handle_voice_message_transcribes_and_routes_as_text(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+    telegram_client = _FakeTelegramClient(b"raw-ogg-bytes")
+    voice_client = _FakeVoiceClient(response_text="/rule")
+
+    reply = router.handle_voice_message(
+        fake_db, store, FAMILY_ID, "voice123", 30,
+        telegram_client, _FakeGDriveClient(), voice_client,
+    )
+
+    # 轉出來的文字（"/rule"）比照一般文字訊息，走完整的指令分派
+    assert reply == templates.APPENDIX_A_TEXT
+    assert telegram_client.last_file_id == "voice123"
+    assert voice_client.last_audio_bytes == b"raw-ogg-bytes"
+    rows = fake_db.select("media_uploads")
+    assert len(rows) == 1
+    assert rows[0]["media_type"] == "audio"
+
+
+def test_handle_voice_message_works_for_owner(fake_db, monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
+    store = ConversationStateStore()
+    voice_client = _FakeVoiceClient(response_text="/rule")
+
+    reply = router.handle_voice_message(
+        fake_db, store, ROBIN_ID, "voice999", 30,
+        _FakeTelegramClient(b"raw-ogg"), _FakeGDriveClient(), voice_client,
+    )
+
+    assert reply == templates.APPENDIX_A_TEXT
+    owner_row = fake_db.select("users", where="telegram_user_id = %s", params=(ROBIN_ID,), fetch_one=True)
+    assert owner_row is not None
+
+
+def test_handle_voice_message_clears_stale_pending_flow_first(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+    store.set(FAMILY_ID, {"flow": "pending_user_knowledge", "target_user_id": 1})
+    voice_client = _FakeVoiceClient(response_text="/rule")
+
+    reply = router.handle_voice_message(
+        fake_db, store, FAMILY_ID, "voice123", 30,
+        _FakeTelegramClient(b"raw-ogg"), _FakeGDriveClient(), voice_client,
+    )
+
+    assert reply == templates.APPENDIX_A_TEXT
     assert store.get(FAMILY_ID) is None

@@ -3,7 +3,7 @@ title: Submodules — 共用子模組基礎骨架
 slug: submodules-core
 status: draft
 created: 2026-07-29
-updated: 2026-07-31
+updated: 2026-08-01
 owner: Robin
 ---
 
@@ -27,7 +27,17 @@ submodules/
 │   ├── client.py
 │   ├── requirements.txt
 │   └── README.md
-└── telegram/
+├── telegram/
+│   ├── .env.example
+│   ├── client.py
+│   ├── requirements.txt
+│   └── README.md
+├── gdrive/
+│   ├── .env.example
+│   ├── client.py
+│   ├── requirements.txt
+│   └── README.md
+└── voice/
     ├── .env.example
     ├── client.py
     ├── requirements.txt
@@ -45,6 +55,7 @@ submodules/
 - [x] FR-5：所有連線資訊（DB 連線字串、Bot Token、API Key）一律由外部呼叫端注入或讀取環境變數，子模組內部不得寫死任何金鑰
 - [x] FR-6：每個子模組資料夾一律只包含 `client.py`、`README.md`、`requirements.txt`、`.env.example` 四個檔案，不得拆成多個 `.py` 檔、不得加 `__init__.py`（見 ADR-4）
 - [x] FR-7（2026-07-31 新增，見 ADR-5）：`llm.client.LLMClient` 內建本地端節流保護 —— 呼叫 `generate_text`／`generate_with_image`／`generate_with_search` 任一方法前，先檢查「最近 60 秒內以同一把 `api_key` 呼叫的次數」，超過門檻（預設 8 次／分鐘）直接拋 `LLMQuotaGuardError`、不送出請求；門檻可透過建構子 `max_calls_per_minute` 參數調整
+- [x] FR-8（2026-08-01 新增，見 ADR-9）：`submodules/voice` 提供語音轉文字 Client（`VoiceClient.transcribe()`）；目前實際串接 Groq Whisper API，用 `requests` 直接呼叫其 OpenAI 相容 REST 端點，不安裝官方 `groq` SDK
 
 ### 非功能性需求
 
@@ -206,6 +217,29 @@ submodules/
 
 **狀態**：accepted
 
+### ADR-9：`voice` Client 用 `requests` 直接呼叫 Groq Whisper 的 OpenAI 相容 REST API，不安裝官方 `groq` SDK
+
+**背景**：Step 1.4（語音轉文字，見 robinson SPEC.md FR-14／FR-15、ADR-12）需要一個 Groq Whisper 語音轉文字的 Client。Groq 官方提供 Python SDK（`groq` 套件），但 Whisper 轉錄端點（`POST /openai/v1/audio/transcriptions`）本質上是單純的 multipart 檔案上傳，跟 `submodules/telegram`（ADR-2）／`submodules/gdrive` 面對的情況類似：不需要一整包 SDK 就能完成需求。
+
+**選項**：
+| 方案 | 優點 | 缺點 |
+|------|------|------|
+| A：`requests` 直接呼叫 REST 端點 | 零額外重量依賴（`requests` 本來就是專案既有依賴）、介面單純、與 `telegram`／`gdrive` 子模組的既有慣例一致 | 需要自己組 multipart payload，若 Groq API 之後新增更多進階功能（例如串流）需要自己補 |
+| B：安裝官方 `groq` SDK | 官方維護、功能覆蓋更完整（例如未來的 TTS、Chat Completions） | 目前只需要「語音轉文字」這一個能力，安裝整包 SDK 是過度工程；且會讓 `submodules/voice/requirements.txt` 多一個依賴，增加子模組「可攜帶到其他專案」的安裝成本 |
+
+**決策**：採方案 A（2026-08-01）
+
+**理由**：與 ADR-2（telegram）一貫的判斷基準一致——本專案面對的是「單一 REST 端點」而不是「一整套需要 SDK 抽象的能力」，`requests` 已經是專案既有依賴，不需要為了一個端點多裝一包 SDK；未來若 Groq 語音相關能力擴增到需要更完整的 SDK 支援，可以再評估升級。
+
+**替代方案**：官方 `groq` SDK（方案 B）——已否決，理由見上表。
+
+**後果**：
+- `submodules/voice/client.py`：`VoiceClient.transcribe(audio_bytes, filename, mime_type) -> str`，`response_format="text"` 讓 Groq 直接回傳純文字 body，不用另外解析 JSON
+- `submodules/voice/requirements.txt` 只需要 `requests`
+- 若之後語音功能擴增（例如需要逐字時間戳記 `timestamp_granularities`），只需要在 `transcribe()` 內部擴充參數，對外介面不必變動
+
+**狀態**：accepted
+
 ## 實作計畫
 
 ### Phase 0（對應 robinson SPEC.md 的 Step 0.1a）：建立子模組骨架
@@ -217,6 +251,7 @@ submodules/
 - [x] Step S.5：改版重構 — 刪除舊版 `neon_postgres/`、`telegram_client/`、`gemini_client/`（含各自的 `__init__.py`、`connection.py`、`crud.py`、`sender.py`），統一為 ADR-4 的四檔案結構，並將三個 Client 改為 class 寫法（`CloudSQLClient`、`TelegramClient`、`LLMClient`）
 - [ ] Step S.6：撰寫對應單元測試（見下方「測試策略」）—— `llm.client.LLMClient` 已於 Phase 1 Step 1.3 補上（2026-07-31），並於同日追加 ADR-5 本地端節流保護測試；`telegram.client.TelegramClient` 已於 Step 1.3b 補上（2026-07-31，6 個測試，覆蓋率 100%，含 `get_file_bytes`）；`cloudsql` 仍待對應功能實際串接時補上
 - [x] Step S.7：建立 `submodules/gdrive/`（`client.py`、`README.md`、`requirements.txt`、`.env.example`），Step 1.3b 影像辨識需要（2026-07-31）——刻意只暴露 `upload_file()`，不做下載/列表/刪除，避免建置用不到的能力
+- [x] Step S.8（2026-08-01，見 ADR-9）：建立 `submodules/voice/`（`client.py`、`README.md`、`requirements.txt`、`.env.example`），Step 1.4 語音轉文字需要——`VoiceClient.transcribe()`，用 `requests` 直打 Groq Whisper 的 OpenAI 相容 REST API，不安裝官方 `groq` SDK
 
 ## 測試策略
 
@@ -228,6 +263,7 @@ submodules/
 - [x] `llm.client.LLMClient`：mock `genai.Client`，驗證 `generate_text`/`generate_with_image` 呼叫參數正確；空 `api_key` 應拋出 `ValueError`（2026-07-31 依 ADR-8 移除 `generate_with_search` 測試，見 [chat-core SPEC.md](../chat-core/SPEC.md)）
 - [x] `llm.client.LLMClient` 本地端節流保護（ADR-5，2026-07-31，4 個測試）：超過門檻拋 `LLMQuotaGuardError` 且不呼叫底層 SDK／同一 `api_key` 跨 instance 共用計數／不同 `api_key` 互不影響／時間視窗過期後計數重置
 - [x] `gdrive.client.GDriveClient`：mock `service_account.Credentials.from_service_account_file`／`googleapiclient.discovery.build`，驗證 `upload_file()` 帶正確 `filename`/`parents`/`mimetype`，回傳 `webViewLink`；空 `key_file_path`／`folder_id` 應拋出 `ValueError`（2026-07-31，4 個測試，覆蓋率 100%）
+- [x] `voice.client.VoiceClient`（2026-08-01，ADR-9，6 個測試，覆蓋率 100%）：mock `requests.post`，驗證 `transcribe()` 組出正確的 multipart payload（`headers`／`files`／`data`）、回傳去除頭尾空白的純文字、支援自訂 `model`／`filename`／`mime_type`；空 `api_key` 應拋出 `ValueError`；底層 request 失敗（`raise_for_status()` 拋例外）應往外拋，不吞例外
 
 ### Integration Tests
 - [ ] `cloudsql`：對測試用 Neon 分支資料庫實際下 CRUD，確認連線池可正常取得/歸還連線
@@ -258,3 +294,4 @@ submodules/
 | 2026-07-31 | 換模型後 `generate_with_search()` 仍持續 429；逐步排查（新 Key／新專案測純文字成功、掛搜尋工具後同樣 429）後，Robin 於 AI Studio「Tools」區塊發現 Google Search grounding 免費額度依模型世代分桶：Gemini 2／2.5 世代有 1,500 次/天免費額度，**Gemini 3 世代（含 `gemini-3.5-flash-lite`）免費額度是 0**（官方定價頁證實：Gemini 3 使用 grounding 一律計費，免費層不提供）；新增 ADR-7：`generate_with_search()` 固定改用 `gemini-2.5-flash-lite`，其餘方法維持 ADR-6 的 `gemini-3.5-flash-lite`；同時盤點所有功能模組，確認只有一般聊天核心依賴 grounding，104／YouTube 走各自獨立官方 API 不受影響 | Claude（依 Robin「好，麻煩你了」指示） |
 | 2026-07-31 | Robin 實測發現 `gemini-2.5-flash-lite` 在 AI Studio 不可選用，修正 ADR-7：`_SEARCH_MODEL` 改為 `gemini-2.5-flash`（同世代、享有相同的 1,500 次/天免費 grounding 額度） | Claude（依 Robin 回報指示） |
 | 2026-07-31 | Robin 換用新產生的 `GEMINI_API_BOT_KEY` 後 `gemini-2.5-flash` 回傳 404，排查後確認為 Gemini 2.5 世代對新專案關閉存取（非額度／掛工具問題），新增 ADR-8（supersede ADR-7）：`generate_with_search()`／`_SEARCH_MODEL`／`_used_search()` 全數移除；相關測試更新，全專案 174 個測試全過、覆蓋率 100%（見 [chat-core SPEC.md](../chat-core/SPEC.md) ADR-5） | Claude（依 Robin「移除所有上網查詢的部分」指示） |
+| 2026-08-01 | Phase 1 Step 1.4（語音轉文字）需要：新增 Step S.8、FR-8、ADR-9：建立 `submodules/voice/`（`VoiceClient`，用 `requests` 直打 Groq Whisper OpenAI 相容 REST API，不安裝官方 `groq` SDK，比照 `telegram` 子模組的 ADR-2 慣例）；同步補上頂部骨架示意圖遺漏已久的 `gdrive/` 資料夾；全專案 252 個測試全過、覆蓋率 100% | Claude（依 Robin「好」指示） |
