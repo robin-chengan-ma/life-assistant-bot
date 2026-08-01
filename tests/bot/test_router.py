@@ -17,8 +17,10 @@ class _FakeLLMClient:
 
     def __init__(self, response_text="這是聊天核心的回答"):
         self.response_text = response_text
+        self.last_prompt = None
 
     def generate_text(self, prompt):
+        self.last_prompt = prompt
         return self.response_text
 
 
@@ -420,6 +422,82 @@ def test_clean_all_dialog_confirm_flow_keeps_logs_when_user_cancels(fake_db, mon
     assert store.get(FAMILY_ID) is None
     logs = fake_db.select("conversation_logs", where="user_id = %s AND deleted_at IS NULL", params=(user_id,))
     assert len(logs) == 1
+
+
+def test_pending_save_knowledge_confirm_flow_dispatches_via_router(fake_db, monkeypatch):
+    # 2026-08-01（FR-11）：主動新增知識反問確認後，下一輪要正確分派到 commands 執行寫入。
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+    store.set(
+        FAMILY_ID,
+        {"flow": "pending_save_knowledge_confirm", "target_user_id": user_id, "original_request": "幫我存SOP"},
+    )
+    llm_client = _FakeLLMClient(response_text="DECISION: CONFIRM\nCATEGORY: custom\nLABEL: SOP\nCONTENT: 內容")
+
+    reply = router.handle_message(fake_db, store, FAMILY_ID, "對", llm_client=llm_client)
+
+    assert "已經幫你存到你的個人知識庫囉" in reply
+    assert store.get(FAMILY_ID) is None
+    rows = fake_db.select("knowledge_base", where="category = %s AND user_id = %s", params=("custom", user_id))
+    assert len(rows) == 1
+
+
+# --- /clean-target-dialog（docs/specs/chat-core/SPEC.md FR-12）---
+
+
+def test_known_family_member_can_trigger_clean_target_dialog_by_natural_language(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    fake_db.insert("conversation_logs", {"user_id": user_id, "role": "user", "content": "范麗芳人很好", "deleted_at": None})
+    store = ConversationStateStore()
+    llm_client = _FakeLLMClient(response_text="1")
+
+    reply = router.handle_message(fake_db, store, FAMILY_ID, "我想刪除有關范麗芳的紀錄", llm_client=llm_client)
+
+    assert "跟「范麗芳」有關" in reply
+    assert "確定要清除嗎" in reply
+    assert store.get(FAMILY_ID)["flow"] == "pending_clean_target_dialog_confirm"
+    assert store.get(FAMILY_ID)["topic"] == "范麗芳"
+
+
+def test_owner_can_trigger_clean_target_dialog_via_slash_command_with_topic(fake_db, monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
+    fake_db.insert("knowledge_base", {"category": "general_family", "user_id": None, "content": "范麗芳是媽媽"})
+    store = ConversationStateStore()
+    llm_client = _FakeLLMClient(response_text="1")
+
+    reply = router.handle_message(fake_db, store, ROBIN_ID, "/clean-target-dialog 范麗芳", llm_client=llm_client)
+
+    assert "范麗芳是媽媽" in llm_client.last_prompt  # Owner 觸發才會納入共用知識庫候選
+    assert "跟「范麗芳」有關" in reply
+
+
+def test_clean_target_dialog_confirm_flow_deletes_when_user_confirms(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    log_id = fake_db.insert(
+        "conversation_logs", {"user_id": user_id, "role": "user", "content": "范麗芳人很好", "deleted_at": None}
+    )
+    store = ConversationStateStore()
+    store.set(
+        FAMILY_ID,
+        {
+            "flow": "pending_clean_target_dialog_confirm",
+            "target_user_id": user_id,
+            "topic": "范麗芳",
+            "log_ids": [log_id],
+            "kb_ids": [],
+        },
+    )
+    llm_client = _FakeLLMClient(response_text="CONFIRM")
+
+    reply = router.handle_message(fake_db, store, FAMILY_ID, "對，刪掉吧", llm_client=llm_client)
+
+    assert "已經幫你清除跟「范麗芳」有關的" in reply
+    assert store.get(FAMILY_ID) is None
+    logs = fake_db.select("conversation_logs", where="user_id = %s AND deleted_at IS NULL", params=(user_id,))
+    assert logs == []
 
 
 def test_owner_can_trigger_clean_all_dialog_confirmation_via_slash_command(fake_db, monkeypatch):

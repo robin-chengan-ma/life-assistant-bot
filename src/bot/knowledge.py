@@ -21,7 +21,7 @@ def build_context(db: CloudSQLClient, user_id: int) -> dict:
 
     return {
         "persona": get_persona_text(db),
-        "family": family_rows[0]["content"] if family_rows else "",
+        "family": _join_rows(family_rows),
         "custom": [row["content"] for row in custom_rows],
         "recent_logs": _get_recent_logs(db, user_id),
     }
@@ -34,7 +34,18 @@ def get_persona_text(db: CloudSQLClient) -> str:
     不需要完整 context 的場景使用，避免每次都要湊一個假的 user_id。
     """
     persona_rows = db.select("knowledge_base", where="category = %s", params=("general_persona",))
-    return persona_rows[0]["content"] if persona_rows else ""
+    return _join_rows(persona_rows)
+
+
+def _join_rows(rows: list[dict]) -> str:
+    """把同一類別底下的多筆知識庫資料串接成一份文字。
+
+    2026-08-01（見 chat-core SPEC.md FR-11）：`general_persona`／`general_family` 原本一律只有
+    一筆（透過 migration 逐字寫入），只取 `rows[0]` 就好；主動新增知識功能上線後，Robin 可能透過
+    對話新增第二筆、第三筆 `general_family`／`general_persona` 資料，因此改為把所有符合類別的
+    資料都串接進 context，而不是只看第一筆——單筆的情況串接結果與原本行為完全相同，不影響既有測試。
+    """
+    return "\n\n".join(row["content"] for row in rows) if rows else ""
 
 
 def _get_recent_logs(db: CloudSQLClient, user_id: int) -> list[dict]:
@@ -47,6 +58,27 @@ def _get_recent_logs(db: CloudSQLClient, user_id: int) -> list[dict]:
 def save_custom_knowledge(db: CloudSQLClient, user_id: int, content: str) -> None:
     """寫入使用者的客製知識庫（FR-4：查到網路答案且使用者同意存檔時呼叫）。"""
     db.insert("knowledge_base", {"category": "custom", "user_id": user_id, "content": content})
+
+
+def save_knowledge(
+    db: CloudSQLClient,
+    category: str,
+    content: str,
+    label: str | None = None,
+    user_id: int | None = None,
+) -> int:
+    """通用知識庫寫入（2026-08-01 新增，見 chat-core SPEC.md FR-11「主動新增知識」）。
+
+    與 `save_custom_knowledge()` 不同之處：這支可以指定任一 `category`（`custom`／
+    `general_family`／`general_persona`），並附上分類/標籤 `label`（例如「SOP」「食譜」），
+    供之後依主題查找、也供 `/clean-target-dialog`（FR-12）判斷刪除範圍時參考。呼叫端
+    （`commands.handle_save_knowledge_confirm_step`）負責在呼叫前把關：非 Owner 一律只能
+    傳 `category="custom"`，這裡不重複做權限檢查。
+    """
+    return db.insert(
+        "knowledge_base",
+        {"category": category, "user_id": user_id, "label": label, "content": content},
+    )
 
 
 def log_message(db: CloudSQLClient, user_id: int, role: str, content: str) -> None:

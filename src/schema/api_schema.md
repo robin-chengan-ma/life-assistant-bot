@@ -133,7 +133,7 @@
 **權限**：任何已驗證使用者（Robin 或家人）
 **對應 FR**：FR-9～FR-12、FR-56c（見 [chat-core SPEC.md](../../docs/specs/chat-core/SPEC.md)）
 
-**備註**：組 context（人格背景＋家人背景＋自己的客製知識庫＋最近 10 則對話紀錄）→ 呼叫 `GEMINI_API_BOT_KEY`（純文字，不查網路）→ 若回覆含系統標記 `【NOT_FOUND】`（代表模型誠實回報不知道），去除標記並附加自行查詢建議，進入 `pending_user_knowledge` 狀態。使用者訊息與 Robinson 回覆皆寫入 `conversation_logs`。這是取代 Step 1.1/1.2 `_PLACEHOLDER_REPLY` 的正式聊天入口。**2026-07-31 修正**：原本開啟 Google Search grounding，因這把 Key 所屬的新專案對 Gemini 2.5 世代關閉存取已移除，見 [chat-core SPEC.md](../../docs/specs/chat-core/SPEC.md) ADR-5。
+**備註**：組 context（人格背景＋家人背景＋自己的客製知識庫＋最近 10 則對話紀錄）→ 呼叫 `GEMINI_API_BOT_KEY`（純文字，不查網路）→ 若回覆含系統標記 `【NOT_FOUND】`（代表模型誠實回報不知道），去除標記並附加自行查詢建議，進入 `pending_user_knowledge` 狀態。使用者訊息與 Robinson 回覆皆寫入 `conversation_logs`。這是取代 Step 1.1/1.2 `_PLACEHOLDER_REPLY` 的正式聊天入口。**2026-07-31 修正**：原本開啟 Google Search grounding，因這把 Key 所屬的新專案對 Gemini 2.5 世代關閉存取已移除，見 [chat-core SPEC.md](../../docs/specs/chat-core/SPEC.md) ADR-5。**2026-08-01 新增（FR-11／ADR-8）**：若使用者主動要求「記住」「新增到知識庫」，回覆含系統標記 `【REQUEST_SAVE】`（代表模型判斷這是主動記知識請求，先反問確認內容與分類），去除標記後進入 `pending_save_knowledge_confirm` 狀態，見下方對應路由；`_build_prompt()` 依 `auth.is_owner()` 判斷結果給不同的存放範圍規則（Owner 可選共用或個人範圍，非 Owner 僅個人範圍）。
 
 ---
 
@@ -168,7 +168,7 @@
 
 **Response**：固定文字「你目前有 {N} 筆對話紀錄，確定要清除嗎？（不會影響你的知識庫內容）」，不經過 LLM 生成；設定 `pending_clean_all_dialog_confirm` 狀態，等使用者下一則回覆確認後才真正執行。
 
-**備註**：實際刪除邏輯在 `commands.handle_clean_all_dialog(db, user_id)`：只清「對話」——`conversation_logs` 軟刪除（`deleted_at` 設為現在時間）＋ `conversation_summaries` 重置為空白摘要（`summary=''`、`summarized_up_to_log_id=0`），刻意不動 `knowledge_base`。與規劃中、尚未實作的「刪除特定主題相關紀錄」（`/clean-target-dialog`，使用者說「我想刪除有關...的紀錄」時觸發，會連同該主題的知識庫內容一起清除）明確區隔。**2026-08-01 追加修正**：原本觸發詞一送出就直接刪除，Robin 回報沒有給反悔機會，違反「操作前先確認」原則，改為先反問確認。
+**備註**：實際刪除邏輯在 `commands.handle_clean_all_dialog(db, user_id)`：只清「對話」——`conversation_logs` 軟刪除（`deleted_at` 設為現在時間）＋ `conversation_summaries` 重置為空白摘要（`summary=''`、`summarized_up_to_log_id=0`），刻意不動 `knowledge_base`。與 FR-12 的 `/clean-target-dialog`（使用者說「我想刪除有關...的紀錄」時觸發，會連同該主題的知識庫內容一起清除）明確區隔。**2026-08-01 追加修正**：原本觸發詞一送出就直接刪除，Robin 回報沒有給反悔機會，違反「操作前先確認」原則，改為先反問確認。
 
 ---
 
@@ -180,6 +180,41 @@
 **對應 FR**：chat-core SPEC.md FR-10
 
 **備註**：用單次 `GEMINI_API_BOT_KEY` 呼叫判斷使用者這則回覆是「確定」（回覆固定字 `CONFIRM`，才呼叫 `handle_clean_all_dialog()` 真正執行刪除）還是「取消」（回覆固定字 `CANCEL`）；任何非 `CONFIRM` 的判定結果一律視為取消，寧可保守也不誤刪。狀態內容為 `{"flow": "pending_clean_all_dialog_confirm", "target_user_id": <int>}`。
+
+---
+
+### `pending_save_knowledge_confirm`（內部路由，非對外 HTTP 端點）
+
+**狀態**：已實作（`src/bot/commands.py::handle_save_knowledge_confirm_step`，2026-08-01 新增，見 chat-core SPEC.md FR-11／ADR-8）
+**觸發方式**：一般聊天核心偵測到使用者主動要求記住/新增知識，回覆帶 `【REQUEST_SAVE】` 標記反問確認後，下一則訊息自動進入此狀態
+**權限**：任何已驗證使用者；共用知識庫（`general_family`／`general_persona`）僅 Owner 能實際寫入，非 Owner 一律強制寫進自己的 `custom`（伺服器端依 `auth.is_owner()` 現場判斷，不信任模型判斷結果）
+**對應 FR**：chat-core SPEC.md FR-11、ADR-8
+
+**備註**：用單次內部 `GEMINI_API_BOT_KEY` 呼叫（`DECISION`/`CATEGORY`/`LABEL`/`CONTENT` 固定格式，非使用者可見）判斷確定與否並整理出分類標籤與內容；`DECISION=CONFIRM` 才呼叫 `knowledge.save_knowledge()` 真正寫入（`CATEGORY` 依伺服器端權限判斷可能被強制改為 `custom`），`CANCEL`（或任何非 `CONFIRM`）不寫入。狀態內容為 `{"flow": "pending_save_knowledge_confirm", "target_user_id": <int>, "original_request": <str>}`。
+
+---
+
+### `/clean-target-dialog`（內部路由，非對外 HTTP 端點）
+
+**狀態**：已實作（觸發即進入確認流程，`src/bot/commands.py::start_clean_target_dialog_confirm`，2026-08-01 新增，見 chat-core SPEC.md FR-12／ADR-8）
+**觸發方式**：使用者於對話框輸入 `/clean-target-dialog <主題>` 或「我想刪除有關 OOO 的紀錄」（`router.py` 用 regex `_CLEAN_TARGET_DIALOG_PATTERN` 擷取主題）
+**權限**：任何已驗證使用者；共用知識庫（`general_family`／`general_persona`）只有 Owner 觸發時才會納入候選並可被刪除，非 Owner 只能清自己的 `conversation_logs` 與自己的 `custom` 知識庫
+**對應 FR**：chat-core SPEC.md FR-12、ADR-8
+
+**Response**：候選中沒有任何資料、或候選裡沒有跟主題相關的項目時，直接回覆固定文案且不進入確認流程；有匹配時回覆「找到 N 則對話紀錄、M 筆知識庫資料跟「主題」有關，確定要清除嗎？」，設定 `pending_clean_target_dialog_confirm` 狀態。
+
+**備註**：候選清單（自己的 `conversation_logs`＋自己的 `custom`，Owner 觸發再加上全部 `general_family`／`general_persona`）交給單次內部 LLM 呼叫判斷「哪些跟這個主題相關」（回傳編號清單或 `NONE`），不是規則式比對。
+
+---
+
+### `pending_clean_target_dialog_confirm`（內部路由，非對外 HTTP 端點）
+
+**狀態**：已實作（`src/bot/commands.py::handle_clean_target_dialog_confirm_step`，2026-08-01 新增，見 chat-core SPEC.md FR-12／ADR-8）
+**觸發方式**：`/clean-target-dialog` 觸發反問確認後，下一則訊息自動進入此狀態
+**權限**：任何已驗證使用者，僅能確認/取消自己觸發的這次清除請求
+**對應 FR**：chat-core SPEC.md FR-12、ADR-8
+
+**備註**：用單次內部 `GEMINI_API_BOT_KEY` 呼叫判斷使用者這則回覆是「確定」（`CONFIRM`，才真正執行：`conversation_logs` 軟刪除、`knowledge_base` **硬刪除**——`knowledge_base` 沒有 `deleted_at` 欄位）還是「取消」（`CANCEL`，任何非 `CONFIRM` 一律視為取消，保守優先）。狀態內容為 `{"flow": "pending_clean_target_dialog_confirm", "target_user_id": <int>, "topic": <str>, "log_ids": [...], "kb_ids": [...]}`。
 
 ---
 

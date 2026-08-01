@@ -1,10 +1,10 @@
 """內建指令與對話式設定流程（對應 docs/specs/platform-auth/SPEC.md FR-4～FR-6、
-docs/specs/feature-toggles/SPEC.md FR-1～FR-2、docs/specs/chat-core/SPEC.md ADR-4、FR-10）。"""
+docs/specs/feature-toggles/SPEC.md FR-1～FR-2、docs/specs/chat-core/SPEC.md ADR-4、FR-10～FR-12）。"""
 from datetime import datetime, timezone
 
 from submodules.cloudsql.client import CloudSQLClient
 
-from src.bot import knowledge, templates, toggles
+from src.bot import auth, knowledge, templates, toggles
 from src.bot.state import ConversationStateStore
 
 _EXIT_PHRASES = {"沒有了", "結束"}
@@ -86,6 +86,214 @@ def handle_clean_all_dialog(db: CloudSQLClient, user_id: int) -> str:
         params=(user_id,),
     )
     return "已經幫你清除所有對話紀錄囉！你的知識庫內容不會受影響。"
+
+
+_SAVE_KNOWLEDGE_CATEGORY_NAMES = {
+    "custom": "你的個人知識庫",
+    "general_family": "Robin 與家人背景知識庫",
+    "general_persona": "Robinson 人格背景知識庫",
+}
+
+_SAVE_KNOWLEDGE_EXTRACT_PROMPT = (
+    "使用者先前這樣要求 Robinson 記住/新增一筆知識：「{original_request}」，Robinson 已經反問"
+    "確認過，這是使用者這一則的回覆：「{reply}」。\n"
+    "{scope_hint}\n"
+    "請判斷使用者是否確定要儲存，並整理出要儲存的內容與適合的分類標籤，嚴格照下面格式輸出，"
+    "每個欄位各自一行，不要輸出其他任何文字：\n"
+    "DECISION: CONFIRM 或 CANCEL\n"
+    "CATEGORY: custom 或 general_family 或 general_persona（使用者確定要儲存時才需要填寫，"
+    "取消的話這行可以省略）\n"
+    "LABEL: 簡短的分類/標籤，例如 SOP、食譜、行程（取消的話可以省略）\n"
+    "CONTENT: 要儲存的完整內容文字（取消的話可以省略）"
+)
+
+_SAVE_KNOWLEDGE_OWNER_SCOPE_HINT = (
+    "使用者是 Robin（Owner），CATEGORY 可以填 custom、general_family 或 general_persona，"
+    "請依內容判斷最適合的類別（家人背景相關 → general_family；Robinson 自身人格/行為相關 → "
+    "general_persona；其餘個人筆記、SOP、生活知識等 → custom）。"
+)
+_SAVE_KNOWLEDGE_NON_OWNER_SCOPE_HINT = "使用者不是 Owner，CATEGORY 一律只能填 custom。"
+
+
+def handle_save_knowledge_confirm_step(
+    db: CloudSQLClient,
+    llm_client,
+    state_store: ConversationStateStore,
+    telegram_user_id: int,
+    text: str,
+) -> str:
+    """處理 `pending_save_knowledge_confirm` 狀態下使用者對「主動新增知識」請求的確認回覆
+    （2026-08-01 新增，見 chat-core SPEC.md FR-11、ADR-8）。
+
+    用單次、完全對內部用（不會直接顯示給使用者）的 LLM 呼叫同時判斷「確定/取消」與整理出
+    「分類、標籤、內容」三個欄位，比照 ADR-6／ADR-7 的單次呼叫慣例。是否為 Owner 一律用
+    `auth.is_owner(telegram_user_id)` 現場判斷，不信任模型自己的判斷結果——即使模型回傳
+    `general_family`／`general_persona`，非 Owner 使用者也會被強制改回 `custom`，這是最後一道
+    伺服器端防線，避免任何情況下家人不小心（或被誘導）寫入全家共用的知識庫（依 Robin 決策：
+    共用知識庫只有 Owner 能編輯）。
+    """
+    state = state_store.get(telegram_user_id)
+    target_user_id = state["target_user_id"]
+    original_request = state["original_request"]
+    state_store.clear(telegram_user_id)
+
+    is_owner_user = auth.is_owner(telegram_user_id)
+    scope_hint = _SAVE_KNOWLEDGE_OWNER_SCOPE_HINT if is_owner_user else _SAVE_KNOWLEDGE_NON_OWNER_SCOPE_HINT
+    prompt = _SAVE_KNOWLEDGE_EXTRACT_PROMPT.format(
+        original_request=original_request, reply=text, scope_hint=scope_hint,
+    )
+    parsed = _parse_key_value_block(llm_client.generate_text(prompt))
+
+    if parsed.get("DECISION") != "CONFIRM":
+        return "好的，先不儲存這筆資訊！"
+
+    category = parsed.get("CATEGORY", "custom").lower()
+    if not is_owner_user or category not in _SAVE_KNOWLEDGE_CATEGORY_NAMES:
+        category = "custom"
+    label = parsed.get("LABEL") or None
+    content = parsed.get("CONTENT") or original_request
+    row_user_id = target_user_id if category == "custom" else None
+
+    knowledge.save_knowledge(db, category=category, content=content, label=label, user_id=row_user_id)
+
+    category_name = _SAVE_KNOWLEDGE_CATEGORY_NAMES[category]
+    label_part = f"「{label}」分類、" if label else ""
+    return f"已經幫你存到{category_name}囉！{label_part}內容是：{content}"
+
+
+def _parse_key_value_block(raw: str) -> dict:
+    """解析單次內部 LLM 呼叫回傳的 `KEY: value` 格式區塊（每行一個欄位），供本模組內部共用。"""
+    data: dict[str, str] = {}
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        data[key.strip().upper()] = value.strip()
+    return data
+
+
+_CLEAN_TARGET_MATCH_PROMPT = (
+    "以下是使用者的對話紀錄與知識庫資料候選清單，每一項前面有編號：\n"
+    "{candidates}\n\n"
+    "請找出所有跟主題「{topic}」有關的項目（只要內容有提到、談到、或與這個主題明顯相關就算）。\n"
+    "整則回覆只能輸出符合的編號，用逗號分隔（例如：1,3,5），不要輸出其他任何文字；"
+    "如果完全沒有符合的項目，只回傳：NONE"
+)
+
+_CLEAN_TARGET_CONFIRM_PROMPT = (
+    "使用者剛被 Robinson 反問「確定要清除跟『{topic}』有關的紀錄嗎？」，這是使用者這一則的回覆："
+    "「{reply}」。\n"
+    "請判斷使用者的意思，整則回覆只能輸出以下其中一個固定字，不要輸出其他任何文字：\n"
+    "(1) 確定要清除 → CONFIRM\n"
+    "(2) 不要清除、想取消、還沒想清楚、或其實在問別的事 → CANCEL"
+)
+
+
+def start_clean_target_dialog_confirm(
+    db: CloudSQLClient,
+    llm_client,
+    state_store: ConversationStateStore,
+    telegram_user_id: int,
+    user_id: int,
+    is_owner: bool,
+    topic: str,
+) -> str:
+    """`/clean-target-dialog`／「我想刪除有關 OOO 的紀錄」：清除跟指定主題相關的對話紀錄與知識庫
+    資料（2026-08-01 新增，見 chat-core SPEC.md FR-12、ADR-8）。
+
+    與 FR-10 的 `/clean-all-dialog` 不同：這支「也會」清知識庫，不是只清對話。範圍依 Robin 決策：
+    一般使用者只會檢視、清除「自己的」`conversation_logs` 與自己的 `custom` 知識庫；只有 Owner
+    （Robin）觸發時才會額外把共用的 `general_family`／`general_persona` 資料也納入候選（`is_owner`
+    由呼叫端的 `router.py` 現場判斷後傳入，這裡不重複判斷，也不信任其他來源）。
+
+    判斷「哪些資料跟主題相關」交給單次 LLM 呼叫（比照 ADR-6 的單次呼叫慣例），把候選資料編號列出、
+    請模型回傳符合的編號；真正的刪除動作留到下一輪使用者確認後才執行，見
+    `handle_clean_target_dialog_confirm_step()`。
+    """
+    candidates: list[dict] = []
+    for row in db.select("conversation_logs", where="user_id = %s AND deleted_at IS NULL", params=(user_id,)):
+        candidates.append({"kind": "log", "id": row["id"], "content": row["content"]})
+    for row in db.select("knowledge_base", where="category = %s AND user_id = %s", params=("custom", user_id)):
+        candidates.append({"kind": "kb", "id": row["id"], "content": row["content"]})
+    if is_owner:
+        for row in db.select("knowledge_base", where="category = %s", params=("general_family",)):
+            candidates.append({"kind": "kb", "id": row["id"], "content": row["content"]})
+        for row in db.select("knowledge_base", where="category = %s", params=("general_persona",)):
+            candidates.append({"kind": "kb", "id": row["id"], "content": row["content"]})
+
+    if not candidates:
+        return "目前沒有任何對話紀錄或知識庫資料，不需要清除喔！"
+
+    listing = "\n".join(f"{i}. {c['content'][:200]}" for i, c in enumerate(candidates, start=1))
+    raw = llm_client.generate_text(_CLEAN_TARGET_MATCH_PROMPT.format(topic=topic, candidates=listing))
+    matched_indexes = _parse_index_list(raw, len(candidates))
+
+    if not matched_indexes:
+        return f"目前沒有找到任何跟「{topic}」有關的對話紀錄或知識庫資料喔！"
+
+    matched = [candidates[i - 1] for i in matched_indexes]
+    log_ids = [c["id"] for c in matched if c["kind"] == "log"]
+    kb_ids = [c["id"] for c in matched if c["kind"] == "kb"]
+
+    state_store.set(
+        telegram_user_id,
+        {
+            "flow": "pending_clean_target_dialog_confirm",
+            "target_user_id": user_id,
+            "topic": topic,
+            "log_ids": log_ids,
+            "kb_ids": kb_ids,
+        },
+    )
+    return f"找到 {len(log_ids)} 則對話紀錄、{len(kb_ids)} 筆知識庫資料跟「{topic}」有關，確定要清除嗎？"
+
+
+def handle_clean_target_dialog_confirm_step(
+    db: CloudSQLClient,
+    llm_client,
+    state_store: ConversationStateStore,
+    telegram_user_id: int,
+    text: str,
+) -> str:
+    """處理 `pending_clean_target_dialog_confirm` 狀態下使用者對主題式清除的確認回覆。
+
+    對話紀錄比照 FR-10 軟刪除（`deleted_at`）；知識庫資料則直接硬刪除（`knowledge_base` 沒有
+    軟刪除欄位，且使用者的意圖就是真的移除這筆知識），任何非 `CONFIRM` 的判定結果一律視為取消，
+    保守優先、不誤刪。
+    """
+    state = state_store.get(telegram_user_id)
+    topic = state["topic"]
+    log_ids = state["log_ids"]
+    kb_ids = state["kb_ids"]
+    state_store.clear(telegram_user_id)
+
+    decision = llm_client.generate_text(_CLEAN_TARGET_CONFIRM_PROMPT.format(topic=topic, reply=text)).strip()
+    if decision != "CONFIRM":
+        return "好的，先不清除，這些資料都還在喔！"
+
+    now = datetime.now(timezone.utc)
+    for log_id in log_ids:
+        db.update("conversation_logs", {"deleted_at": now}, where="id = %s", params=(log_id,))
+    for kb_id in kb_ids:
+        db.delete("knowledge_base", where="id = %s", params=(kb_id,))
+
+    return f"已經幫你清除跟「{topic}」有關的 {len(log_ids)} 則對話紀錄與 {len(kb_ids)} 筆知識庫資料囉！"
+
+
+def _parse_index_list(raw: str, max_index: int) -> list[int]:
+    """解析 `_CLEAN_TARGET_MATCH_PROMPT` 回傳的編號清單（逗號分隔，或 NONE）。"""
+    cleaned = raw.strip()
+    if cleaned.upper() == "NONE":
+        return []
+    result = []
+    for token in cleaned.replace("，", ",").split(","):
+        token = token.strip()
+        if token.isdigit():
+            n = int(token)
+            if 1 <= n <= max_index:
+                result.append(n)
+    return result
 
 
 def handle_function(db: CloudSQLClient, llm_client) -> str:

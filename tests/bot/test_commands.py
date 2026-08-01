@@ -101,6 +101,193 @@ def test_handle_clean_all_dialog_soft_deletes_logs_resets_summary_and_keeps_know
     assert len(kb_rows) == 1
 
 
+def test_handle_save_knowledge_confirm_step_saves_to_custom_for_non_owner(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_save_knowledge_confirm", "target_user_id": 42, "original_request": "幫我存補胎SOP"})
+    llm_client = _FakeLLMClient(
+        # 中間刻意留一個空白行、以及一行沒有冒號的雜訊，涵蓋 _parse_key_value_block 的略過分支。
+        response_text=(
+            "DECISION: CONFIRM\n\n這是一行沒有冒號的雜訊\nCATEGORY: custom\nLABEL: SOP\nCONTENT: 補胎流程：先拆輪胎"
+        )
+    )
+
+    reply = commands.handle_save_knowledge_confirm_step(fake_db, llm_client, store, telegram_user_id=1, text="對")
+
+    assert reply == "已經幫你存到你的個人知識庫囉！「SOP」分類、內容是：補胎流程：先拆輪胎"
+    assert store.get(1) is None
+    rows = fake_db.select("knowledge_base", where="category = %s AND user_id = %s", params=("custom", 42))
+    assert len(rows) == 1
+    assert rows[0]["content"] == "補胎流程：先拆輪胎"
+    assert rows[0]["label"] == "SOP"
+    assert "使用者不是 Owner，CATEGORY 一律只能填 custom" in llm_client.last_prompt
+
+
+def test_handle_save_knowledge_confirm_step_forces_custom_even_if_model_suggests_shared_for_non_owner(fake_db, monkeypatch):
+    # 伺服器端最後一道防線：即使模型（可能被誘導）回傳 general_family，非 Owner 也一律強制改回 custom。
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_save_knowledge_confirm", "target_user_id": 42, "original_request": "幫我存家人背景"})
+    llm_client = _FakeLLMClient(
+        response_text="DECISION: CONFIRM\nCATEGORY: general_family\nLABEL: 家人\nCONTENT: 測試內容"
+    )
+
+    commands.handle_save_knowledge_confirm_step(fake_db, llm_client, store, telegram_user_id=1, text="對")
+
+    family_rows = fake_db.select("knowledge_base", where="category = %s", params=("general_family",))
+    assert family_rows == []
+    custom_rows = fake_db.select("knowledge_base", where="category = %s AND user_id = %s", params=("custom", 42))
+    assert len(custom_rows) == 1
+
+
+def test_handle_save_knowledge_confirm_step_allows_owner_to_save_to_general_family(fake_db, monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", "1")
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_save_knowledge_confirm", "target_user_id": 1, "original_request": "新增家庭成員"})
+    llm_client = _FakeLLMClient(
+        response_text="DECISION: CONFIRM\nCATEGORY: general_family\nLABEL: 寵物\nCONTENT: 阿旺是一隻貓"
+    )
+
+    reply = commands.handle_save_knowledge_confirm_step(fake_db, llm_client, store, telegram_user_id=1, text="對")
+
+    assert reply == "已經幫你存到Robin 與家人背景知識庫囉！「寵物」分類、內容是：阿旺是一隻貓"
+    rows = fake_db.select("knowledge_base", where="category = %s", params=("general_family",))
+    assert len(rows) == 1
+    assert rows[0]["user_id"] is None
+    assert "使用者是 Robin（Owner）" in llm_client.last_prompt
+
+
+def test_handle_save_knowledge_confirm_step_cancels_and_writes_nothing(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_save_knowledge_confirm", "target_user_id": 42, "original_request": "幫我存"})
+    llm_client = _FakeLLMClient(response_text="DECISION: CANCEL")
+
+    reply = commands.handle_save_knowledge_confirm_step(fake_db, llm_client, store, telegram_user_id=1, text="不用了")
+
+    assert reply == "好的，先不儲存這筆資訊！"
+    assert store.get(1) is None
+    assert fake_db.select("knowledge_base") == []
+
+
+def test_start_clean_target_dialog_confirm_reports_no_data_when_nothing_exists(fake_db):
+    llm_client = _FakeLLMClient()
+    store = ConversationStateStore()
+
+    reply = commands.start_clean_target_dialog_confirm(
+        fake_db, llm_client, store, telegram_user_id=1, user_id=1, is_owner=False, topic="范麗芳"
+    )
+
+    assert reply == "目前沒有任何對話紀錄或知識庫資料，不需要清除喔！"
+    assert store.get(1) is None
+
+
+def test_start_clean_target_dialog_confirm_reports_no_match_found(fake_db):
+    fake_db.insert("conversation_logs", {"user_id": 1, "role": "user", "content": "今天天氣真好", "deleted_at": None})
+    llm_client = _FakeLLMClient(response_text="NONE")
+    store = ConversationStateStore()
+
+    reply = commands.start_clean_target_dialog_confirm(
+        fake_db, llm_client, store, telegram_user_id=1, user_id=1, is_owner=False, topic="范麗芳"
+    )
+
+    assert reply == "目前沒有找到任何跟「范麗芳」有關的對話紀錄或知識庫資料喔！"
+    assert store.get(1) is None
+
+
+def test_start_clean_target_dialog_confirm_non_owner_excludes_shared_knowledge(fake_db):
+    fake_db.insert("conversation_logs", {"user_id": 1, "role": "user", "content": "范麗芳人很好", "deleted_at": None})
+    fake_db.insert("knowledge_base", {"category": "custom", "user_id": 1, "content": "范麗芳的電話", "label": None})
+    fake_db.insert("knowledge_base", {"category": "general_family", "user_id": None, "content": "范麗芳是媽媽"})
+    llm_client = _FakeLLMClient(response_text="1,2")
+    store = ConversationStateStore()
+
+    reply = commands.start_clean_target_dialog_confirm(
+        fake_db, llm_client, store, telegram_user_id=1, user_id=1, is_owner=False, topic="范麗芳"
+    )
+
+    assert "范麗芳是媽媽" not in llm_client.last_prompt  # 非 Owner 看不到共用知識庫候選
+    assert "1 則對話紀錄" in reply
+    assert "1 筆知識庫資料" in reply
+    assert store.get(1)["kb_ids"] == [
+        fake_db.select("knowledge_base", where="category = %s AND user_id = %s", params=("custom", 1))[0]["id"]
+    ]
+
+
+def test_start_clean_target_dialog_confirm_owner_includes_shared_knowledge(fake_db, monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", "1")
+    fake_db.insert("knowledge_base", {"category": "general_family", "user_id": None, "content": "范麗芳是媽媽"})
+    fake_db.insert("knowledge_base", {"category": "general_persona", "user_id": None, "content": "范麗芳也認識羅賓森"})
+    llm_client = _FakeLLMClient(response_text="1,2")
+    store = ConversationStateStore()
+
+    reply = commands.start_clean_target_dialog_confirm(
+        fake_db, llm_client, store, telegram_user_id=1, user_id=1, is_owner=True, topic="范麗芳"
+    )
+
+    assert "范麗芳是媽媽" in llm_client.last_prompt
+    assert "范麗芳也認識羅賓森" in llm_client.last_prompt  # 涵蓋 general_persona 候選也一併納入
+    assert "2 筆知識庫資料" in reply
+
+
+def test_handle_clean_target_dialog_confirm_step_deletes_when_confirmed(fake_db):
+    log_id = fake_db.insert(
+        "conversation_logs", {"user_id": 1, "role": "user", "content": "范麗芳人很好", "deleted_at": None}
+    )
+    kb_id = fake_db.insert("knowledge_base", {"category": "custom", "user_id": 1, "content": "范麗芳的電話"})
+    store = ConversationStateStore()
+    store.set(
+        1,
+        {
+            "flow": "pending_clean_target_dialog_confirm",
+            "target_user_id": 1,
+            "topic": "范麗芳",
+            "log_ids": [log_id],
+            "kb_ids": [kb_id],
+        },
+    )
+    llm_client = _FakeLLMClient(response_text="CONFIRM")
+
+    reply = commands.handle_clean_target_dialog_confirm_step(fake_db, llm_client, store, telegram_user_id=1, text="對")
+
+    assert reply == "已經幫你清除跟「范麗芳」有關的 1 則對話紀錄與 1 筆知識庫資料囉！"
+    assert store.get(1) is None
+    remaining_logs = fake_db.select("conversation_logs", where="user_id = %s AND deleted_at IS NULL", params=(1,))
+    assert remaining_logs == []
+    remaining_kb = fake_db.select("knowledge_base", where="category = %s AND user_id = %s", params=("custom", 1))
+    assert remaining_kb == []
+
+
+def test_handle_clean_target_dialog_confirm_step_keeps_data_when_cancelled(fake_db):
+    log_id = fake_db.insert(
+        "conversation_logs", {"user_id": 1, "role": "user", "content": "范麗芳人很好", "deleted_at": None}
+    )
+    kb_id = fake_db.insert("knowledge_base", {"category": "custom", "user_id": 1, "content": "范麗芳的電話"})
+    store = ConversationStateStore()
+    store.set(
+        1,
+        {
+            "flow": "pending_clean_target_dialog_confirm",
+            "target_user_id": 1,
+            "topic": "范麗芳",
+            "log_ids": [log_id],
+            "kb_ids": [kb_id],
+        },
+    )
+    llm_client = _FakeLLMClient(response_text="CANCEL")
+
+    reply = commands.handle_clean_target_dialog_confirm_step(
+        fake_db, llm_client, store, telegram_user_id=1, text="算了"
+    )
+
+    assert reply == "好的，先不清除，這些資料都還在喔！"
+    assert store.get(1) is None
+    remaining_logs = fake_db.select("conversation_logs", where="user_id = %s AND deleted_at IS NULL", params=(1,))
+    assert len(remaining_logs) == 1
+    remaining_kb = fake_db.select("knowledge_base", where="category = %s AND user_id = %s", params=("custom", 1))
+    assert len(remaining_kb) == 1
+
+
 def test_handle_function_returns_llm_generated_overview(fake_db):
     llm_client = _FakeLLMClient(response_text="這是總覽")
 

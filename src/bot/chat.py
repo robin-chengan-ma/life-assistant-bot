@@ -47,13 +47,22 @@ Robin 回報連續問「小雯有養動物嗎」→（中間插入「小猴是�
    姓名「吳凱吉」，模型會照抄這個範例而不是真的去比對知識庫內容。改為要求反問句必須帶出「資料中
    真實存在且真的高度相似」的人名，且明確規定知識庫裡沒有相似人名時要直接走「不知道」規則，
    不可以誤觸發反問機制。
+
+2026-08-01 新增功能（見 chat-core SPEC.md FR-11、ADR-8）：主動新增知識。Robin 要求開發「使用者
+主動說要記住某個資訊」的功能（前一輪修正只解決了「不可以謊報已儲存」，還沒有真正提供儲存能力）。
+新增 `_REQUEST_SAVE_MARKER`：偵測到使用者明確要求記住/新增/儲存資訊時，先反問確認內容與分類/
+標籤，並設定 `pending_save_knowledge_confirm` 狀態；真正的寫入動作留到下一輪由
+`commands.handle_save_knowledge_confirm_step()` 執行（沿用 ADR-7 建立的「先反問、下一輪才真的
+動作」模式）。依 Robin 決策：只有 Owner（Robin）可以選擇寫入共用的 `general_family`／
+`general_persona`，其他使用者一律只能寫入自己的 `custom` 知識庫；因此上方誠實性規則（FR-3g）
+也一併更新，改為涵蓋這個新流程，不再只提「請轉告 Robin 手動新增」。
 """
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from submodules.cloudsql.client import CloudSQLClient
 
-from src.bot import knowledge, memory, templates
+from src.bot import auth, knowledge, memory, templates
 from src.bot.state import ConversationStateStore
 
 # 系統內部標記，只用來讓程式碼判斷模型的判斷結果，不會出現在使用者看到的回覆裡
@@ -63,6 +72,7 @@ _UNKNOWN_SUFFIX = "\n\n你可以先自行上網查詢，查到後把答案打給
 _SAVE_MARKER = "【SAVE_ANSWER】"
 _DECLINE_MARKER = "【DECLINE_SAVE】"
 _CONFIRM_NAME_MARKER = "【CONFIRM_NAME】"
+_REQUEST_SAVE_MARKER = "【REQUEST_SAVE】"
 
 _TAIWAN_TZ = ZoneInfo("Asia/Taipei")
 _WEEKDAY_NAMES = ["一", "二", "三", "四", "五", "六", "日"]
@@ -102,9 +112,10 @@ def handle_chat_message(
     人名疑似打字誤植，Robinson 已經反問確認過是不是問知識庫裡最相近的那個人，這一輪由 router 的
     `pending_name_confirm` 分支呼叫（見 ADR-7），交給模型判斷使用者是在確認／回覆，還是問了別的事。
     """
+    is_owner = auth.is_owner(telegram_user_id)
     context = knowledge.build_context(db, user_id)
     long_memory = memory.get_summary(db, user_id)
-    prompt = _build_prompt(context, long_memory, text, pending_question, confirming_question)
+    prompt = _build_prompt(context, long_memory, text, pending_question, confirming_question, is_owner)
     reply_text = llm_client.generate_text(prompt)
 
     knowledge.log_message(db, user_id, "user", text)
@@ -122,6 +133,14 @@ def handle_chat_message(
         state_store.set(
             telegram_user_id,
             {"flow": "pending_name_confirm", "target_user_id": user_id, "original_question": text},
+        )
+    elif _REQUEST_SAVE_MARKER in reply_text:
+        # 2026-08-01（FR-11）：使用者主動要求記住/新增知識，先反問確認內容與分類，真正的寫入
+        # 動作留到下一輪由 commands.handle_save_knowledge_confirm_step() 執行，這裡不寫資料庫。
+        final_reply = reply_text.replace(_REQUEST_SAVE_MARKER, "").rstrip()
+        state_store.set(
+            telegram_user_id,
+            {"flow": "pending_save_knowledge_confirm", "target_user_id": user_id, "original_request": text},
         )
     elif _UNKNOWN_MARKER in reply_text:
         # 保險起見先去掉模型自己可能已經從對話紀錄裡學著複誦出來的建議句，避免跟下面
@@ -154,6 +173,7 @@ def _build_prompt(
     user_message: str,
     pending_question: str | None = None,
     confirming_question: str | None = None,
+    is_owner: bool = False,
 ) -> str:
     custom_text = "\n".join(f"- {item}" for item in context["custom"]) or "（無）"
     logs_text = "\n".join(
@@ -186,6 +206,20 @@ def _build_prompt(
             "全新的一般聊天訊息，依照下方所有規則正常回答，不要假設使用者在回答上一題。\n\n"
         )
 
+    if is_owner:
+        save_scope_rule = (
+            "使用者是 Robin（Owner）：如果內容明顯是關於 Robin 家人的背景資訊（例如新增家庭成員、"
+            "寵物、家人近況），可以主動建議存到全家共用的『Robin 與家人背景』；如果內容是關於"
+            "Robinson 你自己的人格／行為設定，可以建議存到『Robinson 人格背景』；其餘一般筆記、"
+            "SOP、生活知識等個人用途的資訊，建議存到 Robin 自己的個人知識庫；三種都可以選，"
+            "依內容判斷最合適的一種，並在反問時講清楚你打算存到哪一種。"
+        )
+    else:
+        save_scope_rule = (
+            "這位使用者不是 Robin（Owner）：這一律只會存到使用者自己的個人知識庫，不會影響全家"
+            "共用的資料，反問時要讓使用者知道存的是他自己的知識庫。"
+        )
+
     return (
         "你是 Robinson，請完全依照下方的人格背景設定來回答，用溫暖、有同理心、邏輯清晰、直入重點的語氣回覆，"
         "不要用條列式照本宣科的方式回答，也不要說自己是語言模型。回答務必精簡直接：像「幾歲」「什麼顏色」"
@@ -212,12 +246,19 @@ def _build_prompt(
         f"「{_CONFIRM_NAME_MARKER}」（這是系統內部用的標記，使用者看不到，等使用者確認後你才會被要求真正回答）；"
         "如果以上資料裡根本沒有任何跟使用者打的名字相似的人名，代表這是真的不知道，直接依照下面的"
         "「不知道」規則回答即可，不要誤觸發這個反問機制；"
-        "你目前唯一能真正把新資訊寫進知識庫的方式，是在你誠實回答不知道之後，使用者主動提供答案、"
-        "且被系統判定為提供答案的那個流程（只有在那個情境下才會真的寫入資料庫）；"
-        "除此之外，即使使用者直接要求你「記住」「新增到知識庫」"
-        "「幫我存起來」，你也絕對不能宣稱已經記錄、已經新增、已經儲存——因為你沒有其他管道能真的把"
-        "資料寫進資料庫，那樣講會是謊報成功；這種情況下要誠實告訴使用者，你目前沒辦法主動把這則資訊"
-        "寫進知識庫，請他轉告 Robin 手動新增。"
+        "如果使用者這則訊息是明確要求你把某個資訊記住／新增／儲存到知識庫（不是在問問題，而是主動"
+        "要求你儲存新資訊），不要直接說已經存了（這一輪還沒有真的寫入，見下方誠實性規則），也不要"
+        "假裝什麼都沒聽到，而是先用自然口語跟使用者確認：你打算儲存的內容摘要、以及一個簡短的"
+        f"分類/標籤（例如「SOP」「食譜」「行程」，依內容自行判斷合適的標籤）。{save_scope_rule}"
+        "確認句講完後，在回覆最後加上這個固定標記文字："
+        f"「{_REQUEST_SAVE_MARKER}」（這是系統內部用的標記，使用者看不到，等使用者下一輪確認後，"
+        "才會由系統真正執行寫入）；"
+        "你自己這一輪的回覆，不管是回答問題、反問確認、或任何情況，都絕對不能宣稱『已經記錄』"
+        "『已經新增』『已經儲存』『已經存好了』——資料庫的實際寫入只會發生在使用者對上述反問句"
+        "回覆確認之後的下一輪（由系統執行，不是你直接做的），你自己永遠沒有立即寫入資料庫的能力；"
+        "如果使用者用一般聊天的方式要求「清除」「刪除」對話紀錄或知識庫資料，你也不能假裝已經刪除，"
+        "要引導使用者改用「我想要刪除所有對話紀錄」或「我想刪除有關 OOO 的紀錄」這樣的固定講法，"
+        "才會真的觸發系統的刪除流程。"
         "如果以上資料不足以回答使用者的問題，你必須誠實地告訴使用者你目前不知道，並且一定要在回覆的最後"
         f"加上這個固定標記文字：「{_UNKNOWN_MARKER}」（這是系統內部用的標記，使用者看不到，不用跟使用者解釋這個標記代表什麼）。"
         "使用者用代名詞（他／她／牠／它／那個人）追問時，一律理解成使用者「最近一次」明確點名問過的那個人"

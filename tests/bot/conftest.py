@@ -43,6 +43,13 @@ class FakeCloudSQLClient:
                 affected += 1
         return affected
 
+    def delete(self, table, where, params):
+        if not where:
+            raise ValueError("delete() 必須提供 where 條件")
+        before = len(self._tables[table])
+        self._tables[table] = [row for row in self._tables[table] if not self._matches(row, where, params)]
+        return before - len(self._tables[table])
+
     def close(self):
         pass
 

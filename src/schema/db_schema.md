@@ -132,6 +132,13 @@ COMMENT ON COLUMN knowledge_base.updated_at IS '最後更新時間';
 
 **2026-07-31 新增家庭成員**：Robin 提供資料，新增第 7 筆家庭成員「阿姨（母親范麗芳的親妹妹）：范焞琪」——生日民國 72 年 (1983) 2 月 9 日、居住南投縣水里鄉、喜歡貓咪、兼職兩份（早上全聯、晚上 7-11 六合門市），透過 `src/migrations/0010_add_aunt_fan_tunqi_to_family_knowledge.sql` 用 `UPDATE` 附加到 `general_family` 內容末尾，格式沿用既有慣例（民國年附西元年對照）。
 
+**2026-08-01 新增家庭寵物**：Robin 提供資料，新增第 8、9 筆內容「阿牛（暱稱牛牛）：Robin 家養超過 7 年的黑底狗，胸腹部大片白毛帶黑色斑點似乳牛紋路，尾巴全白也帶黑色斑點」與「龜龜：Robin 爸爸養的蘇卡達陸龜」，透過 `src/migrations/0011_add_family_pets_to_family_knowledge.sql` 用 `UPDATE` 附加到 `general_family` 內容末尾。
+
+**變更紀錄**（如果有）：
+| 日期 | 變更內容 | 原因 | Migration 檔案 |
+| --- | --- | --- | --- |
+| 2026-08-01 | 新增 `label TEXT` 欄位（允許 NULL） | chat-core SPEC.md FR-11／ADR-8：主動新增知識功能需要一個分類/標籤欄位（例如「SOP」「食譜」「行程」），方便之後依主題查找，也供 FR-12 `/clean-target-dialog` 判斷刪除範圍時參考；既有資料與大部分 `general_persona`／`general_family` 內容不使用此欄位，不回填、允許 NULL | `src/migrations/0012_add_label_to_knowledge_base.sql` |
+
 ---
 
 ### conversation_logs

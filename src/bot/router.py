@@ -1,4 +1,6 @@
 """統一路由：依身分、對話狀態、文字內容，分派到對應處理函式。"""
+import re
+
 from submodules.cloudsql.client import CloudSQLClient
 
 from src.bot import auth, chat, commands, image, templates, toggles
@@ -12,6 +14,11 @@ _FUNCTION_TRIGGERS = {"/function", "我要看所有功能"}
 _MY_TOGGLES_TRIGGERS = {"/my_toggles", "我的功能設定"}
 _SET_TOGGLE_TRIGGERS = {"/set_toggle", "設定家人功能開關"}
 _CLEAN_ALL_DIALOG_TRIGGERS = {"/clean-all-dialog", "我想要刪除所有對話紀錄"}
+# 2026-08-01（chat-core SPEC.md FR-12）：/clean-target-dialog 的主題是自由文字，無法用固定
+# 觸發詞集合窮舉，改用 regex 擷取「我想刪除有關 OOO 的紀錄」或 `/clean-target-dialog OOO` 的主題。
+_CLEAN_TARGET_DIALOG_PATTERN = re.compile(
+    r"^(?:/clean-target-dialog\s+(?P<topic1>.+)|我想刪除有關(?P<topic2>.+)的紀錄)$"
+)
 
 
 def handle_message(
@@ -33,8 +40,9 @@ def handle_message(
     webhook.py 注入，這裡預設 None 只是為了讓不涉及該流程的既有測試不用逐一補上假的 LLM Client。
     """
     text = (text or "").strip()
+    is_owner = auth.is_owner(telegram_user_id)
 
-    if auth.is_owner(telegram_user_id):
+    if is_owner:
         state = state_store.get(telegram_user_id)
         if state is not None:
             return _dispatch_active_flow(
@@ -81,6 +89,14 @@ def handle_message(
     if text in _CLEAN_ALL_DIALOG_TRIGGERS:
         # 2026-08-01 起改為先反問確認，不再直接刪除，見 commands.start_clean_all_dialog_confirm。
         return commands.start_clean_all_dialog_confirm(db, state_store, telegram_user_id, user_id)
+    target_match = _CLEAN_TARGET_DIALOG_PATTERN.match(text)
+    if target_match:
+        # 2026-08-01（FR-12）：主題式清除，範圍依 is_owner 決定要不要納入共用知識庫，見
+        # commands.start_clean_target_dialog_confirm。
+        topic = (target_match.group("topic1") or target_match.group("topic2")).strip()
+        return commands.start_clean_target_dialog_confirm(
+            db, llm_client, state_store, telegram_user_id, user_id, is_owner, topic
+        )
 
     return chat.handle_chat_message(
         db, llm_client, text_llm_client, state_store, telegram_user_id, user_id, text
@@ -162,4 +178,10 @@ def _dispatch_active_flow(
     if flow == "pending_clean_all_dialog_confirm":
         # 2026-08-01：/clean-all-dialog 先反問確認，這一輪由使用者的回覆判斷要不要真的執行刪除。
         return commands.handle_clean_all_dialog_confirm_step(db, llm_client, state_store, telegram_user_id, text)
+    if flow == "pending_save_knowledge_confirm":
+        # 2026-08-01（FR-11）：主動新增知識先反問確認，這一輪判斷確定/取消並整理出分類與內容。
+        return commands.handle_save_knowledge_confirm_step(db, llm_client, state_store, telegram_user_id, text)
+    if flow == "pending_clean_target_dialog_confirm":
+        # 2026-08-01（FR-12）：主題式清除先反問確認，這一輪判斷確定/取消並真正執行刪除。
+        return commands.handle_clean_target_dialog_confirm_step(db, llm_client, state_store, telegram_user_id, text)
     return commands.handle_toggle_step(db, state_store, telegram_user_id, text)

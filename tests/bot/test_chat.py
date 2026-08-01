@@ -251,9 +251,9 @@ def test_handle_chat_message_deduplicates_suggestion_when_model_already_echoed_i
 
 
 def test_handle_chat_message_prompt_forbids_falsely_claiming_knowledge_was_saved(fake_db):
-    # Robin 回報：請 Robinson 把家庭成員背景「新增到知識庫」，Robinson 回覆已經新增，但目前
-    # 完全沒有對應的寫入路徑（唯一真的會寫入的管道是 pending_user_knowledge 的 SAVE_ANSWER 流程），
-    # 等於謊報成功；prompt 要明確禁止這種說法。
+    # Robin 回報：請 Robinson 把家庭成員背景「新增到知識庫」，Robinson 回覆已經新增，但當時
+    # 完全沒有對應的寫入路徑，等於謊報成功；prompt 要明確禁止這種說法（2026-08-01 新增
+    # REQUEST_SAVE 流程後，唯一合法的寫入時機是使用者確認之後的下一輪，不是這一輪）。
     _seed_general(fake_db)
     llm_client = _FakeLLMClient()
     text_llm_client = _FakeTextLLMClient()
@@ -264,8 +264,78 @@ def test_handle_chat_message_prompt_forbids_falsely_claiming_knowledge_was_saved
         text="幫我把這個家庭成員的背景新增到知識庫",
     )
 
-    assert "你也絕對不能宣稱已經記錄、已經新增、已經儲存" in llm_client.last_prompt
-    assert "請他轉告 Robin 手動新增" in llm_client.last_prompt
+    assert "都絕對不能宣稱『已經記錄』" in llm_client.last_prompt
+    assert "資料庫的實際寫入只會發生在使用者對上述反問句" in llm_client.last_prompt
+
+
+def test_handle_chat_message_prompt_includes_request_save_rule_and_marker(fake_db):
+    # 2026-08-01（FR-11）：使用者主動要求記住/新增知識時，prompt 要指示模型先反問確認
+    # 內容與分類標籤，並輸出 REQUEST_SAVE 標記，而不是直接回答或假裝已經存了。
+    _seed_general(fake_db)
+    llm_client = _FakeLLMClient()
+    text_llm_client = _FakeTextLLMClient()
+    store = ConversationStateStore()
+
+    chat.handle_chat_message(
+        fake_db, llm_client, text_llm_client, store, telegram_user_id=1, user_id=1,
+        text="幫我存『補胎 SOP』：先拆輪胎、找到破洞、打磨、上膠、補片",
+    )
+
+    assert "【REQUEST_SAVE】" in llm_client.last_prompt
+    assert "分類/標籤" in llm_client.last_prompt
+
+
+def test_handle_chat_message_prompt_lets_owner_choose_shared_or_personal_scope(fake_db, monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", "1")
+    _seed_general(fake_db)
+    llm_client = _FakeLLMClient()
+    text_llm_client = _FakeTextLLMClient()
+    store = ConversationStateStore()
+
+    chat.handle_chat_message(
+        fake_db, llm_client, text_llm_client, store, telegram_user_id=1, user_id=1,
+        text="幫我新增一個家庭成員背景",
+    )
+
+    assert "使用者是 Robin（Owner）" in llm_client.last_prompt
+    assert "全家共用的『Robin 與家人背景』" in llm_client.last_prompt
+
+
+def test_handle_chat_message_prompt_restricts_non_owner_to_personal_scope(fake_db, monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", "999")  # 跟 telegram_user_id=1 不同，代表非 Owner
+    _seed_general(fake_db)
+    llm_client = _FakeLLMClient()
+    text_llm_client = _FakeTextLLMClient()
+    store = ConversationStateStore()
+
+    chat.handle_chat_message(
+        fake_db, llm_client, text_llm_client, store, telegram_user_id=1, user_id=1, text="幫我記住這件事"
+    )
+
+    assert "這位使用者不是 Robin（Owner）" in llm_client.last_prompt
+    assert "只會存到使用者自己的個人知識庫" in llm_client.last_prompt
+
+
+def test_handle_chat_message_sets_pending_save_knowledge_confirm_state_when_llm_returns_request_save_marker(fake_db):
+    _seed_general(fake_db)
+    llm_client = _FakeLLMClient(
+        response_text="好的，我要把這個存到你的個人知識庫，分類是「SOP」，確定要儲存嗎？【REQUEST_SAVE】"
+    )
+    text_llm_client = _FakeTextLLMClient()
+    store = ConversationStateStore()
+
+    reply = chat.handle_chat_message(
+        fake_db, llm_client, text_llm_client, store, telegram_user_id=1, user_id=1,
+        text="幫我存『補胎 SOP』：先拆輪胎、找到破洞、打磨、上膠、補片",
+    )
+
+    assert reply == "好的，我要把這個存到你的個人知識庫，分類是「SOP」，確定要儲存嗎？"
+    assert "【REQUEST_SAVE】" not in reply
+    assert store.get(1) == {
+        "flow": "pending_save_knowledge_confirm",
+        "target_user_id": 1,
+        "original_request": "幫我存『補胎 SOP』：先拆輪胎、找到破洞、打磨、上膠、補片",
+    }
 
 
 def test_handle_chat_message_prompt_requires_real_similar_name_for_confirm_name_and_falls_back_to_unknown(fake_db):
