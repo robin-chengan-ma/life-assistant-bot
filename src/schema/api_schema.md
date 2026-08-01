@@ -148,6 +148,30 @@
 
 ---
 
+### `pending_name_confirm`（內部路由，非對外 HTTP 端點）
+
+**狀態**：已實作（`src/bot/chat.py::handle_chat_message`，帶 `confirming_question` 參數；見 chat-core SPEC.md ADR-7，部分 supersede ADR-6 的「直接假設打字誤植並回答」機制）
+**觸發方式**：一般聊天核心偵測到使用者問的人名疑似打字誤植（同音字/形似字），回覆帶 `【CONFIRM_NAME】` 標記反問確認後，下一則訊息自動進入此狀態
+**權限**：任何已驗證使用者，僅能針對自己上一輪的提問確認
+**對應 FR**：FR-3(e)、chat-core SPEC.md ADR-7
+
+**備註**：同一次 LLM 呼叫判斷使用者這則回覆是「確認／講出更明確的名字」（針對原問題完整回答，不再輸出任何標記，也不再反問一次）還是「否認／問了別的事」（當成全新一般訊息正常回答，不假設在回答上一題）。狀態內容為 `{"flow": "pending_name_confirm", "target_user_id": <int>, "original_question": <str>}`，`original_question` 供下一輪判斷 prompt 使用。
+
+---
+
+### `/clean-all-dialog`（內部路由，非對外 HTTP 端點）
+
+**狀態**：已實作（`src/bot/commands.py::handle_clean_all_dialog`）
+**觸發方式**：使用者於對話框輸入「我想要刪除所有對話紀錄」或 `/clean-all-dialog`
+**權限**：任何已驗證使用者（Robin 或家人），僅能清除自己的對話紀錄
+**對應 FR**：chat-core SPEC.md FR-10
+
+**Response**：固定文字「已經幫你清除所有對話紀錄囉！你的知識庫內容不會受影響。」，不經過 LLM 生成。
+
+**備註**：只清「對話」——`conversation_logs` 軟刪除（`deleted_at` 設為現在時間）＋ `conversation_summaries` 重置為空白摘要（`summary=''`、`summarized_up_to_log_id=0`），刻意不動 `knowledge_base`。與規劃中、尚未實作的「刪除特定主題相關紀錄」（`/clean-target-dialog`，使用者說「我想刪除有關...的紀錄」時觸發，會連同該主題的知識庫內容一起清除）明確區隔。
+
+---
+
 ### 圖片訊息（內部路由，非對外 HTTP 端點）
 
 **狀態**：已實作（`src/bot/router.py::handle_photo_message`、`src/bot/image.py::handle_image_message`，Step 1.3b，見 robinson SPEC.md FR-17、ADR-13）

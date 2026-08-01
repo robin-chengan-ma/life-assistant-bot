@@ -11,6 +11,7 @@ _RULE_TRIGGERS = {"/rule", "我要看使用規則"}
 _FUNCTION_TRIGGERS = {"/function", "我要看所有功能"}
 _MY_TOGGLES_TRIGGERS = {"/my_toggles", "我的功能設定"}
 _SET_TOGGLE_TRIGGERS = {"/set_toggle", "設定家人功能開關"}
+_CLEAN_ALL_DIALOG_TRIGGERS = {"/clean-all-dialog", "我想要刪除所有對話紀錄"}
 
 
 def handle_message(
@@ -76,6 +77,8 @@ def handle_message(
         return commands.handle_rule()
     if text in _FUNCTION_TRIGGERS:
         return commands.handle_function(db, llm_client)
+    if text in _CLEAN_ALL_DIALOG_TRIGGERS:
+        return commands.handle_clean_all_dialog(db, user_id)
 
     return chat.handle_chat_message(
         db, llm_client, text_llm_client, state_store, telegram_user_id, user_id, text
@@ -145,6 +148,12 @@ def _dispatch_active_flow(
         return chat.handle_chat_message(
             db, llm_client, text_llm_client, state_store, telegram_user_id,
             state["target_user_id"], text, pending_question=state.get("original_question"),
+        )
+    if flow == "pending_name_confirm":
+        # 2026-08-01（ADR-7）：打字誤植改為先反問確認，等使用者這則回覆才真正回答原本的問題。
+        return chat.handle_chat_message(
+            db, llm_client, text_llm_client, state_store, telegram_user_id,
+            state["target_user_id"], text, confirming_question=state.get("original_question"),
         )
     if flow == "pending_image_confirm":
         return image.handle_image_confirm_step(image_llm_clients, state_store, telegram_user_id, text)

@@ -665,6 +665,7 @@ Robinson 是一個以 Telegram 為前台介面的家庭生活小助手，Robin �
 1. 本服務皆使用免費資源建置。
 2. 每個功能皆設有開關：若開啟後發現暫時不需要使用，請直接關閉，避免消耗 AI 使用額度。
 3. 支援「打字」或「語音」兩種訊息傳送方式。
+4. 想清除您與羅賓森的對話紀錄（不含知識庫內容）時，可以輸入「我想要刪除所有對話紀錄」。
 
 ⚠️ 使用限制與規範：
 1. 嚴禁記錄個人敏感隱私資訊（如身分證字號、電話號碼、信用卡號等）。
@@ -682,6 +683,7 @@ Robinson 是一個以 Telegram 為前台介面的家庭生活小助手，Robin �
 **變更紀錄**：
 - 2026-07-30 開頭語句由「🎉 通關密碼驗證成功！歡迎使用羅賓森 AI 服務。」改為「📋 以下是羅賓森的使用須知：」，讓 FR-6d（歡迎訊息）與 FR-55（`/rule`）共用同一份文案時語境都通順；同時補上「我要客訴你」的觸發提示，呼應新增的 FR-60～FR-63 客訴收集功能。
 - 2026-07-30 依 FR-17／FR-17a 更新：原本「請勿傳送證照題目以外的圖片」改為開放圖片與語音兩種格式上傳（不再限定證照題目），並新增個資影像警語「後果需由您自行承擔」（對應 FR-17a）；原有的第 2 點拆成三點，編號順延。
+- 2026-08-01 新增第 4 點：告知使用者可輸入「我想要刪除所有對話紀錄」清除對話紀錄（對應 chat-core SPEC.md FR-10、`/clean-all-dialog` 路由）。
 
 ## 附錄 B：`/function` 路由待補文字模板
 
@@ -717,4 +719,5 @@ FR-56 的 `/function` 路由目前只定義了「回傳範圍」（所有功能�
 | 2026-07-31 | Robin 要求「該做的防呆要做好，不要因為程式碼關係浪費不必要的額度」，再補兩層防護：① platform-auth SPEC.md FR-7a：`update_id` 去重（LRU 上限 1000 筆），解決「沒出錯但被 Telegram 誤判逾時重送」也會重複打 Gemini 的問題 ② submodules-core SPEC.md FR-7／ADR-5：`LLMClient` 新增本地端節流保護（同一 `api_key` 最近 60 秒超過 8 次呼叫直接擋下、不送出請求，避免明知道會被官方 429 拒絕還是浪費額度嘗試）；FR-7 安全網範圍也擴大涵蓋 DB／LLM Client 建立與 Telegram 傳送失敗；全專案 137 個測試全過、覆蓋率 100% | Claude（依 Robin「該做的防呆要做好」指示） |
 | 2026-07-31 | 確認 429 Traceback 為真實 Gemini 額度超限（非本地端節流誤判），安全網運作正常；Robin 確認 Step 1.3b（影像辨識）設計：新增 `media_uploads` 表統一記錄圖片/語音的 Google Drive 網址（Step 1.4 語音功能上線後共用）；修正 ADR-13 第 2、4 點——壓縮版圖片僅記憶體內即時處理、不落地存回 Google Drive，只保留原始檔 | Robin |
 | 2026-07-31 | **Phase 1 Step 1.3b 完成**：影像辨識基礎流程，FR-17／FR-17a～FR-17c 全數完成；新增 `submodules/gdrive/`（Service Account 認證，僅上傳、不含下載/列表能力）、`TelegramClient.get_file_bytes()`（兩段式檔案下載）、`src/bot/image.py`（`Pillow` 壓縮＋隨機挑選影像 Key＋`[NEED_CONFIRM]` 標記慣例反問使用者）；`router.py` 新增 `handle_photo_message()`／`pending_image_confirm` 流程分派，`webhook.py` 新增 `_extract_photo()`／`_extract_unsupported_file()` 完成訊息類型分流；修正 `pytest.ini` 加 `--import-mode=importlib` 解決多個 `submodules/*/test_client.py` 同名模組衝突；全專案 179 個測試全過，`src/bot/`／`submodules/gdrive`／`submodules/telegram`／`submodules/llm` 覆蓋率 100% | Claude（依 Robin「你繼續開發你的，我明天再一次測試」指示） |
+| 2026-08-01 | Robin 實測回報兩個調整需求並新增一個功能：① 打字誤植（同音字/形似字）原本「直接假設同一人並回答」改為「先反問確認再回答」，新增 chat-core SPEC.md ADR-7、`pending_name_confirm` 狀態 ② 回答太囉唆（例如問年齡/顏色會附加不必要的推算過程），新增 FR-3(f) 精簡回答規則 ③ 新增 `/clean-all-dialog` 指令（見 chat-core SPEC.md FR-10），使用者輸入「我想要刪除所有對話紀錄」可清除自己的對話紀錄（`conversation_logs`＋`conversation_summaries`），刻意不動知識庫內容，明確與規劃中、尚未實作的「刪除特定主題相關紀錄」（`/clean-target-dialog`，會連知識庫一起清）區隔；附錄 A 新增第 4 點使用須知 | Robin |
 | 2026-07-31 | Robin 持續撞到 429，經 AI Studio Rate Limit 頁面實測發現 `gemini-flash-latest` 別名解析到的 Gemini 3.6 Flash 免費層只有 RPM 5／RPD 20，遠低於原本假設的 10～15 RPM／1500 RPD；新增 submodules-core SPEC.md ADR-6：改用明確指定版本的 `gemini-3.5-flash-lite`（實測 RPM 15／RPD 500，同屬 Gemini 家族、零相容性風險），Gemma 4（實測 RPM 30／RPD 14,400）與開通計費升級留待額度仍不夠用時再評估 | Claude（依 Robin「好啊，麻煩你了」指示） |

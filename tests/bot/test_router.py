@@ -335,6 +335,23 @@ def test_pending_user_knowledge_flow_treats_unrelated_new_question_normally_via_
     assert len(rows) == 0
 
 
+def test_pending_name_confirm_flow_continues_via_router(fake_db, monkeypatch):
+    # 2026-08-01（ADR-7）：打字誤植先反問確認，router 要正確帶 confirming_question 分派下去。
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+    store.set(
+        FAMILY_ID,
+        {"flow": "pending_name_confirm", "target_user_id": user_id, "original_question": "吳鎧吉是誰"},
+    )
+    llm_client = _FakeLLMClient(response_text="吳凱吉是 Robin 的妹夫喔！")
+
+    reply = router.handle_message(fake_db, store, FAMILY_ID, "對啊", llm_client=llm_client)
+
+    assert reply == "吳凱吉是 Robin 的妹夫喔！"
+    assert store.get(FAMILY_ID) is None
+
+
 def test_owner_pending_user_knowledge_flow_declines_via_router(fake_db, monkeypatch):
     monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
     store = ConversationStateStore()
@@ -347,6 +364,31 @@ def test_owner_pending_user_knowledge_flow_declines_via_router(fake_db, monkeypa
     assert store.get(ROBIN_ID) is None
     rows = fake_db.select("knowledge_base", where="category = %s AND user_id = %s", params=("custom", 1))
     assert len(rows) == 0
+
+
+# --- /clean-all-dialog（docs/specs/chat-core/SPEC.md FR-10）---
+
+
+def test_known_family_member_can_trigger_clean_all_dialog_by_natural_language(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    fake_db.insert("conversation_logs", {"user_id": user_id, "role": "user", "content": "早安", "deleted_at": None})
+    store = ConversationStateStore()
+
+    reply = router.handle_message(fake_db, store, FAMILY_ID, "我想要刪除所有對話紀錄")
+
+    assert "已經幫你清除所有對話紀錄" in reply
+    logs = fake_db.select("conversation_logs", where="user_id = %s AND deleted_at IS NULL", params=(user_id,))
+    assert logs == []
+
+
+def test_owner_can_trigger_clean_all_dialog_via_slash_command(fake_db, monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
+    store = ConversationStateStore()
+
+    reply = router.handle_message(fake_db, store, ROBIN_ID, "/clean-all-dialog")
+
+    assert reply == "已經幫你清除所有對話紀錄囉！你的知識庫內容不會受影響。"
 
 
 # --- 圖片辨識（docs/specs/robinson/SPEC.md FR-17、ADR-13）---

@@ -20,6 +20,35 @@ def test_handle_rule_returns_appendix_a_text():
     assert commands.handle_rule() == templates.APPENDIX_A_TEXT
 
 
+def test_handle_clean_all_dialog_soft_deletes_logs_resets_summary_and_keeps_knowledge_base(fake_db):
+    fake_db.insert("conversation_logs", {"user_id": 1, "role": "user", "content": "早安", "deleted_at": None})
+    fake_db.insert("conversation_logs", {"user_id": 1, "role": "assistant", "content": "早安！", "deleted_at": None})
+    fake_db.insert("conversation_logs", {"user_id": 2, "role": "user", "content": "別人的訊息", "deleted_at": None})
+    fake_db.insert(
+        "conversation_summaries",
+        {"user_id": 1, "summary": "很久以前提過喜歡打籃球", "summarized_up_to_log_id": 5},
+    )
+    fake_db.insert("knowledge_base", {"category": "custom", "user_id": 1, "content": "陳東東是我朋友"})
+
+    reply = commands.handle_clean_all_dialog(fake_db, user_id=1)
+
+    assert reply == "已經幫你清除所有對話紀錄囉！你的知識庫內容不會受影響。"
+
+    remaining_logs = fake_db.select("conversation_logs", where="user_id = %s AND deleted_at IS NULL", params=(1,))
+    assert remaining_logs == []
+    # 只清自己的，其他使用者的對話紀錄不受影響（資安隔離）
+    other_user_logs = fake_db.select("conversation_logs", where="user_id = %s AND deleted_at IS NULL", params=(2,))
+    assert len(other_user_logs) == 1
+
+    summary_row = fake_db.select("conversation_summaries", where="user_id = %s", params=(1,), fetch_one=True)
+    assert summary_row["summary"] == ""
+    assert summary_row["summarized_up_to_log_id"] == 0
+
+    # 刻意不動知識庫內容（與規劃中的 /clean-target-dialog 不同）
+    kb_rows = fake_db.select("knowledge_base", where="category = %s AND user_id = %s", params=("custom", 1))
+    assert len(kb_rows) == 1
+
+
 def test_handle_function_returns_llm_generated_overview(fake_db):
     llm_client = _FakeLLMClient(response_text="這是總覽")
 

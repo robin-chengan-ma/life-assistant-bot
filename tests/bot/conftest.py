@@ -62,6 +62,8 @@ class FakeCloudSQLClient:
             return row.get("id") == params[0]
         if where == "user_id = %s":
             return row.get("user_id") == params[0]
+        if where == "user_id = %s AND deleted_at IS NULL":
+            return row.get("user_id") == params[0] and row.get("deleted_at") is None
         if where == "user_id = %s AND feature_key = %s":
             return row.get("user_id") == params[0] and row.get("feature_key") == params[1]
         if where == "category = %s":

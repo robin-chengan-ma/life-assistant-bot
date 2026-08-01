@@ -1,7 +1,7 @@
 ---
 title: Robinson 產品開發階段紀錄
 spec: docs/specs/robinson/SPEC.md
-updated: 2026-07-31
+updated: 2026-08-01
 ---
 
 # Robinson 產品開發階段紀錄

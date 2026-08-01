@@ -341,3 +341,80 @@ def test_build_prompt_includes_pending_question_block_only_when_provided(fake_db
     chat.handle_chat_message(fake_db, llm_client, text_llm_client, store, telegram_user_id=1, user_id=1, text="嗨")
 
     assert "特別狀況" not in llm_client.last_prompt
+
+
+def test_handle_chat_message_prompt_includes_conciseness_rule(fake_db):
+    # 2026-08-01（FR-3f）：Robin 回報問「Robin 幾歲」被複述整段生日與計算過程、問「牛牛是什麼顏色」
+    # 被附加一整段外觀描述，實際上只需要回核心答案；prompt 要指示模型精簡直接。
+    _seed_general(fake_db)
+    llm_client = _FakeLLMClient()
+    text_llm_client = _FakeTextLLMClient()
+    store = ConversationStateStore()
+
+    chat.handle_chat_message(
+        fake_db, llm_client, text_llm_client, store, telegram_user_id=1, user_id=1, text="Robin 今年幾歲？"
+    )
+
+    assert "回答務必精簡直接" in llm_client.last_prompt
+
+
+def test_handle_chat_message_sets_pending_name_confirm_state_when_llm_returns_confirm_marker(fake_db):
+    # 2026-08-01（ADR-7）：打字誤植不再直接假設回答，改為輸出 CONFIRM_NAME 標記、先反問確認。
+    _seed_general(fake_db)
+    llm_client = _FakeLLMClient(response_text="你是說『吳凱吉』嗎？【CONFIRM_NAME】")
+    text_llm_client = _FakeTextLLMClient()
+    store = ConversationStateStore()
+
+    reply = chat.handle_chat_message(
+        fake_db, llm_client, text_llm_client, store, telegram_user_id=1, user_id=1, text="吳鎧吉是誰"
+    )
+
+    assert reply == "你是說『吳凱吉』嗎？"
+    assert "【CONFIRM_NAME】" not in reply
+    assert store.get(1) == {
+        "flow": "pending_name_confirm",
+        "target_user_id": 1,
+        "original_question": "吳鎧吉是誰",
+    }
+
+
+def test_handle_chat_message_confirming_question_answers_directly_when_user_confirms(fake_db):
+    # 使用者確認（或講出更明確的名字）後，這一輪應該針對原問題完整回答，不再輸出任何標記。
+    _seed_general(fake_db)
+    llm_client = _FakeLLMClient(response_text="吳凱吉是 Robin 的妹夫喔！")
+    text_llm_client = _FakeTextLLMClient()
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_name_confirm", "target_user_id": 1, "original_question": "吳鎧吉是誰"})
+
+    reply = chat.handle_chat_message(
+        fake_db, llm_client, text_llm_client, store, telegram_user_id=1, user_id=1,
+        text="對啊", confirming_question="吳鎧吉是誰",
+    )
+
+    assert reply == "吳凱吉是 Robin 的妹夫喔！"
+    assert store.get(1) is None
+    # prompt 必須把原本疑似打字誤植的問題帶進去，模型才有判斷依據
+    assert "吳鎧吉是誰" in llm_client.last_prompt
+    assert "疑似打字誤植" in llm_client.last_prompt
+
+
+def test_handle_chat_message_confirming_question_treats_denial_as_new_message(fake_db):
+    # 使用者否認猜測、或其實在問別的事時，完全忽略這個特別狀況，照一般規則正常回答，
+    # 不假設使用者在回答上一題，且要清除舊的 pending_name_confirm 狀態（不殘留卡住下一輪）。
+    _seed_general(fake_db)
+    llm_client = _FakeLLMClient(response_text="這個我目前不知道耶【NOT_FOUND】")
+    text_llm_client = _FakeTextLLMClient()
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_name_confirm", "target_user_id": 1, "original_question": "吳鎧吉是誰"})
+
+    reply = chat.handle_chat_message(
+        fake_db, llm_client, text_llm_client, store, telegram_user_id=1, user_id=1,
+        text="不是啦，我問別的", confirming_question="吳鎧吉是誰",
+    )
+
+    assert "這個我目前不知道耶" in reply
+    assert store.get(1) == {
+        "flow": "pending_user_knowledge",
+        "target_user_id": 1,
+        "original_question": "不是啦，我問別的",
+    }

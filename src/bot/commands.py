@@ -1,5 +1,7 @@
 """內建指令與對話式設定流程（對應 docs/specs/platform-auth/SPEC.md FR-4～FR-6、
-docs/specs/feature-toggles/SPEC.md FR-1～FR-2、docs/specs/chat-core/SPEC.md ADR-4）。"""
+docs/specs/feature-toggles/SPEC.md FR-1～FR-2、docs/specs/chat-core/SPEC.md ADR-4、FR-10）。"""
+from datetime import datetime, timezone
+
 from submodules.cloudsql.client import CloudSQLClient
 
 from src.bot import knowledge, templates, toggles
@@ -11,6 +13,29 @@ _EXIT_PHRASES = {"沒有了", "結束"}
 def handle_rule() -> str:
     """/rule：回傳規範文本，不經過 LLM 生成。"""
     return templates.APPENDIX_A_TEXT
+
+
+def handle_clean_all_dialog(db: CloudSQLClient, user_id: int) -> str:
+    """/clean-all-dialog：清除使用者自己的全部對話紀錄（短記憶＋長記憶摘要），對應 FR-10。
+
+    只清「對話」——`conversation_logs`（軟刪除，比照既有 `deleted_at` 慣例）與
+    `conversation_summaries`（重置為空白摘要，watermark 歸零）。刻意不動 `knowledge_base`：
+    這是與「刪除特定主題相關紀錄」（規劃中的 `/clean-target-dialog`，會同時清知識庫）不同的指令，
+    見 chat-core SPEC.md FR-10 備註。
+    """
+    db.update(
+        "conversation_logs",
+        {"deleted_at": datetime.now(timezone.utc)},
+        where="user_id = %s AND deleted_at IS NULL",
+        params=(user_id,),
+    )
+    db.update(
+        "conversation_summaries",
+        {"summary": "", "summarized_up_to_log_id": 0, "updated_at": datetime.now(timezone.utc)},
+        where="user_id = %s",
+        params=(user_id,),
+    )
+    return "已經幫你清除所有對話紀錄囉！你的知識庫內容不會受影響。"
 
 
 def handle_function(db: CloudSQLClient, llm_client) -> str:
