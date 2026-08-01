@@ -26,7 +26,8 @@ def handle_message(
     """處理一則來自 Telegram 的文字訊息，回傳要回覆的文字。
 
     `llm_client`（`GEMINI_API_BOT_KEY`）與 `text_llm_client`（`GEMINI_API_TEXT_KEY`，長記憶摘要用，
-    見 chat-core SPEC.md ADR-3）只有在訊息最終落入一般聊天核心時才會用到，`image_llm_clients`
+    見 chat-core SPEC.md ADR-3）在訊息落入一般聊天核心、或 `pending_clean_all_dialog_confirm`
+    反問確認流程（見 FR-10 追加修正）時會用到，`image_llm_clients`
     （`GEMINI_API_IMAGE_KEY1`/`KEY2`，見 robinson SPEC.md ADR-13）只有在使用者處於圖片辨識反問
     澄清流程（`pending_image_confirm`）時才會用到，其餘指令/對話流程分支都不需要；正式環境一律由
     webhook.py 注入，這裡預設 None 只是為了讓不涉及該流程的既有測試不用逐一補上假的 LLM Client。
@@ -78,7 +79,8 @@ def handle_message(
     if text in _FUNCTION_TRIGGERS:
         return commands.handle_function(db, llm_client)
     if text in _CLEAN_ALL_DIALOG_TRIGGERS:
-        return commands.handle_clean_all_dialog(db, user_id)
+        # 2026-08-01 起改為先反問確認，不再直接刪除，見 commands.start_clean_all_dialog_confirm。
+        return commands.start_clean_all_dialog_confirm(db, state_store, telegram_user_id, user_id)
 
     return chat.handle_chat_message(
         db, llm_client, text_llm_client, state_store, telegram_user_id, user_id, text
@@ -157,4 +159,7 @@ def _dispatch_active_flow(
         )
     if flow == "pending_image_confirm":
         return image.handle_image_confirm_step(image_llm_clients, state_store, telegram_user_id, text)
+    if flow == "pending_clean_all_dialog_confirm":
+        # 2026-08-01：/clean-all-dialog 先反問確認，這一輪由使用者的回覆判斷要不要真的執行刪除。
+        return commands.handle_clean_all_dialog_confirm_step(db, llm_client, state_store, telegram_user_id, text)
     return commands.handle_toggle_step(db, state_store, telegram_user_id, text)

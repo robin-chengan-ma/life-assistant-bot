@@ -20,6 +20,58 @@ def test_handle_rule_returns_appendix_a_text():
     assert commands.handle_rule() == templates.APPENDIX_A_TEXT
 
 
+def test_start_clean_all_dialog_confirm_reports_count_and_sets_pending_state(fake_db):
+    fake_db.insert("conversation_logs", {"user_id": 1, "role": "user", "content": "早安", "deleted_at": None})
+    fake_db.insert("conversation_logs", {"user_id": 1, "role": "assistant", "content": "早安！", "deleted_at": None})
+    store = ConversationStateStore()
+
+    reply = commands.start_clean_all_dialog_confirm(fake_db, store, telegram_user_id=1, user_id=1)
+
+    assert "2 筆對話紀錄" in reply
+    assert "確定要清除嗎" in reply
+    assert store.get(1) == {"flow": "pending_clean_all_dialog_confirm", "target_user_id": 1}
+
+
+def test_start_clean_all_dialog_confirm_reports_zero_when_no_logs(fake_db):
+    store = ConversationStateStore()
+
+    reply = commands.start_clean_all_dialog_confirm(fake_db, store, telegram_user_id=1, user_id=1)
+
+    assert "0 筆對話紀錄" in reply
+
+
+def test_handle_clean_all_dialog_confirm_step_deletes_when_llm_confirms(fake_db):
+    fake_db.insert("conversation_logs", {"user_id": 1, "role": "user", "content": "早安", "deleted_at": None})
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_clean_all_dialog_confirm", "target_user_id": 1})
+    llm_client = _FakeLLMClient(response_text="CONFIRM")
+
+    reply = commands.handle_clean_all_dialog_confirm_step(fake_db, llm_client, store, telegram_user_id=1, text="對啊")
+
+    assert reply == "已經幫你清除所有對話紀錄囉！你的知識庫內容不會受影響。"
+    assert store.get(1) is None
+    logs = fake_db.select("conversation_logs", where="user_id = %s AND deleted_at IS NULL", params=(1,))
+    assert logs == []
+    # prompt 必須把使用者的回覆帶進去，模型才有判斷依據
+    assert "對啊" in llm_client.last_prompt
+
+
+def test_handle_clean_all_dialog_confirm_step_cancels_on_any_non_confirm_reply(fake_db):
+    fake_db.insert("conversation_logs", {"user_id": 1, "role": "user", "content": "早安", "deleted_at": None})
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_clean_all_dialog_confirm", "target_user_id": 1})
+    llm_client = _FakeLLMClient(response_text="CANCEL")
+
+    reply = commands.handle_clean_all_dialog_confirm_step(
+        fake_db, llm_client, store, telegram_user_id=1, text="算了不要好了"
+    )
+
+    assert reply == "好的，先不清除，你的對話紀錄都還在喔！"
+    assert store.get(1) is None
+    logs = fake_db.select("conversation_logs", where="user_id = %s AND deleted_at IS NULL", params=(1,))
+    assert len(logs) == 1
+
+
 def test_handle_clean_all_dialog_soft_deletes_logs_resets_summary_and_keeps_knowledge_base(fake_db):
     fake_db.insert("conversation_logs", {"user_id": 1, "role": "user", "content": "早安", "deleted_at": None})
     fake_db.insert("conversation_logs", {"user_id": 1, "role": "assistant", "content": "早安！", "deleted_at": None})

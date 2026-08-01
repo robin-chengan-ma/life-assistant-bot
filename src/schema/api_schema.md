@@ -161,14 +161,25 @@
 
 ### `/clean-all-dialog`（內部路由，非對外 HTTP 端點）
 
-**狀態**：已實作（`src/bot/commands.py::handle_clean_all_dialog`）
+**狀態**：已實作（觸發即進入確認流程，`src/bot/commands.py::start_clean_all_dialog_confirm`；**2026-08-01 起不再直接刪除**，見下方 `pending_clean_all_dialog_confirm`）
 **觸發方式**：使用者於對話框輸入「我想要刪除所有對話紀錄」或 `/clean-all-dialog`
 **權限**：任何已驗證使用者（Robin 或家人），僅能清除自己的對話紀錄
 **對應 FR**：chat-core SPEC.md FR-10
 
-**Response**：固定文字「已經幫你清除所有對話紀錄囉！你的知識庫內容不會受影響。」，不經過 LLM 生成。
+**Response**：固定文字「你目前有 {N} 筆對話紀錄，確定要清除嗎？（不會影響你的知識庫內容）」，不經過 LLM 生成；設定 `pending_clean_all_dialog_confirm` 狀態，等使用者下一則回覆確認後才真正執行。
 
-**備註**：只清「對話」——`conversation_logs` 軟刪除（`deleted_at` 設為現在時間）＋ `conversation_summaries` 重置為空白摘要（`summary=''`、`summarized_up_to_log_id=0`），刻意不動 `knowledge_base`。與規劃中、尚未實作的「刪除特定主題相關紀錄」（`/clean-target-dialog`，使用者說「我想刪除有關...的紀錄」時觸發，會連同該主題的知識庫內容一起清除）明確區隔。
+**備註**：實際刪除邏輯在 `commands.handle_clean_all_dialog(db, user_id)`：只清「對話」——`conversation_logs` 軟刪除（`deleted_at` 設為現在時間）＋ `conversation_summaries` 重置為空白摘要（`summary=''`、`summarized_up_to_log_id=0`），刻意不動 `knowledge_base`。與規劃中、尚未實作的「刪除特定主題相關紀錄」（`/clean-target-dialog`，使用者說「我想刪除有關...的紀錄」時觸發，會連同該主題的知識庫內容一起清除）明確區隔。**2026-08-01 追加修正**：原本觸發詞一送出就直接刪除，Robin 回報沒有給反悔機會，違反「操作前先確認」原則，改為先反問確認。
+
+---
+
+### `pending_clean_all_dialog_confirm`（內部路由，非對外 HTTP 端點）
+
+**狀態**：已實作（`src/bot/commands.py::handle_clean_all_dialog_confirm_step`，2026-08-01 新增，見 chat-core SPEC.md FR-10 追加修正）
+**觸發方式**：`/clean-all-dialog` 觸發反問確認後，下一則訊息自動進入此狀態
+**權限**：任何已驗證使用者，僅能確認/取消自己的清除請求
+**對應 FR**：chat-core SPEC.md FR-10
+
+**備註**：用單次 `GEMINI_API_BOT_KEY` 呼叫判斷使用者這則回覆是「確定」（回覆固定字 `CONFIRM`，才呼叫 `handle_clean_all_dialog()` 真正執行刪除）還是「取消」（回覆固定字 `CANCEL`）；任何非 `CONFIRM` 的判定結果一律視為取消，寧可保守也不誤刪。狀態內容為 `{"flow": "pending_clean_all_dialog_confirm", "target_user_id": <int>}`。
 
 ---
 

@@ -366,29 +366,75 @@ def test_owner_pending_user_knowledge_flow_declines_via_router(fake_db, monkeypa
     assert len(rows) == 0
 
 
-# --- /clean-all-dialog（docs/specs/chat-core/SPEC.md FR-10）---
+# --- /clean-all-dialog（docs/specs/chat-core/SPEC.md FR-10，2026-08-01 起改為先確認再執行）---
 
 
-def test_known_family_member_can_trigger_clean_all_dialog_by_natural_language(fake_db, monkeypatch):
+def test_known_family_member_triggering_clean_all_dialog_only_asks_for_confirmation_first(fake_db, monkeypatch):
+    # Robin 回報：原本一觸發 /clean-all-dialog 就直接刪除，沒有給反悔機會；改為先反問確認，
+    # 並且要告知目前有幾筆對話紀錄，這一步驟本身不應該真的刪除任何東西。
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     fake_db.insert("conversation_logs", {"user_id": user_id, "role": "user", "content": "早安", "deleted_at": None})
+    fake_db.insert("conversation_logs", {"user_id": user_id, "role": "assistant", "content": "早安！", "deleted_at": None})
     store = ConversationStateStore()
 
     reply = router.handle_message(fake_db, store, FAMILY_ID, "我想要刪除所有對話紀錄")
 
-    assert "已經幫你清除所有對話紀錄" in reply
+    assert "2 筆對話紀錄" in reply
+    assert "確定要清除嗎" in reply
+    assert store.get(FAMILY_ID) == {
+        "flow": "pending_clean_all_dialog_confirm",
+        "target_user_id": user_id,
+    }
+    logs = fake_db.select("conversation_logs", where="user_id = %s AND deleted_at IS NULL", params=(user_id,))
+    assert len(logs) == 2  # 還沒真的刪除
+
+
+def test_clean_all_dialog_confirm_flow_deletes_when_user_confirms(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    fake_db.insert("conversation_logs", {"user_id": user_id, "role": "user", "content": "早安", "deleted_at": None})
+    store = ConversationStateStore()
+    store.set(FAMILY_ID, {"flow": "pending_clean_all_dialog_confirm", "target_user_id": user_id})
+    llm_client = _FakeLLMClient(response_text="CONFIRM")
+
+    reply = router.handle_message(fake_db, store, FAMILY_ID, "對，刪掉吧", llm_client=llm_client)
+
+    assert reply == "已經幫你清除所有對話紀錄囉！你的知識庫內容不會受影響。"
+    assert store.get(FAMILY_ID) is None
     logs = fake_db.select("conversation_logs", where="user_id = %s AND deleted_at IS NULL", params=(user_id,))
     assert logs == []
 
 
-def test_owner_can_trigger_clean_all_dialog_via_slash_command(fake_db, monkeypatch):
+def test_clean_all_dialog_confirm_flow_keeps_logs_when_user_cancels(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    fake_db.insert("conversation_logs", {"user_id": user_id, "role": "user", "content": "早安", "deleted_at": None})
+    store = ConversationStateStore()
+    store.set(FAMILY_ID, {"flow": "pending_clean_all_dialog_confirm", "target_user_id": user_id})
+    llm_client = _FakeLLMClient(response_text="CANCEL")
+
+    reply = router.handle_message(fake_db, store, FAMILY_ID, "算了不要好了", llm_client=llm_client)
+
+    assert reply == "好的，先不清除，你的對話紀錄都還在喔！"
+    assert store.get(FAMILY_ID) is None
+    logs = fake_db.select("conversation_logs", where="user_id = %s AND deleted_at IS NULL", params=(user_id,))
+    assert len(logs) == 1
+
+
+def test_owner_can_trigger_clean_all_dialog_confirmation_via_slash_command(fake_db, monkeypatch):
     monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
     store = ConversationStateStore()
 
     reply = router.handle_message(fake_db, store, ROBIN_ID, "/clean-all-dialog")
 
-    assert reply == "已經幫你清除所有對話紀錄囉！你的知識庫內容不會受影響。"
+    assert "0 筆對話紀錄" in reply
+    assert "確定要清除嗎" in reply
+    owner_row = fake_db.select("users", where="telegram_user_id = %s", params=(ROBIN_ID,), fetch_one=True)
+    assert store.get(ROBIN_ID) == {
+        "flow": "pending_clean_all_dialog_confirm",
+        "target_user_id": owner_row["id"],
+    }
 
 
 # --- 圖片辨識（docs/specs/robinson/SPEC.md FR-17、ADR-13）---

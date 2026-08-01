@@ -29,7 +29,7 @@ owner: Robin
 
 - [x] FR-1：路由層最終 fallback（不是任何已知指令、也沒有進行中的對話流程）改為呼叫對話核心，取代 `_PLACEHOLDER_REPLY`
 - [x] FR-2：Context 組裝 —— 每次呼叫固定帶上：① `general_persona`、② `general_family`（全體共用，不分使用者）、③ 該使用者自己的 `custom` 知識庫（依 FR-10 資安隔離，只查自己的 `user_id`）、④ 該使用者最近 10 則 `conversation_logs`（依時間排序，避免 prompt 無上限成長）
-- [x] FR-3：System Prompt 規則 —— 明確指示模型：(a) 用 Robinson 的人格語氣回答，不要照本宣科；(b) 只根據提供的知識庫內容回答，明確告知模型自己沒有查詢網路的能力；(c) 知識庫沒有答案時必須誠實回報不知道（2026-07-31 修正，見 ADR-5）；(d)（2026-07-31 追加）真實日期由伺服器本地算出（`Asia/Taipei` 時區）直接塞進 prompt，日期／星期問題一律以此為準，不可自行推算或憑印象亂猜；除 prompt 內明確提供的資料外絕對不能捏造具體事實（例如生日、事件細節、數字）——起因是 Robin 回報問「今天幾月幾號」時模型瞎掰錯誤日期並編造「剛好是我生日」，LLM 本身沒有即時時鐘，移除 grounding 後更無管道查證，日期屬於伺服器本地就能算出的資訊，不需要任何外部 API；(e)（2026-07-31 追加，2026-08-01 追加修正）代名詞（他／她／牠／它）追問一律理解成使用者「最近一次」明確點名問過的那個人，即使中間插入了其他不相關的問題也要以那之後最新一次明確點名的對象為準，不可跳回更早之前提過的人；不能因為上一輪回答內容裡順便提到其他人名就誤判指涉對象；使用者明確糾正時要針對正確對象重新回答原本的問題，不能只重複貼舊答案；只要沒有百分之百把握指涉對象就必須先反問使用者，不能用可能錯誤的假設硬答；年齡等數值計算一律用「現在的日期」與知識庫裡的正確生日相減——起因是 Robin 回報問「小布丁是誰」後追問「他大概幾歲」，Robinson 誤把「他」理解成上一輪回答裡順便提到的照顧者（爺爺）並算出爺爺的年齡，使用者糾正「我說小布丁啦」後又只是重複貼一模一樣的舊答案，沒有真的回答年齡；**2026-08-01 追加修正起因**：Robin 回報連續問「小雯有養動物嗎」→（中間插入一則不相關問題）→「范麗芳是誰」→「她老公是誰」，Robinson 誤把「她」理解成更早之前提過的小雯，而不是最近一次才明確點名問過的范麗芳，原規則未明確規範「該用哪一輪的主體」也未強制「沒把握就要反問」，故補強上述兩點；(f)（2026-08-01 追加，見 ADR-7）回答務必精簡直接——單純的事實性問題（幾歲、什麼顏色、是誰等）只需給出核心答案本身，不要主動附加推算過程、查到的來源或不必要的背景說明／形容詞堆疊；只有使用者明確要求解釋原因、過程，或問題本身就需要完整說明時才展開細講——起因是 Robin 回報問「Robin 今年幾歲」時 Robinson 複述了整段生日與計算過程，問「牛牛是什麼顏色」時附加了一整段外觀描述，其實只需要回「快要滿 29 歲」「黑色」就好
+- [x] FR-3：System Prompt 規則 —— 明確指示模型：(a) 用 Robinson 的人格語氣回答，不要照本宣科；(b) 只根據提供的知識庫內容回答，明確告知模型自己沒有查詢網路的能力；(c) 知識庫沒有答案時必須誠實回報不知道（2026-07-31 修正，見 ADR-5）；(d)（2026-07-31 追加）真實日期由伺服器本地算出（`Asia/Taipei` 時區）直接塞進 prompt，日期／星期問題一律以此為準，不可自行推算或憑印象亂猜；除 prompt 內明確提供的資料外絕對不能捏造具體事實（例如生日、事件細節、數字）——起因是 Robin 回報問「今天幾月幾號」時模型瞎掰錯誤日期並編造「剛好是我生日」，LLM 本身沒有即時時鐘，移除 grounding 後更無管道查證，日期屬於伺服器本地就能算出的資訊，不需要任何外部 API；(e)（2026-07-31 追加，2026-08-01 追加修正）代名詞（他／她／牠／它）追問一律理解成使用者「最近一次」明確點名問過的那個人，即使中間插入了其他不相關的問題也要以那之後最新一次明確點名的對象為準，不可跳回更早之前提過的人；不能因為上一輪回答內容裡順便提到其他人名就誤判指涉對象；使用者明確糾正時要針對正確對象重新回答原本的問題，不能只重複貼舊答案；只要沒有百分之百把握指涉對象就必須先反問使用者，不能用可能錯誤的假設硬答；年齡等數值計算一律用「現在的日期」與知識庫裡的正確生日相減——起因是 Robin 回報問「小布丁是誰」後追問「他大概幾歲」，Robinson 誤把「他」理解成上一輪回答裡順便提到的照顧者（爺爺）並算出爺爺的年齡，使用者糾正「我說小布丁啦」後又只是重複貼一模一樣的舊答案，沒有真的回答年齡；**2026-08-01 追加修正起因**：Robin 回報連續問「小雯有養動物嗎」→（中間插入一則不相關問題）→「范麗芳是誰」→「她老公是誰」，Robinson 誤把「她」理解成更早之前提過的小雯，而不是最近一次才明確點名問過的范麗芳，原規則未明確規範「該用哪一輪的主體」也未強制「沒把握就要反問」，故補強上述兩點；(f)（2026-08-01 追加，見 ADR-7）回答務必精簡直接——單純的事實性問題（幾歲、什麼顏色、是誰等）只需給出核心答案本身，不要主動附加推算過程、查到的來源或不必要的背景說明／形容詞堆疊；只有使用者明確要求解釋原因、過程，或問題本身就需要完整說明時才展開細講——起因是 Robin 回報問「Robin 今年幾歲」時 Robinson 複述了整段生日與計算過程，問「牛牛是什麼顏色」時附加了一整段外觀描述，其實只需要回「快要滿 29 歲」「黑色」就好；(g)（2026-08-01 追加，誠實性規則）除了 FR-4 的 `pending_user_knowledge` `【SAVE_ANSWER】` 流程以外，模型沒有任何其他管道能真的把新資訊寫進 `knowledge_base`；即使使用者直接要求「記住」「新增到知識庫」「幫我存起來」，也絕對不能宣稱已經記錄、已經新增、已經儲存，必須誠實告知目前無法主動寫入、請轉告 Robin 手動新增——起因是 Robin 回報請 Robinson 把家庭成員背景新增到知識庫，Robinson 回覆已經新增，但實際上完全沒有對應的寫入路徑，屬於謊報成功；也順帶修正打字誤植反問機制（ADR-7）的一個副作用：反問句必須帶出【Robinson 人格背景】／【Robin 與家人背景】／【客製知識庫】裡「真實存在」的相似人名，不可以套用其他不相關的人名，資料裡根本沒有相似人名時要直接走 FR-4 的「不知道」規則——起因是 Robin 回報問「阿牛是誰」（知識庫當時沒有這筆資料）卻被反問「你是說『吳凱吉』嗎？」，兩者毫無相似之處，原因是舊版 prompt 範例把一個真實家人姓名寫死在指示文字裡，模型會照抄範例而非真的比對知識庫內容
 - [x] FR-4：查無答案時的處理（對應 FR-12，2026-07-31 修正，見 ADR-5，supersede 原本的 Google Search grounding 設計）—— 單次 API 呼叫（`generate_text`，不掛任何工具）；prompt 指示模型在資料不足以回答時，於回覆最後加上固定標記 `【NOT_FOUND】`；`chat.py` 偵測到標記後，去除標記並附加「你可以先自行上網查詢，查到後把答案打給我，我會幫你記錄到知識庫喔！」，同時進入等待使用者提供答案的狀態（`flow: pending_user_knowledge`，含 `original_question` 欄位）。**2026-07-31 再修正，見 ADR-6**：下一則訊息不再無條件視為答案存檔——同一次 LLM 呼叫會先判斷這則新訊息是「提供答案」（輸出 `【SAVE_ANSWER】`，才寫入 `knowledge_base`，`category='custom'`，`user_id=`該使用者）、「拒絕記錄」（輸出 `【DECLINE_SAVE】`，不寫入）、還是「其實是問了個無關的新問題」（不輸出任何標記，照一般規則正常回答，並清除 pending 狀態）
 - [x] FR-5：對話紀錄 —— 只有真正進入一般聊天核心的訊息才記錄：使用者原始輸入寫一筆（`role='user'`），Robinson 的回覆寫一筆（`role='assistant'`）；指令觸發（`/rule`、`/my_toggles` 等）與確認存檔流程本身的輸入/輸出不計入對話紀錄
 - [x] FR-6：長記憶查詢 —— Context 組裝時額外帶上該使用者的 `conversation_summaries.summary`（查無資料視為空字串），與短記憶/知識庫一起放進 prompt
@@ -38,7 +38,7 @@ owner: Robin
 - [x] FR-9：`/function` 改版（Step 1.3a，對應 robinson SPEC.md FR-56、FR-56a～FR-56c，見 ADR-4）—— 「總覽」與「細節追問」兩階段：
   - [x] FR-9a：總覽 —— 觸發 `/function` 或「我要看所有功能」時，`commands.handle_function(db, llm_client)` 組 prompt（Robinson 人格背景 + `templates.build_function_overview_raw_text()` 原始清單）呼叫一次 LLM，回傳人格化改寫過的功能總覽（僅名稱＋一句話簡述＋權限標記，不展開細節或範例）
   - [x] FR-9b：細節追問 —— 使用者用自然語言追問特定功能（例如「記帳功能可以做什麼？」）時，不走 `/function` 路由，直接落入一般聊天核心；`chat._build_prompt()` 固定附上 `templates.build_function_manual_text()`（完整功能手冊，含 FR-56d～FR-56h 情境範例），並指示 LLM 只有使用者明確詢問時才依此回答且需附範例，一般聊天不主動提起
-- [x] FR-10（2026-08-01 新增）：`/clean-all-dialog` —— 使用者輸入「我想要刪除所有對話紀錄」或 `/clean-all-dialog` 時，`commands.handle_clean_all_dialog(db, user_id)` 只清除該使用者自己的「對話」：`conversation_logs` 軟刪除（`deleted_at` 設為現在時間，比照既有慣例）＋ `conversation_summaries` 重置為空白摘要（`summary=''`、`summarized_up_to_log_id=0`）；**刻意不動 `knowledge_base`**——這是與規劃中、尚未實作的「刪除特定主題相關紀錄」（`/clean-target-dialog`，使用者說「我想刪除有關...的紀錄」時觸發，會連同該主題的知識庫內容一起清除）明確區隔開的不同指令，`/clean-all-dialog` 只處理對話記憶，不處理知識庫
+- [x] FR-10（2026-08-01 新增，2026-08-01 追加修正改為先確認）：`/clean-all-dialog` —— 使用者輸入「我想要刪除所有對話紀錄」或 `/clean-all-dialog` 時，`commands.handle_clean_all_dialog(db, user_id)` 只清除該使用者自己的「對話」：`conversation_logs` 軟刪除（`deleted_at` 設為現在時間，比照既有慣例）＋ `conversation_summaries` 重置為空白摘要（`summary=''`、`summarized_up_to_log_id=0`）；**刻意不動 `knowledge_base`**——這是與規劃中、尚未實作的「刪除特定主題相關紀錄」（`/clean-target-dialog`，使用者說「我想刪除有關...的紀錄」時觸發，會連同該主題的知識庫內容一起清除）明確區隔開的不同指令，`/clean-all-dialog` 只處理對話記憶，不處理知識庫。**追加修正起因**：Robin 回報原本觸發詞一送出就直接執行刪除，沒有給使用者反悔機會，違反 FR-16「任何涉及寫入/修改資料庫的操作前一律先與使用者確認」；改為 `commands.start_clean_all_dialog_confirm()` 先查出目前 `conversation_logs` 未刪除筆數告知使用者並反問「確定要清除嗎？」，進入 `pending_clean_all_dialog_confirm` 狀態，下一則訊息由 `commands.handle_clean_all_dialog_confirm_step()` 以單次 LLM 呼叫判斷使用者是「確定」（`CONFIRM`，才呼叫 `handle_clean_all_dialog()` 真正執行）還是「取消」（`CANCEL`，任何無法判斷為確定的回覆一律視為取消，保守優先，不誤刪）
 
 ### 非功能性需求
 
@@ -190,6 +190,8 @@ owner: Robin
 
 **狀態**：accepted（ADR-6 的「直接假設並回答」機制部分 superseded；ADR-6 其餘部分——同一次呼叫判斷答案/拒絕/新問題、建議句去重——維持 accepted）
 
+**2026-08-01 追加修正**：Robin 回報問「阿牛是誰」（知識庫當時沒有這筆資料）卻被反問「你是說『吳凱吉』嗎？」，兩者毫無相似之處。原因是上方「後果」提到的 prompt 規則裡，反問範例寫死了一個真實家人姓名「吳凱吉」，模型會照抄這個範例而不是真的去比對知識庫內容判斷相似度。修正 `chat._build_prompt()`：反問句必須帶出資料中「真實存在且真的高度相似」的人名，不可以套用其他不相關、不相似的名字；且明確規定知識庫裡根本沒有相似人名時要直接依照 FR-4 的「不知道」規則回答，不可以誤觸發這個反問機制。同時補上 FR-3(g) 誠實性規則（見上方 FR-3）。
+
 ## 實作計畫
 
 - [x] Step 1（2026-07-31 由 ADR-5 取代）：`submodules/llm/client.py` 曾新增 `generate_with_search(prompt) -> tuple[str, bool]`，現已刪除
@@ -209,6 +211,7 @@ owner: Robin
 - [x] Step 15（2026-08-01，ADR-7）：`chat.py` 新增 `_CONFIRM_NAME_MARKER`／`confirming_question` 參數，prompt 打字誤植規則改為先反問；`router.py` 新增 `pending_name_confirm` 分支
 - [x] Step 16（2026-08-01，FR-3f）：`chat._build_prompt()` 加入精簡回答規則
 - [x] Step 17（2026-08-01，FR-10）：新增 `commands.handle_clean_all_dialog(db, user_id)`；`router.py` 新增 `_CLEAN_ALL_DIALOG_TRIGGERS` 分派；`templates.APPENDIX_A_TEXT` 補上第 4 點使用須知
+- [x] Step 18（2026-08-01，FR-10 追加修正＋FR-3g）：`commands.py` 新增 `start_clean_all_dialog_confirm()`／`handle_clean_all_dialog_confirm_step()`，`/clean-all-dialog` 改為先反問確認再刪除；`router.py` 新增 `pending_clean_all_dialog_confirm` 分派；`chat._build_prompt()` 修正 CONFIRM_NAME 反問範例（不可套用不相關人名）並加入誠實性規則（不可謊報已寫入知識庫）；`src/migrations/0011_add_family_pets_to_family_knowledge.sql` 新增阿牛（牛牛）、龜龜兩筆家庭寵物背景
 
 ## 測試策略
 
@@ -226,6 +229,8 @@ owner: Robin
 - [x] 連續對話累積超過門檻則數後，自動觸發一次摘要更新（`test_handle_chat_message_triggers_memory_update_after_reply`）
 - [x]（2026-08-01，ADR-7）打字誤植觸發 `【CONFIRM_NAME】` 標記時設定 `pending_name_confirm` 狀態並去除標記；`router.py` 正確分派該 flow 並帶入 `confirming_question`；使用者確認／否認兩種情況分別正確處理
 - [x]（2026-08-01，FR-10）`commands.handle_clean_all_dialog()`：軟刪除 `conversation_logs`、重置 `conversation_summaries`、不影響 `knowledge_base`；`router.py` 的 `/clean-all-dialog` 與「我想要刪除所有對話紀錄」皆能正確觸發
+- [x]（2026-08-01，FR-10 追加修正）`commands.start_clean_all_dialog_confirm()`：正確回報目前未刪除的對話紀錄筆數並設定 `pending_clean_all_dialog_confirm` 狀態、不會真的刪除；`commands.handle_clean_all_dialog_confirm_step()`：LLM 判定 `CONFIRM` 才真的執行刪除、`CANCEL`（或任何非 `CONFIRM` 回覆）保留原資料；`router.py` 正確分派該 flow
+- [x]（2026-08-01，FR-3g／CONFIRM_NAME 修正）prompt 誠實性規則存在（不可謊報已寫入知識庫）；CONFIRM_NAME 反問規則要求帶出資料中真實存在的相似人名、且知識庫沒有相似人名時要走「不知道」規則，不誤觸發反問
 
 ### E2E Tests
 - [x]（2026-07-31 依 ADR-5 修正）完整流程：使用者問一個知識庫沒有的問題 → 模型誠實回報不知道（`【NOT_FOUND】`標記）→ 附加自行查詢建議 → 使用者提供答案 → 直接寫入 `custom` 知識庫
@@ -244,7 +249,8 @@ owner: Robin
 | 長記憶摘要多次滾動濃縮後可能失真或遺漏細節（ADR-3 已知取捨） | 低 | 中 | 短記憶（最近 10 則原文）與知識庫仍保有精確資訊，摘要只補「更早以前」的粗略脈絡，不是唯一資訊來源；若之後發現失真嚴重，可再評估升級為向量搜尋（ADR-3 方案 C） |
 | 摘要更新呼叫（`GEMINI_API_TEXT_KEY`）失敗，可能拖慢或影響本次聊天回覆 | 低 | 低 | ADR-3 明訂摘要更新在回覆算完之後才執行，且用 `try/except` 包住，失敗只跳過本次摘要更新，不影響聊天回覆本身送出 |
 | `pending_name_confirm` 判斷「使用者是否確認」依賴模型語言理解，不是規則式 100% 可控（ADR-7 已知取捨） | 低 | 低 | 與 ADR-6 一貫的取捨邏輯一致；猜錯的代價（誤判成否認、退回一般聊天重新回答一次）遠低於「假設打字誤植答錯人」的代價 |
-| `/clean-all-dialog` 是不可逆操作（軟刪除，但一般聊天流程不提供復原入口） | 低 | 低 | 觸發詞明確（需使用者主動輸入完整句子或指令），不會被模糊語句誤觸；`deleted_at` 軟刪除保留了資料庫層級復原的可能性，只是目前沒有對外的復原指令 |
+| `/clean-all-dialog` 是不可逆操作（軟刪除，但一般聊天流程不提供復原入口） | 低 | 低 | 觸發詞明確（需使用者主動輸入完整句子或指令），不會被模糊語句誤觸；`deleted_at` 軟刪除保留了資料庫層級復原的可能性，只是目前沒有對外的復原指令；**2026-08-01 追加緩解**：已改為先反問確認、告知目前筆數，才真正執行，進一步降低誤觸風險 |
+| 目前沒有任何「使用者主動要求，就把資訊寫進知識庫」的機制（唯一寫入路徑是 `pending_user_knowledge` 的被動流程），使用者可能誤以為講一聲「記住」就會生效 | 中 | 中 | 已修正 prompt 誠實性規則，Robinson 不會再謊稱已經記錄；但功能本身仍缺，屬於已知缺口，待 Robin 決定是否要開發「主動寫入知識庫」功能（新 Step，範圍待定：寫入 `custom` 還是 `general_family`、是否需要確認流程） |
 
 ## 變更記錄
 
@@ -261,3 +267,4 @@ owner: Robin
 | 2026-07-31 | Robin 回報 `pending_user_knowledge` 三個問題：(1) 問「陳東東是誰」被回不知道後換問完全無關的「吳凱吉是誰」，被誤存成陳東東的答案，新問題也沒被回答 (2) 「吳鎧吉」（同音字打錯，知識庫其實有「吳凱吉」）被誤判不知道，正常人一看就知道在找誰 (3) 明確說「不用紀錄啦」還是被存進知識庫，且建議句重複出現兩次；新增 ADR-6（部分 supersede ADR-5）：改由同一次 LLM 呼叫判斷「答案／拒絕／新問題」（`【SAVE_ANSWER】`／`【DECLINE_SAVE】`／無標記），不再無條件存檔；`handle_pending_user_knowledge_step()` 整併進 `handle_chat_message()`；prompt 加入同音字/形似字容錯規則；`router.py` `_dispatch_active_flow` 改吃整包 `state` 並新增 `llm_client`／`text_llm_client` 參數；全專案 184 個測試全過、覆蓋率 100% | Claude（依 Robin 回報指示） |
 | 2026-08-01 | Robin 測試後回報三項調整：(1) ADR-6 的打字誤植容錯「直接假設並回答」太冒進，改為新增 ADR-7：先反問確認（`【CONFIRM_NAME】` 標記＋`pending_name_confirm` 狀態），等使用者這則回覆確認或否認後才真正回答 (2) 補充 FR-3(f)：回答太囉唆（問年齡附加完整計算過程、問顏色附加整段外觀描述），加入精簡回答規則，單純事實性問題只給核心答案 (3) 新增 FR-10：`/clean-all-dialog` 指令，清除使用者自己的 `conversation_logs`＋`conversation_summaries`（軟刪除/重置），刻意不動 `knowledge_base`，並與規劃中的 `/clean-target-dialog`（會連知識庫一起清）明確區隔；`templates.APPENDIX_A_TEXT` 補上第 4 點使用須知；全專案 192 個測試全過、覆蓋率 100% | Claude（依 Robin 回報指示） |
 | 2026-08-01 | Robin 再回報代名詞指涉 bug：連續問「小雯有養動物嗎」→（中間插入一則不相關問題）→「范麗芳是誰」→「她老公是誰」，Robinson 誤把「她」理解成更早之前提過的小雯，而不是最近一次才明確點名問過的范麗芳；補強 FR-3(e)：明確規定代名詞一律以使用者「最近一次」明確點名的對象為準（即使中間插入其他問題也不可跳回更早之前的人），且只要沒有百分之百把握就必須先反問使用者，不能用可能錯誤的假設硬答 | Claude（依 Robin 回報指示） |
+| 2026-08-01 | Robin 測試又回報四個問題：(1) `/clean-all-dialog` 沒有先確認就直接刪除，補強 FR-10：新增 `commands.start_clean_all_dialog_confirm()`／`handle_clean_all_dialog_confirm_step()`，先告知目前對話紀錄筆數並反問確認，使用者確認（LLM 判定 `CONFIRM`）後才真正執行，任何非確定回覆一律視為取消，保守優先；`router.py` 新增 `pending_clean_all_dialog_confirm` 分派 (2) Robin 請 Robinson 把家庭成員背景新增到知識庫，Robinson 謊稱已新增（實際上沒有對應寫入路徑，目前唯一真的會寫入的管道只有 `pending_user_knowledge` 的 `【SAVE_ANSWER】` 流程），新增 FR-3(g) 誠實性規則，禁止在沒有實際寫入的情況下宣稱已記錄／已新增／已儲存 (3) 新增 `src/migrations/0011_add_family_pets_to_family_knowledge.sql`，寫入阿牛（牛牛，Robin 家的狗）與龜龜（Robin 爸爸養的蘇卡達陸龜）兩筆寵物背景 (4) 問「阿牛是誰」（知識庫當時沒有這筆資料）被誤反問「你是說『吳凱吉』嗎？」，原因是 prompt 反問範例寫死了一個真實家人姓名，模型照抄範例而非真的比對知識庫，修正 CONFIRM_NAME 反問規則要求帶出資料中真實存在且高度相似的人名，沒有相似人名時要走「不知道」規則；全專案 201 個測試全過、覆蓋率 100% | Claude（依 Robin 回報指示） |

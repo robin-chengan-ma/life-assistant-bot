@@ -15,13 +15,63 @@ def handle_rule() -> str:
     return templates.APPENDIX_A_TEXT
 
 
+_CLEAN_ALL_DIALOG_CONFIRM_PROMPT = (
+    "使用者剛被 Robinson 反問「確定要清除所有對話紀錄嗎？」，這是使用者這一則的回覆：「{text}」。\n"
+    "請判斷使用者的意思，整則回覆只能輸出以下其中一個固定字，不要輸出其他任何文字：\n"
+    "(1) 確定要清除 → CONFIRM\n"
+    "(2) 不要清除、想取消、還沒想清楚、或其實在問別的事 → CANCEL"
+)
+
+
+def start_clean_all_dialog_confirm(
+    db: CloudSQLClient,
+    state_store: ConversationStateStore,
+    telegram_user_id: int,
+    user_id: int,
+) -> str:
+    """/clean-all-dialog 觸發時先反問確認，不直接執行刪除（2026-08-01 追加，見 chat-core SPEC.md FR-10 追加修正）。
+
+    Robin 回報原本一觸發就直接刪除，沒有給使用者反悔機會，違反「任何操作都要先確認再執行」的原則
+    （FR-16）。改為先查出目前有幾筆未刪除的 `conversation_logs` 告知使用者，進入
+    `pending_clean_all_dialog_confirm` 狀態，等使用者下一則訊息確認後才真正執行刪除。
+    """
+    count = len(db.select("conversation_logs", where="user_id = %s AND deleted_at IS NULL", params=(user_id,)))
+    state_store.set(telegram_user_id, {"flow": "pending_clean_all_dialog_confirm", "target_user_id": user_id})
+    return f"你目前有 {count} 筆對話紀錄，確定要清除嗎？（不會影響你的知識庫內容）"
+
+
+def handle_clean_all_dialog_confirm_step(
+    db: CloudSQLClient,
+    llm_client,
+    state_store: ConversationStateStore,
+    telegram_user_id: int,
+    text: str,
+) -> str:
+    """處理 `pending_clean_all_dialog_confirm` 狀態下使用者對刪除確認的回覆。
+
+    用單次 LLM 呼叫判斷使用者是「確定」還是「取消」（沿用 ADR-6／ADR-7 已建立的單次呼叫＋
+    固定標記慣例），避免關鍵字窮舉不了「好啊刪掉吧」「不用了」等各種講法；判斷不出來或任何非
+    `CONFIRM` 的回覆一律視為取消，寧可保守也不要誤刪。
+    """
+    state = state_store.get(telegram_user_id)
+    user_id = state["target_user_id"]
+    state_store.clear(telegram_user_id)
+
+    decision = llm_client.generate_text(_CLEAN_ALL_DIALOG_CONFIRM_PROMPT.format(text=text)).strip()
+    if decision == "CONFIRM":
+        return handle_clean_all_dialog(db, user_id)
+    return "好的，先不清除，你的對話紀錄都還在喔！"
+
+
 def handle_clean_all_dialog(db: CloudSQLClient, user_id: int) -> str:
-    """/clean-all-dialog：清除使用者自己的全部對話紀錄（短記憶＋長記憶摘要），對應 FR-10。
+    """清除使用者自己的全部對話紀錄（短記憶＋長記憶摘要），對應 FR-10。
 
     只清「對話」——`conversation_logs`（軟刪除，比照既有 `deleted_at` 慣例）與
     `conversation_summaries`（重置為空白摘要，watermark 歸零）。刻意不動 `knowledge_base`：
     這是與「刪除特定主題相關紀錄」（規劃中的 `/clean-target-dialog`，會同時清知識庫）不同的指令，
-    見 chat-core SPEC.md FR-10 備註。
+    見 chat-core SPEC.md FR-10 備註。**2026-08-01 起不再由觸發詞直接呼叫**，一律先經過
+    `start_clean_all_dialog_confirm()` 反問確認，使用者確認後才由 `handle_clean_all_dialog_confirm_step()`
+    呼叫這個函式執行實際刪除。
     """
     db.update(
         "conversation_logs",

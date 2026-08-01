@@ -250,6 +250,42 @@ def test_handle_chat_message_deduplicates_suggestion_when_model_already_echoed_i
     assert reply.count("你可以先自行上網查詢") == 1
 
 
+def test_handle_chat_message_prompt_forbids_falsely_claiming_knowledge_was_saved(fake_db):
+    # Robin 回報：請 Robinson 把家庭成員背景「新增到知識庫」，Robinson 回覆已經新增，但目前
+    # 完全沒有對應的寫入路徑（唯一真的會寫入的管道是 pending_user_knowledge 的 SAVE_ANSWER 流程），
+    # 等於謊報成功；prompt 要明確禁止這種說法。
+    _seed_general(fake_db)
+    llm_client = _FakeLLMClient()
+    text_llm_client = _FakeTextLLMClient()
+    store = ConversationStateStore()
+
+    chat.handle_chat_message(
+        fake_db, llm_client, text_llm_client, store, telegram_user_id=1, user_id=1,
+        text="幫我把這個家庭成員的背景新增到知識庫",
+    )
+
+    assert "你也絕對不能宣稱已經記錄、已經新增、已經儲存" in llm_client.last_prompt
+    assert "請他轉告 Robin 手動新增" in llm_client.last_prompt
+
+
+def test_handle_chat_message_prompt_requires_real_similar_name_for_confirm_name_and_falls_back_to_unknown(fake_db):
+    # Robin 回報：問「阿牛是誰」（知識庫裡當時沒有這個人/寵物）卻被反問「你是說『吳凱吉』嗎？」，
+    # 兩者毫無相似之處；原因是舊 prompt 範例寫死了真實姓名，模型照抄範例而非真的比對知識庫。
+    # 新規則要求反問一定要帶出資料中真實存在的相似人名，且沒有相似人名時要直接走「不知道」規則。
+    _seed_general(fake_db)
+    llm_client = _FakeLLMClient()
+    text_llm_client = _FakeTextLLMClient()
+    store = ConversationStateStore()
+
+    chat.handle_chat_message(
+        fake_db, llm_client, text_llm_client, store, telegram_user_id=1, user_id=1, text="阿牛是誰"
+    )
+
+    assert "反問句裡一定要帶出以上資料中真實存在的那個人名" in llm_client.last_prompt
+    assert "絕對不可以套用其他" in llm_client.last_prompt
+    assert "如果以上資料裡根本沒有任何跟使用者打的名字相似的人名，代表這是真的不知道" in llm_client.last_prompt
+
+
 def test_handle_chat_message_prompt_includes_fuzzy_name_matching_rule(fake_db):
     # Robin 回報：知識庫存的是「吳凱吉」，打成「吳鎧吉」（同音字誤植）就直接被判定不知道，
     # 正常人類看了也知道在找誰；prompt 要指示模型合理假設打字誤植、別急著說不知道。
