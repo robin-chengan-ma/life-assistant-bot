@@ -126,6 +126,24 @@ def test_handle_chat_message_prompt_includes_pronoun_resolution_rule(fake_db):
     assert "不能只是重複貼上一輪答過的舊內容" in llm_client.last_prompt
 
 
+def test_handle_chat_message_prompt_includes_pronoun_recency_and_confirm_when_unsure_rule(fake_db):
+    # Robin 回報：問「小雯有養動物嗎」→（中間插入不相關問題）→「范麗芳是誰」→「她老公是誰」，
+    # Robinson 誤把「她」理解成更早之前提過的小雯，而不是最近一次才明確點名問過的范麗芳。
+    # prompt 要明確規定以「最近一次明確點名」為準，且沒把握就要反問，不要用假設硬答。
+    _seed_general(fake_db)
+    llm_client = _FakeLLMClient()
+    text_llm_client = _FakeTextLLMClient()
+    store = ConversationStateStore()
+
+    chat.handle_chat_message(
+        fake_db, llm_client, text_llm_client, store, telegram_user_id=1, user_id=1, text="她老公是誰"
+    )
+
+    assert "以那之後最新一次明確點名的對象為準，不可以跳回更早之前提過的人" in llm_client.last_prompt
+    assert "只要你自己沒有百分之百把握代名詞指的是誰" in llm_client.last_prompt
+    assert "絕對不要用可能錯誤的假設硬答" in llm_client.last_prompt
+
+
 def test_handle_chat_message_prompt_states_no_web_search_capability(fake_db):
     # ADR-5：Gemini 2.5 世代對新 Key 關閉存取，grounding 整個移除，prompt 必須明確告知模型
     # 自己沒有查網路的能力，不知道就要誠實回報（透過固定標記讓程式碼判斷）。
