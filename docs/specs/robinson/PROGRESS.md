@@ -107,6 +107,7 @@ updated: 2026-08-01
 | 2026-08-02 | **FR-16a 追加優化**：Robin 追問卡在最終確認狀態時收到新語音會如何處理，發現初版是先下載/轉錄才拒絕，浪費 Drive/Groq 額度，確認補上；`handle_voice_message()` 改為在下載/轉錄之前就短路拒絕，完全不消耗額度；全專案 275 個測試全過、覆蓋率 100% |
 | 2026-08-02 | **補上 FR-14 規則 1（語音超時全面鎖定）**：Robin 指出印象中 15 分鐘鎖定應該是「單次錄音超過 10 分鐘才觸發」，核對後發現這其實跟 FR-15「修正情境鎖定」是兩條獨立規則，目前只做了後者，前者完全沒實作；確認兩條都要做，新增 `voice.mark_duration_violation()`／`is_locked_out_from_duration_violation()`，`webhook.py` 新增長期持有的 `_voice_lockout_store`；全專案 284 個測試全過、覆蓋率 100% |
 | 2026-08-02 | **FR-15 修正窗口主動提醒**：Robin 追問語音功能被限制/恢復時會不會提醒使用者；盤點後發現 FR-14 規則 1 的拒絕回覆已有主動提示，但 FR-15 修正窗口開始當下、鎖定到期時都沒有主動通知（機器人被動回應訊息，沒有排程/推播機制）；Robin 選擇先聚焦較簡單的一項，新增 `router._VOICE_TRANSCRIBED_REMINDER`，語音成功轉出文字後於回覆末尾附註 15 分鐘修正窗口提醒；鎖定到期主動通知維持現狀；全專案 284 個測試全過、覆蓋率 100% |
+| 2026-08-02 | **修正 Telegram send_text 400 錯誤 + 排查 gdrive 金鑰路徑**：Robin 實測回報兩個部署後問題：① `/function` 觸發 Telegram `sendMessage` 400 Bad Request，根因是 `send_text()` 預設 `parse_mode="Markdown"`，但 LLM 生成的回覆文字無法保證符合 Telegram 舊版 Markdown 語法，格式不符會整則被拒收——所有 LLM 生成回覆都有此風險，非 `/function` 獨有；Robin 選擇直接關閉 Markdown，改為預設純文字傳送 ② 語音功能因 `GDriveClient` 找不到 Service Account 金鑰檔而失敗，確認是 Robin 把金鑰放在 Render Secret Files（實際掛載路徑 `/etc/secrets/<filename>`），但 `GDRIVE_KEY_FILE_PATH` 環境變數設定的是相對路徑，兩者對不上——純屬 Render 環境變數設定問題，非程式碼錯誤，待 Robin 調整環境變數即可解決；全專案 285 個測試全過、覆蓋率 100% |
 
 ## 待決事項
 

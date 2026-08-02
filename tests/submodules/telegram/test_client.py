@@ -37,6 +37,8 @@ def test_call_posts_to_correct_url_and_returns_json(monkeypatch):
 
 
 def test_send_text_builds_correct_payload(monkeypatch):
+    """2026-08-02：預設不帶 parse_mode（純文字），避免 LLM 生成文字格式不符 Telegram 舊版
+    Markdown 語法時被整則拒收（400 Bad Request），見 client.py send_text() docstring。"""
     mock_post = MagicMock(return_value=_fake_response({"ok": True}))
     monkeypatch.setattr(client_module.requests, "post", mock_post)
 
@@ -46,6 +48,19 @@ def test_send_text_builds_correct_payload(monkeypatch):
     assert mock_post.call_args.kwargs["json"] == {
         "chat_id": 123,
         "text": "哈囉",
+    }
+
+
+def test_send_text_includes_parse_mode_when_explicitly_given(monkeypatch):
+    mock_post = MagicMock(return_value=_fake_response({"ok": True}))
+    monkeypatch.setattr(client_module.requests, "post", mock_post)
+
+    client = TelegramClient(bot_token="fake-token")
+    client.send_text(chat_id=123, text="*哈囉*", parse_mode="Markdown")
+
+    assert mock_post.call_args.kwargs["json"] == {
+        "chat_id": 123,
+        "text": "*哈囉*",
         "parse_mode": "Markdown",
     }
 

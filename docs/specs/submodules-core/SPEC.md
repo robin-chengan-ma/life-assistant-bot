@@ -96,6 +96,8 @@ submodules/
 **後果**：主專案根目錄 `requirements.txt` 保留 `python-telegram-bot`，供 Phase 1 backend 層處理 webhook 接收與訊息路由時使用；两者分工不衝突（submodules 負責送、backend 負責收與 dispatch）。
 **狀態**：accepted
 
+**2026-08-02 補充決策**：`send_text()` 原本預設 `parse_mode="Markdown"`；Robin 實測「我要看所有功能」時 Telegram 回 `400 Bad Request`，排查後確認是 `handle_function()` 的回覆文字由 LLM 自然語言生成，無法保證符合 Telegram 舊版 Markdown 語法（例如星號、底線沒有成對），一旦格式不符，Telegram 會整則拒收，使用者完全收不到回覆——這個風險不只 `/function`，所有 LLM 生成的聊天回覆都可能中獎。改為預設不帶 `parse_mode`（純文字傳送），呼叫端仍可視需要明確傳入；目前所有靜態文案模板本來就沒有依賴 Markdown 格式化（用 emoji 分段），純文字不影響既有呈現效果。
+
 ### ADR-3：llm Client 採用官方 `google-genai` SDK
 
 **背景**：Google 已將舊版 `google-generativeai` 套件標記為 deprecated，統一改用新版 `google-genai`（2025 年 5 月起 GA，涵蓋 Gemini Developer API 與 Vertex AI）。
@@ -259,7 +261,7 @@ submodules/
 
 ### Unit Tests
 - [ ] `cloudsql.client.CloudSQLClient`：mock `psycopg2` 連線，驗證 `select`/`insert`/`update`/`delete` 組出的 SQL 與參數正確；`update()`/`delete()` 未帶 `where` 應拋出 `ValueError`；`dsn` 未提供且無 `DATABASE_URL` 應拋出 `ValueError`
-- [x] `telegram.client.TelegramClient`：mock `requests.post`/`requests.get`，驗證 `send_text`/`send_photo`/`send_chat_action` 組出的 payload 正確、`get_file_bytes` 兩段式下載（`getFile` 換 `file_path` 再打檔案專屬網域）正確；空 `bot_token` 應拋出 `ValueError`（2026-07-31，6 個測試，覆蓋率 100%）
+- [x] `telegram.client.TelegramClient`：mock `requests.post`/`requests.get`，驗證 `send_text`/`send_photo`/`send_chat_action` 組出的 payload 正確、`get_file_bytes` 兩段式下載（`getFile` 換 `file_path` 再打檔案專屬網域）正確；空 `bot_token` 應拋出 `ValueError`（2026-07-31，6 個測試，覆蓋率 100%）。**2026-08-02 更新**：`send_text()` 預設不再帶 `parse_mode`（原預設 `"Markdown"`），改為純文字傳送，見下方「2026-08-02」決策補充；新增 1 個測試涵蓋「明確傳入 `parse_mode` 時仍會帶上」的情境，共 7 個測試，覆蓋率維持 100%
 - [x] `llm.client.LLMClient`：mock `genai.Client`，驗證 `generate_text`/`generate_with_image` 呼叫參數正確；空 `api_key` 應拋出 `ValueError`（2026-07-31 依 ADR-8 移除 `generate_with_search` 測試，見 [chat-core SPEC.md](../chat-core/SPEC.md)）
 - [x] `llm.client.LLMClient` 本地端節流保護（ADR-5，2026-07-31，4 個測試）：超過門檻拋 `LLMQuotaGuardError` 且不呼叫底層 SDK／同一 `api_key` 跨 instance 共用計數／不同 `api_key` 互不影響／時間視窗過期後計數重置
 - [x] `gdrive.client.GDriveClient`：mock `service_account.Credentials.from_service_account_file`／`googleapiclient.discovery.build`，驗證 `upload_file()` 帶正確 `filename`/`parents`/`mimetype`，回傳 `webViewLink`；空 `key_file_path`／`folder_id` 應拋出 `ValueError`（2026-07-31，4 個測試，覆蓋率 100%）
@@ -295,3 +297,4 @@ submodules/
 | 2026-07-31 | Robin 實測發現 `gemini-2.5-flash-lite` 在 AI Studio 不可選用，修正 ADR-7：`_SEARCH_MODEL` 改為 `gemini-2.5-flash`（同世代、享有相同的 1,500 次/天免費 grounding 額度） | Claude（依 Robin 回報指示） |
 | 2026-07-31 | Robin 換用新產生的 `GEMINI_API_BOT_KEY` 後 `gemini-2.5-flash` 回傳 404，排查後確認為 Gemini 2.5 世代對新專案關閉存取（非額度／掛工具問題），新增 ADR-8（supersede ADR-7）：`generate_with_search()`／`_SEARCH_MODEL`／`_used_search()` 全數移除；相關測試更新，全專案 174 個測試全過、覆蓋率 100%（見 [chat-core SPEC.md](../chat-core/SPEC.md) ADR-5） | Claude（依 Robin「移除所有上網查詢的部分」指示） |
 | 2026-08-01 | Phase 1 Step 1.4（語音轉文字）需要：新增 Step S.8、FR-8、ADR-9：建立 `submodules/voice/`（`VoiceClient`，用 `requests` 直打 Groq Whisper OpenAI 相容 REST API，不安裝官方 `groq` SDK，比照 `telegram` 子模組的 ADR-2 慣例）；同步補上頂部骨架示意圖遺漏已久的 `gdrive/` 資料夾；全專案 252 個測試全過、覆蓋率 100% | Claude（依 Robin「好」指示） |
+| 2026-08-02 | Robin 實測回報「我要看所有功能」觸發 Telegram `400 Bad Request`；排查後確認 `send_text()` 預設 `parse_mode="Markdown"`，但回覆文字是 LLM 自然語言生成，格式不保證符合 Telegram 舊版 Markdown 語法，一旦不符會整則被拒收，所有 LLM 生成的回覆都有此風險；Robin 選擇直接關閉 Markdown，改為預設純文字傳送（見上方 ADR-2 補充決策），呼叫端仍可視需要明確傳入 `parse_mode`；新增 1 個測試，全專案 285 個測試全過、覆蓋率 100% | Claude（依 Robin 選定方向實作） |

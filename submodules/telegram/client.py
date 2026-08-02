@@ -30,9 +30,18 @@ class TelegramClient:
         response.raise_for_status()
         return response.json()
 
-    def send_text(self, chat_id: int | str, text: str, parse_mode: str = "Markdown") -> dict:
-        """發送文字訊息。"""
-        payload = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
+    def send_text(self, chat_id: int | str, text: str, parse_mode: str | None = None) -> dict:
+        """發送文字訊息。
+
+        2026-08-02：預設不帶 `parse_mode`（純文字）。原本預設 `"Markdown"`，但這則訊息的
+        文字內容大多來自 LLM 自然語言生成，無法保證符合 Telegram 舊版 Markdown 語法（例如
+        底線、星號沒有成對），一旦格式不符 Telegram 會整則拒收（400 Bad Request），使用者
+        完全收不到回覆；純文字傳送不會有這個風險。呼叫端仍可視需要明確傳入 `parse_mode`
+        （例如確定內容是自己手寫、格式受控的靜態文案時）。
+        """
+        payload = {"chat_id": chat_id, "text": text}
+        if parse_mode is not None:
+            payload["parse_mode"] = parse_mode
         return self.call("sendMessage", payload)
 
     def send_photo(self, chat_id: int | str, photo: str, caption: str = "") -> dict:
