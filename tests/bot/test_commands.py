@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime, timezone
 
 import pytest
 
@@ -1089,29 +1089,41 @@ def test_handle_todo_action_confirm_step_marks_cancelled(fake_db):
     assert fake_db.select("todos", where="id = %s", params=(todo_id,), fetch_one=True)["status"] == "cancelled"
 
 
-def test_start_mood_journal_asks_category_and_sets_state(fake_db):
+def test_start_mood_journal_asks_category_and_sets_state(fake_db, monkeypatch):
+    monkeypatch.setattr(commands, "_now", lambda: datetime(2026, 8, 2, 9, 0, tzinfo=commands._TAIWAN_TZ))
     store = ConversationStateStore()
 
     reply = commands.start_mood_journal(store, telegram_user_id=1, user_id=42)
 
     assert "請幫我選一個" in reply
     assert "6. 高興/興奮" in reply
-    assert store.get(1) == {"flow": "pending_mood_category", "target_user_id": 42}
+    assert store.get(1) == {
+        "flow": "pending_mood_category",
+        "target_user_id": 42,
+        "entry_date": date(2026, 8, 2),
+        "journal_id": None,
+    }
 
 
 def test_handle_mood_category_step_valid_index_moves_to_content_step(fake_db):
     store = ConversationStateStore()
-    store.set(1, {"flow": "pending_mood_category", "target_user_id": 42})
+    store.set(1, {"flow": "pending_mood_category", "target_user_id": 42, "entry_date": date(2026, 8, 2), "journal_id": None})
 
     reply = commands.handle_mood_category_step(store, telegram_user_id=1, text="6")
 
     assert reply == "給我完整的日記內容："
-    assert store.get(1) == {"flow": "pending_mood_content", "target_user_id": 42, "mood_category": "happy_excited"}
+    assert store.get(1) == {
+        "flow": "pending_mood_content",
+        "target_user_id": 42,
+        "entry_date": date(2026, 8, 2),
+        "journal_id": None,
+        "mood_category": "happy_excited",
+    }
 
 
 def test_handle_mood_category_step_invalid_reprompts(fake_db):
     store = ConversationStateStore()
-    original_state = {"flow": "pending_mood_category", "target_user_id": 42}
+    original_state = {"flow": "pending_mood_category", "target_user_id": 42, "entry_date": date(2026, 8, 2), "journal_id": None}
     store.set(1, original_state)
 
     reply = commands.handle_mood_category_step(store, telegram_user_id=1, text="超級開心")
@@ -1122,7 +1134,16 @@ def test_handle_mood_category_step_invalid_reprompts(fake_db):
 
 def test_handle_mood_content_step_creates_journal_and_asks_achievement(fake_db):
     store = ConversationStateStore()
-    store.set(1, {"flow": "pending_mood_content", "target_user_id": 42, "mood_category": "happy_excited"})
+    store.set(
+        1,
+        {
+            "flow": "pending_mood_content",
+            "target_user_id": 42,
+            "entry_date": date(2026, 8, 2),
+            "journal_id": None,
+            "mood_category": "happy_excited",
+        },
+    )
 
     reply = commands.handle_mood_content_step(fake_db, store, telegram_user_id=1, text="今天很開心")
 
@@ -1132,15 +1153,70 @@ def test_handle_mood_content_step_creates_journal_and_asks_achievement(fake_db):
     assert len(rows) == 1
     assert rows[0]["content"] == "今天很開心"
     assert rows[0]["achievement_note"] is None
+    assert rows[0]["entry_date"] == date(2026, 8, 2)
     state = store.get(1)
     assert state["flow"] == "pending_mood_achievement"
     assert state["target_user_id"] == 42
     assert state["journal_id"] == rows[0]["id"]
 
 
+def test_handle_mood_content_step_backfill_uses_given_entry_date(fake_db):
+    """補記流程：entry_date 是過去日期，寫入時要用這個日期，不是今天。"""
+    store = ConversationStateStore()
+    store.set(
+        1,
+        {
+            "flow": "pending_mood_content",
+            "target_user_id": 42,
+            "entry_date": date(2026, 7, 30),
+            "journal_id": None,
+            "mood_category": "sad_down",
+        },
+    )
+
+    commands.handle_mood_content_step(fake_db, store, telegram_user_id=1, text="補記昨天的心情")
+
+    rows = fake_db.select("mood_journals")
+    assert rows[0]["entry_date"] == date(2026, 7, 30)
+
+
+def test_handle_mood_content_step_edit_mode_updates_existing_row(fake_db):
+    """journal_id 非 None 代表編輯既有紀錄，要 UPDATE 而不是新增一筆。"""
+    journal_id = commands.mood.create_mood_journal(fake_db, 42, "sad_down", "原本內容", date(2026, 8, 1))
+    store = ConversationStateStore()
+    store.set(
+        1,
+        {
+            "flow": "pending_mood_content",
+            "target_user_id": 42,
+            "entry_date": date(2026, 8, 1),
+            "journal_id": journal_id,
+            "mood_category": "happy_excited",
+        },
+    )
+
+    commands.handle_mood_content_step(fake_db, store, telegram_user_id=1, text="改過的內容")
+
+    rows = fake_db.select("mood_journals")
+    assert len(rows) == 1  # 沒有多新增一筆
+    assert rows[0]["id"] == journal_id
+    assert rows[0]["content"] == "改過的內容"
+    assert rows[0]["mood_category"] == "happy_excited"
+    assert store.get(1)["journal_id"] == journal_id
+
+
 def test_handle_mood_content_step_masks_pii_and_adds_reminder(fake_db):
     store = ConversationStateStore()
-    store.set(1, {"flow": "pending_mood_content", "target_user_id": 42, "mood_category": "sad_down"})
+    store.set(
+        1,
+        {
+            "flow": "pending_mood_content",
+            "target_user_id": 42,
+            "entry_date": date(2026, 8, 2),
+            "journal_id": None,
+            "mood_category": "sad_down",
+        },
+    )
 
     reply = commands.handle_mood_content_step(fake_db, store, telegram_user_id=1, text="我的手機是 0912345678")
 
@@ -1152,7 +1228,13 @@ def test_handle_mood_content_step_masks_pii_and_adds_reminder(fake_db):
 def test_handle_mood_achievement_step_skips_on_exit_phrase(fake_db):
     journal_id = fake_db.insert(
         "mood_journals",
-        {"user_id": 42, "mood_category": "happy_excited", "content": "今天很開心", "achievement_note": None},
+        {
+            "user_id": 42,
+            "mood_category": "happy_excited",
+            "content": "今天很開心",
+            "achievement_note": None,
+            "entry_date": date(2026, 8, 2),
+        },
     )
     store = ConversationStateStore()
     store.set(1, {"flow": "pending_mood_achievement", "target_user_id": 42, "journal_id": journal_id})
@@ -1168,7 +1250,13 @@ def test_handle_mood_achievement_step_skips_on_exit_phrase(fake_db):
 def test_handle_mood_achievement_step_saves_answer(fake_db):
     journal_id = fake_db.insert(
         "mood_journals",
-        {"user_id": 42, "mood_category": "happy_excited", "content": "今天很開心", "achievement_note": None},
+        {
+            "user_id": 42,
+            "mood_category": "happy_excited",
+            "content": "今天很開心",
+            "achievement_note": None,
+            "entry_date": date(2026, 8, 2),
+        },
     )
     store = ConversationStateStore()
     store.set(1, {"flow": "pending_mood_achievement", "target_user_id": 42, "journal_id": journal_id})
@@ -1179,6 +1267,226 @@ def test_handle_mood_achievement_step_saves_answer(fake_db):
     assert store.get(1) is None
     row = fake_db.select("mood_journals", where="id = %s", params=(journal_id,), fetch_one=True)
     assert row["achievement_note"] == "完成了一份報告"
+
+
+# --- 心情小記補記（2026-08-02 追加，FR-49 補記擴充）---
+
+
+def test_start_mood_backfill_asks_which_day():
+    store = ConversationStateStore()
+
+    reply = commands.start_mood_backfill(store, telegram_user_id=1, user_id=42)
+
+    assert "哪一天" in reply
+    assert store.get(1) == {"flow": "pending_mood_backfill_date", "target_user_id": 42}
+
+
+def test_handle_mood_backfill_date_step_clear_moves_to_category_step(fake_db, monkeypatch):
+    monkeypatch.setattr(commands, "_now", lambda: datetime(2026, 8, 2, 9, 0, tzinfo=commands._TAIWAN_TZ))
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_mood_backfill_date", "target_user_id": 42})
+    llm_client = _FakeLLMClient(response_text="STATUS: CLEAR\nDATE: 2026-08-01")
+
+    reply = commands.handle_mood_backfill_date_step(llm_client, store, telegram_user_id=1, text="昨天")
+
+    assert "請幫我選一個" in reply
+    assert store.get(1) == {
+        "flow": "pending_mood_category",
+        "target_user_id": 42,
+        "entry_date": date(2026, 8, 1),
+        "journal_id": None,
+    }
+
+
+def test_handle_mood_backfill_date_step_unclear_stays(fake_db):
+    store = ConversationStateStore()
+    original_state = {"flow": "pending_mood_backfill_date", "target_user_id": 42}
+    store.set(1, original_state)
+    llm_client = _FakeLLMClient(response_text="STATUS: UNCLEAR")
+
+    reply = commands.handle_mood_backfill_date_step(llm_client, store, telegram_user_id=1, text="之前")
+
+    assert "不太確定" in reply
+    assert store.get(1) == original_state
+
+
+def test_handle_mood_backfill_date_step_unparseable_date_stays(fake_db):
+    store = ConversationStateStore()
+    original_state = {"flow": "pending_mood_backfill_date", "target_user_id": 42}
+    store.set(1, original_state)
+    llm_client = _FakeLLMClient(response_text="STATUS: CLEAR\nDATE: 不是日期")
+
+    reply = commands.handle_mood_backfill_date_step(llm_client, store, telegram_user_id=1, text="怪怪的回覆")
+
+    assert "不太確定" in reply
+    assert store.get(1) == original_state
+
+
+def test_handle_mood_backfill_date_step_stays_when_date_missing_entirely(fake_db):
+    """防禦性處理：LLM 聲稱 CLEAR 卻沒有輸出 DATE 欄位（理論上不該發生），一樣視為 UNCLEAR。"""
+    store = ConversationStateStore()
+    original_state = {"flow": "pending_mood_backfill_date", "target_user_id": 42}
+    store.set(1, original_state)
+    llm_client = _FakeLLMClient(response_text="STATUS: CLEAR")
+
+    reply = commands.handle_mood_backfill_date_step(llm_client, store, telegram_user_id=1, text="怪怪的回覆")
+
+    assert "不太確定" in reply
+    assert store.get(1) == original_state
+
+
+def test_handle_mood_backfill_date_step_rejects_future_date(fake_db, monkeypatch):
+    monkeypatch.setattr(commands, "_now", lambda: datetime(2026, 8, 2, 9, 0, tzinfo=commands._TAIWAN_TZ))
+    store = ConversationStateStore()
+    original_state = {"flow": "pending_mood_backfill_date", "target_user_id": 42}
+    store.set(1, original_state)
+    llm_client = _FakeLLMClient(response_text="STATUS: CLEAR\nDATE: 2026-08-05")
+
+    reply = commands.handle_mood_backfill_date_step(llm_client, store, telegram_user_id=1, text="這週五")
+
+    assert "未來" in reply
+    assert store.get(1) == original_state
+
+
+# --- 心情小記查詢/更新/刪除（2026-08-02 追加，FR-49 更新/刪除擴充）---
+
+
+def test_start_mood_list_shows_entries_and_sets_state(fake_db):
+    journal_id = commands.mood.create_mood_journal(fake_db, 42, "happy_excited", "今天很開心", date(2026, 8, 2))
+    store = ConversationStateStore()
+
+    reply = commands.start_mood_list(fake_db, store, telegram_user_id=1, user_id=42)
+
+    assert "2026/08/02" in reply
+    assert "更新或刪除" in reply
+    assert store.get(1) == {"flow": "pending_mood_list_action", "target_user_id": 42, "journal_ids": [journal_id]}
+
+
+def test_start_mood_list_empty_does_not_set_state(fake_db):
+    store = ConversationStateStore()
+
+    reply = commands.start_mood_list(fake_db, store, telegram_user_id=1, user_id=42)
+
+    assert reply == "目前還沒有心情小記紀錄喔！"
+    assert store.get(1) is None
+
+
+def test_handle_mood_list_action_step_exit_phrase_clears_state(fake_db):
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_mood_list_action", "target_user_id": 42, "journal_ids": [1]})
+
+    reply = commands.handle_mood_list_action_step(store, telegram_user_id=1, text="結束")
+
+    assert "結束" in reply
+    assert store.get(1) is None
+
+
+def test_handle_mood_list_action_step_invalid_number_reprompts(fake_db):
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_mood_list_action", "target_user_id": 42, "journal_ids": [1, 2]})
+
+    reply = commands.handle_mood_list_action_step(store, telegram_user_id=1, text="9")
+
+    assert "1～2" in reply
+    assert store.get(1)["flow"] == "pending_mood_list_action"
+
+
+def test_handle_mood_list_action_step_valid_number_asks_update_or_delete(fake_db):
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_mood_list_action", "target_user_id": 42, "journal_ids": [11, 22]})
+
+    reply = commands.handle_mood_list_action_step(store, telegram_user_id=1, text="2")
+
+    assert "更新" in reply and "刪除" in reply
+    assert store.get(1) == {"flow": "pending_mood_action_choice", "target_user_id": 42, "journal_id": 22}
+
+
+def test_handle_mood_action_choice_step_update_reuses_entry_date(fake_db):
+    journal_id = commands.mood.create_mood_journal(fake_db, 42, "sad_down", "原本內容", date(2026, 7, 20))
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_mood_action_choice", "target_user_id": 42, "journal_id": journal_id})
+    llm_client = _FakeLLMClient(response_text="UPDATE")
+
+    reply = commands.handle_mood_action_choice_step(fake_db, llm_client, store, telegram_user_id=1, text="我要改內容")
+
+    assert "重新選一次心情分類" in reply
+    assert store.get(1) == {
+        "flow": "pending_mood_category",
+        "target_user_id": 42,
+        "entry_date": date(2026, 7, 20),
+        "journal_id": journal_id,
+    }
+
+
+def test_handle_mood_action_choice_step_update_falls_back_to_created_at_when_entry_date_missing(fake_db):
+    journal_id = fake_db.insert(
+        "mood_journals",
+        {
+            "user_id": 42,
+            "mood_category": "neutral",
+            "content": "舊資料",
+            "achievement_note": None,
+            "entry_date": None,
+            "created_at": datetime(2026, 7, 1, 3, 0, tzinfo=timezone.utc),  # 台灣時區 7/1 11:00
+        },
+    )
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_mood_action_choice", "target_user_id": 42, "journal_id": journal_id})
+    llm_client = _FakeLLMClient(response_text="UPDATE")
+
+    commands.handle_mood_action_choice_step(fake_db, llm_client, store, telegram_user_id=1, text="我要改內容")
+
+    assert store.get(1)["entry_date"] == date(2026, 7, 1)
+
+
+def test_handle_mood_action_choice_step_delete_asks_confirm(fake_db):
+    journal_id = commands.mood.create_mood_journal(fake_db, 42, "sad_down", "要刪除的內容", date(2026, 8, 1))
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_mood_action_choice", "target_user_id": 42, "journal_id": journal_id})
+    llm_client = _FakeLLMClient(response_text="DELETE")
+
+    reply = commands.handle_mood_action_choice_step(fake_db, llm_client, store, telegram_user_id=1, text="刪掉")
+
+    assert "沒辦法復原" in reply
+    assert store.get(1) == {"flow": "pending_mood_delete_confirm", "target_user_id": 42, "journal_id": journal_id}
+
+
+def test_handle_mood_action_choice_step_other_clears_state(fake_db):
+    journal_id = commands.mood.create_mood_journal(fake_db, 42, "sad_down", "內容", date(2026, 8, 1))
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_mood_action_choice", "target_user_id": 42, "journal_id": journal_id})
+    llm_client = _FakeLLMClient(response_text="OTHER")
+
+    reply = commands.handle_mood_action_choice_step(fake_db, llm_client, store, telegram_user_id=1, text="呃我不確定")
+
+    assert "不太確定" in reply
+    assert store.get(1) is None
+
+
+def test_handle_mood_delete_confirm_step_confirm_deletes_row(fake_db):
+    journal_id = commands.mood.create_mood_journal(fake_db, 42, "sad_down", "要刪除的內容", date(2026, 8, 1))
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_mood_delete_confirm", "target_user_id": 42, "journal_id": journal_id})
+    llm_client = _FakeLLMClient(response_text="CONFIRM")
+
+    reply = commands.handle_mood_delete_confirm_step(fake_db, llm_client, store, telegram_user_id=1, text="對，刪掉")
+
+    assert "已經刪除" in reply
+    assert store.get(1) is None
+    assert fake_db.select("mood_journals", where="id = %s", params=(journal_id,), fetch_one=True) is None
+
+
+def test_handle_mood_delete_confirm_step_cancel_keeps_row(fake_db):
+    journal_id = commands.mood.create_mood_journal(fake_db, 42, "sad_down", "保留的內容", date(2026, 8, 1))
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_mood_delete_confirm", "target_user_id": 42, "journal_id": journal_id})
+    llm_client = _FakeLLMClient(response_text="CANCEL")
+
+    reply = commands.handle_mood_delete_confirm_step(fake_db, llm_client, store, telegram_user_id=1, text="不要好了")
+
+    assert "保留" in reply
+    assert store.get(1) is None
+    assert fake_db.select("mood_journals", where="id = %s", params=(journal_id,), fetch_one=True) is not None
 
 
 def test_start_complaint_asks_fixed_text_without_llm(fake_db):

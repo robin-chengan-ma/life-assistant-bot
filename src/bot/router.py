@@ -42,6 +42,10 @@ _SET_TOGGLE_TRIGGERS = {"/set_toggle", "設定家人功能開關"}
 _MY_TODOS_TRIGGERS = {"/my_todos", "我的待辦事項"}
 # 2026-08-02（Step 1.8，見 robinson SPEC.md FR-49、FR-56h）：開始心情小記流程，所有使用者皆可用。
 _MOOD_JOURNAL_TRIGGERS = {"/mood_journal", "我想做心情筆記"}
+# 2026-08-02 追加（見 robinson SPEC.md FR-49 補記/更新/刪除擴充）：補記過去日期的心情小記、
+# 查詢並進入可更新/刪除模式，觸發詞設計比照上面 _MOOD_JOURNAL_TRIGGERS／_MY_TODOS_TRIGGERS。
+_MOOD_BACKFILL_TRIGGERS = {"/backfill_mood", "我要補記心情"}
+_MY_MOOD_JOURNALS_TRIGGERS = {"/my_mood_journals", "我的心情紀錄"}
 # 2026-08-02（Step 1.9，見 robinson SPEC.md FR-60）：任何身分皆可觸發客訴收集流程。
 _COMPLAINT_TRIGGERS = {"/complaint", "我要客訴你"}
 _CLEAN_ALL_DIALOG_TRIGGERS = {"/clean-all-dialog", "我想要刪除所有對話紀錄"}
@@ -149,6 +153,12 @@ def handle_message(
     if text in _MOOD_JOURNAL_TRIGGERS:
         # 2026-08-02（Step 1.8，見 robinson SPEC.md FR-49）：開始心情小記三輪反問流程，先問分類。
         return commands.start_mood_journal(state_store, telegram_user_id, user_id)
+    if text in _MOOD_BACKFILL_TRIGGERS:
+        # 2026-08-02 追加（FR-49 補記擴充）：補記過去日期的心情小記，先問是哪一天。
+        return commands.start_mood_backfill(state_store, telegram_user_id, user_id)
+    if text in _MY_MOOD_JOURNALS_TRIGGERS:
+        # 2026-08-02 追加（FR-49 更新/刪除擴充）：查詢清單並進入可更新/刪除的模式。
+        return commands.start_mood_list(db, state_store, telegram_user_id, user_id)
     if text in _COMPLAINT_TRIGGERS:
         # 2026-08-02（Step 1.9，見 robinson SPEC.md FR-60）：固定提問，不經過 LLM。
         return commands.start_complaint(state_store, telegram_user_id, user_id)
@@ -373,6 +383,9 @@ def _dispatch_active_flow(
         return commands.handle_todo_action_confirm_step(db, llm_client, state_store, telegram_user_id, text)
     # 2026-08-02（Step 1.8，見 robinson SPEC.md FR-49、FR-50）：心情小記三輪反問流程，全程不需要
     # LLM（固定分類選單＋自由文字直接記錄），只有內容/成就這兩輪需要 privacy_llm_client 做個資遮蔽。
+    if flow == "pending_mood_backfill_date":
+        # 2026-08-02 追加（FR-49 補記擴充）：解析「要補記哪一天」，講清楚後接到既有的分類選單。
+        return commands.handle_mood_backfill_date_step(llm_client, state_store, telegram_user_id, text)
     if flow == "pending_mood_category":
         return commands.handle_mood_category_step(state_store, telegram_user_id, text)
     if flow == "pending_mood_content":
@@ -383,6 +396,14 @@ def _dispatch_active_flow(
         return commands.handle_mood_achievement_step(
             db, state_store, telegram_user_id, text, privacy_llm_client=privacy_llm_client
         )
+    # 2026-08-02 追加（見 robinson SPEC.md FR-49 更新/刪除擴充）：查詢清單後選編號、決定要更新
+    # 還是刪除，結構比照上面待辦事項的 pending_todo_list_action／pending_todo_action_confirm。
+    if flow == "pending_mood_list_action":
+        return commands.handle_mood_list_action_step(state_store, telegram_user_id, text)
+    if flow == "pending_mood_action_choice":
+        return commands.handle_mood_action_choice_step(db, llm_client, state_store, telegram_user_id, text)
+    if flow == "pending_mood_delete_confirm":
+        return commands.handle_mood_delete_confirm_step(db, llm_client, state_store, telegram_user_id, text)
     if flow == "pending_complaint_content":
         # 2026-08-02（Step 1.9，見 robinson SPEC.md FR-61、FR-62）：寫入客訴＋Gemini 分析私訊 Robin。
         return commands.handle_complaint_content_step(

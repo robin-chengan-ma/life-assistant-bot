@@ -333,7 +333,8 @@ CREATE TABLE mood_journals (
     )),
     content TEXT NOT NULL,
     achievement_note TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    entry_date DATE
 );
 
 CREATE INDEX idx_mood_journals_user_id ON mood_journals (user_id);
@@ -345,13 +346,17 @@ COMMENT ON COLUMN mood_journals.mood_category IS '心情分類（FR-56h 情境�
 COMMENT ON COLUMN mood_journals.content IS '完整日記內容（已經過 FR-13 個資遮蔽處理，不存未遮蔽的原文）';
 COMMENT ON COLUMN mood_journals.achievement_note IS 'FR-50 個人成就三選一提示的回答（今天完成了什麼一句話總結／挑一件有感覺的事／寫下啟發或下次想改變的地方，僅需一項）；使用者選擇跳過時為 NULL，同樣已經過 FR-13 個資遮蔽處理';
 COMMENT ON COLUMN mood_journals.created_at IS '這筆心情小記建立的時間';
+COMMENT ON COLUMN mood_journals.entry_date IS '這筆心情小記實際對應的日期（可補記過去日期）；既有舊資料此欄位為 NULL，讀取時 fallback 使用 created_at 的日期部分；一律由 app 端依台灣時區算好日期後寫入，不依賴資料庫預設值';
 ```
+
+**Migration 檔案（entry_date）**：`src/migrations/0017_add_entry_date_to_mood_journals.sql`
 
 **設計理由**：
 - `mood_category` 用 `CHECK` 鎖定 FR-56h 情境範例列出的固定 6 種分類，避免自由輸入造成資料不一致
 - `achievement_note` 允許 `NULL`：FR-50 明確是「使用者自行選擇是否回答」，跳過是合法情況
 - `content`／`achievement_note` 都套用 FR-13 個資遮蔽（跟一般聊天、圖片說明文字、語音轉文字三個既有入口一致），2026-08-02 與 Robin 確認新入口也要套用同一套防線
 - 只建 `user_id` 單欄索引：目前唯一常見查詢是「查某人的心情小記」，沒有像 `todos` 那種需要跨使用者掃描的排程查詢，不需要額外複合索引
+- **`entry_date`（2026-08-02，FR-49 補記/更新/刪除擴充）**：Robin 提出「記帳、心情小記、體重、飲食、運動習慣都要有補記、更新、刪除、新增的功能」，心情小記優先實作。設計比照 `todos.start_at`（FR-31b）：新增可選欄位而不動既有必填欄位，既有資料/程式邏輯不受影響（此欄位為 NULL 即可）；一律由 app 端用台灣時區算好日期後寫入，不依賴資料庫 `DEFAULT`（理由同 `todos.start_at`：資料庫伺服器時區可能是 UTC，靠 DB 端算日期在台灣午夜前後容易出現差一天的 bug）。讀取時（`mood._entry_date_of()`）對舊資料 fallback 使用 `created_at` 換算成台灣時區後的日期部分，語意上等同「當時新增的那天就是實際發生的那天」
 
 ---
 

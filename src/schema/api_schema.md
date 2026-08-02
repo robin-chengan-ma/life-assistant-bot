@@ -108,14 +108,38 @@
 
 ### `/mood_journal`（內部路由，非對外 HTTP 端點）
 
-**狀態**：已實作（`src/bot/commands.py::start_mood_journal`，2026-08-02，Step 1.8，見 robinson SPEC.md FR-49）
+**狀態**：已實作（`src/bot/commands.py::start_mood_journal`，2026-08-02，Step 1.8，見 robinson SPEC.md FR-49；2026-08-02 追加支援補記/更新/刪除擴充）
 **觸發方式**：使用者於對話框輸入「我想做心情筆記」或 `/mood_journal`
 **權限**：任何已驗證使用者（Robin 或家人，各自只會記到自己的心情小記）
 **對應 FR**：FR-49、FR-50、FR-56h
 
-**Response**：文字，依序走三輪反問：先回傳心情分類清單（`mood.format_category_prompt()`，固定 6 選一，接受編號或直接輸入分類名稱）→ 分類選定後問「給我完整的日記內容」→ 日記內容寫入 `mood_journals` 後主動追問 FR-50 個人成就三選一提示，使用者可輸入既有的「結束」／「沒有了」跳過。
+**Response**：文字，依序走三輪反問：先回傳心情分類清單（`mood.format_category_prompt()`，固定 6 選一，接受編號或直接輸入分類名稱）→ 分類選定後問「給我完整的日記內容」→ 日記內容寫入 `mood_journals` 後主動追問 FR-50 個人成就三選一提示，使用者可輸入既有的「結束」／「沒有了」跳過。這是「一般新增」入口，`entry_date` 固定是今天；補記過去日期請走下面的 `/backfill_mood`。
 
 **備註**：全程不需要呼叫 LLM——心情分類固定 6 選一、個人成就「有填就存沒填就跳過」，純字串比對即可完成，跟 Step 1.7 待辦事項需要 LLM 解析模糊自然語言時間的架構不同。日記內容與個人成就回答都是自由文字，可能含個資，寫入 `mood_journals` 前一律先過 `privacy.mask_text()`（見 docs/specs/privacy-masking/SPEC.md FR-4），跟一般聊天／圖片說明文字／語音轉文字三個既有入口的防線一致，`detected=True` 時在回覆最後附加提醒文案。
+
+---
+
+### `/backfill_mood`（內部路由，非對外 HTTP 端點）
+
+**狀態**：已實作（`src/bot/commands.py::start_mood_backfill`／`handle_mood_backfill_date_step`，2026-08-02，見 robinson SPEC.md FR-49 補記擴充）
+**觸發方式**：使用者於對話框輸入「我要補記心情」或 `/backfill_mood`
+**權限**：任何已驗證使用者
+**對應 FR**：FR-49
+
+**Response**：先問「要補記哪一天的心情呢？」（`pending_mood_backfill_date`），由 LLM 解析使用者回覆的日期描述（`_MOOD_BACKFILL_DATE_PARSE_PROMPT`，格式比照 `_TODO_TIME_PARSE_PROMPT` 但只需日期不需時段），日期不明確一律反問、不可自己亂猜；只接受今天或過去的日期，未來日期會被拒絕並要求重講。日期確定後接到既有的 `/mood_journal` 分類/內容/成就三輪反問流程，寫入時 `entry_date` 使用這裡解析出的日期，不是今天。
+
+---
+
+### `/my_mood_journals`（內部路由，非對外 HTTP 端點）
+
+**狀態**：已實作（`src/bot/commands.py::start_mood_list`，2026-08-02，見 robinson SPEC.md FR-49 更新/刪除擴充）
+**觸發方式**：使用者於對話框輸入「我的心情紀錄」或 `/my_mood_journals`
+**權限**：任何已驗證使用者（各自只能看到自己的心情小記）
+**對應 FR**：FR-49
+
+**Response**：文字，列出最近 10 筆心情小記（`mood.list_mood_journals()`，依 `entry_date` 由新到舊排序，`entry_date` 缺值的舊資料 fallback 用 `created_at` 的台灣時區日期），沒有資料時回「目前還沒有心情小記紀錄喔！」；有資料時附上「輸入編號可更新/刪除」的提示，進入 `pending_mood_list_action` 狀態。
+
+**備註**：選定編號後（`pending_mood_list_action`）反問「要更新這筆還是刪除呢？」，由 LLM 判斷意思（`pending_mood_action_choice`，UPDATE/DELETE/OTHER 三選一）：選 UPDATE 會沿用原本記錄的 `entry_date`、`journal_id` 帶著代表這是編輯，重新走一次 `/mood_journal` 的分類/內容兩輪反問（`mood.update_mood_journal()` 改用 `UPDATE` 而非新增一筆）；選 DELETE 進入 `pending_mood_delete_confirm`，由 LLM 判斷簡單一輪 CONFIRM/CANCEL（設計理由見 `commands.py`「心情小記」區塊開頭說明：屬於中等風險、可事後補記修正的操作，不套用 FR-16a 逐字打字最終確認，FR-16a 保留給 `/clean-all-dialog`／`/clean-target-dialog`／主動記知識三個高風險流程）；OTHER 一律清除狀態、提示重新查詢。
 
 ---
 

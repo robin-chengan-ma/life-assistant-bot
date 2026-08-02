@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 
 from PIL import Image
@@ -658,6 +658,83 @@ def test_mood_journal_achievement_can_be_skipped(fake_db, monkeypatch):
     assert reply == "好的，那先這樣吧！"
     rows = fake_db.select("mood_journals")
     assert rows[0]["achievement_note"] is None
+
+
+def test_mood_backfill_full_flow_records_entry_with_given_date(fake_db, monkeypatch):
+    """2026-08-02 追加（FR-49 補記擴充）：「我要補記心情」先問哪一天，再走既有分類/內容流程。"""
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+
+    reply1 = router.handle_message(fake_db, store, FAMILY_ID, "我要補記心情")
+    assert "哪一天" in reply1
+    assert store.get(FAMILY_ID)["flow"] == "pending_mood_backfill_date"
+
+    date_llm_client = _FakeLLMClient(response_text="STATUS: CLEAR\nDATE: 2026-07-30")
+    reply2 = router.handle_message(fake_db, store, FAMILY_ID, "前天", llm_client=date_llm_client)
+    assert "請幫我選一個" in reply2
+    assert store.get(FAMILY_ID)["flow"] == "pending_mood_category"
+
+    router.handle_message(fake_db, store, FAMILY_ID, "2")
+    router.handle_message(fake_db, store, FAMILY_ID, "那天有點難過")
+    reply4 = router.handle_message(fake_db, store, FAMILY_ID, "結束")
+
+    assert reply4 == "好的，那先這樣吧！"
+    rows = fake_db.select("mood_journals")
+    assert rows[0]["entry_date"].isoformat() == "2026-07-30"
+    assert rows[0]["mood_category"] == "sad_down"
+
+
+def test_mood_list_update_and_delete_full_flow(fake_db, monkeypatch):
+    """2026-08-02 追加（FR-49 更新/刪除擴充）：「我的心情紀錄」查詢清單、選一筆、更新內容、
+    再查詢一次、選同一筆、刪除。"""
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    fake_db.insert(
+        "mood_journals",
+        {
+            "user_id": user_id,
+            "mood_category": "sad_down",
+            "content": "原本內容",
+            "achievement_note": None,
+            "entry_date": date(2026, 8, 1),
+        },
+    )
+    store = ConversationStateStore()
+
+    reply1 = router.handle_message(fake_db, store, FAMILY_ID, "我的心情紀錄")
+    assert "更新或刪除" in reply1
+    assert store.get(FAMILY_ID)["flow"] == "pending_mood_list_action"
+
+    reply2 = router.handle_message(fake_db, store, FAMILY_ID, "1")
+    assert "更新" in reply2 and "刪除" in reply2
+    assert store.get(FAMILY_ID)["flow"] == "pending_mood_action_choice"
+
+    update_llm_client = _FakeLLMClient(response_text="UPDATE")
+    reply3 = router.handle_message(fake_db, store, FAMILY_ID, "我要改內容", llm_client=update_llm_client)
+    assert "重新選一次心情分類" in reply3
+    assert store.get(FAMILY_ID)["flow"] == "pending_mood_category"
+
+    router.handle_message(fake_db, store, FAMILY_ID, "6")
+    router.handle_message(fake_db, store, FAMILY_ID, "改過的內容")
+    router.handle_message(fake_db, store, FAMILY_ID, "結束")
+
+    rows = fake_db.select("mood_journals")
+    assert len(rows) == 1
+    assert rows[0]["content"] == "改過的內容"
+    assert rows[0]["mood_category"] == "happy_excited"
+
+    router.handle_message(fake_db, store, FAMILY_ID, "我的心情紀錄")
+    router.handle_message(fake_db, store, FAMILY_ID, "1")
+    delete_llm_client = _FakeLLMClient(response_text="DELETE")
+    reply_delete_ask = router.handle_message(fake_db, store, FAMILY_ID, "刪掉", llm_client=delete_llm_client)
+    assert "沒辦法復原" in reply_delete_ask
+    assert store.get(FAMILY_ID)["flow"] == "pending_mood_delete_confirm"
+
+    confirm_llm_client = _FakeLLMClient(response_text="CONFIRM")
+    reply_deleted = router.handle_message(fake_db, store, FAMILY_ID, "對", llm_client=confirm_llm_client)
+    assert "已經刪除" in reply_deleted
+    assert fake_db.select("mood_journals") == []
 
 
 # --- 客訴收集（robinson SPEC.md FR-60～FR-63，Step 1.9）---
