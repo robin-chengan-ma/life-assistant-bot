@@ -633,8 +633,19 @@ _TODO_TIME_PARSE_PROMPT = (
     "【現在的日期（台灣時區，計算相對日期時間一律以此為準）】\n{current_date_text}\n\n"
     "請判斷使用者是否已經講清楚明確的日期與時間，並嚴格照下面格式輸出，每個欄位各自一行，"
     "不要輸出其他任何文字：\n"
-    "STATUS: CLEAR 或 UNCLEAR（這則回覆完全沒有講到具體時間、或還是很模糊、無法換算出確切日期"
-    "時間時填 UNCLEAR）\n"
+    "STATUS: CLEAR 或 UNCLEAR。必須同時滿足下面兩個條件才能填 CLEAR，只要有一個條件不滿足就"
+    "一律填 UNCLEAR，絕對不可以自己猜測、幫使用者補上「今天」或「上午/下午」：\n"
+    "  條件一（日期要明確）：『原始描述』或『這次回覆』裡面，至少有一項要明確提到是哪一天"
+    "（例如「今天」「明天」「後天」「星期五」「8/5」等），如果兩邊都完全沒提到任何日期線索，"
+    "一律視為 UNCLEAR；\n"
+    "  條件二（時段要明確）：時間本身不可以有上午/下午的歧義。小時數是 13～23（或 0 點/00:xx，"
+    "代表午夜）的寫法本來就只可能是下午/晚上或凌晨，視為已經明確，不需要再額外加註時段字眼；"
+    "但小時數是 1～12 的寫法（不論寫成「5:30」「05:30」還是「五點半」，只要小時數落在 1～12），"
+    "一律必須額外明確講出時段（例如「上午/下午/中午/凌晨/早上/晚上」，例如「下午5:30」「下午"
+    "五點半」）才算清楚；只要使用者只給了「數字:數字」或「幾點幾分」卻沒有額外講時段，"
+    "就一律視為 UNCLEAR，絕對不可以自己猜是上午還是下午。\n"
+    "以上兩個條件都滿足時才填 CLEAR，換算並填寫下面兩個欄位；否則兩個條件只要有一個不滿足，"
+    "都填 UNCLEAR，並把 CONTENT／DUE_AT 兩欄省略：\n"
     "CONTENT: 待辦事項內容摘要，精簡具體，不需要包含時間（STATUS 為 UNCLEAR 時可省略）\n"
     "DUE_AT: 換算後的完整日期時間，格式一律為 YYYY-MM-DD HH:MM（24 小時制，STATUS 為 UNCLEAR 時"
     "可省略）"
@@ -659,10 +670,16 @@ _TODO_ACTION_CLASSIFY_PROMPT = (
 _TODO_TIME_UNCLEAR_REPLY = "不好意思，我還是不太確定時間，可以再講清楚一點嗎？（例如：明天下午三點）"
 
 
+def _now() -> datetime:
+    """回傳現在的台灣時間；獨立成函式方便測試用 monkeypatch 固定時間點
+    （比照 chat.py 的同名私有函式，這裡獨立寫一份避免跨模組依賴對方的私有成員）。"""
+    return datetime.now(_TAIWAN_TZ)
+
+
 def _current_date_text() -> str:
     """跟 chat.py 的同名私有函式邏輯一致，但待辦時間解析發生在 commands.py，避免跨模組互相
     依賴對方的私有函式，這裡獨立寫一份最簡版本（只需要日期，不需要星期幾）。"""
-    now = datetime.now(_TAIWAN_TZ)
+    now = _now()
     return f"{now.year}年{now.month}月{now.day}日"
 
 
@@ -729,9 +746,19 @@ def handle_todo_time_step(
         telegram_user_id,
         {"flow": "pending_todo_reminder", "target_user_id": target_user_id, "content": content, "due_at": due_at},
     )
+    # 2026-08-02 追加修正（Robin 回報：中午設定當天下午的待辦，卻還是講「當天早上 8 點會提醒」——
+    # 這句是不可能發生的事，因為 8 點早就過了）：每日 08:00 摘要（見 todo.check_and_push_daily_digest）
+    # 只在「現在剛好是 8 點那個小時」時才會觸發，所以只有「due 的日期不是今天」或「due 的日期是
+    # 今天、但現在還沒到 8 點」這兩種情況，這句提醒才有機會真的發生；已經過了今天 8 點的話，
+    # 這筆不會收到當天早上摘要（30 分鐘前提醒仍然不受影響，看使用者接下來要不要開）。
+    now = _now()
+    if due_at.date() == now.date() and now.hour >= 8:
+        digest_note = "由於現在已經過了今天的早上 8 點，這筆不會收到當天早上的提醒摘要囉，"
+    else:
+        digest_note = "到時候當天早上 8 點會主動提醒你一次，"
     return (
         f"已收到 {due_at.year}/{due_at.month:02d}/{due_at.day:02d} {due_at.hour:02d}:{due_at.minute:02d}，"
-        "到時候當天早上 8 點會主動提醒你一次，你也可以隨時查詢待辦事項清單，"
+        f"{digest_note}你也可以隨時查詢待辦事項清單，"
         "需要在前 30 分鐘時再提醒你一次嗎？"
     )
 

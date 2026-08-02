@@ -3,7 +3,7 @@ title: Gemini 對話核心 — 知識庫問答、資安隔離、人格化語氣
 slug: chat-core
 status: implemented
 created: 2026-07-30
-updated: 2026-08-01
+updated: 2026-08-02
 owner: Robin
 ---
 
@@ -170,6 +170,8 @@ owner: Robin
 
 **狀態**：accepted
 
+**2026-08-02 追加修正（三選一分流的措辭偏誤）**：Robin 回報問完氣溫（誠實回不知道）後，換講一句完全無關的新事情「我要載妹妹到水里」（不是問句，是待辦事項描述），結果被誤判成「拒絕記錄」（`【DECLINE_SAVE】`），回了「好的，這次就不記錄囉！」，明顯不是使用者的意思。追查發現 `_build_prompt()` 裡「無關新內容」那個選項的措辭寫成「使用者其實是在問一個新的、跟上面那題無關的『問題』」，用詞侷限在「問句」，使用者講的若是陳述句/新需求就沒有明確對應的選項，模型只剩兩個選項可套，容易誤選成「拒絕」。修正：把該選項改為「除了以上情況以外的任何內容——不管是問題還是單純的新陳述/新需求」的 catch-all 寫法，同時把「拒絕」選項收緊為必須是「明確的拒絕/跳過語句」；`confirming_question`（ADR-7）的對應區塊比照修正。純屬 prompt 措辭調整，不影響既有的三選一分流架構本身。
+
 ### ADR-7：打字誤植改為「先反問確認，等使用者回覆才回答」，不再直接假設是同一人（部分 supersede ADR-6 的容錯規則）
 
 **背景**：ADR-6 為同音字/形似字打字誤植（如「鎧」vs「凱」）加了容錯規則，但當時的作法是「假設是打字誤植、直接用最相近的知識庫人名回答」。2026-08-01 Robin 實測後認為這樣太冒進——萬一猜錯人，會在使用者沒發現的情況下把錯誤資訊講得煞有其事，不如先反問一句更保險。
@@ -334,3 +336,4 @@ owner: Robin
 | 2026-08-01 | Robin 指示「主動記知識的功能、/clean-target-dialog API 現在先開發吧」，開發 FR-11（主動新增知識）與 FR-12（`/clean-target-dialog`），新增 ADR-8：(1) 寫入範圍——`general_persona`／`general_family` 只有 Robin（Owner）能編輯，非 Owner 一律只能寫自己的 `custom`，最終 `category` 由 Python 依 `auth.is_owner()` 現場強制、不信任 LLM 判斷（Robin 確認）(2) 刪除範圍——只有 Robin 觸發 `/clean-target-dialog` 才會把共用知識庫納入候選，非 Owner 只能清自己的資料（Robin 確認）(3) 新增 `knowledge_base.label` 欄位供分類/標籤（Robin 確認，`0012_add_label_to_knowledge_base.sql`）(4) 沿用 ADR-6/ADR-7 的「使用者可見反問確認 + 下一輪內部 LLM 呼叫判斷」兩輪架構；`knowledge.py` 新增 `save_knowledge()`，`build_context()`／`get_persona_text()` 改用 `_join_rows()` 支援 Owner 對共用類別追加多筆資料；`chat.py` 新增 `_REQUEST_SAVE_MARKER`／`is_owner` 參數與對應 prompt 規則，並把 FR-3(g) 誠實性規則導向新的反問流程；`commands.py` 新增 `handle_save_knowledge_confirm_step()`、`start_clean_target_dialog_confirm()`／`handle_clean_target_dialog_confirm_step()`；`router.py` 新增 `_CLEAN_TARGET_DIALOG_PATTERN` 與兩個新 flow 分派；`tests/bot/conftest.py` 的 `FakeCloudSQLClient` 新增 `delete()`；全專案 219 個測試全過、覆蓋率 100% | Claude（依 Robin 指示） |
 | 2026-08-02 | Robin 問語音轉文字後是否會先重發確認還是直接執行，得知是直接執行後提出風險情境：「使用者用語音說執行 A 決策，但 LLM 聽錯了，直接執行 B 決策，且已刪除的紀錄無法回頭補上」；提出兩個強化方向請 Robin 選擇，Robin 選定「復誦＋最終執行前一定要打字答一次」，新增 ADR-9（FR-16a）：`/clean-all-dialog`／`/clean-target-dialog`／主動記知識三個高風險 flow 在判定 `CONFIRM` 後不再馬上執行，改為轉入新的 `pending_*_final_confirm` 狀態，要求逐字打字輸入「確認執行」；語音輸入這一步一律拒絕（`router.py` 新增 `via_voice` 參數，`handle_voice_message()` 固定傳 `True`），且刻意不讓語音訊息清除這三個最終確認狀態（新增 `_FINAL_CONFIRM_FLOWS`），避免語音一來就把待確認的操作悄悄清空；`commands.py` 新增三個 `handle_*_final_confirm_step()`；全專案 274 個測試全過、覆蓋率 100% | Claude（依 Robin 選定方向實作） |
 | 2026-08-02 | Robin 追問「如果卡在最終確認狀態時又發送一個新語音，這時會如何處理」，發現初版實作是先下載/轉錄，才由 `commands.py` 依 `via_voice` 拒絕，等於明知道會被拒絕還是先花了一次 Drive/Groq 額度，與 FR-14/FR-15「先擋才不浪費額度」的原則不一致；Robin 確認補上，修正 `handle_voice_message()`：卡在 `_FINAL_CONFIRM_FLOWS` 時在下載/轉錄之前直接短路回覆（`text` 帶空字串呼叫 `handle_message()`），完全不消耗 Drive/Groq 額度，短路檢查也排在 FR-14／FR-15 之前；全專案 275 個測試全過、覆蓋率 100% | Claude（依 Robin「補上吧」指示） |
+| 2026-08-02 | **ADR-6 追加修正**：Robin 回報問完氣溫（誠實回不知道）後，換講一句完全無關的新事情「我要載妹妹到水里」（陳述句、不是問句），被誤判成「拒絕記錄」（回「好的，這次就不記錄囉！」），追查發現 `_build_prompt()` 的「無關新內容」選項措辭寫成「問一個新的『問題』」，用詞侷限在問句，使用者講陳述句時模型容易誤套進另外兩個選項；修正把該選項改為「除了以上情況以外的任何內容」的 catch-all 寫法，並把「拒絕」選項收緊為必須是明確拒絕/跳過語句，`confirming_question`（ADR-7）對應區塊比照修正；純屬 prompt 措辭調整，三選一分流架構本身不變，`src/bot/chat.py` 覆蓋率維持 100% | Claude（依 Robin 回報排查並修正） |

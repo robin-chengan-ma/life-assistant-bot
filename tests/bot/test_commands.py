@@ -1,3 +1,5 @@
+from datetime import datetime
+
 import pytest
 
 from src.bot import commands, templates, toggles
@@ -768,20 +770,50 @@ def test_handle_todo_confirm_step_cancels_on_non_confirm(fake_db):
     assert store.get(1) is None
 
 
-def test_handle_todo_time_step_moves_to_reminder_step_when_clear(fake_db):
+def test_handle_todo_time_step_moves_to_reminder_step_when_clear(fake_db, monkeypatch):
+    # 2026-08-02 追加：due_at 是「今天」但現在還沒到早上 8 點，8 點提醒的承諾仍然成立。
+    monkeypatch.setattr(commands, "_now", lambda: datetime(2026, 8, 2, 7, 0, tzinfo=commands._TAIWAN_TZ))
     store = ConversationStateStore()
     store.set(1, {"flow": "pending_todo_time", "target_user_id": 42, "original_text": "我下午要去買菜"})
     llm_client = _FakeLLMClient(response_text="STATUS: CLEAR\nCONTENT: 買菜\nDUE_AT: 2026-08-02 15:00")
 
-    reply = commands.handle_todo_time_step(fake_db, llm_client, store, telegram_user_id=1, text="三點")
+    reply = commands.handle_todo_time_step(fake_db, llm_client, store, telegram_user_id=1, text="下午三點")
 
     assert "2026/08/02 15:00" in reply
-    assert "提醒" in reply
+    assert "早上 8 點會主動提醒你一次" in reply
     state = store.get(1)
     assert state["flow"] == "pending_todo_reminder"
     assert state["target_user_id"] == 42
     assert state["content"] == "買菜"
     assert state["due_at"].strftime("%Y-%m-%d %H:%M") == "2026-08-02 15:00"
+
+
+def test_handle_todo_time_step_skips_digest_promise_when_8am_already_passed(fake_db, monkeypatch):
+    # Robin 實測回報：中午設定當天下午才要執行的待辦，卻還是收到「當天早上 8 點會提醒你」——
+    # 這句話是不可能發生的事，因為當下 8 點早就過了；改用另一句話講清楚不會收到今天的早上摘要。
+    monkeypatch.setattr(commands, "_now", lambda: datetime(2026, 8, 2, 12, 0, tzinfo=commands._TAIWAN_TZ))
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_todo_time", "target_user_id": 42, "original_text": "下午要載妹妹到水里"})
+    llm_client = _FakeLLMClient(response_text="STATUS: CLEAR\nCONTENT: 載妹妹到水里\nDUE_AT: 2026-08-02 17:30")
+
+    reply = commands.handle_todo_time_step(fake_db, llm_client, store, telegram_user_id=1, text="下午5:30")
+
+    assert "已經過了今天的早上 8 點" in reply
+    assert "不會收到當天早上的提醒摘要" in reply
+    assert "早上 8 點會主動提醒你一次" not in reply
+
+
+def test_handle_todo_time_step_keeps_digest_promise_for_future_due_date(fake_db, monkeypatch):
+    # due_at 是「明天」，即使現在已經是今天晚上（早就過了今天的 8 點），明天的 8 點摘要仍然會發生。
+    monkeypatch.setattr(commands, "_now", lambda: datetime(2026, 8, 2, 20, 0, tzinfo=commands._TAIWAN_TZ))
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_todo_time", "target_user_id": 42, "original_text": "明天要交報告"})
+    llm_client = _FakeLLMClient(response_text="STATUS: CLEAR\nCONTENT: 交報告\nDUE_AT: 2026-08-03 09:00")
+
+    reply = commands.handle_todo_time_step(fake_db, llm_client, store, telegram_user_id=1, text="明天上午九點")
+
+    assert "早上 8 點會主動提醒你一次" in reply
+    assert "已經過了" not in reply
 
 
 def test_handle_todo_time_step_stays_when_unclear(fake_db):
