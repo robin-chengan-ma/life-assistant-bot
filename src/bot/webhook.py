@@ -31,6 +31,13 @@ _logger = logging.getLogger(__name__)
 # 留待 Phase 2 Step 2.6，Phase 1 先用同一句安全用語涵蓋所有未預期例外。
 _UNEXPECTED_ERROR_REPLY = "羅賓森好像不太舒服，等一下再試試看喔！"
 
+# 2026-08-02 追加修正（見 robinson SPEC.md FR-19，Robin 回報「打了訊息 Robinson 完全不理我」）：
+# 根因是沒有拋出例外，但 Gemini 那次生成剛好回傳空字串，導致 `reply` 被覆寫成 ""，連預設的
+# `_UNEXPECTED_ERROR_REPLY` 安全網都被蓋掉，下面 `if reply:` 判斷為 False、完全不送出任何
+# Telegram 訊息——使用者只會看到已讀不回，連安全用語都收不到。用不同措辭跟例外安全網區分，
+# 讓使用者知道是「這句沒接上」而不是「系統掛了」，鼓勵他換句話說再試一次。
+_EMPTY_REPLY_FALLBACK = "不好意思，我剛剛好像沒接上你的話，可以再說一次或換個方式講講看嗎？"
+
 # 目前支援文字、圖片、語音（voice 與 audio 兩種訊息類型都算，見 _extract_voice），
 # 收到其他格式（文件/影片/貼圖等）直接回這句拒絕，不進入 DB/Gemini 流程，符合 FR-17
 # 「僅支援圖片與音檔兩種格式」的承諾。
@@ -332,6 +339,17 @@ def telegram_webhook():
     finally:
         if db is not None:
             db.close()
+
+    if not reply or not reply.strip():
+        # 沒有例外、純粹是這次處理結果剛好是空字串（例如 Gemini 生成回傳空內容）：
+        # 沒有 Traceback 可以私訊 Robin，先記警告 log 方便事後排查，並改用專屬的空字串安全網，
+        # 避免使用者收到完全的已讀不回（見上方 `_EMPTY_REPLY_FALLBACK` 定義的說明）。
+        _logger.warning(
+            "處理結果為空字串（觸發功能=%s，telegram_user_id=%s），改用安全用語回覆，避免使用者完全收不到任何回應",
+            error_feature,
+            telegram_user_id,
+        )
+        reply = _EMPTY_REPLY_FALLBACK
 
     if reply:
         try:

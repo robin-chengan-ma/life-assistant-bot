@@ -450,6 +450,56 @@ def test_webhook_survives_db_construction_failure(client, monkeypatch):
     )
 
 
+# --- 空字串回覆防呆（2026-08-02，見 robinson SPEC.md FR-19，Robin 回報「完全不理我」）---
+
+
+def test_webhook_sends_fallback_when_reply_is_empty_string(client, monkeypatch):
+    # 沒有拋例外，但 handle_message 剛好回傳空字串時（例如 Gemini 生成回傳空內容），
+    # 原本 `if reply:` 會判斷為 False 而完全不送出任何 Telegram 訊息，使用者只會看到
+    # 已讀不回；改用專屬的空字串安全網文案，確保一定會收到某種回應。
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("GEMINI_API_BOT_KEY", "fake-gemini-bot-key")
+    monkeypatch.setenv("GEMINI_API_TEXT_KEY", "fake-gemini-text-key")
+
+    monkeypatch.setattr(webhook, "handle_message", MagicMock(return_value=""))
+    monkeypatch.setattr(webhook, "CloudSQLClient", MagicMock(return_value=MagicMock()))
+    monkeypatch.setattr(webhook, "LLMClient", MagicMock())
+
+    mock_telegram_instance = MagicMock()
+    monkeypatch.setattr(webhook, "TelegramClient", MagicMock(return_value=mock_telegram_instance))
+
+    payload = {"message": {"from": {"id": 123}, "text": "我要載妹妹到水里"}}
+    response = client.post("/telegram/webhook", json=payload)
+
+    assert response.status_code == 200
+    mock_telegram_instance.send_text.assert_called_once_with(
+        chat_id=123, text=webhook._EMPTY_REPLY_FALLBACK
+    )
+
+
+def test_webhook_sends_fallback_when_reply_is_whitespace_only(client, monkeypatch):
+    # 空字串以外，純空白（例如模型只回了換行/空格）也該視為「沒有內容」，不能只用
+    # `not reply` 判斷、要一併 strip() 檢查。
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("GEMINI_API_BOT_KEY", "fake-gemini-bot-key")
+    monkeypatch.setenv("GEMINI_API_TEXT_KEY", "fake-gemini-text-key")
+
+    monkeypatch.setattr(webhook, "handle_message", MagicMock(return_value="   \n  "))
+    monkeypatch.setattr(webhook, "CloudSQLClient", MagicMock(return_value=MagicMock()))
+    monkeypatch.setattr(webhook, "LLMClient", MagicMock())
+
+    mock_telegram_instance = MagicMock()
+    monkeypatch.setattr(webhook, "TelegramClient", MagicMock(return_value=mock_telegram_instance))
+
+    payload = {"message": {"from": {"id": 123}, "text": "嗯"}}
+    response = client.post("/telegram/webhook", json=payload)
+
+    assert response.status_code == 200
+    mock_telegram_instance.send_text.assert_called_once_with(
+        chat_id=123, text=webhook._EMPTY_REPLY_FALLBACK
+    )
+
+
 # --- 不支援的檔案格式（robinson SPEC.md FR-17）---
 
 
