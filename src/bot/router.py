@@ -37,6 +37,9 @@ _RULE_TRIGGERS = {"/rule", "我要看使用規則"}
 _FUNCTION_TRIGGERS = {"/function", "我要看所有功能"}
 _MY_TOGGLES_TRIGGERS = {"/my_toggles", "我的功能設定"}
 _SET_TOGGLE_TRIGGERS = {"/set_toggle", "設定家人功能開關"}
+# 2026-08-02（Step 1.7，見 robinson SPEC.md FR-32）：查詢待辦事項清單，所有使用者皆可用
+# （不像 /set_toggle 是 Owner 專屬），放在 is_owner/非 is_owner 分支都會落到的共用觸發詞區塊。
+_MY_TODOS_TRIGGERS = {"/my_todos", "我的待辦事項"}
 _CLEAN_ALL_DIALOG_TRIGGERS = {"/clean-all-dialog", "我想要刪除所有對話紀錄"}
 # 2026-08-01（chat-core SPEC.md FR-12）：/clean-target-dialog 的主題是自由文字，無法用固定
 # 觸發詞集合窮舉，改用 regex 擷取「我想刪除有關 OOO 的紀錄」或 `/clean-target-dialog OOO` 的主題。
@@ -135,6 +138,9 @@ def handle_message(
         return commands.handle_rule()
     if text in _FUNCTION_TRIGGERS:
         return commands.handle_function(db, llm_client)
+    if text in _MY_TODOS_TRIGGERS:
+        # 2026-08-02（Step 1.7，見 robinson SPEC.md FR-32）：查詢待處理清單並進入可標記完成/取消的模式。
+        return commands.start_todo_list(db, state_store, telegram_user_id, user_id)
     if text in _CLEAN_ALL_DIALOG_TRIGGERS:
         # 2026-08-01 起改為先反問確認，不再直接刪除，見 commands.start_clean_all_dialog_confirm。
         return commands.start_clean_all_dialog_confirm(db, state_store, telegram_user_id, user_id)
@@ -341,4 +347,16 @@ def _dispatch_active_flow(
         return commands.handle_clean_target_dialog_final_confirm_step(
             db, state_store, telegram_user_id, text, via_voice
         )
+    # 2026-08-02（Step 1.7，見 robinson SPEC.md FR-31、FR-31a、FR-32）：待辦事項新增（三輪反問）
+    # 與查詢清單後標記完成/取消，各自對應的 flow 分派，見 commands.py 模組內「待辦事項」區塊說明。
+    if flow == "pending_todo_confirm":
+        return commands.handle_todo_confirm_step(db, llm_client, state_store, telegram_user_id, text)
+    if flow == "pending_todo_time":
+        return commands.handle_todo_time_step(db, llm_client, state_store, telegram_user_id, text)
+    if flow == "pending_todo_reminder":
+        return commands.handle_todo_reminder_step(db, llm_client, state_store, telegram_user_id, text)
+    if flow == "pending_todo_list_action":
+        return commands.handle_todo_list_action_step(db, state_store, telegram_user_id, text)
+    if flow == "pending_todo_action_confirm":
+        return commands.handle_todo_action_confirm_step(db, llm_client, state_store, telegram_user_id, text)
     return commands.handle_toggle_step(db, state_store, telegram_user_id, text)

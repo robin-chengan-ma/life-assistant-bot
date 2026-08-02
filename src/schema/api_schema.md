@@ -43,7 +43,7 @@
 {"status": "ok"}
 ```
 
-**備註**：純 keep-alive 用途，避免 Render 免費方案 15 分鐘無請求即休眠。**2026-08-02 新增（Step 1.6，見 robinson SPEC.md FR-21）**：順便觸發 `main._check_neon_capacity()`，借用 cron-job.org 既有的每 10 分鐘呼叫頻率檢查 Neon 資料庫容量，達 80% 門檻時私訊 Robin（`src/bot/monitoring.py` 的 `NeonCapacityMonitor`），不影響本端點回應內容與狀態碼；監控邏輯本身包一層 try/except，絕對不會讓健康檢查端點回傳失敗。
+**備註**：純 keep-alive 用途，避免 Render 免費方案 15 分鐘無請求即休眠。**2026-08-02 新增（Step 1.6，見 robinson SPEC.md FR-21）**：順便觸發 `main._check_neon_capacity()`，借用 cron-job.org 既有的每 10 分鐘呼叫頻率檢查 Neon 資料庫容量，達 80% 門檻時私訊 Robin（`src/bot/monitoring.py` 的 `NeonCapacityMonitor`），不影響本端點回應內容與狀態碼；監控邏輯本身包一層 try/except，絕對不會讓健康檢查端點回傳失敗。**2026-08-02 補充（Step 1.7，見 FR-31a、FR-32）**：同一個 10 分鐘頻率也順便觸發 `main._check_todo_pushes()`——把逾期的待辦標記為 `expired`、推播前 30 分鐘提醒、台灣時間 08 點推播當天待辦摘要（`src/bot/todo.py`），同樣包一層 try/except 不影響本端點。
 
 ---
 
@@ -90,6 +90,19 @@
 **對應 FR**：FR-56、FR-56a～FR-56c、chat-core SPEC.md FR-9
 
 **備註**：總覽階段組 prompt（Robinson 人格背景 + `templates.build_function_overview_raw_text()`）呼叫一次 LLM（`GEMINI_API_BOT_KEY`）改寫成口語，只列功能名稱＋一句話簡述＋權限標記，不展開細節或範例；細節與情境範例（`templates.build_function_manual_text()`）併入一般聊天核心的 context，由 LLM 依使用者提問自行判斷是否回答。實際文字模板排版待有產品原型後再美化（見 robinson SPEC.md 附錄 B）。
+
+---
+
+### `/my_todos`（內部路由，非對外 HTTP 端點）
+
+**狀態**：已實作（`src/bot/commands.py::start_todo_list`，2026-08-02，Step 1.7，見 robinson SPEC.md FR-32）
+**觸發方式**：使用者於對話框輸入「我的待辦事項」或 `/my_todos`
+**權限**：任何已驗證使用者（Robin 或家人，各自只能看到自己的待辦）
+**對應 FR**：FR-32
+
+**Response**：文字，列出目前 `status='pending'` 的待辦事項清單（依預定時間由近到遠排序），沒有資料時回「目前沒有待辦事項喔！」；有資料時額外附上「輸入編號可標記完成/取消」的提示，並進入 `pending_todo_list_action` 狀態等待下一則訊息。
+
+**備註**：這是 FR-32「使用者主動查詢」的入口；選定編號後（`pending_todo_list_action`）會反問「標記為完成還是取消」，下一輪由 LLM 判斷使用者意思（`pending_todo_action_confirm`，比照全專案既有的 CONFIRM/CANCEL 單次呼叫慣例）寫入 `status='completed'`／`'cancelled'`（FR-31a）。新增待辦不是走這支路由觸發，而是使用者在一般聊天中自然語言描述「什麼時候要做什麼事」時，由 `chat.py` 的 `_REQUEST_TODO_MARKER` 偵測後進入 `pending_todo_confirm`→`pending_todo_time`→`pending_todo_reminder` 三輪反問流程（見 chat-core 一般聊天路由、`src/bot/commands.py` 的 `handle_todo_confirm_step`／`handle_todo_time_step`／`handle_todo_reminder_step`），確認提醒設定後才真正寫入 `todos`（FR-31）。
 
 ---
 

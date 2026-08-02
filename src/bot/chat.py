@@ -65,6 +65,14 @@ Robin 回報連續問「小雯有養動物嗎」→（中間插入「小猴是�
 代為刪除使用者自己傳送的訊息）。`/clean-target-dialog` 的搜尋主題刻意不套用這個遮蔽（見
 privacy-masking SPEC.md FR-7），因為那支指令本來就需要讓使用者用個資內容當關鍵字搜尋要刪除
 的紀錄，遮蔽反而會讓功能失效。
+
+2026-08-02 新增（見 robinson SPEC.md FR-31、FR-56e，Step 1.7）：待辦事項偵測。比照 FR-11
+「主動新增知識」的 `_REQUEST_SAVE_MARKER` 模式，新增 `_REQUEST_TODO_MARKER`——偵測到使用者用
+自然語言描述「什麼時候要做什麼事」時，先反問是否要記到待辦事項，設定 `pending_todo_confirm`
+狀態；真正的時間解析、提醒設定、寫入動作都留到後續多輪對話由 `commands.py` 的
+`handle_todo_confirm_step()`／`handle_todo_time_step()`／`handle_todo_reminder_step()` 執行
+（見 router._dispatch_active_flow）。FR-31 的跨模組歧義判斷（Phase 1 暫不實作，見
+`src/bot/todo.py` 模組 docstring）。
 """
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -88,6 +96,7 @@ _SAVE_MARKER = "【SAVE_ANSWER】"
 _DECLINE_MARKER = "【DECLINE_SAVE】"
 _CONFIRM_NAME_MARKER = "【CONFIRM_NAME】"
 _REQUEST_SAVE_MARKER = "【REQUEST_SAVE】"
+_REQUEST_TODO_MARKER = "【REQUEST_TODO】"
 
 _TAIWAN_TZ = ZoneInfo("Asia/Taipei")
 _WEEKDAY_NAMES = ["一", "二", "三", "四", "五", "六", "日"]
@@ -163,6 +172,15 @@ def handle_chat_message(
         state_store.set(
             telegram_user_id,
             {"flow": "pending_save_knowledge_confirm", "target_user_id": user_id, "original_request": text},
+        )
+    elif _REQUEST_TODO_MARKER in reply_text:
+        # 2026-08-02（Step 1.7，見 robinson SPEC.md FR-31）：偵測到「什麼時候要做什麼事」的
+        # 自然語言描述，先反問是否要記錄，真正的時間解析與寫入動作留到後續多輪對話，
+        # 見 commands.handle_todo_confirm_step()。
+        final_reply = reply_text.replace(_REQUEST_TODO_MARKER, "").rstrip()
+        state_store.set(
+            telegram_user_id,
+            {"flow": "pending_todo_confirm", "target_user_id": user_id, "original_text": text},
         )
     elif _UNKNOWN_MARKER in reply_text:
         # 保險起見先去掉模型自己可能已經從對話紀錄裡學著複誦出來的建議句，避免跟下面
@@ -286,6 +304,14 @@ def _build_prompt(
         "如果使用者用一般聊天的方式要求「清除」「刪除」對話紀錄或知識庫資料，你也不能假裝已經刪除，"
         "要引導使用者改用「我想要刪除所有對話紀錄」或「我想刪除有關 OOO 的紀錄」這樣的固定講法，"
         "才會真的觸發系統的刪除流程。"
+        "如果使用者這則訊息是在用自然語言描述一件『什麼時候要做什麼事』的待辦事項"
+        "（例如「我下午要去買菜」「明天要交報告」），不是在問問題，也不是要求你記住某個資訊，"
+        "用溫暖自然的口語反問使用者要不要幫他記錄到待辦事項清單（例如「要幫你紀錄到待辦事項嗎？」），"
+        "這一輪不用先問確切時間或提醒設定（後續會另外用多輪對話詢問），並在回覆最後加上這個固定"
+        f"標記文字：「{_REQUEST_TODO_MARKER}」（這是系統內部用的標記，使用者看不到）；"
+        f"以上這幾種標記（{_CONFIRM_NAME_MARKER}／{_REQUEST_SAVE_MARKER}／{_REQUEST_TODO_MARKER}／"
+        f"{_UNKNOWN_MARKER}）同一則回覆最多只能輸出其中一個，依實際情況判斷最符合的一種，"
+        "不可以同時輸出兩個以上。"
         "如果以上資料不足以回答使用者的問題，你必須誠實地告訴使用者你目前不知道，並且一定要在回覆的最後"
         f"加上這個固定標記文字：「{_UNKNOWN_MARKER}」（這是系統內部用的標記，使用者看不到，不用跟使用者解釋這個標記代表什麼）。"
         "使用者用代名詞（他／她／牠／它／那個人）追問時，一律理解成使用者「最近一次」明確點名問過的那個人"

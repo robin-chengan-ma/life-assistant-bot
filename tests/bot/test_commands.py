@@ -741,3 +741,209 @@ def test_handle_toggle_step_raises_on_unknown_state(fake_db):
 
     with pytest.raises(ValueError):
         commands.handle_toggle_step(fake_db, store, telegram_user_id=1, text="whatever")
+
+
+# --- 待辦事項（FR-31、FR-31a、FR-32，Step 1.7）---
+
+
+def test_handle_todo_confirm_step_moves_to_time_step_when_llm_confirms(fake_db):
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_todo_confirm", "target_user_id": 42, "original_text": "我下午要去買菜"})
+    llm_client = _FakeLLMClient(response_text="CONFIRM")
+
+    reply = commands.handle_todo_confirm_step(fake_db, llm_client, store, telegram_user_id=1, text="好")
+
+    assert reply == "好的，請問是什麼時候呢？"
+    assert store.get(1) == {"flow": "pending_todo_time", "target_user_id": 42, "original_text": "我下午要去買菜"}
+
+
+def test_handle_todo_confirm_step_cancels_on_non_confirm(fake_db):
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_todo_confirm", "target_user_id": 42, "original_text": "我下午要去買菜"})
+    llm_client = _FakeLLMClient(response_text="CANCEL")
+
+    reply = commands.handle_todo_confirm_step(fake_db, llm_client, store, telegram_user_id=1, text="不用")
+
+    assert reply == "好的，這次就不記錄囉！"
+    assert store.get(1) is None
+
+
+def test_handle_todo_time_step_moves_to_reminder_step_when_clear(fake_db):
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_todo_time", "target_user_id": 42, "original_text": "我下午要去買菜"})
+    llm_client = _FakeLLMClient(response_text="STATUS: CLEAR\nCONTENT: 買菜\nDUE_AT: 2026-08-02 15:00")
+
+    reply = commands.handle_todo_time_step(fake_db, llm_client, store, telegram_user_id=1, text="三點")
+
+    assert "2026/08/02 15:00" in reply
+    assert "提醒" in reply
+    state = store.get(1)
+    assert state["flow"] == "pending_todo_reminder"
+    assert state["target_user_id"] == 42
+    assert state["content"] == "買菜"
+    assert state["due_at"].strftime("%Y-%m-%d %H:%M") == "2026-08-02 15:00"
+
+
+def test_handle_todo_time_step_stays_when_unclear(fake_db):
+    store = ConversationStateStore()
+    original_state = {"flow": "pending_todo_time", "target_user_id": 42, "original_text": "我要做事"}
+    store.set(1, original_state)
+    llm_client = _FakeLLMClient(response_text="STATUS: UNCLEAR")
+
+    reply = commands.handle_todo_time_step(fake_db, llm_client, store, telegram_user_id=1, text="呃再說")
+
+    assert "不太確定時間" in reply
+    assert store.get(1) == original_state
+
+
+def test_handle_todo_time_step_stays_when_due_at_unparseable(fake_db):
+    store = ConversationStateStore()
+    original_state = {"flow": "pending_todo_time", "target_user_id": 42, "original_text": "我要做事"}
+    store.set(1, original_state)
+    llm_client = _FakeLLMClient(response_text="STATUS: CLEAR\nCONTENT: 做事\nDUE_AT: 不知道幾點")
+
+    reply = commands.handle_todo_time_step(fake_db, llm_client, store, telegram_user_id=1, text="怪怪的回覆")
+
+    assert "不太確定時間" in reply
+    assert store.get(1) == original_state
+
+
+def test_handle_todo_reminder_step_creates_todo_with_reminder_when_confirmed(fake_db):
+    store = ConversationStateStore()
+    due_at = commands.datetime(2026, 8, 2, 15, 0, tzinfo=commands._TAIWAN_TZ)
+    store.set(1, {"flow": "pending_todo_reminder", "target_user_id": 42, "content": "買菜", "due_at": due_at})
+    llm_client = _FakeLLMClient(response_text="CONFIRM")
+
+    reply = commands.handle_todo_reminder_step(fake_db, llm_client, store, telegram_user_id=1, text="好")
+
+    assert reply == "好的，已經幫你記錄好了！"
+    assert store.get(1) is None
+    rows = fake_db.select("todos", where="user_id = %s AND status = %s", params=(42, "pending"))
+    assert len(rows) == 1
+    assert rows[0]["content"] == "買菜"
+    assert rows[0]["remind_before_30min"] is True
+
+
+def test_handle_todo_reminder_step_creates_todo_without_reminder_when_declined(fake_db):
+    store = ConversationStateStore()
+    due_at = commands.datetime(2026, 8, 2, 15, 0, tzinfo=commands._TAIWAN_TZ)
+    store.set(1, {"flow": "pending_todo_reminder", "target_user_id": 42, "content": "買菜", "due_at": due_at})
+    llm_client = _FakeLLMClient(response_text="CANCEL")
+
+    commands.handle_todo_reminder_step(fake_db, llm_client, store, telegram_user_id=1, text="不用")
+
+    rows = fake_db.select("todos", where="user_id = %s AND status = %s", params=(42, "pending"))
+    assert rows[0]["remind_before_30min"] is False
+
+
+def test_start_todo_list_reports_no_todos_and_does_not_set_state(fake_db):
+    store = ConversationStateStore()
+
+    reply = commands.start_todo_list(fake_db, store, telegram_user_id=1, user_id=42)
+
+    assert reply == "目前沒有待辦事項喔！"
+    assert store.get(1) is None
+
+
+def test_start_todo_list_shows_list_and_sets_pending_action_state(fake_db):
+    due_at = commands.datetime(2026, 8, 2, 15, 0, tzinfo=commands._TAIWAN_TZ)
+    todo_id = fake_db.insert(
+        "todos",
+        {"user_id": 42, "content": "買菜", "due_at": due_at, "remind_before_30min": False, "status": "pending"},
+    )
+    store = ConversationStateStore()
+
+    reply = commands.start_todo_list(fake_db, store, telegram_user_id=1, user_id=42)
+
+    assert "買菜" in reply
+    assert "結束" in reply
+    assert store.get(1) == {"flow": "pending_todo_list_action", "target_user_id": 42, "todo_ids": [todo_id]}
+
+
+def test_handle_todo_list_action_step_exit_phrase_clears_state(fake_db):
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_todo_list_action", "target_user_id": 42, "todo_ids": [1]})
+
+    reply = commands.handle_todo_list_action_step(fake_db, store, telegram_user_id=1, text="結束")
+
+    assert store.get(1) is None
+    assert "結束" in reply
+
+
+def test_handle_todo_list_action_step_invalid_index_reprompts(fake_db):
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_todo_list_action", "target_user_id": 42, "todo_ids": [1]})
+
+    reply = commands.handle_todo_list_action_step(fake_db, store, telegram_user_id=1, text="99")
+
+    assert "編號" in reply
+    assert store.get(1)["flow"] == "pending_todo_list_action"
+
+
+def test_handle_todo_list_action_step_valid_index_moves_to_action_confirm(fake_db):
+    due_at = commands.datetime(2026, 8, 2, 15, 0, tzinfo=commands._TAIWAN_TZ)
+    todo_id = fake_db.insert(
+        "todos",
+        {"user_id": 42, "content": "買菜", "due_at": due_at, "remind_before_30min": False, "status": "pending"},
+    )
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_todo_list_action", "target_user_id": 42, "todo_ids": [todo_id]})
+
+    reply = commands.handle_todo_list_action_step(fake_db, store, telegram_user_id=1, text="1")
+
+    assert "買菜" in reply
+    assert store.get(1) == {
+        "flow": "pending_todo_action_confirm",
+        "target_user_id": 42,
+        "todo_id": todo_id,
+        "content": "買菜",
+    }
+
+
+def test_handle_todo_action_confirm_step_marks_completed(fake_db):
+    due_at = commands.datetime(2026, 8, 2, 15, 0, tzinfo=commands._TAIWAN_TZ)
+    todo_id = fake_db.insert(
+        "todos",
+        {"user_id": 42, "content": "買菜", "due_at": due_at, "remind_before_30min": False, "status": "pending"},
+    )
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_todo_action_confirm", "target_user_id": 42, "todo_id": todo_id, "content": "買菜"})
+    llm_client = _FakeLLMClient(response_text="COMPLETE")
+
+    reply = commands.handle_todo_action_confirm_step(fake_db, llm_client, store, telegram_user_id=1, text="做完了")
+
+    assert "完成" in reply
+    assert store.get(1) is None
+    assert fake_db.select("todos", where="id = %s", params=(todo_id,), fetch_one=True)["status"] == "completed"
+
+
+def test_handle_todo_action_confirm_step_marks_cancelled(fake_db):
+    due_at = commands.datetime(2026, 8, 2, 15, 0, tzinfo=commands._TAIWAN_TZ)
+    todo_id = fake_db.insert(
+        "todos",
+        {"user_id": 42, "content": "買菜", "due_at": due_at, "remind_before_30min": False, "status": "pending"},
+    )
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_todo_action_confirm", "target_user_id": 42, "todo_id": todo_id, "content": "買菜"})
+    llm_client = _FakeLLMClient(response_text="CANCEL")
+
+    reply = commands.handle_todo_action_confirm_step(fake_db, llm_client, store, telegram_user_id=1, text="不用了")
+
+    assert "取消" in reply
+    assert fake_db.select("todos", where="id = %s", params=(todo_id,), fetch_one=True)["status"] == "cancelled"
+
+
+def test_handle_todo_action_confirm_step_keeps_status_when_unclassifiable(fake_db):
+    due_at = commands.datetime(2026, 8, 2, 15, 0, tzinfo=commands._TAIWAN_TZ)
+    todo_id = fake_db.insert(
+        "todos",
+        {"user_id": 42, "content": "買菜", "due_at": due_at, "remind_before_30min": False, "status": "pending"},
+    )
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_todo_action_confirm", "target_user_id": 42, "todo_id": todo_id, "content": "買菜"})
+    llm_client = _FakeLLMClient(response_text="OTHER")
+
+    reply = commands.handle_todo_action_confirm_step(fake_db, llm_client, store, telegram_user_id=1, text="嗯？")
+
+    assert "不太確定" in reply
+    assert fake_db.select("todos", where="id = %s", params=(todo_id,), fetch_one=True)["status"] == "pending"

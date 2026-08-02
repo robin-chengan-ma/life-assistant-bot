@@ -3,7 +3,7 @@ title: Robinson — Robin 與家人們的生活小助手
 slug: robinson
 status: draft
 created: 2026-07-29
-updated: 2026-08-01
+updated: 2026-08-02
 owner: Robin
 ---
 
@@ -178,9 +178,9 @@ Robinson 是一個以 Telegram 為前台介面的家庭生活小助手，Robin �
 
 ### 功能性需求 — 待辦事項
 
-- [ ] FR-31：使用者以自然語言描述「什麼時候要做什麼事」，Robinson 解析後記錄；若使用者描述內容可能與其他功能模組重疊（例如「打籃球」既像待辦事項也像體態管理的運動紀錄），Robinson 需先反問使用者要記到哪個模組，不可自行猜測
-- [ ] FR-31a：待辦事項狀態管理 —— 該筆待辦已超過預定執行時間、或使用者明確表示已完成／取消時，需將該筆標記為已結束狀態，不再出現在待處理清單或後續推播中
-- [ ] FR-32：推播時機：使用者主動查詢時、每日 08:00 固定推播、預計處理時間前 30 分鐘提醒（提醒與否由使用者於記錄當下決定，見 FR-56e 情境範例）
+- [x] FR-31：使用者以自然語言描述「什麼時候要做什麼事」，Robinson 解析後記錄；若使用者描述內容可能與其他功能模組重疊（例如「打籃球」既像待辦事項也像體態管理的運動紀錄），Robinson 需先反問使用者要記到哪個模組，不可自行猜測（**2026-08-02 Step 1.7 實作**：跨模組歧義判斷 Phase 1 暫不實作——體態管理要 Phase 2 才做、心情小記 Step 1.8 也還沒做，目前沒有其他已完成的模組可以比較，待那些模組做出來後再回頭補上；自然語言偵測比照 FR-11「主動新增知識」的 LLM 標記模式，見 `src/bot/chat.py` 的 `_REQUEST_TODO_MARKER`）
+- [x] FR-31a：待辦事項狀態管理 —— 該筆待辦已超過預定執行時間、或使用者明確表示已完成／取消時，需將該筆標記為已結束狀態，不再出現在待處理清單或後續推播中（**2026-08-02 實作**：逾期由 `src/bot/todo.py` 的 `mark_overdue_as_expired()` 借用 `/healthz` 排程檢查自動標記為 `expired`；完成/取消由「我的待辦事項」查詢清單後選定編號、LLM 判斷使用者意思後標記為 `completed`／`cancelled`）
+- [x] FR-32：推播時機：使用者主動查詢時、每日 08:00 固定推播、預計處理時間前 30 分鐘提醒（提醒與否由使用者於記錄當下決定，見 FR-56e 情境範例）（**2026-08-02 實作**：主動查詢＝「我的待辦事項」／`/my_todos`；每日 08:00 固定推播與前 30 分鐘提醒兩者都沒有獨立排程系統，借用 `/healthz` 既有的 10 分鐘 cron 頻率，去重狀態存在 `todos` 資料列本身（`reminded_30min_sent_at`／`daily_pushed_on`），見 `src/schema/db_schema.md` todos 表設計理由）
 
 ### 功能性需求 — 求職
 
@@ -537,7 +537,7 @@ Robinson 是一個以 Telegram 為前台介面的家庭生活小助手，Robin �
 - [x] Step 1.4：語音轉文字流程（改用 Groq Whisper，`VOICE_API_KEY`，見 ADR-12）+ 10 分鐘上限 + 15 分鐘內文字修正限制（FR-14、FR-15）+ 語音檔上傳 Google Drive 備份（ADR-13）——新增 `submodules/voice/`（`VoiceClient`，用 `requests` 直打 Groq OpenAI 相容 REST API）、`src/bot/voice.py`（時長/修正窗口檢查、上傳＋轉文字）；轉出來的文字直接比照一般文字訊息呼叫既有 `handle_message()`，不重複指令/對話流程分派邏輯；`src/bot/media.py` 從 `image.py` 抽出共用的 `save_media_upload()`；**追加修正**：初版只處理 `message.voice`（錄音鍵語音訊息），Robin 回報「除了照片和音檔外的檔案格式才無效」才發現漏了 `message.audio`（使用者上傳的音檔，例如 MP3），與 FR-17 原文「僅支援圖片與音檔兩種檔案類型」承諾不符，補上 `webhook._extract_voice()` 同時偵測兩種類型並依 Telegram 回報的 `mime_type` 決定正確的 Drive 副檔名與轉錄請求格式；全專案 262 個測試全過、`src/bot/`／`submodules/llm`／`submodules/voice` 覆蓋率 100%
 - [x] Step 1.5：個資偵測與刪除機制，Regex 硬規則 + LLM 語意雙層防線（FR-13、FR-13a～FR-13d），展開為獨立 [docs/specs/privacy-masking/SPEC.md](../privacy-masking/SPEC.md)；新增 `src/bot/privacy.py`，整合進 `chat.handle_chat_message()`（一般聊天文字）與 `image.handle_image_message()`（圖片說明文字），語音因統一轉文字後走 `handle_message()` 天然涵蓋；`/clean-target-dialog` 的搜尋主題刻意排除遮蔽（避免刪除功能失效）；全專案 326 個測試全過、覆蓋率 100%
 - [x] Step 1.6（2026-08-02 完成）：基礎錯誤處理層 —— 對外「生病了」/「我康復了」用語、捕獲異常＋完整 Traceback 記錄、私訊 Robin 原始 log（FR-19a、FR-20、FR-21；FR-19b～FR-19i 的 AI 自主診斷、分級降級、重試機制延後至 Phase 2，見 Step 2.4 與 ADR-7）。新增 `src/bot/monitoring.py`（`NeonCapacityMonitor`）、`submodules/cloudsql/client.py` 的 `execute_query()` 逃生口、`commands.handle_recovered()`（`/recovered` Owner 專屬指令）、`webhook.py` 的 `_notify_robin_of_error()`／`_summarize_user_input()`；全專案 352 個測試全過、覆蓋率 100%
-- [ ] Step 1.7：待辦事項模組（FR-31、FR-32）
+- [x] Step 1.7（2026-08-02 完成）：待辦事項模組 —— 自然語言新增（三輪反問：要不要記錄→什麼時候→要不要提前 30 分鐘提醒）、逾期自動標記、查詢清單＋標記完成/取消、每日 08:00 固定推播＋前 30 分鐘提醒（FR-31、FR-31a、FR-32）。新增 `todos` migration、`src/bot/todo.py`（純邏輯）、`chat.py` 的 `_REQUEST_TODO_MARKER`、`commands.py` 五個新 flow 處理函式、`router.py` 整合、`main.py` 的 `_check_todo_pushes()` 借用 `/healthz` 頻率；全專案 391 個測試全過、覆蓋率 100%
 - [ ] Step 1.8：心情小記模組（FR-49、FR-50）
 - [ ] Step 1.9：客訴收集模組（FR-60～FR-63）—— `/complaint` 路由、客訴內容記錄、Gemini 分析私訊 Robin
 
@@ -738,3 +738,4 @@ FR-56 的 `/function` 路由目前只定義了「回傳範圍」（所有功能�
 | 2026-08-02 | **Phase 1 Step 1.5 完成**：個資偵測與遮蔽機制（FR-13、FR-13a～FR-13d），展開為獨立 [docs/specs/privacy-masking/SPEC.md](../privacy-masking/SPEC.md)；語意層 LLM 呼叫用 Robin 確認的新申請專用 Key（`GEMINI_API_PRIVACY_KEY`），不佔用既有聊天配額（避免重演先前多次 429 的問題）；新增 `src/bot/privacy.py`（`mask_regex()`／`mask_with_llm()`／`mask_text()`），整合進 `chat.handle_chat_message()`（一般聊天含 `pending_user_knowledge`／`pending_name_confirm`／`pending_save_knowledge_confirm`）與 `image.handle_image_message()`（圖片說明文字）；語音因為統一轉文字後走既有 `handle_message()` 天然涵蓋；刻意排除 `/clean-target-dialog` 的搜尋主題（`topic`）不遮蔽，因為該指令本來就需要讓使用者用個資內容當關鍵字搜尋要刪除的紀錄，遮蔽會讓功能失效；全專案 326 個測試全過、覆蓋率 100% | Claude（依 Robin「先做吧」指示，經 AskUserQuestion 確認額度策略後實作） |
 | 2026-08-02 | **gdrive 改用 OAuth 2.0**：Robin 實測語音上傳撞到 Google Drive API `403 storageQuotaExceeded`，查證後確認 Service Account 完全沒有 Drive 儲存額度，任何一般（非 Shared Drive）資料夾上傳皆會失敗，跟資料夾空間無關；Shared Drive 又需要付費 Google Workspace；經 AskUserQuestion 確認，Robin 選擇「改用 OAuth 以你本人身份上傳（推薦）」；新增 [submodules-core SPEC.md ADR-10](../submodules-core/SPEC.md)，`submodules/gdrive/client.py` 建構子改為 `refresh_token`／`client_id`／`client_secret`／`folder_id`，新增一次性本機互動授權腳本 `get_refresh_token.py`；`webhook.py` 兩處 `GDriveClient` 建構呼叫與環境變數同步更新（`GDRIVE_OAUTH_CLIENT_ID`／`GDRIVE_OAUTH_CLIENT_SECRET`／`GDRIVE_OAUTH_REFRESH_TOKEN`，取代 `GDRIVE_KEY_FILE_PATH`）；ADR-13 補充決策記錄本次變更；全專案 329 個測試全過、覆蓋率 100%（`get_refresh_token.py` 為一次性互動腳本，依 AGENTS.md 慣例排除於 TDD 範圍外） | Claude（依 Robin 於 AskUserQuestion 選定方向實作） |
 | 2026-08-02 | **Phase 1 Step 1.6 完成**：基礎錯誤處理層（FR-19a、FR-20、FR-21）。經 AskUserQuestion 確認兩個範圍決策：① FR-20「我康復了」廣播改為新增 Owner 專屬指令 `/recovered`（Phase 1 沒有 AI 自主修復機制，由 Robin 自己判斷後手動觸發，廣播給所有已綁定家人、排除 Robin 自己）② FR-21 Gemini 免費額度監控 Phase 1 先跳過（官方無查詢即時用量的 API，本地節流計數器準確度不足，429 例外已經會走 FR-19a 私訊機制），只做 Neon 容量監控（`src/bot/monitoring.py` 的 `NeonCapacityMonitor`，借用 `/healthz` 既有的 10 分鐘 cron 頻率，達 80% 私訊 Robin、回落後重置避免重複告警）；FR-19a 簡化版通知：`webhook.py` 新增 `_notify_robin_of_error()`／`_summarize_user_input()`，例外發生時除了 log 額外私訊 Robin 完整 Traceback＋發生情境（不含 AI 自主診斷，留待 Step 2.4）；`submodules/cloudsql/client.py` 新增 `execute_query()` 逃生口供監控查詢使用；全專案 352 個測試全過、覆蓋率 100% | Claude（依 Robin 於 AskUserQuestion 選定方向實作） |
+| 2026-08-02 | **Phase 1 Step 1.7 完成**：待辦事項模組（FR-31、FR-31a、FR-32）。經 AskUserQuestion 確認兩個範圍決策：① 待辦意圖偵測比照 FR-11「主動新增知識」的 LLM 標記模式，新增 `chat.py` 的 `_REQUEST_TODO_MARKER`（而非新增固定指令），符合 FR-31「自然語言描述」的精神 ② FR-31 跨模組歧義判斷 Phase 1 暫不實作（體態管理是 Phase 2、心情小記 Step 1.8 都還沒做，目前沒有其他模組可以比較），待那些模組做出來後再回頭補上。新增 `todos` migration（Robin 依 ADR-10 核准 SQL）；`src/bot/todo.py`（純邏輯：新增/查詢/標記/逾期/兩種推播判斷）；`chat.py` 新增待辦意圖偵測（三輪反問流程：`pending_todo_confirm`→`pending_todo_time`→`pending_todo_reminder`，時間解析不清楚時停留原地繼續反問，不硬存猜錯的時間）；`commands.py` 新增五個新 flow 處理函式（含查詢清單「我的待辦事項」／`/my_todos` 後標記完成/取消的 `pending_todo_list_action`／`pending_todo_action_confirm`）；`router.py` 整合觸發詞與 flow 分派；每日 08:00 固定推播與前 30 分鐘提醒都沒有獨立排程系統，比照 Step 1.6 借用 `/healthz` 既有的 10 分鐘 cron 頻率（`main.py` 新增 `_check_todo_pushes()`），但去重狀態刻意存在 `todos` 資料列本身（`reminded_30min_sent_at`／`daily_pushed_on`）而非記憶體 instance state，跟 Step 1.6 `NeonCapacityMonitor` 的取捨不同（Render 免費方案可能不定期重啟，待辦提醒的正確性值得多花欄位換取跨重啟持久性）；新增待辦不比照 FR-16a 的「逐字打字確認執行」關卡（低風險、可回頭用查詢清單修正，跟刪除紀錄/寫入知識庫的風險層級不同）；全專案 391 個測試全過、覆蓋率 100% | Claude（依 Robin「開始吧」指示，經 AskUserQuestion 確認範圍後實作） |

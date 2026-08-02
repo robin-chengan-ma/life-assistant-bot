@@ -45,6 +45,36 @@ def _check_neon_capacity() -> None:
         db.close()
 
 
+def _check_todo_pushes() -> None:
+    """在 /healthz 被呼叫時順便處理待辦事項的自動化邏輯（Step 1.7，見 robinson SPEC.md FR-31a、
+    FR-32）：①把逾期的 pending 待辦標記為 expired ②推播「預定時間前 30 分鐘」提醒 ③台灣時間
+    08 點推播當天待辦摘要，見 src/bot/todo.py 模組 docstring 的完整說明。
+
+    跟 `_check_neon_capacity()` 一樣包一層 try/except，不能因為這裡出錯就讓 `/healthz` 回傳失敗；
+    沒設定 DATABASE_URL／TELEGRAM_BOT_TOKEN 時直接跳過（本機測試環境常見）。這裡不像
+    `_check_neon_capacity()` 需要 `ROBIN_TELEGRAM_TOKEN`——待辦事項是推播給每一位有待辦的使用者
+    自己（依 todos.user_id 查對應的 users.telegram_user_id），不是固定通知 Robin。
+    """
+    if not (os.environ.get("DATABASE_URL") and os.environ.get("TELEGRAM_BOT_TOKEN")):
+        return
+
+    from submodules.cloudsql.client import CloudSQLClient
+    from submodules.telegram.client import TelegramClient
+
+    from src.bot import todo
+
+    db = CloudSQLClient()
+    try:
+        telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
+        todo.mark_overdue_as_expired(db)
+        todo.check_and_push_reminders(db, telegram_client)
+        todo.check_and_push_daily_digest(db, telegram_client)
+    except Exception:
+        logger.exception("待辦事項推播檢查失敗，不影響健康檢查端點本身")
+    finally:
+        db.close()
+
+
 def _run_startup_migrations() -> None:
     """開機自動套用尚未執行過的 DB migration（ADR-11）。
 
@@ -84,8 +114,12 @@ def health_check():
 
     2026-08-02（Step 1.6，見 FR-21）：順便觸發 Neon 容量檢查，借用 cron-job.org 既有的
     每 10 分鐘呼叫頻率，不需要額外的排程機制。
+
+    2026-08-02（Step 1.7，見 FR-31a、FR-32）：同樣借用這個頻率，順便觸發待辦事項的逾期標記與
+    兩種推播檢查，見 `_check_todo_pushes()`。
     """
     _check_neon_capacity()
+    _check_todo_pushes()
     return jsonify({"status": "ok"}), 200
 
 

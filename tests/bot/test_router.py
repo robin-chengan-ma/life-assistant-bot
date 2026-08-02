@@ -541,6 +541,80 @@ def test_pending_save_knowledge_confirm_flow_moves_to_final_confirm_via_router(f
     assert len(rows) == 1
 
 
+# --- 待辦事項（robinson SPEC.md FR-31、FR-31a、FR-32，Step 1.7）---
+
+
+def test_my_todos_trigger_reports_empty_list(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+
+    reply = router.handle_message(fake_db, store, FAMILY_ID, "我的待辦事項")
+
+    assert reply == "目前沒有待辦事項喔！"
+    assert store.get(FAMILY_ID) is None
+
+
+def test_todo_full_flow_from_natural_language_to_creation(fake_db, monkeypatch):
+    # 2026-08-02（Step 1.7，見 FR-31、FR-56e 情境範例）：自然語言描述 → 確認要記錄 → 給時間
+    # → 確認提醒設定，全程由 router 正確分派到 chat.py／commands.py。
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    fake_db.insert("knowledge_base", {"category": "general_persona", "user_id": None, "content": "我是羅賓森"})
+    fake_db.insert("knowledge_base", {"category": "general_family", "user_id": None, "content": "家人背景"})
+    store = ConversationStateStore()
+
+    llm_client = _FakeLLMClient(response_text="要幫你紀錄到待辦事項嗎？【REQUEST_TODO】")
+    reply1 = router.handle_message(fake_db, store, FAMILY_ID, "我下午要去買菜", llm_client=llm_client)
+    assert reply1 == "要幫你紀錄到待辦事項嗎？"
+    assert store.get(FAMILY_ID)["flow"] == "pending_todo_confirm"
+
+    llm_client.response_text = "CONFIRM"
+    reply2 = router.handle_message(fake_db, store, FAMILY_ID, "好", llm_client=llm_client)
+    assert reply2 == "好的，請問是什麼時候呢？"
+    assert store.get(FAMILY_ID)["flow"] == "pending_todo_time"
+
+    llm_client.response_text = "STATUS: CLEAR\nCONTENT: 買菜\nDUE_AT: 2026-08-02 15:00"
+    reply3 = router.handle_message(fake_db, store, FAMILY_ID, "三點", llm_client=llm_client)
+    assert "2026/08/02 15:00" in reply3
+    assert store.get(FAMILY_ID)["flow"] == "pending_todo_reminder"
+
+    llm_client.response_text = "CONFIRM"
+    reply4 = router.handle_message(fake_db, store, FAMILY_ID, "好", llm_client=llm_client)
+    assert reply4 == "好的，已經幫你記錄好了！"
+    assert store.get(FAMILY_ID) is None
+
+    rows = fake_db.select("todos", where="user_id = %s AND status = %s", params=(user_id, "pending"))
+    assert len(rows) == 1
+    assert rows[0]["content"] == "買菜"
+    assert rows[0]["remind_before_30min"] is True
+
+
+def test_my_todos_trigger_lists_and_marks_completed_via_index_selection(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    due_at = datetime(2026, 8, 2, 7, 0, tzinfo=timezone.utc)
+    todo_id = fake_db.insert(
+        "todos",
+        {"user_id": user_id, "content": "買菜", "due_at": due_at, "remind_before_30min": False, "status": "pending"},
+    )
+    store = ConversationStateStore()
+
+    reply1 = router.handle_message(fake_db, store, FAMILY_ID, "我的待辦事項")
+    assert "買菜" in reply1
+    assert store.get(FAMILY_ID)["flow"] == "pending_todo_list_action"
+
+    reply2 = router.handle_message(fake_db, store, FAMILY_ID, "1")
+    assert "買菜" in reply2
+    assert store.get(FAMILY_ID)["flow"] == "pending_todo_action_confirm"
+
+    llm_client = _FakeLLMClient(response_text="COMPLETE")
+    reply3 = router.handle_message(fake_db, store, FAMILY_ID, "做完了", llm_client=llm_client)
+    assert "完成" in reply3
+    assert store.get(FAMILY_ID) is None
+    assert fake_db.select("todos", where="id = %s", params=(todo_id,), fetch_one=True)["status"] == "completed"
+
+
 # --- /clean-target-dialog（docs/specs/chat-core/SPEC.md FR-12）---
 
 

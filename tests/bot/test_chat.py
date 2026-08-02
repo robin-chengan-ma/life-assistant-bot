@@ -408,6 +408,41 @@ def test_handle_chat_message_sets_pending_save_knowledge_confirm_state_when_llm_
     }
 
 
+def test_handle_chat_message_prompt_includes_request_todo_rule_and_marker(fake_db):
+    # 2026-08-02（Step 1.7，見 robinson SPEC.md FR-31）：使用者用自然語言描述「什麼時候要做
+    # 什麼事」時，prompt 要指示模型先反問是否記錄，並輸出 REQUEST_TODO 標記。
+    _seed_general(fake_db)
+    llm_client = _FakeLLMClient()
+    text_llm_client = _FakeTextLLMClient()
+    store = ConversationStateStore()
+
+    chat.handle_chat_message(
+        fake_db, llm_client, text_llm_client, store, telegram_user_id=1, user_id=1, text="我下午要去買菜",
+    )
+
+    assert "【REQUEST_TODO】" in llm_client.last_prompt
+    assert "要幫你紀錄到待辦事項嗎" in llm_client.last_prompt
+
+
+def test_handle_chat_message_sets_pending_todo_confirm_state_when_llm_returns_request_todo_marker(fake_db):
+    _seed_general(fake_db)
+    llm_client = _FakeLLMClient(response_text="要幫你紀錄到待辦事項嗎？【REQUEST_TODO】")
+    text_llm_client = _FakeTextLLMClient()
+    store = ConversationStateStore()
+
+    reply = chat.handle_chat_message(
+        fake_db, llm_client, text_llm_client, store, telegram_user_id=1, user_id=1, text="我下午要去買菜",
+    )
+
+    assert reply == "要幫你紀錄到待辦事項嗎？"
+    assert "【REQUEST_TODO】" not in reply
+    assert store.get(1) == {
+        "flow": "pending_todo_confirm",
+        "target_user_id": 1,
+        "original_text": "我下午要去買菜",
+    }
+
+
 def test_handle_chat_message_prompt_requires_real_similar_name_for_confirm_name_and_falls_back_to_unknown(fake_db):
     # Robin 回報：問「阿牛是誰」（知識庫裡當時沒有這個人/寵物）卻被反問「你是說『吳凱吉』嗎？」，
     # 兩者毫無相似之處；原因是舊 prompt 範例寫死了真實姓名，模型照抄範例而非真的比對知識庫。

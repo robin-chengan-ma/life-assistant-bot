@@ -18,6 +18,7 @@ class FakeCloudSQLClient:
             "conversation_logs": [],
             "conversation_summaries": [],
             "media_uploads": [],
+            "todos": [],
         }
         self._id_counter = itertools.count(1)
 
@@ -81,6 +82,29 @@ class FakeCloudSQLClient:
             return row.get("user_id") == params[0] and row.get("media_type") == params[1]
         if where == "telegram_user_id IS NOT NULL AND is_owner = FALSE":
             return row.get("telegram_user_id") is not None and row.get("is_owner") is False
+        # 2026-08-02（Step 1.7，見 robinson SPEC.md FR-31/FR-31a/FR-32）：待辦事項模組的查詢條件。
+        if where == "user_id = %s AND status = %s":
+            return row.get("user_id") == params[0] and row.get("status") == params[1]
+        if where == "status = %s AND due_at < %s":
+            return row.get("status") == params[0] and row.get("due_at") < params[1]
+        if where == (
+            "status = %s AND remind_before_30min = %s AND reminded_30min_sent_at IS NULL "
+            "AND due_at > %s AND due_at <= %s"
+        ):
+            return (
+                row.get("status") == params[0]
+                and row.get("remind_before_30min") == params[1]
+                and row.get("reminded_30min_sent_at") is None
+                and row.get("due_at") > params[2]
+                and row.get("due_at") <= params[3]
+            )
+        if where == "status = %s AND due_at >= %s AND due_at < %s AND daily_pushed_on IS NULL":
+            return (
+                row.get("status") == params[0]
+                and row.get("due_at") >= params[1]
+                and row.get("due_at") < params[2]
+                and row.get("daily_pushed_on") is None
+            )
 
         raise NotImplementedError(f"FakeCloudSQLClient 尚未支援這個 where 條件：{where}")
 

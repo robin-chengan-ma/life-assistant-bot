@@ -1,13 +1,17 @@
 """內建指令與對話式設定流程（對應 docs/specs/platform-auth/SPEC.md FR-4～FR-6、
 docs/specs/feature-toggles/SPEC.md FR-1～FR-2、docs/specs/chat-core/SPEC.md ADR-4、FR-10～FR-12、
-docs/specs/robinson/SPEC.md FR-20）。"""
+docs/specs/robinson/SPEC.md FR-20、FR-31、FR-31a、FR-32）。"""
 import logging
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from submodules.cloudsql.client import CloudSQLClient
 
 from src.bot import auth, knowledge, templates, toggles
+from src.bot import todo as todo_module
 from src.bot.state import ConversationStateStore
+
+_TAIWAN_TZ = ZoneInfo("Asia/Taipei")
 
 _logger = logging.getLogger(__name__)
 
@@ -591,3 +595,229 @@ def handle_toggle_step(
         return f"已將「{result['name']}」切換為{status}！\n\n{toggles.format_toggle_list(toggle_list)}"
 
     raise ValueError(f"未知的對話狀態：{state}")
+
+
+# ---------------------------------------------------------------------------
+# 待辦事項（2026-08-02，Step 1.7，見 robinson SPEC.md FR-31、FR-31a、FR-32、FR-56e）
+#
+# 新增流程分三輪反問（比照 FR-56e 情境範例）：chat.py 偵測到自然語言描述先問「要不要記錄」
+# （pending_todo_confirm）→ 確定後問「什麼時候」（pending_todo_time，時間還講不清楚時會停留在
+# 原地繼續反問，不會硬存一個猜錯的時間）→ 問「要不要提前 30 分鐘提醒」（pending_todo_reminder），
+# 使用者這一輪回覆後才真正呼叫 todo.create_todo() 寫入，全程沒有 FR-16a 的「逐字打字確認執行」
+# 關卡——新增待辦屬於低風險、可回頭用查詢清單流程取消/完成修正的操作，跟刪除紀錄／寫入知識庫的
+# 風險層級不同，故不比照那三個 flow 額外加上最終確認關卡。
+#
+# 查詢＋標記完成/取消走另一條路：「我的待辦事項」／`/my_todos` 觸發 start_todo_list()，
+# 選定編號後（pending_todo_list_action）反問要標記完成還是取消，由 LLM 判斷使用者這句話的意思
+# （pending_todo_action_confirm），比照全專案既有的 CONFIRM/CANCEL 單次呼叫慣例。
+# ---------------------------------------------------------------------------
+
+_TODO_INTENT_CONFIRM_PROMPT = (
+    "使用者剛被 Robinson 反問「要幫你紀錄到待辦事項嗎？」，這是使用者這一則的回覆：「{text}」。\n"
+    "請判斷使用者的意思，整則回覆只能輸出以下其中一個固定字，不要輸出其他任何文字：\n"
+    "(1) 確定要記錄 → CONFIRM\n"
+    "(2) 不要記錄、想取消、或其實在問別的事 → CANCEL"
+)
+
+_TODO_TIME_PARSE_PROMPT = (
+    "使用者想要記錄一筆待辦事項，原始描述是：「{original_text}」，Robinson 反問了確切時間，"
+    "這是使用者這一則的回覆：「{time_reply}」。\n"
+    "【現在的日期（台灣時區，計算相對日期時間一律以此為準）】\n{current_date_text}\n\n"
+    "請判斷使用者是否已經講清楚明確的日期與時間，並嚴格照下面格式輸出，每個欄位各自一行，"
+    "不要輸出其他任何文字：\n"
+    "STATUS: CLEAR 或 UNCLEAR（這則回覆完全沒有講到具體時間、或還是很模糊、無法換算出確切日期"
+    "時間時填 UNCLEAR）\n"
+    "CONTENT: 待辦事項內容摘要，精簡具體，不需要包含時間（STATUS 為 UNCLEAR 時可省略）\n"
+    "DUE_AT: 換算後的完整日期時間，格式一律為 YYYY-MM-DD HH:MM（24 小時制，STATUS 為 UNCLEAR 時"
+    "可省略）"
+)
+
+_TODO_REMINDER_CONFIRM_PROMPT = (
+    "Robinson 剛詢問使用者「需要在前 30 分鐘時提醒你嗎？」，這是使用者這一則的回覆：「{text}」。\n"
+    "請判斷使用者的意思，整則回覆只能輸出以下其中一個固定字，不要輸出其他任何文字：\n"
+    "(1) 需要提醒 → CONFIRM\n"
+    "(2) 不需要提醒 → CANCEL"
+)
+
+_TODO_ACTION_CLASSIFY_PROMPT = (
+    "使用者剛被 Robinson 反問要把待辦事項「{content}」標記為完成還是取消，這是使用者這一則的回覆："
+    "「{text}」。\n"
+    "請判斷使用者的意思，整則回覆只能輸出以下其中一個固定字，不要輸出其他任何文字：\n"
+    "(1) 標記為已完成 → COMPLETE\n"
+    "(2) 標記為取消 → CANCEL\n"
+    "(3) 都不是、看不懂、或其實在問別的事 → OTHER"
+)
+
+_TODO_TIME_UNCLEAR_REPLY = "不好意思，我還是不太確定時間，可以再講清楚一點嗎？（例如：明天下午三點）"
+
+
+def _current_date_text() -> str:
+    """跟 chat.py 的同名私有函式邏輯一致，但待辦時間解析發生在 commands.py，避免跨模組互相
+    依賴對方的私有函式，這裡獨立寫一份最簡版本（只需要日期，不需要星期幾）。"""
+    now = datetime.now(_TAIWAN_TZ)
+    return f"{now.year}年{now.month}月{now.day}日"
+
+
+def handle_todo_confirm_step(
+    db: CloudSQLClient,
+    llm_client,
+    state_store: ConversationStateStore,
+    telegram_user_id: int,
+    text: str,
+) -> str:
+    """處理 `pending_todo_confirm` 狀態下使用者對「要幫你紀錄到待辦事項嗎？」的回覆。"""
+    state = state_store.get(telegram_user_id)
+    target_user_id = state["target_user_id"]
+    original_text = state["original_text"]
+    state_store.clear(telegram_user_id)
+
+    decision = llm_client.generate_text(_TODO_INTENT_CONFIRM_PROMPT.format(text=text)).strip()
+    if decision != "CONFIRM":
+        return "好的，這次就不記錄囉！"
+
+    state_store.set(
+        telegram_user_id,
+        {"flow": "pending_todo_time", "target_user_id": target_user_id, "original_text": original_text},
+    )
+    return "好的，請問是什麼時候呢？"
+
+
+def handle_todo_time_step(
+    db: CloudSQLClient,
+    llm_client,
+    state_store: ConversationStateStore,
+    telegram_user_id: int,
+    text: str,
+) -> str:
+    """處理 `pending_todo_time` 狀態下使用者提供的時間描述（FR-31、FR-56e 情境範例）。
+
+    使用者可能一次講清楚（例如「三點」），也可能還是模糊，這種情況停留在原本的狀態繼續反問，
+    不強迫往下一步走，避免存入一個猜錯的時間。
+    """
+    state = state_store.get(telegram_user_id)
+    target_user_id = state["target_user_id"]
+    original_text = state["original_text"]
+
+    parsed = _parse_key_value_block(
+        llm_client.generate_text(
+            _TODO_TIME_PARSE_PROMPT.format(
+                original_text=original_text, time_reply=text, current_date_text=_current_date_text()
+            )
+        )
+    )
+
+    if parsed.get("STATUS") != "CLEAR":
+        return _TODO_TIME_UNCLEAR_REPLY
+
+    try:
+        # 下一行刻意先解析成不帶時區的 datetime，緊接著用 .replace(tzinfo=...) 補上台灣時區。
+        due_at_naive = datetime.strptime(parsed.get("DUE_AT", ""), "%Y-%m-%d %H:%M")  # noqa: DTZ007
+    except ValueError:
+        return _TODO_TIME_UNCLEAR_REPLY
+    due_at = due_at_naive.replace(tzinfo=_TAIWAN_TZ)
+    content = parsed.get("CONTENT") or original_text
+
+    state_store.set(
+        telegram_user_id,
+        {"flow": "pending_todo_reminder", "target_user_id": target_user_id, "content": content, "due_at": due_at},
+    )
+    return (
+        f"已收到 {due_at.year}/{due_at.month:02d}/{due_at.day:02d} {due_at.hour:02d}:{due_at.minute:02d}，"
+        "到時候當天早上 8 點會主動提醒你一次，你也可以隨時查詢待辦事項清單，"
+        "需要在前 30 分鐘時再提醒你一次嗎？"
+    )
+
+
+def handle_todo_reminder_step(
+    db: CloudSQLClient,
+    llm_client,
+    state_store: ConversationStateStore,
+    telegram_user_id: int,
+    text: str,
+) -> str:
+    """處理 `pending_todo_reminder` 狀態下使用者對「需要在前 30 分鐘時提醒你嗎？」的回覆，
+    確定後才真正寫入 todos（FR-31、FR-32）。
+    """
+    state = state_store.get(telegram_user_id)
+    target_user_id = state["target_user_id"]
+    content = state["content"]
+    due_at = state["due_at"]
+    state_store.clear(telegram_user_id)
+
+    decision = llm_client.generate_text(_TODO_REMINDER_CONFIRM_PROMPT.format(text=text)).strip()
+    remind_before_30min = decision == "CONFIRM"
+
+    todo_module.create_todo(db, target_user_id, content, due_at, remind_before_30min)
+    return "好的，已經幫你記錄好了！"
+
+
+def start_todo_list(
+    db: CloudSQLClient,
+    state_store: ConversationStateStore,
+    telegram_user_id: int,
+    user_id: int,
+) -> str:
+    """「我的待辦事項」／`/my_todos`：列出目前待處理清單，並進入可標記完成/取消的模式（FR-32）。"""
+    pending_todos = todo_module.list_pending_todos(db, user_id)
+    listing = todo_module.format_todo_list(pending_todos)
+    if not pending_todos:
+        return listing
+
+    state_store.set(
+        telegram_user_id,
+        {"flow": "pending_todo_list_action", "target_user_id": user_id, "todo_ids": [t["id"] for t in pending_todos]},
+    )
+    return f"{listing}\n\n如果要標記某一筆為完成或取消，請輸入編號；不需要的話輸入「結束」。"
+
+
+def handle_todo_list_action_step(
+    db: CloudSQLClient,
+    state_store: ConversationStateStore,
+    telegram_user_id: int,
+    text: str,
+) -> str:
+    """處理 `pending_todo_list_action` 狀態下使用者輸入的編號，選定要標記完成/取消的那一筆。"""
+    state = state_store.get(telegram_user_id)
+    if text in _EXIT_PHRASES:
+        state_store.clear(telegram_user_id)
+        return "好的，已結束待辦事項查詢模式！"
+
+    todo_ids = state["todo_ids"]
+    if not text.isdigit() or not (1 <= int(text) <= len(todo_ids)):
+        return f"請輸入 1～{len(todo_ids)} 之間的編號，或輸入「結束」離開喔！"
+
+    todo_id = todo_ids[int(text) - 1]
+    row = db.select("todos", where="id = %s", params=(todo_id,), fetch_one=True)
+    state_store.set(
+        telegram_user_id,
+        {
+            "flow": "pending_todo_action_confirm",
+            "target_user_id": state["target_user_id"],
+            "todo_id": todo_id,
+            "content": row["content"],
+        },
+    )
+    return f"要把「{row['content']}」標記為完成還是取消呢？"
+
+
+def handle_todo_action_confirm_step(
+    db: CloudSQLClient,
+    llm_client,
+    state_store: ConversationStateStore,
+    telegram_user_id: int,
+    text: str,
+) -> str:
+    """處理 `pending_todo_action_confirm` 狀態下使用者對完成/取消的回覆（FR-31a）。"""
+    state = state_store.get(telegram_user_id)
+    todo_id = state["todo_id"]
+    content = state["content"]
+    state_store.clear(telegram_user_id)
+
+    decision = llm_client.generate_text(_TODO_ACTION_CLASSIFY_PROMPT.format(content=content, text=text)).strip()
+    if decision not in ("COMPLETE", "CANCEL"):
+        return "不好意思，我不太確定你的意思，這筆待辦維持原狀，你可以再查詢一次待辦事項清單重新標記喔！"
+
+    new_status = "completed" if decision == "COMPLETE" else "cancelled"
+    todo_module.mark_status(db, todo_id, new_status)
+    label = "完成" if new_status == "completed" else "取消"
+    return f"好的，已經把「{content}」標記為{label}囉！"
