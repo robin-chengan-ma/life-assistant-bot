@@ -660,6 +660,42 @@ def test_mood_journal_achievement_can_be_skipped(fake_db, monkeypatch):
     assert rows[0]["achievement_note"] is None
 
 
+# --- 客訴收集（robinson SPEC.md FR-60～FR-63，Step 1.9）---
+
+
+def test_complaint_full_flow_records_and_notifies_robin(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+    llm_client = _FakeLLMClient(response_text="分析報告內容")
+
+    reply1 = router.handle_message(fake_db, store, FAMILY_ID, "我要客訴你")
+    assert reply1 == "請問你覺得哪個地方需要改進呢？"
+    assert store.get(FAMILY_ID)["flow"] == "pending_complaint_content"
+
+    class _FakeTelegramClient:
+        def __init__(self):
+            self.sent = []
+
+        def send_text(self, chat_id, text):
+            self.sent.append((chat_id, text))
+
+    telegram_client = _FakeTelegramClient()
+    reply2 = router.handle_message(
+        fake_db, store, FAMILY_ID, "客服態度不好",
+        llm_client=llm_client, telegram_client=telegram_client,
+    )
+
+    assert "已經收到你的意見了" in reply2
+    assert store.get(FAMILY_ID) is None
+    rows = fake_db.select("complaints")
+    assert len(rows) == 1
+    assert rows[0]["content"] == "客服態度不好"
+    assert len(telegram_client.sent) == 1
+    assert telegram_client.sent[0][0] == ROBIN_ID
+
+
 # --- /clean-target-dialog（docs/specs/chat-core/SPEC.md FR-12）---
 
 

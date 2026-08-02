@@ -1,13 +1,13 @@
 """內建指令與對話式設定流程（對應 docs/specs/platform-auth/SPEC.md FR-4～FR-6、
 docs/specs/feature-toggles/SPEC.md FR-1～FR-2、docs/specs/chat-core/SPEC.md ADR-4、FR-10～FR-12、
-docs/specs/robinson/SPEC.md FR-20、FR-31、FR-31a、FR-32、FR-49、FR-50）。"""
+docs/specs/robinson/SPEC.md FR-20、FR-31、FR-31a、FR-32、FR-49、FR-50、FR-60～FR-63）。"""
 import logging
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from submodules.cloudsql.client import CloudSQLClient
 
-from src.bot import auth, knowledge, mood, privacy, templates, toggles
+from src.bot import auth, complaint as complaint_module, knowledge, mood, privacy, templates, toggles
 from src.bot import todo as todo_module
 from src.bot.state import ConversationStateStore
 
@@ -922,6 +922,78 @@ def handle_mood_achievement_step(
     mood.set_achievement_note(db, journal_id, masked_note)
 
     reply = "已經幫你記錄好了！"
+    if pii_detected:
+        reply += _PII_DETECTED_REMINDER
+    return reply
+
+
+# ---------------------------------------------------------------------------
+# 客訴收集（2026-08-02，Step 1.9，見 robinson SPEC.md FR-60～FR-63）
+#
+# 流程分兩輪：觸發「我要客訴你」／`/complaint` 固定提問（不經過 LLM，FR-60）→ 下一則訊息視為
+# 客訴內容，寫入 `complaints`（FR-61）後立即呼叫 Gemini 分析、私訊給 Robin（FR-62，刻意的隱私
+# 例外——只有 FR-10/FR-11「Robin 平常看不到家人個別對話」這條規則被排除，客訴內容本身仍套用
+# FR-13 個資遮蔽，兩者是不同層面的隱私考量，見 2026-08-02 與 Robin 確認的範圍決策）。分析報告
+# 只私訊 Robin，不回傳給提出客訴的使用者本人；FR-63 的人工決策與後續討論純粹是 Robin 自己的
+# 產品判斷，不涉及程式碼，不需要額外實作。
+# ---------------------------------------------------------------------------
+
+_COMPLAINT_ASK_TEXT = "請問你覺得哪個地方需要改進呢？"
+
+_COMPLAINT_NOTIFY_TEMPLATE = (
+    "📝 收到一則客訴/意見回饋\n"
+    "使用者：{role}（telegram_user_id={telegram_user_id}）\n"
+    "原始內容：{content}\n\n"
+    "AI 分析：\n{analysis}"
+)
+
+
+def start_complaint(state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
+    """「我要客訴你」／`/complaint`：固定提問，不經過 LLM 生成（FR-60）。任何身分皆可觸發。"""
+    state_store.set(telegram_user_id, {"flow": "pending_complaint_content", "target_user_id": user_id})
+    return _COMPLAINT_ASK_TEXT
+
+
+def handle_complaint_content_step(
+    db: CloudSQLClient,
+    llm_client,
+    telegram_client,
+    state_store: ConversationStateStore,
+    telegram_user_id: int,
+    text: str,
+    privacy_llm_client=None,
+) -> str:
+    """處理 `pending_complaint_content` 狀態下使用者回覆的客訴內容：寫入、分析、私訊 Robin
+    （FR-61、FR-62）。
+
+    客訴內容一定會先寫入成功（FR-61 是硬性要求），分析＋私訊這段包一層 try/except——Gemini
+    額度用盡或 Telegram 傳送失敗都不該讓「客訴已經被記錄下來」這個結果打折扣，失敗時只記錄
+    log，使用者仍會收到已收到回饋的確認訊息。找不到 Robin 的 `users` 記錄（理論上不該發生，
+    Robin 只要互動過一次就會有記錄，防禦性處理）時，同樣只是跳過私訊這一步。
+    """
+    state = state_store.get(telegram_user_id)
+    target_user_id = state["target_user_id"]
+    state_store.clear(telegram_user_id)
+
+    masked_content, pii_detected = privacy.mask_text(text, privacy_llm_client)
+    complaint_module.create_complaint(db, target_user_id, masked_content)
+
+    try:
+        robin = db.select("users", where="is_owner = %s", params=(True,), fetch_one=True)
+        if robin is not None and robin.get("telegram_user_id") is not None:
+            analysis = llm_client.generate_text(complaint_module.build_analysis_prompt(masked_content))
+            complainant = db.select("users", where="id = %s", params=(target_user_id,), fetch_one=True)
+            role = complainant["role"] if complainant is not None else "未知"
+            telegram_client.send_text(
+                chat_id=robin["telegram_user_id"],
+                text=_COMPLAINT_NOTIFY_TEMPLATE.format(
+                    role=role, telegram_user_id=telegram_user_id, content=masked_content, analysis=analysis
+                ),
+            )
+    except Exception:
+        _logger.exception("客訴分析或私訊 Robin 失敗（telegram_user_id=%s），客訴內容已成功記錄不受影響", telegram_user_id)
+
+    reply = "已經收到你的意見了，謝謝你的回饋，我會把這件事轉達給 Robin 知道！"
     if pii_detected:
         reply += _PII_DETECTED_REMINDER
     return reply

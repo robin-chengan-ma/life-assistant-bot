@@ -121,14 +121,14 @@
 
 ### `/complaint`（內部路由，非對外 HTTP 端點）
 
-**狀態**：計畫中
+**狀態**：已實作（`src/bot/commands.py::start_complaint`／`handle_complaint_content_step`，2026-08-02，Step 1.9，見 robinson SPEC.md FR-60～FR-63）
 **觸發方式**：使用者於對話框輸入「我要客訴你」或 `/complaint`
 **權限**：任何已驗證使用者（Robin 或家人）
 **對應 FR**：FR-60～FR-63
 
-**Response**：固定文字「請問你覺得哪個地方需要改進呢？」，接著進入等待客訴內容狀態；下一則訊息視為客訴內容並寫入資料庫。
+**Response**：固定文字「請問你覺得哪個地方需要改進呢？」（不經過 LLM，FR-60），接著進入等待客訴內容狀態（`pending_complaint_content`）；下一則訊息視為客訴內容，寫入 `complaints` 後回覆「已經收到你的意見了，謝謝你的回饋，我會把這件事轉達給 Robin 知道！」（FR-61）。
 
-**備註**：客訴內容會私訊給 Robin 並觸發 Gemini 分析（見 FR-62），此為刻意的隱私例外（見 FR-10/FR-11 的一般資料隔離原則）。
+**備註**：客訴內容寫入 `complaints` 前一律先過 `privacy.mask_text()`（見 docs/specs/privacy-masking/SPEC.md FR-4），跟一般聊天／圖片說明文字／語音轉文字／心情小記四個既有入口的防線一致——FR-62 的隱私例外只針對「Robin 平常看不到家人個別對話」（FR-10/FR-11）這條資料隔離規則，跟「個資不能明碼存檔/送外部 API」（FR-13）是不同層面的隱私考量，兩者不衝突。寫入成功後立即呼叫 Gemini（`complaint.build_analysis_prompt()`）分析出「可能問題點」與「修正/優化建議」，私訊給 Robin（查 `users` 表 `is_owner=TRUE` 那筆記錄的 `telegram_user_id`），分析報告**不會**回傳給提出客訴的使用者本人；分析／私訊這段包一層 try/except，Gemini 額度用盡、Telegram 傳送失敗、或 Robin 尚未有 `users` 記錄（理論上不該發生）都只記錄 log，不影響客訴內容已成功記錄這個結果。FR-63 的人工決策與後續討論純屬 Robin 自己的產品判斷，不涉及程式碼，沒有對應的實作。
 
 ---
 

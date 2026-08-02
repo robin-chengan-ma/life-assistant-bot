@@ -20,6 +20,7 @@ class FakeCloudSQLClient:
             "media_uploads": [],
             "todos": [],
             "mood_journals": [],
+            "complaints": [],
         }
         self._id_counter = itertools.count(1)
 
@@ -110,6 +111,9 @@ class FakeCloudSQLClient:
         # （正式程式碼路徑只用 insert()／id 查詢，不需要這個 where，但整合測試需要驗證寫入結果）。
         if where == "user_id = %s AND mood_category = %s":
             return row.get("user_id") == params[0] and row.get("mood_category") == params[1]
+        # 2026-08-02（Step 1.9，見 robinson SPEC.md FR-60~FR-63）：客訴流程查 Robin 的 users 記錄。
+        if where == "is_owner = %s":
+            return row.get("is_owner") == params[0]
 
         raise NotImplementedError(f"FakeCloudSQLClient 尚未支援這個 where 條件：{where}")
 

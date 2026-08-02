@@ -349,3 +349,33 @@ COMMENT ON COLUMN mood_journals.created_at IS '這筆心情小記建立的時間
 - `achievement_note` 允許 `NULL`：FR-50 明確是「使用者自行選擇是否回答」，跳過是合法情況
 - `content`／`achievement_note` 都套用 FR-13 個資遮蔽（跟一般聊天、圖片說明文字、語音轉文字三個既有入口一致），2026-08-02 與 Robin 確認新入口也要套用同一套防線
 - 只建 `user_id` 單欄索引：目前唯一常見查詢是「查某人的心情小記」，沒有像 `todos` 那種需要跨使用者掃描的排程查詢，不需要額外複合索引
+
+---
+
+### complaints
+
+**建立日期**：2026-08-02
+**用途**：客訴/意見回饋收集，對應 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) FR-60～FR-63（Step 1.9）。
+**Migration 檔案**：`src/migrations/0015_create_complaints_table.sql`
+
+```sql
+CREATE TABLE complaints (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id),
+    content TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_complaints_user_id ON complaints (user_id);
+
+COMMENT ON TABLE complaints IS '客訴/意見回饋收集表：對應 FR-60～FR-63';
+COMMENT ON COLUMN complaints.id IS '內部主鍵';
+COMMENT ON COLUMN complaints.user_id IS '提出客訴的使用者，對應 users.id';
+COMMENT ON COLUMN complaints.content IS '客訴原始內容（已經過 FR-13 個資遮蔽處理，不存未遮蔽的原文）';
+COMMENT ON COLUMN complaints.created_at IS '這筆客訴建立的時間';
+```
+
+**設計理由**：
+- `content` 套用 FR-13 個資遮蔽（跟一般聊天／圖片說明文字／語音轉文字／心情小記四個既有入口一致，2026-08-02 與 Robin 確認：FR-62 的隱私例外只是允許 Robin 看到客訴內容，不代表個資保護防線可以跳過，兩者是不同層面的隱私考量）
+- FR-62 的 Gemini 分析結果只透過私訊即時送給 Robin，刻意不落地存進這張表——分析報告是輔助判讀用途，Robin 看過即可，不需要永久保留一份重複於私訊內容的資料
+- 只建 `user_id` 單欄索引，用途與 `mood_journals` 相同（查某人的客訴紀錄），不需要額外複合索引

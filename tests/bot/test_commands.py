@@ -1025,6 +1025,80 @@ def test_handle_mood_achievement_step_saves_answer(fake_db):
     assert row["achievement_note"] == "完成了一份報告"
 
 
+def test_start_complaint_asks_fixed_text_without_llm(fake_db):
+    store = ConversationStateStore()
+
+    reply = commands.start_complaint(store, telegram_user_id=1, user_id=42)
+
+    assert reply == "請問你覺得哪個地方需要改進呢？"
+    assert store.get(1) == {"flow": "pending_complaint_content", "target_user_id": 42}
+
+
+def test_handle_complaint_content_step_records_and_notifies_robin(fake_db):
+    fake_db.insert("users", {"telegram_user_id": 999, "role": "Robin", "is_owner": True})
+    fake_db.insert("users", {"telegram_user_id": 1, "role": "爸爸", "is_owner": False}, )
+    target_user_id = fake_db.select("users", where="telegram_user_id = %s", params=(1,), fetch_one=True)["id"]
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_complaint_content", "target_user_id": target_user_id})
+    llm_client = _FakeLLMClient(response_text="1. 可能的問題點：xxx\n2. 修正/優化建議：yyy")
+    telegram_client = _FakeTelegramClient()
+
+    reply = commands.handle_complaint_content_step(fake_db, llm_client, telegram_client, store, telegram_user_id=1, text="客服態度不好")
+
+    assert "已經收到你的意見了" in reply
+    assert store.get(1) is None
+    rows = fake_db.select("complaints")
+    assert len(rows) == 1
+    assert rows[0]["content"] == "客服態度不好"
+    assert len(telegram_client.sent) == 1
+    notified_chat_id, notified_text = telegram_client.sent[0]
+    assert notified_chat_id == 999
+    assert "客服態度不好" in notified_text
+    assert "可能的問題點" in notified_text
+
+
+def test_handle_complaint_content_step_masks_pii_and_adds_reminder(fake_db):
+    fake_db.insert("users", {"telegram_user_id": 999, "role": "Robin", "is_owner": True})
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_complaint_content", "target_user_id": 42})
+    llm_client = _FakeLLMClient(response_text="分析內容")
+    telegram_client = _FakeTelegramClient()
+
+    reply = commands.handle_complaint_content_step(
+        fake_db, llm_client, telegram_client, store, telegram_user_id=1, text="我的手機是 0912345678"
+    )
+
+    assert "提醒" in reply
+    rows = fake_db.select("complaints")
+    assert rows[0]["content"] == "我的手機是 [已遮蔽個資]"
+
+
+def test_handle_complaint_content_step_still_records_when_robin_not_found(fake_db):
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_complaint_content", "target_user_id": 42})
+    llm_client = _FakeLLMClient(response_text="分析內容")
+    telegram_client = _FakeTelegramClient()
+
+    reply = commands.handle_complaint_content_step(fake_db, llm_client, telegram_client, store, telegram_user_id=1, text="客服態度不好")
+
+    assert "已經收到你的意見了" in reply
+    assert len(fake_db.select("complaints")) == 1
+    assert telegram_client.sent == []
+
+
+def test_handle_complaint_content_step_still_records_when_notify_fails(fake_db):
+    fake_db.insert("users", {"telegram_user_id": 999, "role": "Robin", "is_owner": True})
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_complaint_content", "target_user_id": 42})
+    llm_client = _FakeLLMClient(response_text="分析內容")
+    telegram_client = _FakeTelegramClient(fail_for_chat_ids={999})
+
+    reply = commands.handle_complaint_content_step(fake_db, llm_client, telegram_client, store, telegram_user_id=1, text="客服態度不好")
+
+    assert "已經收到你的意見了" in reply
+    assert len(fake_db.select("complaints")) == 1
+
+
 def test_handle_mood_achievement_step_masks_pii_and_adds_reminder(fake_db):
     journal_id = fake_db.insert(
         "mood_journals",

@@ -42,6 +42,8 @@ _SET_TOGGLE_TRIGGERS = {"/set_toggle", "設定家人功能開關"}
 _MY_TODOS_TRIGGERS = {"/my_todos", "我的待辦事項"}
 # 2026-08-02（Step 1.8，見 robinson SPEC.md FR-49、FR-56h）：開始心情小記流程，所有使用者皆可用。
 _MOOD_JOURNAL_TRIGGERS = {"/mood_journal", "我想做心情筆記"}
+# 2026-08-02（Step 1.9，見 robinson SPEC.md FR-60）：任何身分皆可觸發客訴收集流程。
+_COMPLAINT_TRIGGERS = {"/complaint", "我要客訴你"}
 _CLEAN_ALL_DIALOG_TRIGGERS = {"/clean-all-dialog", "我想要刪除所有對話紀錄"}
 # 2026-08-01（chat-core SPEC.md FR-12）：/clean-target-dialog 的主題是自由文字，無法用固定
 # 觸發詞集合窮舉，改用 regex 擷取「我想刪除有關 OOO 的紀錄」或 `/clean-target-dialog OOO` 的主題。
@@ -88,8 +90,9 @@ def handle_message(
     專用的獨立 Key，只會透傳到 `chat.handle_chat_message()`（見該函式 docstring）；`None` 時遮蔽
     只跑免費的 Regex 層，不影響其餘指令/對話流程分支。
 
-    `telegram_client`（2026-08-02，Step 1.6，見 robinson SPEC.md FR-20）：只有 `/recovered`
-    這個 Owner 專屬指令會用到（廣播「我康復了」給所有已綁定家人），其餘分支不需要。
+    `telegram_client`（2026-08-02，Step 1.6，見 robinson SPEC.md FR-20）：`/recovered`（廣播
+    「我康復了」給所有已綁定家人）與 `pending_complaint_content`（Step 1.9，FR-62，私訊 Robin
+    客訴分析報告）這兩個分支會用到，其餘分支不需要。
     """
     text = (text or "").strip()
     is_owner = auth.is_owner(telegram_user_id)
@@ -99,7 +102,7 @@ def handle_message(
         if state is not None:
             return _dispatch_active_flow(
                 db, state_store, telegram_user_id, text, state,
-                llm_client, text_llm_client, image_llm_clients, via_voice, privacy_llm_client,
+                llm_client, text_llm_client, image_llm_clients, via_voice, privacy_llm_client, telegram_client,
             )
 
         if text in _SET_INVITE_CODES_TRIGGERS:
@@ -128,7 +131,7 @@ def handle_message(
         if state is not None:
             return _dispatch_active_flow(
                 db, state_store, telegram_user_id, text, state,
-                llm_client, text_llm_client, image_llm_clients, via_voice, privacy_llm_client,
+                llm_client, text_llm_client, image_llm_clients, via_voice, privacy_llm_client, telegram_client,
             )
 
         user_id = user["id"]
@@ -146,6 +149,9 @@ def handle_message(
     if text in _MOOD_JOURNAL_TRIGGERS:
         # 2026-08-02（Step 1.8，見 robinson SPEC.md FR-49）：開始心情小記三輪反問流程，先問分類。
         return commands.start_mood_journal(state_store, telegram_user_id, user_id)
+    if text in _COMPLAINT_TRIGGERS:
+        # 2026-08-02（Step 1.9，見 robinson SPEC.md FR-60）：固定提問，不經過 LLM。
+        return commands.start_complaint(state_store, telegram_user_id, user_id)
     if text in _CLEAN_ALL_DIALOG_TRIGGERS:
         # 2026-08-01 起改為先反問確認，不再直接刪除，見 commands.start_clean_all_dialog_confirm。
         return commands.start_clean_all_dialog_confirm(db, state_store, telegram_user_id, user_id)
@@ -308,6 +314,7 @@ def _dispatch_active_flow(
     image_llm_clients: list | None = None,
     via_voice: bool = False,
     privacy_llm_client=None,
+    telegram_client=None,
 ) -> str:
     """依進行中對話流程的 `flow` 標記分派到對應處理函式（見各 flow 對應 spec 的 ADR）。"""
     flow = state.get("flow")
@@ -375,5 +382,11 @@ def _dispatch_active_flow(
     if flow == "pending_mood_achievement":
         return commands.handle_mood_achievement_step(
             db, state_store, telegram_user_id, text, privacy_llm_client=privacy_llm_client
+        )
+    if flow == "pending_complaint_content":
+        # 2026-08-02（Step 1.9，見 robinson SPEC.md FR-61、FR-62）：寫入客訴＋Gemini 分析私訊 Robin。
+        return commands.handle_complaint_content_step(
+            db, llm_client, telegram_client, state_store, telegram_user_id, text,
+            privacy_llm_client=privacy_llm_client,
         )
     return commands.handle_toggle_step(db, state_store, telegram_user_id, text)
