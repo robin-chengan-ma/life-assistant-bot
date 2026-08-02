@@ -106,6 +106,19 @@
 
 ---
 
+### `/mood_journal`（內部路由，非對外 HTTP 端點）
+
+**狀態**：已實作（`src/bot/commands.py::start_mood_journal`，2026-08-02，Step 1.8，見 robinson SPEC.md FR-49）
+**觸發方式**：使用者於對話框輸入「我想做心情筆記」或 `/mood_journal`
+**權限**：任何已驗證使用者（Robin 或家人，各自只會記到自己的心情小記）
+**對應 FR**：FR-49、FR-50、FR-56h
+
+**Response**：文字，依序走三輪反問：先回傳心情分類清單（`mood.format_category_prompt()`，固定 6 選一，接受編號或直接輸入分類名稱）→ 分類選定後問「給我完整的日記內容」→ 日記內容寫入 `mood_journals` 後主動追問 FR-50 個人成就三選一提示，使用者可輸入既有的「結束」／「沒有了」跳過。
+
+**備註**：全程不需要呼叫 LLM——心情分類固定 6 選一、個人成就「有填就存沒填就跳過」，純字串比對即可完成，跟 Step 1.7 待辦事項需要 LLM 解析模糊自然語言時間的架構不同。日記內容與個人成就回答都是自由文字，可能含個資，寫入 `mood_journals` 前一律先過 `privacy.mask_text()`（見 docs/specs/privacy-masking/SPEC.md FR-4），跟一般聊天／圖片說明文字／語音轉文字三個既有入口的防線一致，`detected=True` 時在回覆最後附加提醒文案。
+
+---
+
 ### `/complaint`（內部路由，非對外 HTTP 端點）
 
 **狀態**：計畫中

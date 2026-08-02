@@ -15,7 +15,7 @@ updated: 2026-08-02
 
 ## 目前階段
 
-**Phase 1（MVP）進行中 — Step 1.1、Step 1.2、Step 1.3（Gemini 對話核心）、Step 1.3a（`/function` 改版）、Step 1.3b（影像辨識基礎流程）、Step 1.4（語音轉文字）、Step 1.5（個資偵測與遮蔽機制）、Step 1.6（基礎錯誤處理層）、Step 1.7（待辦事項模組）已完成，下一步 Step 1.8（心情小記模組）**
+**Phase 1（MVP）進行中 — Step 1.1、Step 1.2、Step 1.3（Gemini 對話核心）、Step 1.3a（`/function` 改版）、Step 1.3b（影像辨識基礎流程）、Step 1.4（語音轉文字）、Step 1.5（個資偵測與遮蔽機制）、Step 1.6（基礎錯誤處理層）、Step 1.7（待辦事項模組）、Step 1.8（心情小記模組）已完成，下一步 Step 1.9（客訴收集模組）**
 
 ## 目標時程（2026-07-30 更新：改為三週制，因新增多模態影像/語音處理架構）
 
@@ -49,7 +49,7 @@ updated: 2026-08-02
 | Phase | 內容 | 狀態 | 目標日期 | 備註 |
 | --- | --- | --- | --- | --- |
 | Phase 0 | 專案基礎建設（repo 結構、金鑰串接、Render/Neon/cron-job、DB 初始化） | 🟢 已完成 | 7/29～7/30 | 全部 Step 完成：`submodules/`、`src/schema/`、`src/migrations/`（ADR-11）骨架就緒；`/healthz` 已部署上線並掛上 cron-job.org；第一批 5 張表（`users`／`invite_codes`／`knowledge_base`／`conversation_logs`／`feature_toggles`）已核准並套用成功 |
-| Phase 1（MVP） | 核心平台（通關密碼對話式設定、歡迎訊息、`/rule`／`/function`／`/complaint` 內建指令、功能開關、Gemini 對話+知識庫、影像辨識、語音、個資遮蔽、基礎錯誤處理）＋待辦事項＋心情小記＋客訴收集 | 🟡 進行中 | 7/31～8/7 | Step 1.1、1.2、1.3、1.3a、1.3b、1.4、1.5、1.6、1.7 完成；FR-56 全面改版為總覽＋按需深入＋情境範例（FR-56a～FR-56d） |
+| Phase 1（MVP） | 核心平台（通關密碼對話式設定、歡迎訊息、`/rule`／`/function`／`/complaint` 內建指令、功能開關、Gemini 對話+知識庫、影像辨識、語音、個資遮蔽、基礎錯誤處理）＋待辦事項＋心情小記＋客訴收集 | 🟡 進行中 | 7/31～8/7 | Step 1.1、1.2、1.3、1.3a、1.3b、1.4、1.5、1.6、1.7、1.8 完成；FR-56 全面改版為總覽＋按需深入＋情境範例（FR-56a～FR-56d） |
 | Phase 2 | 記帳＋體態管理＋重要通知＋異常自主診斷與 GitHub PR 治理＋重試機制＋分級降級 | ⚪ 未開始 | 8/8～8/11 | Step 2.4～2.6 為新增範圍，技術複雜度最高，已獨立預留兩天；體態模組飲食分析需附誤差聲明（FR-17c） |
 | Phase 3 | 個人技能成長（TOEIC 雙軌題庫 Pipeline＋YouTube 技術情報模組，僅 Robin）＋好友模式 | ⚪ 未開始 | 8/12～8/14 | 新增 YouTube 模組（FR-57～FR-59，見 ADR-9）；TOEIC 語音處理改用 Groq Whisper（ADR-12） |
 | Phase 4 | 求職模組（104 爬蟲＋評分） | ⚪ 未開始 | 8/15～8/16 | 爬蟲策略已定案：每週一次、AJAX API、無登入態、禮貌性延遲、ETL 去重（FR-34a～FR-34d） |
@@ -112,6 +112,7 @@ updated: 2026-08-02
 | 2026-08-02 | **gdrive 改用 OAuth 2.0（真人帳號身分）**：Robin 實測語音上傳撞到 Google Drive API `403 storageQuotaExceeded`，查證確認 Service Account 完全沒有 Drive 儲存額度，改用 Shared Drive 需要付費 Google Workspace；經 AskUserQuestion 確認，Robin 選擇改用 OAuth 讓程式以本人身分上傳；`submodules/gdrive/client.py` 建構子改為 `refresh_token`／`client_id`／`client_secret`／`folder_id`，新增一次性本機互動授權腳本 `get_refresh_token.py`；`webhook.py` 兩處建構呼叫與環境變數同步更新；新增 submodules-core SPEC.md ADR-10、robinson SPEC.md ADR-13 補充決策；全專案 329 個測試全過、覆蓋率 100%；**待 Robin 執行的手動步驟**：Google Cloud Console 建立 OAuth 用戶端 ID、發布狀態設為正式版、本機跑 `get_refresh_token.py` 取得 refresh token、設定 Render 環境變數 |
 | 2026-08-02 | **Phase 1 Step 1.6 完成**：基礎錯誤處理層，FR-19a／FR-20／FR-21 完成（FR-19b～FR-19i 的 AI 自主診斷／分級降級／重試機制仍留待 Phase 2 Step 2.4～2.6）。經 AskUserQuestion 確認兩個範圍決策：① FR-20 新增 Owner 專屬指令 `/recovered`，Robin 判斷修好後手動觸發，廣播固定文案給所有已綁定家人（排除 Robin 自己）② FR-21 Gemini 免費額度監控 Phase 1 先跳過（官方無查詢即時用量的 API），只做 Neon 容量監控（新增 `src/bot/monitoring.py` 的 `NeonCapacityMonitor`，借用 `/healthz` 既有的 10 分鐘 cron 頻率，達 80% 私訊 Robin、回落後重置避免重複告警）；FR-19a：`webhook.py` 新增 `_notify_robin_of_error()`／`_summarize_user_input()`，例外發生時除了記錄 Traceback＋情境到 log，額外私訊 Robin 完整原始內容；`submodules/cloudsql/client.py` 新增 `execute_query()` 供監控查詢使用；全專案 352 個測試全過、覆蓋率 100% |
 | 2026-08-02 | **Phase 1 Step 1.7 完成**：待辦事項模組，FR-31／FR-31a／FR-32 完成。經 AskUserQuestion 確認兩個範圍決策：① 待辦意圖偵測比照 FR-11「主動新增知識」的 LLM 標記模式（新增 `chat.py` 的 `_REQUEST_TODO_MARKER`），符合「自然語言描述」的精神，不用新增固定指令 ② FR-31 跨模組歧義判斷 Phase 1 暫不實作（體態管理／心情小記都還沒做，沒有其他模組可以比較）。新增 `todos` migration（Robin 依 ADR-10 核准）；`src/bot/todo.py` 新增/查詢/標記/逾期/推播判斷純邏輯；新增流程走三輪反問（要不要記錄→什麼時候→要不要提前 30 分鐘提醒），時間解析不清楚時停留原地繼續問；查詢清單「我的待辦事項」／`/my_todos` 後可選編號標記完成/取消；每日 08:00 固定推播與前 30 分鐘提醒比照 Step 1.6 借用 `/healthz` 頻率（`main.py` 新增 `_check_todo_pushes()`），但去重狀態存在 `todos` 資料列本身而非記憶體，跨 Render 重啟仍正確；全專案 391 個測試全過、覆蓋率 100% |
+| 2026-08-02 | **Phase 1 Step 1.8 完成**：心情小記模組，FR-49／FR-50 完成。經 AskUserQuestion 確認兩個範圍決策：① 日記內容與 FR-50 個人成就回答都套用 FR-13 個資遮蔽，新增第四個遮蔽入口（跟一般聊天／圖片說明文字／語音轉文字一致）② 新建 `mood_journals` 表（Robin 依 ADR-10 核准）。流程分三輪：「我想做心情筆記」／`/mood_journal` 先問心情分類（固定 6 選一，接受編號或名稱）→ 問日記內容並寫入 → 主動追問 FR-50 個人成就三選一提示（可跳過）；全程不需要 LLM，比 Step 1.7 待辦事項簡單（心情分類固定選項、個人成就有填就存沒填就跳過，純字串比對即可）；新增 `src/bot/mood.py`、`commands.py` 三個新 flow、`router.py` 整合；全專案 409 個測試全過、覆蓋率 100% |
 
 ## 待決事項
 
@@ -124,6 +125,6 @@ updated: 2026-08-02
 
 ## 下一步
 
-1. **Step 1.8：心情小記模組**（FR-49、FR-50）
-2. 接續 Step 1.9（客訴收集模組）
-3. 每天對照「建議每日分配」檢查進度，落後時優先保住 Phase 1 核心體驗（對話核心、待辦、心情小記），Step 1.9 客訴收集等次要 Step 可延後不必硬趕
+1. **Step 1.9：客訴收集模組**（FR-60～FR-63）—— `/complaint` 路由、客訴內容記錄、Gemini 分析私訊 Robin
+2. Phase 1（MVP）核心 Step 全數完成後，進入 Phase 2：記帳＋體態管理＋重要通知＋系統韌性與自主診斷治理
+3. 每天對照「建議每日分配」檢查進度，落後時 Step 1.9 客訴收集屬次要功能，可延後不必硬趕

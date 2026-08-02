@@ -19,6 +19,7 @@ class FakeCloudSQLClient:
             "conversation_summaries": [],
             "media_uploads": [],
             "todos": [],
+            "mood_journals": [],
         }
         self._id_counter = itertools.count(1)
 
@@ -105,6 +106,10 @@ class FakeCloudSQLClient:
                 and row.get("due_at") < params[2]
                 and row.get("daily_pushed_on") is None
             )
+        # 2026-08-02（Step 1.8，見 robinson SPEC.md FR-49/FR-50）：心情小記查詢條件，只有測試用得到
+        # （正式程式碼路徑只用 insert()／id 查詢，不需要這個 where，但整合測試需要驗證寫入結果）。
+        if where == "user_id = %s AND mood_category = %s":
+            return row.get("user_id") == params[0] and row.get("mood_category") == params[1]
 
         raise NotImplementedError(f"FakeCloudSQLClient 尚未支援這個 where 條件：{where}")
 

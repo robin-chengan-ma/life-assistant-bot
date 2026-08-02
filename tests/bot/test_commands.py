@@ -933,6 +933,113 @@ def test_handle_todo_action_confirm_step_marks_cancelled(fake_db):
     assert fake_db.select("todos", where="id = %s", params=(todo_id,), fetch_one=True)["status"] == "cancelled"
 
 
+def test_start_mood_journal_asks_category_and_sets_state(fake_db):
+    store = ConversationStateStore()
+
+    reply = commands.start_mood_journal(store, telegram_user_id=1, user_id=42)
+
+    assert "請幫我選一個" in reply
+    assert "6. 高興/興奮" in reply
+    assert store.get(1) == {"flow": "pending_mood_category", "target_user_id": 42}
+
+
+def test_handle_mood_category_step_valid_index_moves_to_content_step(fake_db):
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_mood_category", "target_user_id": 42})
+
+    reply = commands.handle_mood_category_step(store, telegram_user_id=1, text="6")
+
+    assert reply == "給我完整的日記內容："
+    assert store.get(1) == {"flow": "pending_mood_content", "target_user_id": 42, "mood_category": "happy_excited"}
+
+
+def test_handle_mood_category_step_invalid_reprompts(fake_db):
+    store = ConversationStateStore()
+    original_state = {"flow": "pending_mood_category", "target_user_id": 42}
+    store.set(1, original_state)
+
+    reply = commands.handle_mood_category_step(store, telegram_user_id=1, text="超級開心")
+
+    assert "沒看懂" in reply
+    assert store.get(1) == original_state
+
+
+def test_handle_mood_content_step_creates_journal_and_asks_achievement(fake_db):
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_mood_content", "target_user_id": 42, "mood_category": "happy_excited"})
+
+    reply = commands.handle_mood_content_step(fake_db, store, telegram_user_id=1, text="今天很開心")
+
+    assert "已經紀錄了" in reply
+    assert "完成了什麼一句話總結" in reply
+    rows = fake_db.select("mood_journals")
+    assert len(rows) == 1
+    assert rows[0]["content"] == "今天很開心"
+    assert rows[0]["achievement_note"] is None
+    state = store.get(1)
+    assert state["flow"] == "pending_mood_achievement"
+    assert state["target_user_id"] == 42
+    assert state["journal_id"] == rows[0]["id"]
+
+
+def test_handle_mood_content_step_masks_pii_and_adds_reminder(fake_db):
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_mood_content", "target_user_id": 42, "mood_category": "sad_down"})
+
+    reply = commands.handle_mood_content_step(fake_db, store, telegram_user_id=1, text="我的手機是 0912345678")
+
+    assert "提醒" in reply
+    rows = fake_db.select("mood_journals")
+    assert rows[0]["content"] == "我的手機是 [已遮蔽個資]"
+
+
+def test_handle_mood_achievement_step_skips_on_exit_phrase(fake_db):
+    journal_id = fake_db.insert(
+        "mood_journals",
+        {"user_id": 42, "mood_category": "happy_excited", "content": "今天很開心", "achievement_note": None},
+    )
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_mood_achievement", "target_user_id": 42, "journal_id": journal_id})
+
+    reply = commands.handle_mood_achievement_step(fake_db, store, telegram_user_id=1, text="結束")
+
+    assert reply == "好的，那先這樣吧！"
+    assert store.get(1) is None
+    row = fake_db.select("mood_journals", where="id = %s", params=(journal_id,), fetch_one=True)
+    assert row["achievement_note"] is None
+
+
+def test_handle_mood_achievement_step_saves_answer(fake_db):
+    journal_id = fake_db.insert(
+        "mood_journals",
+        {"user_id": 42, "mood_category": "happy_excited", "content": "今天很開心", "achievement_note": None},
+    )
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_mood_achievement", "target_user_id": 42, "journal_id": journal_id})
+
+    reply = commands.handle_mood_achievement_step(fake_db, store, telegram_user_id=1, text="完成了一份報告")
+
+    assert reply == "已經幫你記錄好了！"
+    assert store.get(1) is None
+    row = fake_db.select("mood_journals", where="id = %s", params=(journal_id,), fetch_one=True)
+    assert row["achievement_note"] == "完成了一份報告"
+
+
+def test_handle_mood_achievement_step_masks_pii_and_adds_reminder(fake_db):
+    journal_id = fake_db.insert(
+        "mood_journals",
+        {"user_id": 42, "mood_category": "happy_excited", "content": "今天很開心", "achievement_note": None},
+    )
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_mood_achievement", "target_user_id": 42, "journal_id": journal_id})
+
+    reply = commands.handle_mood_achievement_step(fake_db, store, telegram_user_id=1, text="打給我 0912345678")
+
+    assert "提醒" in reply
+    row = fake_db.select("mood_journals", where="id = %s", params=(journal_id,), fetch_one=True)
+    assert row["achievement_note"] == "打給我 [已遮蔽個資]"
+
+
 def test_handle_todo_action_confirm_step_keeps_status_when_unclassifiable(fake_db):
     due_at = commands.datetime(2026, 8, 2, 15, 0, tzinfo=commands._TAIWAN_TZ)
     todo_id = fake_db.insert(

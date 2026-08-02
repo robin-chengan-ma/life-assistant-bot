@@ -615,6 +615,51 @@ def test_my_todos_trigger_lists_and_marks_completed_via_index_selection(fake_db,
     assert fake_db.select("todos", where="id = %s", params=(todo_id,), fetch_one=True)["status"] == "completed"
 
 
+# --- 心情小記（robinson SPEC.md FR-49、FR-50，Step 1.8）---
+
+
+def test_mood_journal_full_flow_records_entry_and_achievement(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+
+    reply1 = router.handle_message(fake_db, store, FAMILY_ID, "我想做心情筆記")
+    assert "請幫我選一個" in reply1
+    assert store.get(FAMILY_ID)["flow"] == "pending_mood_category"
+
+    reply2 = router.handle_message(fake_db, store, FAMILY_ID, "高興/興奮")
+    assert reply2 == "給我完整的日記內容："
+    assert store.get(FAMILY_ID)["flow"] == "pending_mood_content"
+
+    reply3 = router.handle_message(fake_db, store, FAMILY_ID, "今天很開心")
+    assert "已經紀錄了" in reply3
+    assert store.get(FAMILY_ID)["flow"] == "pending_mood_achievement"
+
+    reply4 = router.handle_message(fake_db, store, FAMILY_ID, "完成了一份報告")
+    assert reply4 == "已經幫你記錄好了！"
+    assert store.get(FAMILY_ID) is None
+
+    rows = fake_db.select("mood_journals", where="user_id = %s AND mood_category = %s", params=(user_id, "happy_excited"))
+    assert len(rows) == 1
+    assert rows[0]["content"] == "今天很開心"
+    assert rows[0]["achievement_note"] == "完成了一份報告"
+
+
+def test_mood_journal_achievement_can_be_skipped(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+
+    router.handle_message(fake_db, store, FAMILY_ID, "/mood_journal")
+    router.handle_message(fake_db, store, FAMILY_ID, "1")
+    router.handle_message(fake_db, store, FAMILY_ID, "今天有點低落")
+    reply = router.handle_message(fake_db, store, FAMILY_ID, "結束")
+
+    assert reply == "好的，那先這樣吧！"
+    rows = fake_db.select("mood_journals")
+    assert rows[0]["achievement_note"] is None
+
+
 # --- /clean-target-dialog（docs/specs/chat-core/SPEC.md FR-12）---
 
 

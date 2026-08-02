@@ -312,3 +312,40 @@ COMMENT ON COLUMN todos.created_at IS '這筆待辦事項建立的時間';
 - `reminded_30min_sent_at`／`daily_pushed_on` 兩個欄位都是「去重記號」：整個推播機制沒有獨立的排程系統，是借用 `/healthz` 既有的 10 分鐘 cron 頻率（比照 Step 1.6 `NeonCapacityMonitor` 的做法），若不記錄「這則提醒是否已經送過」，同一筆待辦在期限前 30 分鐘的視窗內會被重複推播多次；選擇存在 DB（而非記憶體狀態）是因為 Render 免費方案可能不定期重啟，記憶體狀態重啟就會遺失，但待辦提醒的正確性比 Step 1.6 的容量告警更重要，值得多花一個欄位換取跨重啟的持久性
 - 兩個索引分別對應「查某人目前待處理清單」（`user_id, status`）與「掃描所有使用者裡快到期/逾期的待辦」（`due_at`，推播與逾期標記都會用到）
 - FR-31 提到的跨模組歧義判斷（例如「打籃球」要反問記到體態管理還是待辦事項）Phase 1 暫不實作，目前沒有其他已完成的模組可以比較（體態管理是 Phase 2、心情小記 Step 1.8 也還沒做），待那些模組做出來後再回頭補上，schema 本身不受影響
+
+---
+
+### mood_journals
+
+**建立日期**：2026-08-02
+**用途**：心情小記，對應 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) FR-49／FR-50（Step 1.8）。
+**Migration 檔案**：`src/migrations/0014_create_mood_journals_table.sql`
+
+```sql
+CREATE TABLE mood_journals (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id),
+    mood_category TEXT NOT NULL CHECK (mood_category IN (
+        'angry_anxious', 'sad_down', 'tired_burned_out', 'neutral', 'calm_relaxed', 'happy_excited'
+    )),
+    content TEXT NOT NULL,
+    achievement_note TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_mood_journals_user_id ON mood_journals (user_id);
+
+COMMENT ON TABLE mood_journals IS '心情小記表：對應 FR-49／FR-50，使用者每日心情紀錄與隨筆';
+COMMENT ON COLUMN mood_journals.id IS '內部主鍵';
+COMMENT ON COLUMN mood_journals.user_id IS '所屬使用者，對應 users.id';
+COMMENT ON COLUMN mood_journals.mood_category IS '心情分類（FR-56h 情境範例六選一）：angry_anxious=生氣/焦慮, sad_down=難過/低落, tired_burned_out=疲倦/厭世, neutral=普通/平淡, calm_relaxed=平靜/放鬆, happy_excited=高興/興奮';
+COMMENT ON COLUMN mood_journals.content IS '完整日記內容（已經過 FR-13 個資遮蔽處理，不存未遮蔽的原文）';
+COMMENT ON COLUMN mood_journals.achievement_note IS 'FR-50 個人成就三選一提示的回答（今天完成了什麼一句話總結／挑一件有感覺的事／寫下啟發或下次想改變的地方，僅需一項）；使用者選擇跳過時為 NULL，同樣已經過 FR-13 個資遮蔽處理';
+COMMENT ON COLUMN mood_journals.created_at IS '這筆心情小記建立的時間';
+```
+
+**設計理由**：
+- `mood_category` 用 `CHECK` 鎖定 FR-56h 情境範例列出的固定 6 種分類，避免自由輸入造成資料不一致
+- `achievement_note` 允許 `NULL`：FR-50 明確是「使用者自行選擇是否回答」，跳過是合法情況
+- `content`／`achievement_note` 都套用 FR-13 個資遮蔽（跟一般聊天、圖片說明文字、語音轉文字三個既有入口一致），2026-08-02 與 Robin 確認新入口也要套用同一套防線
+- 只建 `user_id` 單欄索引：目前唯一常見查詢是「查某人的心情小記」，沒有像 `todos` 那種需要跨使用者掃描的排程查詢，不需要額外複合索引

@@ -1,17 +1,25 @@
 """內建指令與對話式設定流程（對應 docs/specs/platform-auth/SPEC.md FR-4～FR-6、
 docs/specs/feature-toggles/SPEC.md FR-1～FR-2、docs/specs/chat-core/SPEC.md ADR-4、FR-10～FR-12、
-docs/specs/robinson/SPEC.md FR-20、FR-31、FR-31a、FR-32）。"""
+docs/specs/robinson/SPEC.md FR-20、FR-31、FR-31a、FR-32、FR-49、FR-50）。"""
 import logging
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from submodules.cloudsql.client import CloudSQLClient
 
-from src.bot import auth, knowledge, templates, toggles
+from src.bot import auth, knowledge, mood, privacy, templates, toggles
 from src.bot import todo as todo_module
 from src.bot.state import ConversationStateStore
 
 _TAIWAN_TZ = ZoneInfo("Asia/Taipei")
+
+# 2026-08-02（見 docs/specs/privacy-masking/SPEC.md FR-4）：跟 chat.py 的 _PII_DETECTED_REMINDER
+# 文字完全一致，刻意在這裡獨立定義一份而不是從 chat.py 匯入——那是 chat 模組的私有常數，跨模組
+# 依賴私有成員容易在對方調整內部實作時悄悄壞掉，這則提醒文案又短，重複定義的維護成本很低。
+_PII_DETECTED_REMINDER = (
+    "\n\n（提醒：這則訊息裡有偵測到疑似個人敏感資料，我已經自動遮蔽、不會存下明碼，"
+    "但麻煩你盡快到對話紀錄裡手動刪除原始訊息喔，我沒辦法代為刪除你自己傳送的訊息！）"
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -821,3 +829,99 @@ def handle_todo_action_confirm_step(
     todo_module.mark_status(db, todo_id, new_status)
     label = "完成" if new_status == "completed" else "取消"
     return f"好的，已經把「{content}」標記為{label}囉！"
+
+
+# ---------------------------------------------------------------------------
+# 心情小記（2026-08-02，Step 1.8，見 robinson SPEC.md FR-49、FR-50、FR-56h）
+#
+# 流程分三輪（比照 FR-56h 情境範例）：觸發後先問心情分類（pending_mood_category，固定 6 選一，
+# 純字串比對不需要 LLM）→ 問日記內容（pending_mood_content）→ 記錄完成後主動問 FR-50 個人成就
+# 三選一提示（pending_mood_achievement，使用者可用既有的 _EXIT_PHRASES 跳過，不強迫回答）。
+# 全程不需要呼叫 LLM（跟 Step 1.7 待辦事項需要解析模糊時間不同），但日記內容／個人成就都是自由
+# 文字、可能含個資，依 2026-08-02 與 Robin 確認的範圍決策，寫入 `mood_journals` 前一律先過
+# `privacy.mask_text()`，跟一般聊天／圖片說明文字／語音轉文字三個既有入口的防線一致。
+# ---------------------------------------------------------------------------
+
+
+def start_mood_journal(state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
+    """「我想做心情筆記」／`/mood_journal`：開始心情小記流程，先問心情分類（FR-49、FR-56h）。"""
+    state_store.set(telegram_user_id, {"flow": "pending_mood_category", "target_user_id": user_id})
+    return mood.format_category_prompt()
+
+
+def handle_mood_category_step(
+    state_store: ConversationStateStore,
+    telegram_user_id: int,
+    text: str,
+) -> str:
+    """處理 `pending_mood_category` 狀態下使用者選擇的心情分類（接受編號或直接輸入分類名稱）。"""
+    state = state_store.get(telegram_user_id)
+    target_user_id = state["target_user_id"]
+
+    category = mood.resolve_category(text)
+    if category is None:
+        return "不好意思，我沒看懂，麻煩從下面選一個喔：\n\n" + mood.format_category_prompt()
+
+    state_store.set(
+        telegram_user_id, {"flow": "pending_mood_content", "target_user_id": target_user_id, "mood_category": category}
+    )
+    return "給我完整的日記內容："
+
+
+def handle_mood_content_step(
+    db: CloudSQLClient,
+    state_store: ConversationStateStore,
+    telegram_user_id: int,
+    text: str,
+    privacy_llm_client=None,
+) -> str:
+    """處理 `pending_mood_content` 狀態下使用者提供的日記內容，寫入後接著問 FR-50 個人成就。
+
+    `privacy_llm_client`（見 docs/specs/privacy-masking/SPEC.md FR-4）：日記內容可能含個資，
+    寫入 `mood_journals` 前一律先過 `privacy.mask_text()`；`None` 時優雅降級成只跑免費的 Regex 層。
+    """
+    state = state_store.get(telegram_user_id)
+    target_user_id = state["target_user_id"]
+    mood_category = state["mood_category"]
+
+    masked_content, pii_detected = privacy.mask_text(text, privacy_llm_client)
+    journal_id = mood.create_mood_journal(db, target_user_id, mood_category, masked_content)
+
+    state_store.set(
+        telegram_user_id,
+        {"flow": "pending_mood_achievement", "target_user_id": target_user_id, "journal_id": journal_id},
+    )
+    reply = (
+        "好的，已經紀錄了！要不要順便回顧一下今天：完成了什麼一句話總結／挑一件有感覺的事／"
+        "寫下啟發或下次想改變的地方（選一項就好，不想回答也可以輸入「結束」跳過）："
+    )
+    if pii_detected:
+        reply += _PII_DETECTED_REMINDER
+    return reply
+
+
+def handle_mood_achievement_step(
+    db: CloudSQLClient,
+    state_store: ConversationStateStore,
+    telegram_user_id: int,
+    text: str,
+    privacy_llm_client=None,
+) -> str:
+    """處理 `pending_mood_achievement` 狀態下使用者對 FR-50 個人成就提示的回覆（可選擇跳過）。
+
+    `privacy_llm_client`：理由同 `handle_mood_content_step()`，個人成就一樣是自由文字，可能含個資。
+    """
+    state = state_store.get(telegram_user_id)
+    journal_id = state["journal_id"]
+    state_store.clear(telegram_user_id)
+
+    if text in _EXIT_PHRASES:
+        return "好的，那先這樣吧！"
+
+    masked_note, pii_detected = privacy.mask_text(text, privacy_llm_client)
+    mood.set_achievement_note(db, journal_id, masked_note)
+
+    reply = "已經幫你記錄好了！"
+    if pii_detected:
+        reply += _PII_DETECTED_REMINDER
+    return reply

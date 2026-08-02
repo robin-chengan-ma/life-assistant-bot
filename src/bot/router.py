@@ -40,6 +40,8 @@ _SET_TOGGLE_TRIGGERS = {"/set_toggle", "設定家人功能開關"}
 # 2026-08-02（Step 1.7，見 robinson SPEC.md FR-32）：查詢待辦事項清單，所有使用者皆可用
 # （不像 /set_toggle 是 Owner 專屬），放在 is_owner/非 is_owner 分支都會落到的共用觸發詞區塊。
 _MY_TODOS_TRIGGERS = {"/my_todos", "我的待辦事項"}
+# 2026-08-02（Step 1.8，見 robinson SPEC.md FR-49、FR-56h）：開始心情小記流程，所有使用者皆可用。
+_MOOD_JOURNAL_TRIGGERS = {"/mood_journal", "我想做心情筆記"}
 _CLEAN_ALL_DIALOG_TRIGGERS = {"/clean-all-dialog", "我想要刪除所有對話紀錄"}
 # 2026-08-01（chat-core SPEC.md FR-12）：/clean-target-dialog 的主題是自由文字，無法用固定
 # 觸發詞集合窮舉，改用 regex 擷取「我想刪除有關 OOO 的紀錄」或 `/clean-target-dialog OOO` 的主題。
@@ -141,6 +143,9 @@ def handle_message(
     if text in _MY_TODOS_TRIGGERS:
         # 2026-08-02（Step 1.7，見 robinson SPEC.md FR-32）：查詢待處理清單並進入可標記完成/取消的模式。
         return commands.start_todo_list(db, state_store, telegram_user_id, user_id)
+    if text in _MOOD_JOURNAL_TRIGGERS:
+        # 2026-08-02（Step 1.8，見 robinson SPEC.md FR-49）：開始心情小記三輪反問流程，先問分類。
+        return commands.start_mood_journal(state_store, telegram_user_id, user_id)
     if text in _CLEAN_ALL_DIALOG_TRIGGERS:
         # 2026-08-01 起改為先反問確認，不再直接刪除，見 commands.start_clean_all_dialog_confirm。
         return commands.start_clean_all_dialog_confirm(db, state_store, telegram_user_id, user_id)
@@ -359,4 +364,16 @@ def _dispatch_active_flow(
         return commands.handle_todo_list_action_step(db, state_store, telegram_user_id, text)
     if flow == "pending_todo_action_confirm":
         return commands.handle_todo_action_confirm_step(db, llm_client, state_store, telegram_user_id, text)
+    # 2026-08-02（Step 1.8，見 robinson SPEC.md FR-49、FR-50）：心情小記三輪反問流程，全程不需要
+    # LLM（固定分類選單＋自由文字直接記錄），只有內容/成就這兩輪需要 privacy_llm_client 做個資遮蔽。
+    if flow == "pending_mood_category":
+        return commands.handle_mood_category_step(state_store, telegram_user_id, text)
+    if flow == "pending_mood_content":
+        return commands.handle_mood_content_step(
+            db, state_store, telegram_user_id, text, privacy_llm_client=privacy_llm_client
+        )
+    if flow == "pending_mood_achievement":
+        return commands.handle_mood_achievement_step(
+            db, state_store, telegram_user_id, text, privacy_llm_client=privacy_llm_client
+        )
     return commands.handle_toggle_step(db, state_store, telegram_user_id, text)
