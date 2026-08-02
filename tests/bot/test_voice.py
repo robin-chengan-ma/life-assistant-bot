@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from src.bot import voice
+from src.bot.state import ConversationStateStore
 
 
 class _FakeVoiceClient:
@@ -47,6 +48,45 @@ def test_exceeds_duration_limit_true_when_over_ten_minutes():
 def test_exceeds_duration_limit_false_when_duration_missing():
     # 缺少時長資訊時保守放行，不無故擋下使用者
     assert voice.exceeds_duration_limit(None) is False
+
+
+# --- mark_duration_violation／is_locked_out_from_duration_violation（FR-14 規則 1，2026-08-02 追加）---
+
+
+def test_is_locked_out_from_duration_violation_false_when_no_prior_violation():
+    lockout_store = ConversationStateStore()
+    assert voice.is_locked_out_from_duration_violation(lockout_store, telegram_user_id=1) is False
+
+
+def test_is_locked_out_from_duration_violation_true_within_fifteen_minutes():
+    lockout_store = ConversationStateStore()
+    now = datetime(2026, 8, 2, 12, 0, 0, tzinfo=timezone.utc)
+    voice.mark_duration_violation(lockout_store, telegram_user_id=1, now=now - timedelta(minutes=10))
+
+    assert voice.is_locked_out_from_duration_violation(lockout_store, telegram_user_id=1, now=now) is True
+
+
+def test_is_locked_out_from_duration_violation_false_after_fifteen_minutes():
+    lockout_store = ConversationStateStore()
+    now = datetime(2026, 8, 2, 12, 0, 0, tzinfo=timezone.utc)
+    voice.mark_duration_violation(lockout_store, telegram_user_id=1, now=now - timedelta(minutes=16))
+
+    assert voice.is_locked_out_from_duration_violation(lockout_store, telegram_user_id=1, now=now) is False
+
+
+def test_is_locked_out_from_duration_violation_ignores_other_users():
+    lockout_store = ConversationStateStore()
+    now = datetime(2026, 8, 2, 12, 0, 0, tzinfo=timezone.utc)
+    voice.mark_duration_violation(lockout_store, telegram_user_id=999, now=now - timedelta(minutes=1))
+
+    assert voice.is_locked_out_from_duration_violation(lockout_store, telegram_user_id=1, now=now) is False
+
+
+def test_mark_duration_violation_defaults_to_current_time():
+    lockout_store = ConversationStateStore()
+    voice.mark_duration_violation(lockout_store, telegram_user_id=1)
+
+    assert voice.is_locked_out_from_duration_violation(lockout_store, telegram_user_id=1) is True
 
 
 # --- is_within_correction_window（FR-15）---

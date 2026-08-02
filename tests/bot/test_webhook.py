@@ -489,6 +489,8 @@ def test_webhook_routes_voice_message_and_sends_reply(client, monkeypatch):
     assert call_args[3] == "voice1"
     assert call_args[4] == 42
     assert mock_handle_voice_message.call_args.kwargs["mime_type"] == "audio/ogg"
+    # 2026-08-02（FR-14 規則 1）：長期持有的 _voice_lockout_store 要正確傳入，跨呼叫共用同一份。
+    assert mock_handle_voice_message.call_args.kwargs["voice_lockout_store"] is webhook._voice_lockout_store
     mock_db_instance.close.assert_called_once()
     mock_telegram_instance.send_text.assert_called_once_with(chat_id=123, text="好的，已經記下來了！")
 

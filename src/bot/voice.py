@@ -20,14 +20,27 @@ FR-14（10 分鐘上限）／FR-15（15 分鐘修正窗口）這兩項檢查刻�
 負責在下載前先呼叫 `exceeds_duration_limit()`）；FR-15 用 `media_uploads` 裡該使用者最近
 一筆 `audio` 記錄的時間判斷（`is_within_correction_window()`），不需要額外的資料表或
 記憶體狀態。
+
+2026-08-02 追加（Robin 釐清 FR-14／FR-15 其實是兩條獨立規則，都要做）：
+1. **FR-14 規則 1**（`mark_duration_violation()`／`is_locked_out_from_duration_violation()`）：
+   單次錄音「本身」超過 10 分鐘時，語音功能整體鎖定 15 分鐘——這段期間內任何語音訊息
+   （不限於「修正」情境）都會被拒絕。因為超時的語音一開始就不會呼叫
+   `transcribe_and_upload()`（不會寫入 `media_uploads`），無法沿用 FR-15 查 DB 時間戳記的
+   作法，改用純記憶體儲存（比照 `src/bot/state.py` 的 `ConversationStateStore`／ADR-2 慣例：
+   process 重啟會重置，可接受）記錄「最近一次超時的時間點」。
+2. **FR-15**（既有）：只要成功轉出文字（代表這則語音本身沒超過 10 分鐘），15 分鐘內若使用者
+   還想再用語音「修正」剛剛的結果，一樣要拒絕、提醒改用打字——語意上鎖定的是「修正這件事」，
+   跟規則 1「單純因為太長而鎖」是兩個不同觸發條件，只是巧合都設定成 15 分鐘。
 """
 from datetime import datetime, timedelta, timezone
 
 from src.bot.media import save_media_upload
+from src.bot.state import ConversationStateStore
 from submodules.cloudsql.client import CloudSQLClient
 
 _MAX_DURATION_SECONDS = 600  # FR-14：語音訊息超過 10 分鐘強制中斷處理
 _CORRECTION_WINDOW_MINUTES = 15  # FR-15：語音送出後 15 分鐘內僅能用打字修正
+_DURATION_LOCKOUT_MINUTES = 15  # FR-14 規則 1：單次錄音超過 10 分鐘時，語音功能整體鎖定 15 分鐘
 
 # 依 Telegram 回報的 mime_type 決定存到 Drive 時用的副檔名；voice 訊息固定 audio/ogg，
 # audio 訊息（使用者上傳的音檔）常見類型列在這裡，沒對應到的一律 fallback 成 ogg——
@@ -52,6 +65,29 @@ def _infer_extension(mime_type: str) -> str:
 def exceeds_duration_limit(duration_seconds: int | None) -> bool:
     """FR-14：語音長度是否超過 10 分鐘上限；缺少時長資訊時保守放行（不擋）。"""
     return duration_seconds is not None and duration_seconds > _MAX_DURATION_SECONDS
+
+
+def mark_duration_violation(
+    lockout_store: ConversationStateStore, telegram_user_id: int, now: datetime | None = None
+) -> None:
+    """FR-14 規則 1：記錄「這位使用者剛因單次語音超過 10 分鐘被擋下」的時間點，
+    呼叫端在 `exceeds_duration_limit()` 判定為 True 時呼叫，供 `is_locked_out_from_duration_violation()` 判斷。
+    """
+    lockout_store.set(telegram_user_id, {"violated_at": now or datetime.now(timezone.utc)})
+
+
+def is_locked_out_from_duration_violation(
+    lockout_store: ConversationStateStore, telegram_user_id: int, now: datetime | None = None
+) -> bool:
+    """FR-14 規則 1：該使用者是否還在「上次因單次語音超過 10 分鐘」觸發的 15 分鐘全面鎖定內——
+    這段期間語音功能整體關閉，跟 FR-15 的 `is_within_correction_window()`（只鎖「修正」情境）
+    是兩條獨立規則。
+    """
+    state = lockout_store.get(telegram_user_id)
+    if state is None:
+        return False
+    now = now or datetime.now(timezone.utc)
+    return now - state["violated_at"] < timedelta(minutes=_DURATION_LOCKOUT_MINUTES)
 
 
 def is_within_correction_window(db: CloudSQLClient, user_id: int, now: datetime | None = None) -> bool:

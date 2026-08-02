@@ -18,6 +18,10 @@ bot_bp = Blueprint("bot", __name__)
 # Owner /set_invite_codes 對話狀態，整個 process 生命週期內共用一份（ADR-2：僅存於記憶體）。
 _state_store = ConversationStateStore()
 
+# 2026-08-02（FR-14 規則 1）：語音超時鎖定的獨立記憶體儲存，與 `_state_store` 是不同用途、
+# 不同生命週期概念的兩份資料，故意分開，避免跟對話流程的 `flow` 分派狀態混在一起。
+_voice_lockout_store = ConversationStateStore()
+
 _logger = logging.getLogger(__name__)
 
 # Step 1.6（FR-19）完整版之前的暫時性安全網文案：任何未預期例外（例如 Gemini 429 額度超限）
@@ -216,6 +220,7 @@ def telegram_webhook():
                 llm_client=llm_client,
                 text_llm_client=text_llm_client,
                 mime_type=mime_type,
+                voice_lockout_store=_voice_lockout_store,
             )
         else:
             _, text = text_extracted

@@ -1,9 +1,9 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 
 from PIL import Image
 
-from src.bot import router, templates
+from src.bot import router, templates, voice
 from src.bot.state import ConversationStateStore
 
 
@@ -728,6 +728,82 @@ def test_handle_voice_message_rejects_when_over_duration_limit(fake_db, monkeypa
     assert reply == router._VOICE_DURATION_LIMIT_REPLY
     assert telegram_client.last_file_id is None  # 超過上限不該去下載語音檔
     assert fake_db.select("media_uploads") == []
+
+
+# --- FR-14 規則 1：單次語音超過 10 分鐘觸發 15 分鐘全面鎖定（2026-08-02 追加，與 FR-15 修正窗口是獨立規則）---
+
+
+def test_handle_voice_message_marks_lockout_when_over_duration_limit(fake_db, monkeypatch):
+    # 超時的這一則本身照樣被 FR-14 擋下，但這次還要記錄鎖定時間點，供下一則語音判斷。
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+    lockout_store = ConversationStateStore()
+    telegram_client = _FakeTelegramClient(b"raw-ogg")
+
+    reply = router.handle_voice_message(
+        fake_db, store, FAMILY_ID, "voice123", 601,
+        telegram_client, _FakeGDriveClient(), _FakeVoiceClient(),
+        voice_lockout_store=lockout_store,
+    )
+
+    assert reply == router._VOICE_DURATION_LIMIT_REPLY
+    assert voice.is_locked_out_from_duration_violation(lockout_store, FAMILY_ID) is True
+
+
+def test_handle_voice_message_rejects_subsequent_voice_within_lockout_even_if_short(fake_db, monkeypatch):
+    # 鎖定期間內，即使這次語音長度完全合法（沒超過 10 分鐘），也一樣要被拒絕——
+    # 鎖定的是「語音功能整體」，不是只針對超時的那一則。
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+    lockout_store = ConversationStateStore()
+    voice.mark_duration_violation(lockout_store, FAMILY_ID)
+    telegram_client = _FakeTelegramClient(b"raw-ogg")
+
+    reply = router.handle_voice_message(
+        fake_db, store, FAMILY_ID, "voice456", 30,
+        telegram_client, _FakeGDriveClient(), _FakeVoiceClient(),
+        voice_lockout_store=lockout_store,
+    )
+
+    assert reply == router._VOICE_DURATION_LOCKOUT_REPLY
+    assert telegram_client.last_file_id is None  # 鎖定中不該去下載語音檔
+    assert fake_db.select("media_uploads") == []
+
+
+def test_handle_voice_message_allows_voice_again_after_lockout_expires(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+    lockout_store = ConversationStateStore()
+    voice.mark_duration_violation(lockout_store, FAMILY_ID, now=datetime.now(timezone.utc) - timedelta(minutes=16))
+    voice_client = _FakeVoiceClient(response_text="/rule")
+
+    reply = router.handle_voice_message(
+        fake_db, store, FAMILY_ID, "voice789", 30,
+        _FakeTelegramClient(b"raw-ogg"), _FakeGDriveClient(), voice_client,
+        voice_lockout_store=lockout_store,
+    )
+
+    assert reply == templates.APPENDIX_A_TEXT
+    assert voice_client.last_audio_bytes == b"raw-ogg"
+
+
+def test_handle_voice_message_does_not_enforce_lockout_when_store_not_provided(fake_db, monkeypatch):
+    # 呼叫端沒傳 voice_lockout_store（例如既有測試不關心這個行為）時，等同停用這個檢查，
+    # 不會因為缺少這個參數就意外炸掉或誤鎖。
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+    voice_client = _FakeVoiceClient(response_text="/rule")
+
+    reply = router.handle_voice_message(
+        fake_db, store, FAMILY_ID, "voice999", 30,
+        _FakeTelegramClient(b"raw-ogg"), _FakeGDriveClient(), voice_client,
+    )
+
+    assert reply == templates.APPENDIX_A_TEXT
 
 
 def test_handle_voice_message_rejects_within_correction_window(fake_db, monkeypatch):

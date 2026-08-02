@@ -8,9 +8,18 @@ from src.bot.state import ConversationStateStore
 
 _NOT_BOUND_REPLY = "請輸入通關密碼才能開始使用羅賓森喔！"
 
-# 2026-08-01（Step 1.4，robinson SPEC.md FR-14／FR-15）：語音訊息的兩種擋下情境固定文案，
+# 2026-08-01（Step 1.4，robinson SPEC.md FR-14／FR-15）：語音訊息的擋下情境固定文案，
 # 都在下載/上傳/轉文字之前就先擋下，避免浪費 Drive／Groq 額度，見 src/bot/voice.py 模組 docstring。
-_VOICE_DURATION_LIMIT_REPLY = "這則語音超過 10 分鐘囉，我沒辦法處理這麼長的語音，麻煩分段傳送或改用打字喔！"
+# 2026-08-02 起 FR-14 拆成兩條獨立規則：_VOICE_DURATION_LIMIT_REPLY 是「這一則太長」的當下拒絕，
+# _VOICE_DURATION_LOCKOUT_REPLY 是「之前超時過，15 分鐘全面鎖定中」；_VOICE_CORRECTION_WINDOW_REPLY
+# 則是 FR-15「只鎖修正情境」，三者觸發條件互不相同。
+_VOICE_DURATION_LIMIT_REPLY = (
+    "這則語音超過 10 分鐘囉，我沒辦法處理這麼長的語音，麻煩分段傳送或改用打字喔！"
+    "接下來 15 分鐘語音功能會暫時鎖定，這段期間麻煩先用打字。"
+)
+_VOICE_DURATION_LOCKOUT_REPLY = (
+    "剛剛語音超過 10 分鐘，語音功能鎖定中，這段期間麻煩先用打字，超過鎖定時間會自動恢復喔！"
+)
 _VOICE_CORRECTION_WINDOW_REPLY = "你剛剛才傳過語音，15 分鐘內麻煩先用打字修正或補充喔，超過 15 分鐘語音模式就會自動恢復！"
 
 _SET_INVITE_CODES_TRIGGERS = {"/set_invite_codes", "設定通關密碼"}
@@ -177,6 +186,7 @@ def handle_voice_message(
     llm_client=None,
     text_llm_client=None,
     mime_type: str = "audio/ogg",
+    voice_lockout_store: ConversationStateStore | None = None,
 ) -> str:
     """處理使用者傳來的語音/音檔訊息（對應 robinson SPEC.md FR-14、FR-15、FR-17、ADR-12、ADR-13）。
 
@@ -196,10 +206,18 @@ def handle_voice_message(
     FR-14/FR-15「先擋才不浪費額度」的一貫原則——沒必要為了一個註定被拒絕的結果，還是先花一次
     Drive 上傳＋Groq 轉錄的額度。這裡也刻意不清除該狀態，讓使用者可以直接補一則打字訊息完成
     最終確認，不用整個流程重來。
+
+    2026-08-02（Robin 釐清 FR-14 其實有兩條規則）：`voice_lockout_store`（獨立於 `state_store`
+    的另一個 `ConversationStateStore` 實例，正式環境由 webhook.py 建立並長期持有）記錄「這位
+    使用者最近一次是否因單次語音超過 10 分鐘而被鎖定」——這 15 分鐘內語音功能整體關閉，跟
+    FR-15 只鎖「修正情境」是兩條獨立規則。呼叫端沒傳的話（例如既有測試不關心這個行為）就地
+    建立一個新的、不會跨呼叫共用的 store，等於停用這個檢查，不影響其餘行為。
     """
     user = _get_identified_user(db, telegram_user_id)
     if user is None:
         return _NOT_BOUND_REPLY
+
+    voice_lockout_store = voice_lockout_store or ConversationStateStore()
 
     current_state = state_store.get(telegram_user_id)
     if current_state is not None and current_state.get("flow") in _FINAL_CONFIRM_FLOWS:
@@ -207,7 +225,11 @@ def handle_voice_message(
         # `text` 內容（見 commands.py），這裡帶空字串即可，不需要真的轉出語音內容。
         return handle_message(db, state_store, telegram_user_id, "", via_voice=True)
 
+    if voice.is_locked_out_from_duration_violation(voice_lockout_store, telegram_user_id):
+        return _VOICE_DURATION_LOCKOUT_REPLY
+
     if voice.exceeds_duration_limit(duration_seconds):
+        voice.mark_duration_violation(voice_lockout_store, telegram_user_id)
         return _VOICE_DURATION_LIMIT_REPLY
     if voice.is_within_correction_window(db, user["id"]):
         return _VOICE_CORRECTION_WINDOW_REPLY
