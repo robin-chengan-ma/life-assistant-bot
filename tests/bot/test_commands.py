@@ -40,7 +40,8 @@ def test_start_clean_all_dialog_confirm_reports_zero_when_no_logs(fake_db):
     assert "0 筆對話紀錄" in reply
 
 
-def test_handle_clean_all_dialog_confirm_step_deletes_when_llm_confirms(fake_db):
+def test_handle_clean_all_dialog_confirm_step_moves_to_final_confirm_when_llm_confirms(fake_db):
+    # 2026-08-02（FR-16a）：LLM 判定 CONFIRM 後不會馬上刪除，要先進入最終確認狀態。
     fake_db.insert("conversation_logs", {"user_id": 1, "role": "user", "content": "早安", "deleted_at": None})
     store = ConversationStateStore()
     store.set(1, {"flow": "pending_clean_all_dialog_confirm", "target_user_id": 1})
@@ -48,12 +49,54 @@ def test_handle_clean_all_dialog_confirm_step_deletes_when_llm_confirms(fake_db)
 
     reply = commands.handle_clean_all_dialog_confirm_step(fake_db, llm_client, store, telegram_user_id=1, text="對啊")
 
+    assert "確認執行" in reply
+    assert store.get(1) == {"flow": "pending_clean_all_dialog_final_confirm", "target_user_id": 1}
+    logs = fake_db.select("conversation_logs", where="user_id = %s AND deleted_at IS NULL", params=(1,))
+    assert len(logs) == 1  # 還沒真的刪除
+    # prompt 必須把使用者的回覆帶進去，模型才有判斷依據
+    assert "對啊" in llm_client.last_prompt
+
+
+def test_handle_clean_all_dialog_final_confirm_step_deletes_when_keyword_typed(fake_db):
+    fake_db.insert("conversation_logs", {"user_id": 1, "role": "user", "content": "早安", "deleted_at": None})
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_clean_all_dialog_final_confirm", "target_user_id": 1})
+
+    reply = commands.handle_clean_all_dialog_final_confirm_step(fake_db, store, telegram_user_id=1, text="確認執行")
+
     assert reply == "已經幫你清除所有對話紀錄囉！你的知識庫內容不會受影響。"
     assert store.get(1) is None
     logs = fake_db.select("conversation_logs", where="user_id = %s AND deleted_at IS NULL", params=(1,))
     assert logs == []
-    # prompt 必須把使用者的回覆帶進去，模型才有判斷依據
-    assert "對啊" in llm_client.last_prompt
+
+
+def test_handle_clean_all_dialog_final_confirm_step_cancels_on_wrong_text(fake_db):
+    fake_db.insert("conversation_logs", {"user_id": 1, "role": "user", "content": "早安", "deleted_at": None})
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_clean_all_dialog_final_confirm", "target_user_id": 1})
+
+    reply = commands.handle_clean_all_dialog_final_confirm_step(fake_db, store, telegram_user_id=1, text="確定")
+
+    assert reply == "好的，先不清除，你的對話紀錄都還在喔！"
+    assert store.get(1) is None
+    logs = fake_db.select("conversation_logs", where="user_id = %s AND deleted_at IS NULL", params=(1,))
+    assert len(logs) == 1
+
+
+def test_handle_clean_all_dialog_final_confirm_step_rejects_voice_and_keeps_state(fake_db):
+    # 語音轉出來的文字即使剛好是「確認執行」也一律拒絕，且不清除狀態，讓使用者可以直接補打字重試。
+    fake_db.insert("conversation_logs", {"user_id": 1, "role": "user", "content": "早安", "deleted_at": None})
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_clean_all_dialog_final_confirm", "target_user_id": 1})
+
+    reply = commands.handle_clean_all_dialog_final_confirm_step(
+        fake_db, store, telegram_user_id=1, text="確認執行", via_voice=True
+    )
+
+    assert "打字" in reply
+    assert store.get(1) == {"flow": "pending_clean_all_dialog_final_confirm", "target_user_id": 1}
+    logs = fake_db.select("conversation_logs", where="user_id = %s AND deleted_at IS NULL", params=(1,))
+    assert len(logs) == 1
 
 
 def test_handle_clean_all_dialog_confirm_step_cancels_on_any_non_confirm_reply(fake_db):
@@ -101,7 +144,9 @@ def test_handle_clean_all_dialog_soft_deletes_logs_resets_summary_and_keeps_know
     assert len(kb_rows) == 1
 
 
-def test_handle_save_knowledge_confirm_step_saves_to_custom_for_non_owner(fake_db, monkeypatch):
+def test_handle_save_knowledge_confirm_step_moves_to_final_confirm_for_non_owner(fake_db, monkeypatch):
+    # 2026-08-02（FR-16a）：DECISION=CONFIRM 後不會馬上寫入，權限強制（category 改回 custom）
+    # 已經在這一步做完，狀態直接進入最終確認。
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     store = ConversationStateStore()
     store.set(1, {"flow": "pending_save_knowledge_confirm", "target_user_id": 42, "original_request": "幫我存補胎SOP"})
@@ -114,17 +159,22 @@ def test_handle_save_knowledge_confirm_step_saves_to_custom_for_non_owner(fake_d
 
     reply = commands.handle_save_knowledge_confirm_step(fake_db, llm_client, store, telegram_user_id=1, text="對")
 
-    assert reply == "已經幫你存到你的個人知識庫囉！「SOP」分類、內容是：補胎流程：先拆輪胎"
-    assert store.get(1) is None
-    rows = fake_db.select("knowledge_base", where="category = %s AND user_id = %s", params=("custom", 42))
-    assert len(rows) == 1
-    assert rows[0]["content"] == "補胎流程：先拆輪胎"
-    assert rows[0]["label"] == "SOP"
+    assert "確認執行" in reply
+    assert "補胎流程：先拆輪胎" in reply
+    assert store.get(1) == {
+        "flow": "pending_save_knowledge_final_confirm",
+        "category": "custom",
+        "label": "SOP",
+        "content": "補胎流程：先拆輪胎",
+        "row_user_id": 42,
+    }
+    assert fake_db.select("knowledge_base") == []  # 還沒真的寫入
     assert "使用者不是 Owner，CATEGORY 一律只能填 custom" in llm_client.last_prompt
 
 
 def test_handle_save_knowledge_confirm_step_forces_custom_even_if_model_suggests_shared_for_non_owner(fake_db, monkeypatch):
-    # 伺服器端最後一道防線：即使模型（可能被誘導）回傳 general_family，非 Owner 也一律強制改回 custom。
+    # 伺服器端最後一道防線：即使模型（可能被誘導）回傳 general_family，非 Owner 也一律強制改回 custom
+    # ——這個判斷發生在轉入最終確認「之前」，所以最終確認狀態裡存的 category 一定已經是 custom。
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     store = ConversationStateStore()
     store.set(1, {"flow": "pending_save_knowledge_confirm", "target_user_id": 42, "original_request": "幫我存家人背景"})
@@ -134,10 +184,8 @@ def test_handle_save_knowledge_confirm_step_forces_custom_even_if_model_suggests
 
     commands.handle_save_knowledge_confirm_step(fake_db, llm_client, store, telegram_user_id=1, text="對")
 
-    family_rows = fake_db.select("knowledge_base", where="category = %s", params=("general_family",))
-    assert family_rows == []
-    custom_rows = fake_db.select("knowledge_base", where="category = %s AND user_id = %s", params=("custom", 42))
-    assert len(custom_rows) == 1
+    assert store.get(1)["category"] == "custom"
+    assert store.get(1)["row_user_id"] == 42
 
 
 def test_handle_save_knowledge_confirm_step_allows_owner_to_save_to_general_family(fake_db, monkeypatch):
@@ -150,11 +198,74 @@ def test_handle_save_knowledge_confirm_step_allows_owner_to_save_to_general_fami
 
     reply = commands.handle_save_knowledge_confirm_step(fake_db, llm_client, store, telegram_user_id=1, text="對")
 
-    assert reply == "已經幫你存到Robin 與家人背景知識庫囉！「寵物」分類、內容是：阿旺是一隻貓"
-    rows = fake_db.select("knowledge_base", where="category = %s", params=("general_family",))
-    assert len(rows) == 1
-    assert rows[0]["user_id"] is None
+    assert "Robin 與家人背景知識庫" in reply
+    assert "阿旺是一隻貓" in reply
+    assert store.get(1)["category"] == "general_family"
+    assert store.get(1)["row_user_id"] is None
     assert "使用者是 Robin（Owner）" in llm_client.last_prompt
+
+
+def test_handle_save_knowledge_final_confirm_step_saves_when_keyword_typed(fake_db):
+    store = ConversationStateStore()
+    store.set(
+        1,
+        {
+            "flow": "pending_save_knowledge_final_confirm",
+            "category": "custom",
+            "label": "SOP",
+            "content": "補胎流程：先拆輪胎",
+            "row_user_id": 42,
+        },
+    )
+
+    reply = commands.handle_save_knowledge_final_confirm_step(fake_db, store, telegram_user_id=1, text="確認執行")
+
+    assert reply == "已經幫你存到你的個人知識庫囉！「SOP」分類、內容是：補胎流程：先拆輪胎"
+    assert store.get(1) is None
+    rows = fake_db.select("knowledge_base", where="category = %s AND user_id = %s", params=("custom", 42))
+    assert len(rows) == 1
+    assert rows[0]["content"] == "補胎流程：先拆輪胎"
+    assert rows[0]["label"] == "SOP"
+
+
+def test_handle_save_knowledge_final_confirm_step_cancels_on_wrong_text(fake_db):
+    store = ConversationStateStore()
+    store.set(
+        1,
+        {
+            "flow": "pending_save_knowledge_final_confirm",
+            "category": "custom",
+            "label": None,
+            "content": "測試內容",
+            "row_user_id": 42,
+        },
+    )
+
+    reply = commands.handle_save_knowledge_final_confirm_step(fake_db, store, telegram_user_id=1, text="好啊")
+
+    assert reply == "好的，先不儲存這筆資訊！"
+    assert store.get(1) is None
+    assert fake_db.select("knowledge_base") == []
+
+
+def test_handle_save_knowledge_final_confirm_step_rejects_voice_and_keeps_state(fake_db):
+    store = ConversationStateStore()
+    state = {
+        "flow": "pending_save_knowledge_final_confirm",
+        "category": "custom",
+        "label": None,
+        "content": "測試內容",
+        "row_user_id": 42,
+    }
+    store.set(1, state)
+
+    reply = commands.handle_save_knowledge_final_confirm_step(
+        fake_db, store, telegram_user_id=1, text="確認執行", via_voice=True
+    )
+
+    assert "打字" in reply
+    assert store.get(1) == state
+    assert fake_db.select("knowledge_base") == []
 
 
 def test_handle_save_knowledge_confirm_step_cancels_and_writes_nothing(fake_db, monkeypatch):
@@ -230,7 +341,7 @@ def test_start_clean_target_dialog_confirm_owner_includes_shared_knowledge(fake_
     assert "2 筆知識庫資料" in reply
 
 
-def test_handle_clean_target_dialog_confirm_step_deletes_when_confirmed(fake_db):
+def test_handle_clean_target_dialog_confirm_step_moves_to_final_confirm_when_confirmed(fake_db):
     log_id = fake_db.insert(
         "conversation_logs", {"user_id": 1, "role": "user", "content": "范麗芳人很好", "deleted_at": None}
     )
@@ -250,12 +361,74 @@ def test_handle_clean_target_dialog_confirm_step_deletes_when_confirmed(fake_db)
 
     reply = commands.handle_clean_target_dialog_confirm_step(fake_db, llm_client, store, telegram_user_id=1, text="對")
 
+    assert "跟「范麗芳」有關的 1 則對話紀錄與 1 筆知識庫資料" in reply
+    assert "確認執行" in reply
+    assert store.get(1) == {
+        "flow": "pending_clean_target_dialog_final_confirm",
+        "topic": "范麗芳",
+        "log_ids": [log_id],
+        "kb_ids": [kb_id],
+    }
+    remaining_logs = fake_db.select("conversation_logs", where="user_id = %s AND deleted_at IS NULL", params=(1,))
+    assert len(remaining_logs) == 1  # 還沒真的刪除
+    remaining_kb = fake_db.select("knowledge_base", where="category = %s AND user_id = %s", params=("custom", 1))
+    assert len(remaining_kb) == 1
+
+
+def test_handle_clean_target_dialog_final_confirm_step_deletes_when_keyword_typed(fake_db):
+    log_id = fake_db.insert(
+        "conversation_logs", {"user_id": 1, "role": "user", "content": "范麗芳人很好", "deleted_at": None}
+    )
+    kb_id = fake_db.insert("knowledge_base", {"category": "custom", "user_id": 1, "content": "范麗芳的電話"})
+    store = ConversationStateStore()
+    store.set(
+        1,
+        {"flow": "pending_clean_target_dialog_final_confirm", "topic": "范麗芳", "log_ids": [log_id], "kb_ids": [kb_id]},
+    )
+
+    reply = commands.handle_clean_target_dialog_final_confirm_step(
+        fake_db, store, telegram_user_id=1, text="確認執行"
+    )
+
     assert reply == "已經幫你清除跟「范麗芳」有關的 1 則對話紀錄與 1 筆知識庫資料囉！"
     assert store.get(1) is None
     remaining_logs = fake_db.select("conversation_logs", where="user_id = %s AND deleted_at IS NULL", params=(1,))
     assert remaining_logs == []
     remaining_kb = fake_db.select("knowledge_base", where="category = %s AND user_id = %s", params=("custom", 1))
     assert remaining_kb == []
+
+
+def test_handle_clean_target_dialog_final_confirm_step_cancels_on_wrong_text(fake_db):
+    log_id = fake_db.insert(
+        "conversation_logs", {"user_id": 1, "role": "user", "content": "范麗芳人很好", "deleted_at": None}
+    )
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_clean_target_dialog_final_confirm", "topic": "范麗芳", "log_ids": [log_id], "kb_ids": []})
+
+    reply = commands.handle_clean_target_dialog_final_confirm_step(fake_db, store, telegram_user_id=1, text="嗯")
+
+    assert reply == "好的，先不清除，這些資料都還在喔！"
+    assert store.get(1) is None
+    remaining_logs = fake_db.select("conversation_logs", where="user_id = %s AND deleted_at IS NULL", params=(1,))
+    assert len(remaining_logs) == 1
+
+
+def test_handle_clean_target_dialog_final_confirm_step_rejects_voice_and_keeps_state(fake_db):
+    log_id = fake_db.insert(
+        "conversation_logs", {"user_id": 1, "role": "user", "content": "范麗芳人很好", "deleted_at": None}
+    )
+    store = ConversationStateStore()
+    state = {"flow": "pending_clean_target_dialog_final_confirm", "topic": "范麗芳", "log_ids": [log_id], "kb_ids": []}
+    store.set(1, state)
+
+    reply = commands.handle_clean_target_dialog_final_confirm_step(
+        fake_db, store, telegram_user_id=1, text="確認執行", via_voice=True
+    )
+
+    assert "打字" in reply
+    assert store.get(1) == state
+    remaining_logs = fake_db.select("conversation_logs", where="user_id = %s AND deleted_at IS NULL", params=(1,))
+    assert len(remaining_logs) == 1
 
 
 def test_handle_clean_target_dialog_confirm_step_keeps_data_when_cancelled(fake_db):

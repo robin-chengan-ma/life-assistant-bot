@@ -217,6 +217,25 @@ owner: Robin
 
 **狀態**：accepted
 
+### ADR-9：語音的最終執行確認 —— 高風險操作在「語意確認」之後再加一道「逐字打字」硬性關卡（FR-16a）
+
+**背景**：2026-08-02 Robin 問「語音轉成文字後，是重發到 Telegram 確認，還是直接執行動作？」，得知目前是後者（轉出來的文字直接當成使用者輸入送進 `handle_message()`，不會先給使用者看一眼再執行）之後，指出一個具體風險情境：「使用者用語音說執行 A 決策，但 LLM 聽錯了，直接執行 B 決策，然後使用者說你聽錯了，我要的是 A 決策，到這個時候有些決策也來不及回頭補上，像是已刪除某個紀錄」。這點出 ADR-6/ADR-7/ADR-8 已建立的「單次 LLM 呼叫判斷 CONFIRM/CANCEL」機制雖然能擋住「使用者根本沒有表達確認意圖」的誤觸發，但擋不住「語音本身被 Whisper 聽錯」這個更上游的風險——如果聽錯的內容剛好符合 CONFIRM 語意（例如把「不要」聽成「要」），現有機制會照樣放行執行。
+
+**決策**（2026-08-02 Robin 選定「復誦＋最終執行前一定要打字答一次」）：
+1. **適用範圍**：`/clean-all-dialog`（FR-10）、`/clean-target-dialog`（FR-12）、主動記知識（FR-11）這三個涉及刪除/寫入資料庫的高風險 flow，在既有的 `pending_*_confirm` 狀態判定出 `CONFIRM` 之後，**不會馬上執行**，而是轉入新的 `pending_*_final_confirm` 狀態，回覆內容先復誦「即將執行的內容」，再要求使用者用**打字**逐字輸入固定關鍵字「確認執行」才會真正動作。
+2. **語音一律不通過最終確認**：這一步不用 LLM 判斷語意（避免又是一次可能被聽錯內容影響的分類），改成嚴格的逐字比對；`router.handle_message()` 新增 `via_voice: bool` 參數，`handle_voice_message()` 呼叫時固定傳 `True`，`_dispatch_active_flow()` 依此把 `via_voice` 傳給三個 `handle_*_final_confirm_step()`，只要是語音來源，不論轉出來的文字內容為何，一律拒絕且不清除狀態（讓使用者可以直接補一則打字訊息重試，不用整個流程重來）。
+3. **非語音、但沒逐字輸入關鍵字**：一律視為取消（沿用 ADR-6/ADR-7/ADR-8 已建立的「保守優先、猜錯就重來」慣例），不接受「好」「對啊」等寬鬆說法——這一步刻意比第一輪 `pending_*_confirm` 更嚴格，因為這是真正執行前的最後把關。
+4. **`handle_voice_message()` 不清除 `pending_*_final_confirm` 狀態**：既有慣例是新語音訊息一律清除任何未完成的舊流程狀態（避免卡死），但這三個 `_FINAL_CONFIRM_FLOWS` 刻意排除在外——如果比照既有慣例先清除，`handle_message()` 就看不到這個 flow，`via_voice` 檢查永遠不會被觸發，語音訊息會被當成完全無關的新對話處理，使用者會搞不清楚原本在確認的操作到底算不算數。
+5. **權限判斷不重複**：`pending_save_knowledge_confirm`（FR-11）原本就會在判定 CONFIRM 的同時，用 `auth.is_owner()` 強制把非 Owner 的 `category` 改回 `custom`（ADR-8 已建立的「最後一道伺服器端防線」）；這個強制邏輯留在轉入 `pending_save_knowledge_final_confirm` **之前**做完，最終確認狀態裡存的 `category`／`label`／`content`／`row_user_id` 已經是算好的最終值，最終確認步驟本身不重新判斷權限，只單純照著執行。
+
+**理由**：「聽錯」與「聽對但語意分類錯」是兩種不同層次的風險，前者無法靠加強 LLM prompt 解決（模型看到的就是已經轉錯的文字，無從得知原始語音說了什麼），只能靠改變輸入管道本身——要求最後一步必須是打字，從根本排除語音誤聽的可能性。Robin 明確選擇「復誦＋強制打字」而非「只復誦不強制」（後者無法真正防止已執行的動作，只能在事後才讓使用者發現錯誤，为時已晚）或「只有語音觸發才加關卡」（會讓同一支流程在語音/打字兩種情境下行為不一致，複雜度更高）。
+
+**後果**：
+- `src/bot/commands.py`：新增 `_FINAL_EXECUTE_KEYWORD = "確認執行"`；`handle_clean_all_dialog_confirm_step()`／`handle_clean_target_dialog_confirm_step()`／`handle_save_knowledge_confirm_step()` 判定 `CONFIRM` 後改為轉入對應的 `pending_*_final_confirm` 狀態，不再直接執行；新增 `handle_clean_all_dialog_final_confirm_step()`／`handle_clean_target_dialog_final_confirm_step()`／`handle_save_knowledge_final_confirm_step()` 三個函式，皆接受 `via_voice` 參數
+- `src/bot/router.py`：`handle_message()`／`_dispatch_active_flow()` 新增 `via_voice: bool = False` 參數並透傳；新增 `_FINAL_CONFIRM_FLOWS` 常數；`_dispatch_active_flow()` 新增三個 `pending_*_final_confirm` 分派；`handle_voice_message()` 呼叫 `handle_message()` 固定傳 `via_voice=True`，且清除舊流程狀態的邏輯改為排除 `_FINAL_CONFIRM_FLOWS`
+
+**狀態**：accepted
+
 ## 實作計畫
 
 - [x] Step 1（2026-07-31 由 ADR-5 取代）：`submodules/llm/client.py` 曾新增 `generate_with_search(prompt) -> tuple[str, bool]`，現已刪除
@@ -243,6 +262,7 @@ owner: Robin
 - [x] Step 22（2026-08-01，FR-11／ADR-8）：`commands.py` 新增 `handle_save_knowledge_confirm_step()`（內部 LLM 分類＋伺服器端強制 `category`）；`router.py` 新增 `pending_save_knowledge_confirm` 分派
 - [x] Step 23（2026-08-01，FR-12／ADR-8）：`router.py` 新增 `_CLEAN_TARGET_DIALOG_PATTERN`；`commands.py` 新增 `start_clean_target_dialog_confirm()`／`handle_clean_target_dialog_confirm_step()`；`router.py` 新增 `pending_clean_target_dialog_confirm` 分派
 - [x] Step 24（2026-08-01，FR-12）：`tests/bot/conftest.py` 的 `FakeCloudSQLClient` 新增 `delete()`，供 `/clean-target-dialog` 對 `knowledge_base` 硬刪除的測試使用
+- [x] Step 25（2026-08-02，FR-16a／ADR-9）：`commands.py` 三個高風險 flow 的 `CONFIRM` 分支改為轉入 `pending_*_final_confirm` 狀態，新增三個對應的 `handle_*_final_confirm_step()`；`router.py` 新增 `via_voice` 參數與 `_FINAL_CONFIRM_FLOWS`，`_dispatch_active_flow()` 新增三個分派，`handle_voice_message()` 固定傳 `via_voice=True` 且不清除 `_FINAL_CONFIRM_FLOWS` 狀態
 
 ## 測試策略
 
@@ -266,6 +286,9 @@ owner: Robin
 - [x]（2026-08-01，FR-11／ADR-8）`commands.handle_save_knowledge_confirm_step()`：`DECISION=CONFIRM` 才寫入、`CANCEL` 不寫入且回覆固定文案；非 Owner 一律強制 `category="custom"`（即使模型回傳 `general_family` 也會被伺服器端改回，驗證「最後一道防線」）；Owner 可成功寫入 `general_family`
 - [x]（2026-08-01，FR-12／ADR-8）`commands.start_clean_target_dialog_confirm()`：沒有任何候選資料／候選中沒有匹配主題兩種情況分別回覆正確文案且不設定 state；非 Owner 觸發時共用知識庫不會出現在候選（prompt 不含共用資料內容）；Owner 觸發時 `general_family`／`general_persona` 都會納入候選
 - [x]（2026-08-01，FR-12／ADR-8）`commands.handle_clean_target_dialog_confirm_step()`：`CONFIRM` 才真正軟刪除對話紀錄＋硬刪除知識庫、`CANCEL` 保留原資料
+- [x]（2026-08-02，FR-16a／ADR-9）三個 `handle_*_confirm_step()`：`CONFIRM` 後改為轉入 `pending_*_final_confirm` 狀態並回覆含「確認執行」提示，不再馬上執行/寫入
+- [x]（2026-08-02，FR-16a／ADR-9）三個 `handle_*_final_confirm_step()`：逐字輸入「確認執行」才真正執行；打字但文字不符一律取消；`via_voice=True` 一律拒絕且不清除狀態（保留讓使用者補打字重試）
+- [x]（2026-08-02，FR-16a／ADR-9）`router._dispatch_active_flow()` 正確依 `via_voice` 透傳給三個最終確認 handler；`handle_voice_message()` 端到端驗證：卡在 `pending_clean_all_dialog_final_confirm` 時收到新語音訊息（即使轉出來的文字恰好是「確認執行」）不會清除狀態、也不會真的執行刪除
 
 ### E2E Tests
 - [x]（2026-07-31 依 ADR-5 修正）完整流程：使用者問一個知識庫沒有的問題 → 模型誠實回報不知道（`【NOT_FOUND】`標記）→ 附加自行查詢建議 → 使用者提供答案 → 直接寫入 `custom` 知識庫
@@ -288,6 +311,8 @@ owner: Robin
 | （2026-08-01 已開發 FR-11，此風險 resolved）~~目前沒有任何「使用者主動要求，就把資訊寫進知識庫」的機制，使用者可能誤以為講一聲「記住」就會生效~~ | — | — | 見 ADR-8：新增 `pending_save_knowledge_confirm` 反問確認流程，Owner 可寫共用知識庫、非 Owner 限定 `custom` |
 | `/clean-target-dialog`（FR-12）對 `knowledge_base` 採硬刪除，且「哪些候選跟主題相關」交給內部 LLM 判斷，不是規則式 100% 可控——誤判可能刪掉不相關資料，且無法復原 | 中 | 低 | 沿用 ADR-6/ADR-7「猜錯代價 vs 多一輪確認」的一貫取捨：刪除前一定會先反問並列出「N 則對話紀錄、M 筆知識庫資料」讓使用者確認範圍，且任何無法判斷為 `CONFIRM` 的回覆一律視為取消（保守優先）；若之後發現誤刪案例，可再評估加上刪除前的內容預覽 |
 | FR-11 的「共用 vs 個人」寫入範圍判斷雖有伺服器端強制（`auth.is_owner()`），但「該存哪個分類」的初步建議仍由 LLM 判斷，可能建議錯分類（例如該存 `general_family` 卻建議 `custom`） | 低 | 低 | 反問句會明確講出「打算存到哪一種」，使用者可在確認前發現不對並藉由否認/更正修正；即使分類建議錯誤，資料仍會被寫入（只是分類不理想），不是寫入失敗，影響有限 |
+| （2026-08-02 已開發 FR-16a，此風險 resolved）~~語音輸入可能被 Whisper 聽錯，若聽錯內容剛好符合 CONFIRM 語意（例如把「不要」聽成「要」），單靠一次寬鬆的 LLM CONFIRM/CANCEL 分類會照樣放行執行不可逆操作，且事後無法回頭補救~~ | — | — | 見 ADR-9：三個高風險 flow 在判定 CONFIRM 後新增 `pending_*_final_confirm` 狀態，要求逐字打字輸入「確認執行」；語音輸入一律拒絕且不清除狀態 |
+| ADR-9 的最終確認多了一輪來回，即使使用者本來就是打字操作、意圖也很明確，也要多打一次固定關鍵字 | 低 | 低 | 屬於刻意取捨：高風險操作（刪除、寫入知識庫）本來就低頻，多一輪摩擦換取「聽錯就無法復原」風險的徹底排除，Robin 已確認接受這個代價 |
 
 ## 變更記錄
 
@@ -306,3 +331,4 @@ owner: Robin
 | 2026-08-01 | Robin 再回報代名詞指涉 bug：連續問「小雯有養動物嗎」→（中間插入一則不相關問題）→「范麗芳是誰」→「她老公是誰」，Robinson 誤把「她」理解成更早之前提過的小雯，而不是最近一次才明確點名問過的范麗芳；補強 FR-3(e)：明確規定代名詞一律以使用者「最近一次」明確點名的對象為準（即使中間插入其他問題也不可跳回更早之前的人），且只要沒有百分之百把握就必須先反問使用者，不能用可能錯誤的假設硬答 | Claude（依 Robin 回報指示） |
 | 2026-08-01 | Robin 測試又回報四個問題：(1) `/clean-all-dialog` 沒有先確認就直接刪除，補強 FR-10：新增 `commands.start_clean_all_dialog_confirm()`／`handle_clean_all_dialog_confirm_step()`，先告知目前對話紀錄筆數並反問確認，使用者確認（LLM 判定 `CONFIRM`）後才真正執行，任何非確定回覆一律視為取消，保守優先；`router.py` 新增 `pending_clean_all_dialog_confirm` 分派 (2) Robin 請 Robinson 把家庭成員背景新增到知識庫，Robinson 謊稱已新增（實際上沒有對應寫入路徑，目前唯一真的會寫入的管道只有 `pending_user_knowledge` 的 `【SAVE_ANSWER】` 流程），新增 FR-3(g) 誠實性規則，禁止在沒有實際寫入的情況下宣稱已記錄／已新增／已儲存 (3) 新增 `src/migrations/0011_add_family_pets_to_family_knowledge.sql`，寫入阿牛（牛牛，Robin 家的狗）與龜龜（Robin 爸爸養的蘇卡達陸龜）兩筆寵物背景 (4) 問「阿牛是誰」（知識庫當時沒有這筆資料）被誤反問「你是說『吳凱吉』嗎？」，原因是 prompt 反問範例寫死了一個真實家人姓名，模型照抄範例而非真的比對知識庫，修正 CONFIRM_NAME 反問規則要求帶出資料中真實存在且高度相似的人名，沒有相似人名時要走「不知道」規則；全專案 201 個測試全過、覆蓋率 100% | Claude（依 Robin 回報指示） |
 | 2026-08-01 | Robin 指示「主動記知識的功能、/clean-target-dialog API 現在先開發吧」，開發 FR-11（主動新增知識）與 FR-12（`/clean-target-dialog`），新增 ADR-8：(1) 寫入範圍——`general_persona`／`general_family` 只有 Robin（Owner）能編輯，非 Owner 一律只能寫自己的 `custom`，最終 `category` 由 Python 依 `auth.is_owner()` 現場強制、不信任 LLM 判斷（Robin 確認）(2) 刪除範圍——只有 Robin 觸發 `/clean-target-dialog` 才會把共用知識庫納入候選，非 Owner 只能清自己的資料（Robin 確認）(3) 新增 `knowledge_base.label` 欄位供分類/標籤（Robin 確認，`0012_add_label_to_knowledge_base.sql`）(4) 沿用 ADR-6/ADR-7 的「使用者可見反問確認 + 下一輪內部 LLM 呼叫判斷」兩輪架構；`knowledge.py` 新增 `save_knowledge()`，`build_context()`／`get_persona_text()` 改用 `_join_rows()` 支援 Owner 對共用類別追加多筆資料；`chat.py` 新增 `_REQUEST_SAVE_MARKER`／`is_owner` 參數與對應 prompt 規則，並把 FR-3(g) 誠實性規則導向新的反問流程；`commands.py` 新增 `handle_save_knowledge_confirm_step()`、`start_clean_target_dialog_confirm()`／`handle_clean_target_dialog_confirm_step()`；`router.py` 新增 `_CLEAN_TARGET_DIALOG_PATTERN` 與兩個新 flow 分派；`tests/bot/conftest.py` 的 `FakeCloudSQLClient` 新增 `delete()`；全專案 219 個測試全過、覆蓋率 100% | Claude（依 Robin 指示） |
+| 2026-08-02 | Robin 問語音轉文字後是否會先重發確認還是直接執行，得知是直接執行後提出風險情境：「使用者用語音說執行 A 決策，但 LLM 聽錯了，直接執行 B 決策，且已刪除的紀錄無法回頭補上」；提出兩個強化方向請 Robin 選擇，Robin 選定「復誦＋最終執行前一定要打字答一次」，新增 ADR-9（FR-16a）：`/clean-all-dialog`／`/clean-target-dialog`／主動記知識三個高風險 flow 在判定 `CONFIRM` 後不再馬上執行，改為轉入新的 `pending_*_final_confirm` 狀態，要求逐字打字輸入「確認執行」；語音輸入這一步一律拒絕（`router.py` 新增 `via_voice` 參數，`handle_voice_message()` 固定傳 `True`），且刻意不讓語音訊息清除這三個最終確認狀態（新增 `_FINAL_CONFIRM_FLOWS`），避免語音一來就把待確認的操作悄悄清空；`commands.py` 新增三個 `handle_*_final_confirm_step()`；全專案 274 個測試全過、覆蓋率 100% | Claude（依 Robin 選定方向實作） |

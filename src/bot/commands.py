@@ -9,6 +9,24 @@ from src.bot.state import ConversationStateStore
 
 _EXIT_PHRASES = {"沒有了", "結束"}
 
+# 2026-08-02（robinson SPEC.md FR-16a）：所有「會實際刪除/寫入資料」的確認流程，在 LLM 判斷
+# 使用者已經表達 CONFIRM 之後，不會馬上執行，而是多一層更嚴格的把關——要求逐字打字輸入這個
+# 固定關鍵字才算數。背景：Robin 指出語音輸入可能被 Whisper 聽錯（例如把「不要」聽成「要」），
+# 若聽錯的當下剛好命中一次就足以觸發的刪除動作，事後不可能回頭補救；單靠一次寬鬆的 LLM
+# CONFIRM/CANCEL 語意分類撐不住這個風險，所以在「語意上的確認」之後，再加一道「逐字打字」的
+# 硬性關卡，且這一關只接受打字（`via_voice=True` 一律拒絕，見各 `handle_*_final_confirm_step`）。
+_FINAL_EXECUTE_KEYWORD = "確認執行"
+
+
+def _final_execute_prompt_reply(preview: str) -> str:
+    """組出「進入最終確認」這一輪的固定回覆格式，供三個高風險 flow 共用。"""
+    return f"{preview}這個動作沒辦法復原，請直接打字輸入「{_FINAL_EXECUTE_KEYWORD}」來真正執行（這一步語音沒辦法完成）。"
+
+
+def _voice_blocked_final_confirm_reply() -> str:
+    """`pending_*_final_confirm` 狀態下收到語音輸入時的固定拒絕文案（不清除狀態，可直接補打字重試）。"""
+    return f"這一步一定要用打字完成才能執行喔，請直接打字輸入「{_FINAL_EXECUTE_KEYWORD}」！"
+
 
 def handle_rule() -> str:
     """/rule：回傳規範文本，不經過 LLM 生成。"""
@@ -52,15 +70,44 @@ def handle_clean_all_dialog_confirm_step(
     用單次 LLM 呼叫判斷使用者是「確定」還是「取消」（沿用 ADR-6／ADR-7 已建立的單次呼叫＋
     固定標記慣例），避免關鍵字窮舉不了「好啊刪掉吧」「不用了」等各種講法；判斷不出來或任何非
     `CONFIRM` 的回覆一律視為取消，寧可保守也不要誤刪。
+
+    2026-08-02（FR-16a）：這裡判斷出 `CONFIRM` 後**不會馬上刪除**，而是轉入
+    `pending_clean_all_dialog_final_confirm`，見 `handle_clean_all_dialog_final_confirm_step()`。
     """
     state = state_store.get(telegram_user_id)
     user_id = state["target_user_id"]
     state_store.clear(telegram_user_id)
 
     decision = llm_client.generate_text(_CLEAN_ALL_DIALOG_CONFIRM_PROMPT.format(text=text)).strip()
-    if decision == "CONFIRM":
-        return handle_clean_all_dialog(db, user_id)
-    return "好的，先不清除，你的對話紀錄都還在喔！"
+    if decision != "CONFIRM":
+        return "好的，先不清除，你的對話紀錄都還在喔！"
+
+    state_store.set(telegram_user_id, {"flow": "pending_clean_all_dialog_final_confirm", "target_user_id": user_id})
+    return _final_execute_prompt_reply("我理解你要清除所有對話紀錄，")
+
+
+def handle_clean_all_dialog_final_confirm_step(
+    db: CloudSQLClient,
+    state_store: ConversationStateStore,
+    telegram_user_id: int,
+    text: str,
+    via_voice: bool = False,
+) -> str:
+    """處理 `pending_clean_all_dialog_final_confirm` 狀態下的最終執行確認（2026-08-02，FR-16a）。
+
+    語音輸入一律拒絕、不清除狀態（讓使用者可以直接補一則打字訊息重試，不必整個流程重來）；
+    打字但沒有逐字輸入 `_FINAL_EXECUTE_KEYWORD` 一律視為取消，保守優先、不誤刪。
+    """
+    if via_voice:
+        return _voice_blocked_final_confirm_reply()
+
+    state = state_store.get(telegram_user_id)
+    user_id = state["target_user_id"]
+    state_store.clear(telegram_user_id)
+
+    if text.strip() != _FINAL_EXECUTE_KEYWORD:
+        return "好的，先不清除，你的對話紀錄都還在喔！"
+    return handle_clean_all_dialog(db, user_id)
 
 
 def handle_clean_all_dialog(db: CloudSQLClient, user_id: int) -> str:
@@ -131,6 +178,11 @@ def handle_save_knowledge_confirm_step(
     `general_family`／`general_persona`，非 Owner 使用者也會被強制改回 `custom`，這是最後一道
     伺服器端防線，避免任何情況下家人不小心（或被誘導）寫入全家共用的知識庫（依 Robin 決策：
     共用知識庫只有 Owner 能編輯）。
+
+    2026-08-02（FR-16a）：判斷出 `CONFIRM` 後**不會馬上寫入**，權限強制（`category` 改回
+    `custom`）已經在這裡做完，接著轉入 `pending_save_knowledge_final_confirm`，見
+    `handle_save_knowledge_final_confirm_step()`——那一步不會重新判斷權限，只會照搬這裡已經
+    算好的 `category`/`label`/`content`/`row_user_id`。
     """
     state = state_store.get(telegram_user_id)
     target_user_id = state["target_user_id"]
@@ -153,6 +205,46 @@ def handle_save_knowledge_confirm_step(
     label = parsed.get("LABEL") or None
     content = parsed.get("CONTENT") or original_request
     row_user_id = target_user_id if category == "custom" else None
+
+    state_store.set(
+        telegram_user_id,
+        {
+            "flow": "pending_save_knowledge_final_confirm",
+            "category": category,
+            "label": label,
+            "content": content,
+            "row_user_id": row_user_id,
+        },
+    )
+    category_name = _SAVE_KNOWLEDGE_CATEGORY_NAMES[category]
+    label_part = f"「{label}」分類、" if label else ""
+    return _final_execute_prompt_reply(f"我理解你要存到{category_name}，{label_part}內容是：{content}，")
+
+
+def handle_save_knowledge_final_confirm_step(
+    db: CloudSQLClient,
+    state_store: ConversationStateStore,
+    telegram_user_id: int,
+    text: str,
+    via_voice: bool = False,
+) -> str:
+    """處理 `pending_save_knowledge_final_confirm` 狀態下的最終儲存確認（2026-08-02，FR-16a）。
+
+    寫入知識庫雖不像刪除紀錄那樣完全不可逆（事後仍可用 `/clean-target-dialog` 補刪），但錯誤
+    寫入一樣會造成困擾，比照 `handle_clean_all_dialog_final_confirm_step()` 同樣的兩層確認架構。
+    """
+    if via_voice:
+        return _voice_blocked_final_confirm_reply()
+
+    state = state_store.get(telegram_user_id)
+    category = state["category"]
+    label = state["label"]
+    content = state["content"]
+    row_user_id = state["row_user_id"]
+    state_store.clear(telegram_user_id)
+
+    if text.strip() != _FINAL_EXECUTE_KEYWORD:
+        return "好的，先不儲存這筆資訊！"
 
     knowledge.save_knowledge(db, category=category, content=content, label=label, user_id=row_user_id)
 
@@ -258,9 +350,11 @@ def handle_clean_target_dialog_confirm_step(
 ) -> str:
     """處理 `pending_clean_target_dialog_confirm` 狀態下使用者對主題式清除的確認回覆。
 
-    對話紀錄比照 FR-10 軟刪除（`deleted_at`）；知識庫資料則直接硬刪除（`knowledge_base` 沒有
-    軟刪除欄位，且使用者的意圖就是真的移除這筆知識），任何非 `CONFIRM` 的判定結果一律視為取消，
-    保守優先、不誤刪。
+    任何非 `CONFIRM` 的判定結果一律視為取消，保守優先、不誤刪。
+
+    2026-08-02（FR-16a）：判斷出 `CONFIRM` 後**不會馬上刪除**，轉入
+    `pending_clean_target_dialog_final_confirm`，真正的軟刪除／硬刪除動作留給
+    `handle_clean_target_dialog_final_confirm_step()` 執行。
     """
     state = state_store.get(telegram_user_id)
     topic = state["topic"]
@@ -270,6 +364,44 @@ def handle_clean_target_dialog_confirm_step(
 
     decision = llm_client.generate_text(_CLEAN_TARGET_CONFIRM_PROMPT.format(topic=topic, reply=text)).strip()
     if decision != "CONFIRM":
+        return "好的，先不清除，這些資料都還在喔！"
+
+    state_store.set(
+        telegram_user_id,
+        {
+            "flow": "pending_clean_target_dialog_final_confirm",
+            "topic": topic,
+            "log_ids": log_ids,
+            "kb_ids": kb_ids,
+        },
+    )
+    return _final_execute_prompt_reply(
+        f"我理解你要清除跟「{topic}」有關的 {len(log_ids)} 則對話紀錄與 {len(kb_ids)} 筆知識庫資料，"
+    )
+
+
+def handle_clean_target_dialog_final_confirm_step(
+    db: CloudSQLClient,
+    state_store: ConversationStateStore,
+    telegram_user_id: int,
+    text: str,
+    via_voice: bool = False,
+) -> str:
+    """處理 `pending_clean_target_dialog_final_confirm` 狀態下的最終執行確認（2026-08-02，FR-16a）。
+
+    對話紀錄比照 FR-10 軟刪除（`deleted_at`）；知識庫資料則直接硬刪除。語音輸入一律拒絕、不清除
+    狀態；打字但沒有逐字輸入 `_FINAL_EXECUTE_KEYWORD` 一律視為取消。
+    """
+    if via_voice:
+        return _voice_blocked_final_confirm_reply()
+
+    state = state_store.get(telegram_user_id)
+    topic = state["topic"]
+    log_ids = state["log_ids"]
+    kb_ids = state["kb_ids"]
+    state_store.clear(telegram_user_id)
+
+    if text.strip() != _FINAL_EXECUTE_KEYWORD:
         return "好的，先不清除，這些資料都還在喔！"
 
     now = datetime.now(timezone.utc)

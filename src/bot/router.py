@@ -25,6 +25,14 @@ _CLEAN_TARGET_DIALOG_PATTERN = re.compile(
     r"^(?:/clean-target-dialog\s+(?P<topic1>.+)|我想刪除有關(?P<topic2>.+)的紀錄)$"
 )
 
+# 2026-08-02（FR-16a）：這幾個「最終執行確認」狀態是唯二不能被新語音訊息直接覆蓋清除的 flow，
+# 見 handle_voice_message() 內的說明。
+_FINAL_CONFIRM_FLOWS = {
+    "pending_clean_all_dialog_final_confirm",
+    "pending_clean_target_dialog_final_confirm",
+    "pending_save_knowledge_final_confirm",
+}
+
 
 def handle_message(
     db: CloudSQLClient,
@@ -34,6 +42,7 @@ def handle_message(
     llm_client=None,
     text_llm_client=None,
     image_llm_clients: list | None = None,
+    via_voice: bool = False,
 ) -> str:
     """處理一則來自 Telegram 的文字訊息，回傳要回覆的文字。
 
@@ -43,6 +52,11 @@ def handle_message(
     （`GEMINI_API_IMAGE_KEY1`/`KEY2`，見 robinson SPEC.md ADR-13）只有在使用者處於圖片辨識反問
     澄清流程（`pending_image_confirm`）時才會用到，其餘指令/對話流程分支都不需要；正式環境一律由
     webhook.py 注入，這裡預設 None 只是為了讓不涉及該流程的既有測試不用逐一補上假的 LLM Client。
+
+    `via_voice`（2026-08-02，robinson SPEC.md FR-16a）：這則文字是不是語音轉出來的——由
+    `handle_voice_message()` 呼叫這裡時固定傳 `True`，webhook.py 處理一般文字訊息時維持預設的
+    `False`。只有 `pending_*_final_confirm` 這幾個「最終執行確認」狀態會用到，見
+    `_dispatch_active_flow()`；其餘分支不受影響。
     """
     text = (text or "").strip()
     is_owner = auth.is_owner(telegram_user_id)
@@ -52,7 +66,7 @@ def handle_message(
         if state is not None:
             return _dispatch_active_flow(
                 db, state_store, telegram_user_id, text, state,
-                llm_client, text_llm_client, image_llm_clients,
+                llm_client, text_llm_client, image_llm_clients, via_voice,
             )
 
         if text in _SET_INVITE_CODES_TRIGGERS:
@@ -79,7 +93,7 @@ def handle_message(
         if state is not None:
             return _dispatch_active_flow(
                 db, state_store, telegram_user_id, text, state,
-                llm_client, text_llm_client, image_llm_clients,
+                llm_client, text_llm_client, image_llm_clients, via_voice,
             )
 
         user_id = user["id"]
@@ -176,6 +190,11 @@ def handle_voice_message(
     另外走一套獨立流程，而是直接當成使用者「打字輸入」，呼叫既有的 `handle_message()`
     走完整的指令/pending flow/一般聊天分派——這是 Step 1.4 刻意的架構選擇：語音只負責
     「變成文字」，「文字要怎麼處理」全部復用既有邏輯，不重複。
+
+    2026-08-02（FR-16a）：`via_voice=True` 會一路帶進 `handle_message()`。但如果目前卡在
+    `_FINAL_CONFIRM_FLOWS` 這幾個「最終執行確認」狀態，**刻意不比照下面清除舊流程的慣例**——
+    要是先清掉，`handle_message()` 就看不到這個 flow，via_voice 檢查也永遠不會被觸發，語音
+    訊息就會被當成完全無關的新對話處理，使用者會搞不清楚原本在確認的操作到底算不算數。
     """
     user = _get_identified_user(db, telegram_user_id)
     if user is None:
@@ -186,17 +205,21 @@ def handle_voice_message(
     if voice.is_within_correction_window(db, user["id"]):
         return _VOICE_CORRECTION_WINDOW_REPLY
 
-    # 比照 handle_photo_message：新語音訊息直接覆蓋任何未完成的舊流程狀態，避免卡死。
-    state_store.clear(telegram_user_id)
+    current_state = state_store.get(telegram_user_id)
+    if current_state is None or current_state.get("flow") not in _FINAL_CONFIRM_FLOWS:
+        # 比照 handle_photo_message：新語音訊息直接覆蓋任何未完成的舊流程狀態，避免卡死。
+        state_store.clear(telegram_user_id)
 
     voice_bytes = telegram_client.get_file_bytes(file_id)
     transcribed_text = voice.transcribe_and_upload(
         db, gdrive_client, voice_client, user["id"], user["role"], voice_bytes, mime_type=mime_type
     )
 
+    # via_voice=True（FR-16a）：讓 pending_*_final_confirm 這幾個最終執行確認狀態能認出這則訊息
+    # 是語音轉出來的，一律拒絕、不允許用語音完成最後一步。
     return handle_message(
         db, state_store, telegram_user_id, transcribed_text,
-        llm_client=llm_client, text_llm_client=text_llm_client,
+        llm_client=llm_client, text_llm_client=text_llm_client, via_voice=True,
     )
 
 
@@ -209,6 +232,7 @@ def _dispatch_active_flow(
     llm_client=None,
     text_llm_client=None,
     image_llm_clients: list | None = None,
+    via_voice: bool = False,
 ) -> str:
     """依進行中對話流程的 `flow` 標記分派到對應處理函式（見各 flow 對應 spec 的 ADR）。"""
     flow = state.get("flow")
@@ -230,12 +254,25 @@ def _dispatch_active_flow(
     if flow == "pending_image_confirm":
         return image.handle_image_confirm_step(image_llm_clients, state_store, telegram_user_id, text)
     if flow == "pending_clean_all_dialog_confirm":
-        # 2026-08-01：/clean-all-dialog 先反問確認，這一輪由使用者的回覆判斷要不要真的執行刪除。
+        # 2026-08-01：/clean-all-dialog 先反問確認，這一輪由使用者的回覆判斷要不要進入最終確認。
         return commands.handle_clean_all_dialog_confirm_step(db, llm_client, state_store, telegram_user_id, text)
+    if flow == "pending_clean_all_dialog_final_confirm":
+        # 2026-08-02（FR-16a）：最終執行確認，只接受打字逐字輸入固定關鍵字，語音一律拒絕。
+        return commands.handle_clean_all_dialog_final_confirm_step(
+            db, state_store, telegram_user_id, text, via_voice
+        )
     if flow == "pending_save_knowledge_confirm":
         # 2026-08-01（FR-11）：主動新增知識先反問確認，這一輪判斷確定/取消並整理出分類與內容。
         return commands.handle_save_knowledge_confirm_step(db, llm_client, state_store, telegram_user_id, text)
+    if flow == "pending_save_knowledge_final_confirm":
+        # 2026-08-02（FR-16a）：最終儲存確認，只接受打字逐字輸入固定關鍵字，語音一律拒絕。
+        return commands.handle_save_knowledge_final_confirm_step(db, state_store, telegram_user_id, text, via_voice)
     if flow == "pending_clean_target_dialog_confirm":
-        # 2026-08-01（FR-12）：主題式清除先反問確認，這一輪判斷確定/取消並真正執行刪除。
+        # 2026-08-01（FR-12）：主題式清除先反問確認，這一輪判斷確定/取消並進入最終確認。
         return commands.handle_clean_target_dialog_confirm_step(db, llm_client, state_store, telegram_user_id, text)
+    if flow == "pending_clean_target_dialog_final_confirm":
+        # 2026-08-02（FR-16a）：最終執行確認，只接受打字逐字輸入固定關鍵字，語音一律拒絕。
+        return commands.handle_clean_target_dialog_final_confirm_step(
+            db, state_store, telegram_user_id, text, via_voice
+        )
     return commands.handle_toggle_step(db, state_store, telegram_user_id, text)

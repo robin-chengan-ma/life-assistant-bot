@@ -393,7 +393,8 @@ def test_known_family_member_triggering_clean_all_dialog_only_asks_for_confirmat
     assert len(logs) == 2  # 還沒真的刪除
 
 
-def test_clean_all_dialog_confirm_flow_deletes_when_user_confirms(fake_db, monkeypatch):
+def test_clean_all_dialog_confirm_flow_moves_to_final_confirm_when_user_confirms(fake_db, monkeypatch):
+    # 2026-08-02（FR-16a）：第一輪 CONFIRM 只會進入最終確認狀態，不會馬上刪除。
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     fake_db.insert("conversation_logs", {"user_id": user_id, "role": "user", "content": "早安", "deleted_at": None})
@@ -403,10 +404,41 @@ def test_clean_all_dialog_confirm_flow_deletes_when_user_confirms(fake_db, monke
 
     reply = router.handle_message(fake_db, store, FAMILY_ID, "對，刪掉吧", llm_client=llm_client)
 
+    assert "確認執行" in reply
+    assert store.get(FAMILY_ID) == {"flow": "pending_clean_all_dialog_final_confirm", "target_user_id": user_id}
+    logs = fake_db.select("conversation_logs", where="user_id = %s AND deleted_at IS NULL", params=(user_id,))
+    assert len(logs) == 1
+
+
+def test_clean_all_dialog_final_confirm_flow_deletes_when_typed_keyword(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    fake_db.insert("conversation_logs", {"user_id": user_id, "role": "user", "content": "早安", "deleted_at": None})
+    store = ConversationStateStore()
+    store.set(FAMILY_ID, {"flow": "pending_clean_all_dialog_final_confirm", "target_user_id": user_id})
+
+    reply = router.handle_message(fake_db, store, FAMILY_ID, "確認執行")
+
     assert reply == "已經幫你清除所有對話紀錄囉！你的知識庫內容不會受影響。"
     assert store.get(FAMILY_ID) is None
     logs = fake_db.select("conversation_logs", where="user_id = %s AND deleted_at IS NULL", params=(user_id,))
     assert logs == []
+
+
+def test_clean_all_dialog_final_confirm_flow_rejects_voice_sourced_reply(fake_db, monkeypatch):
+    # 語音轉出來的文字即使剛好是「確認執行」也不能通過最終確認，避免語音聽錯就誤刪不可逆的資料。
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    fake_db.insert("conversation_logs", {"user_id": user_id, "role": "user", "content": "早安", "deleted_at": None})
+    store = ConversationStateStore()
+    store.set(FAMILY_ID, {"flow": "pending_clean_all_dialog_final_confirm", "target_user_id": user_id})
+
+    reply = router.handle_message(fake_db, store, FAMILY_ID, "確認執行", via_voice=True)
+
+    assert "打字" in reply
+    assert store.get(FAMILY_ID) == {"flow": "pending_clean_all_dialog_final_confirm", "target_user_id": user_id}
+    logs = fake_db.select("conversation_logs", where="user_id = %s AND deleted_at IS NULL", params=(user_id,))
+    assert len(logs) == 1
 
 
 def test_clean_all_dialog_confirm_flow_keeps_logs_when_user_cancels(fake_db, monkeypatch):
@@ -425,8 +457,9 @@ def test_clean_all_dialog_confirm_flow_keeps_logs_when_user_cancels(fake_db, mon
     assert len(logs) == 1
 
 
-def test_pending_save_knowledge_confirm_flow_dispatches_via_router(fake_db, monkeypatch):
-    # 2026-08-01（FR-11）：主動新增知識反問確認後，下一輪要正確分派到 commands 執行寫入。
+def test_pending_save_knowledge_confirm_flow_moves_to_final_confirm_via_router(fake_db, monkeypatch):
+    # 2026-08-01（FR-11）：主動新增知識反問確認後，下一輪要正確分派到 commands。
+    # 2026-08-02（FR-16a）：CONFIRM 後改為先進入最終確認，不會馬上寫入。
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     store = ConversationStateStore()
@@ -438,7 +471,13 @@ def test_pending_save_knowledge_confirm_flow_dispatches_via_router(fake_db, monk
 
     reply = router.handle_message(fake_db, store, FAMILY_ID, "對", llm_client=llm_client)
 
-    assert "已經幫你存到你的個人知識庫囉" in reply
+    assert "確認執行" in reply
+    assert store.get(FAMILY_ID)["flow"] == "pending_save_knowledge_final_confirm"
+    assert fake_db.select("knowledge_base") == []
+
+    final_reply = router.handle_message(fake_db, store, FAMILY_ID, "確認執行")
+
+    assert "已經幫你存到你的個人知識庫囉" in final_reply
     assert store.get(FAMILY_ID) is None
     rows = fake_db.select("knowledge_base", where="category = %s AND user_id = %s", params=("custom", user_id))
     assert len(rows) == 1
@@ -474,7 +513,8 @@ def test_owner_can_trigger_clean_target_dialog_via_slash_command_with_topic(fake
     assert "跟「范麗芳」有關" in reply
 
 
-def test_clean_target_dialog_confirm_flow_deletes_when_user_confirms(fake_db, monkeypatch):
+def test_clean_target_dialog_confirm_flow_deletes_after_typed_final_confirm(fake_db, monkeypatch):
+    # 2026-08-02（FR-16a）：CONFIRM 後先進入最終確認，要再打字輸入「確認執行」才會真的刪除。
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     log_id = fake_db.insert(
@@ -495,7 +535,14 @@ def test_clean_target_dialog_confirm_flow_deletes_when_user_confirms(fake_db, mo
 
     reply = router.handle_message(fake_db, store, FAMILY_ID, "對，刪掉吧", llm_client=llm_client)
 
-    assert "已經幫你清除跟「范麗芳」有關的" in reply
+    assert "確認執行" in reply
+    assert store.get(FAMILY_ID)["flow"] == "pending_clean_target_dialog_final_confirm"
+    logs = fake_db.select("conversation_logs", where="user_id = %s AND deleted_at IS NULL", params=(user_id,))
+    assert len(logs) == 1  # 還沒真的刪除
+
+    final_reply = router.handle_message(fake_db, store, FAMILY_ID, "確認執行")
+
+    assert "已經幫你清除跟「范麗芳」有關的" in final_reply
     assert store.get(FAMILY_ID) is None
     logs = fake_db.select("conversation_logs", where="user_id = %s AND deleted_at IS NULL", params=(user_id,))
     assert logs == []
@@ -775,3 +822,28 @@ def test_handle_voice_message_clears_stale_pending_flow_first(fake_db, monkeypat
 
     assert reply == templates.APPENDIX_A_TEXT
     assert store.get(FAMILY_ID) is None
+
+
+def test_handle_voice_message_cannot_complete_final_confirm_even_if_transcribed_text_matches_keyword(
+    fake_db, monkeypatch
+):
+    # 2026-08-02（FR-16a）端到端驗證：使用者卡在「清除所有對話紀錄」的最終確認狀態時，即使
+    # 這次語音剛好被 Whisper 轉成跟關鍵字一字不差的「確認執行」，也絕對不能真的執行刪除——
+    # handle_voice_message() 呼叫 handle_message() 時固定帶 via_voice=True，會在
+    # commands.handle_clean_all_dialog_final_confirm_step() 被擋下。
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    fake_db.insert("conversation_logs", {"user_id": user_id, "role": "user", "content": "早安", "deleted_at": None})
+    store = ConversationStateStore()
+    store.set(FAMILY_ID, {"flow": "pending_clean_all_dialog_final_confirm", "target_user_id": user_id})
+    voice_client = _FakeVoiceClient(response_text="確認執行")
+
+    reply = router.handle_voice_message(
+        fake_db, store, FAMILY_ID, "voice123", 30,
+        _FakeTelegramClient(b"raw-ogg"), _FakeGDriveClient(), voice_client,
+    )
+
+    assert "打字" in reply
+    assert store.get(FAMILY_ID) == {"flow": "pending_clean_all_dialog_final_confirm", "target_user_id": user_id}
+    logs = fake_db.select("conversation_logs", where="user_id = %s AND deleted_at IS NULL", params=(user_id,))
+    assert len(logs) == 1
