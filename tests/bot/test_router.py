@@ -824,26 +824,59 @@ def test_handle_voice_message_clears_stale_pending_flow_first(fake_db, monkeypat
     assert store.get(FAMILY_ID) is None
 
 
-def test_handle_voice_message_cannot_complete_final_confirm_even_if_transcribed_text_matches_keyword(
+def test_handle_voice_message_short_circuits_final_confirm_without_downloading_or_transcribing(
     fake_db, monkeypatch
 ):
-    # 2026-08-02（FR-16a）端到端驗證：使用者卡在「清除所有對話紀錄」的最終確認狀態時，即使
-    # 這次語音剛好被 Whisper 轉成跟關鍵字一字不差的「確認執行」，也絕對不能真的執行刪除——
-    # handle_voice_message() 呼叫 handle_message() 時固定帶 via_voice=True，會在
-    # commands.handle_clean_all_dialog_final_confirm_step() 被擋下。
+    # 2026-08-02（FR-16a 追加優化）端到端驗證：使用者卡在「清除所有對話紀錄」的最終確認狀態時，
+    # 新語音一定會被拒絕，所以在下載/轉錄之前就直接短路回覆——即使這次語音「內容」剛好會被
+    # Whisper 轉成跟關鍵字一字不差的「確認執行」也不重要，因為根本不會走到轉錄這一步；
+    # 比照 FR-14/FR-15「先擋才不浪費額度」原則，不該為了一個註定被拒絕的結果還先花 Drive/Groq 額度。
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     fake_db.insert("conversation_logs", {"user_id": user_id, "role": "user", "content": "早安", "deleted_at": None})
     store = ConversationStateStore()
     store.set(FAMILY_ID, {"flow": "pending_clean_all_dialog_final_confirm", "target_user_id": user_id})
+    telegram_client = _FakeTelegramClient(b"raw-ogg")
     voice_client = _FakeVoiceClient(response_text="確認執行")
 
     reply = router.handle_voice_message(
         fake_db, store, FAMILY_ID, "voice123", 30,
-        _FakeTelegramClient(b"raw-ogg"), _FakeGDriveClient(), voice_client,
+        telegram_client, _FakeGDriveClient(), voice_client,
     )
 
     assert "打字" in reply
     assert store.get(FAMILY_ID) == {"flow": "pending_clean_all_dialog_final_confirm", "target_user_id": user_id}
+    # 完全沒有下載、上傳、轉錄——不是「轉錄完才拒絕」，是「連轉錄都沒發生」。
+    assert telegram_client.last_file_id is None
+    assert voice_client.last_audio_bytes is None
+    assert fake_db.select("media_uploads") == []
     logs = fake_db.select("conversation_logs", where="user_id = %s AND deleted_at IS NULL", params=(user_id,))
     assert len(logs) == 1
+
+
+def test_handle_voice_message_short_circuits_final_confirm_even_within_correction_window(fake_db, monkeypatch):
+    # 最終確認狀態的短路檢查排在 FR-15 修正窗口檢查之前，兩者都會拒絕，但要驗證的是回覆內容
+    # 正確對應到最終確認的拒絕文案（而不是被 FR-15 的「15 分鐘內麻煩先用打字」蓋過去）。
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    fake_db.insert(
+        "media_uploads",
+        {
+            "user_id": user_id,
+            "media_type": "audio",
+            "gdrive_url": "https://drive/prev",
+            "created_at": datetime.now(timezone.utc),
+        },
+    )
+    store = ConversationStateStore()
+    store.set(FAMILY_ID, {"flow": "pending_save_knowledge_final_confirm", "category": "custom", "label": None, "content": "x", "row_user_id": user_id})
+    telegram_client = _FakeTelegramClient(b"raw-ogg")
+
+    reply = router.handle_voice_message(
+        fake_db, store, FAMILY_ID, "voice123", 30,
+        telegram_client, _FakeGDriveClient(), _FakeVoiceClient(),
+    )
+
+    assert "打字" in reply
+    assert reply != router._VOICE_CORRECTION_WINDOW_REPLY
+    assert telegram_client.last_file_id is None

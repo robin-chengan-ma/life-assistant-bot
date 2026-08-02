@@ -191,32 +191,37 @@ def handle_voice_message(
     走完整的指令/pending flow/一般聊天分派——這是 Step 1.4 刻意的架構選擇：語音只負責
     「變成文字」，「文字要怎麼處理」全部復用既有邏輯，不重複。
 
-    2026-08-02（FR-16a）：`via_voice=True` 會一路帶進 `handle_message()`。但如果目前卡在
-    `_FINAL_CONFIRM_FLOWS` 這幾個「最終執行確認」狀態，**刻意不比照下面清除舊流程的慣例**——
-    要是先清掉，`handle_message()` 就看不到這個 flow，via_voice 檢查也永遠不會被觸發，語音
-    訊息就會被當成完全無關的新對話處理，使用者會搞不清楚原本在確認的操作到底算不算數。
+    2026-08-02（FR-16a）：如果目前卡在 `_FINAL_CONFIRM_FLOWS` 這幾個「最終執行確認」狀態，
+    語音一定會被拒絕（這一步只接受打字），所以**在下載/轉錄之前就直接短路回覆**，比照
+    FR-14/FR-15「先擋才不浪費額度」的一貫原則——沒必要為了一個註定被拒絕的結果，還是先花一次
+    Drive 上傳＋Groq 轉錄的額度。這裡也刻意不清除該狀態，讓使用者可以直接補一則打字訊息完成
+    最終確認，不用整個流程重來。
     """
     user = _get_identified_user(db, telegram_user_id)
     if user is None:
         return _NOT_BOUND_REPLY
+
+    current_state = state_store.get(telegram_user_id)
+    if current_state is not None and current_state.get("flow") in _FINAL_CONFIRM_FLOWS:
+        # 這幾個 flow 的 `handle_*_final_confirm_step()` 收到 `via_voice=True` 時完全不會用到
+        # `text` 內容（見 commands.py），這裡帶空字串即可，不需要真的轉出語音內容。
+        return handle_message(db, state_store, telegram_user_id, "", via_voice=True)
 
     if voice.exceeds_duration_limit(duration_seconds):
         return _VOICE_DURATION_LIMIT_REPLY
     if voice.is_within_correction_window(db, user["id"]):
         return _VOICE_CORRECTION_WINDOW_REPLY
 
-    current_state = state_store.get(telegram_user_id)
-    if current_state is None or current_state.get("flow") not in _FINAL_CONFIRM_FLOWS:
-        # 比照 handle_photo_message：新語音訊息直接覆蓋任何未完成的舊流程狀態，避免卡死。
-        state_store.clear(telegram_user_id)
+    # 比照 handle_photo_message：新語音訊息直接覆蓋任何未完成的舊流程狀態，避免卡死。
+    state_store.clear(telegram_user_id)
 
     voice_bytes = telegram_client.get_file_bytes(file_id)
     transcribed_text = voice.transcribe_and_upload(
         db, gdrive_client, voice_client, user["id"], user["role"], voice_bytes, mime_type=mime_type
     )
 
-    # via_voice=True（FR-16a）：讓 pending_*_final_confirm 這幾個最終執行確認狀態能認出這則訊息
-    # 是語音轉出來的，一律拒絕、不允許用語音完成最後一步。
+    # via_voice=True（FR-16a）：讓其餘一般聊天/指令分派也能識別這則訊息是語音轉出來的（目前只有
+    # pending_*_final_confirm 這幾個 flow 會用到，其餘分支不受影響）。
     return handle_message(
         db, state_store, telegram_user_id, transcribed_text,
         llm_client=llm_client, text_llm_client=text_llm_client, via_voice=True,

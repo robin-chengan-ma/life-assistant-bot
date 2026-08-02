@@ -104,6 +104,7 @@ updated: 2026-08-01
 | 2026-08-01 | **Phase 1 Step 1.4 完成**：語音轉文字流程，FR-14／FR-15 全數完成；新增 `submodules/voice/`（`VoiceClient`，`requests` 直打 Groq Whisper OpenAI 相容 REST API，見 submodules-core SPEC.md ADR-9）、`src/bot/voice.py`（10 分鐘上限／15 分鐘修正窗口檢查、上傳 Drive＋轉文字）；架構決策：轉出來的文字直接呼叫既有 `router.handle_message()` 走完整文字流程，不重複指令/對話流程分派邏輯；`src/bot/media.py` 從 `image.py` 抽出共用的 `save_media_upload()`；全專案 252 個測試全過、`src/bot/`／`submodules/llm`／`submodules/voice` 覆蓋率 100% |
 | 2026-08-01 | **Step 1.4 追加修正**：Robin 回報「除了照片和音檔外的檔案格式才無效」，發現 Step 1.4 完成當下只處理了 `message.voice`（錄音鍵語音訊息），漏了 `message.audio`（使用者上傳的音檔，如 MP3）——FR-17 原文早就承諾「圖片與音檔兩種檔案類型」都支援，這是範圍沒抓對，不是新功能；修正 `webhook._extract_voice()` 同時偵測 `voice`／`audio` 並透傳 `mime_type`，新增 `voice._infer_extension()` 依實際格式決定 Drive 副檔名與 Groq 轉錄格式，避免把上傳的 MP3/M4A/WAV 誤標成 `.ogg`；全專案 262 個測試全過、`src/bot/`／`submodules/llm`／`submodules/voice` 覆蓋率 100% |
 | 2026-08-02 | **新增 FR-16a（語音最終執行確認）**：Robin 問語音轉文字後是直接執行還是會先確認，得知是直接執行後，提出風險情境「語音說 A 決策被聽錯成 B 決策，且已刪除的紀錄無法回頭補上」；選定「復誦＋最終執行前一定要打字答一次」方向，`/clean-all-dialog`／`/clean-target-dialog`／主動記知識三個高風險 flow 新增 `pending_*_final_confirm` 狀態，判定 `CONFIRM` 後不再馬上執行，改為要求逐字打字輸入「確認執行」；語音輸入這一步一律拒絕且不清除狀態，詳見 [chat-core SPEC.md](../chat-core/SPEC.md) ADR-9；全專案 274 個測試全過、覆蓋率 100% |
+| 2026-08-02 | **FR-16a 追加優化**：Robin 追問卡在最終確認狀態時收到新語音會如何處理，發現初版是先下載/轉錄才拒絕，浪費 Drive/Groq 額度，確認補上；`handle_voice_message()` 改為在下載/轉錄之前就短路拒絕，完全不消耗額度；全專案 275 個測試全過、覆蓋率 100% |
 
 ## 待決事項
 
