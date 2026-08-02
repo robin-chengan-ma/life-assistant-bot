@@ -276,8 +276,8 @@ COMMENT ON COLUMN media_uploads.created_at IS '上傳時間';
 ### todos
 
 **建立日期**：2026-08-02
-**用途**：待辦事項，對應 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) FR-31／FR-31a／FR-32（Step 1.7）。
-**Migration 檔案**：`src/migrations/0013_create_todos_table.sql`
+**用途**：待辦事項，對應 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) FR-31／FR-31a／FR-31b／FR-32（Step 1.7；FR-31b 為 2026-08-02 追加的區間待辦支援）。
+**Migration 檔案**：`src/migrations/0013_create_todos_table.sql`（建表）、`src/migrations/0016_add_start_at_to_todos.sql`（新增 `start_at`，FR-31b）
 
 ```sql
 CREATE TABLE todos (
@@ -289,22 +289,24 @@ CREATE TABLE todos (
     status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'completed', 'cancelled', 'expired')),
     reminded_30min_sent_at TIMESTAMPTZ,
     daily_pushed_on DATE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    start_at TIMESTAMPTZ
 );
 
 CREATE INDEX idx_todos_user_id_status ON todos (user_id, status);
 CREATE INDEX idx_todos_due_at ON todos (due_at);
 
-COMMENT ON TABLE todos IS '待辦事項表：對應 FR-31／FR-31a／FR-32，使用者以自然語言描述的待辦事項';
+COMMENT ON TABLE todos IS '待辦事項表：對應 FR-31／FR-31a／FR-31b／FR-32，使用者以自然語言描述的待辦事項';
 COMMENT ON COLUMN todos.id IS '內部主鍵';
 COMMENT ON COLUMN todos.user_id IS '所屬使用者，對應 users.id';
 COMMENT ON COLUMN todos.content IS '待辦事項內容摘要（由 LLM 從使用者自然語言描述中萃取）';
-COMMENT ON COLUMN todos.due_at IS '預定執行時間，由 LLM 依對話內容與伺服器當下日期換算成絕對時間';
+COMMENT ON COLUMN todos.due_at IS '預定執行時間，由 LLM 依對話內容與伺服器當下日期換算成絕對時間；FR-31b 的區間待辦時代表區間的結束/截止時間';
 COMMENT ON COLUMN todos.remind_before_30min IS '使用者記錄當下是否選擇要在預定時間前 30 分鐘收到提醒（FR-32）';
 COMMENT ON COLUMN todos.status IS '狀態：pending=待處理, completed=使用者確認已完成, cancelled=使用者確認取消, expired=已超過預定時間仍未處理而自動標記（FR-31a）';
 COMMENT ON COLUMN todos.reminded_30min_sent_at IS '「預定時間前 30 分鐘提醒」實際送出的時間戳記；非 NULL 代表已經推播過，避免同一則提醒被重複推播多次';
 COMMENT ON COLUMN todos.daily_pushed_on IS '「每日 08:00 固定推播」最後一次把這筆待辦包含在推播內容裡的日期；避免同一天內因排程重複觸發而被重複推播';
 COMMENT ON COLUMN todos.created_at IS '這筆待辦事項建立的時間';
+COMMENT ON COLUMN todos.start_at IS '區間待辦事項的起始時間（FR-31b）；NULL 代表這是單一時間點待辦（沿用原本 due_at 語意），非 NULL 時 due_at 代表區間的結束/截止時間';
 ```
 
 **設計理由**：
@@ -312,6 +314,7 @@ COMMENT ON COLUMN todos.created_at IS '這筆待辦事項建立的時間';
 - `reminded_30min_sent_at`／`daily_pushed_on` 兩個欄位都是「去重記號」：整個推播機制沒有獨立的排程系統，是借用 `/healthz` 既有的 10 分鐘 cron 頻率（比照 Step 1.6 `NeonCapacityMonitor` 的做法），若不記錄「這則提醒是否已經送過」，同一筆待辦在期限前 30 分鐘的視窗內會被重複推播多次；選擇存在 DB（而非記憶體狀態）是因為 Render 免費方案可能不定期重啟，記憶體狀態重啟就會遺失，但待辦提醒的正確性比 Step 1.6 的容量告警更重要，值得多花一個欄位換取跨重啟的持久性
 - 兩個索引分別對應「查某人目前待處理清單」（`user_id, status`）與「掃描所有使用者裡快到期/逾期的待辦」（`due_at`，推播與逾期標記都會用到）
 - FR-31 提到的跨模組歧義判斷（例如「打籃球」要反問記到體態管理還是待辦事項）Phase 1 暫不實作，目前沒有其他已完成的模組可以比較（體態管理是 Phase 2、心情小記 Step 1.8 也還沒做），待那些模組做出來後再回頭補上，schema 本身不受影響
+- **`start_at`（2026-08-02，FR-31b）**：Robin 詢問「待辦事項是不是只能存單一時間點，不能存像『8/2 08:00～8/5 17:00』這種區間」後新增。選擇用「額外的可選欄位」而不是把 `due_at` 整個改成必填的 `start_at`/`end_at` 兩欄，是為了讓既有單一時間點待辦的 schema 與程式邏輯完全不受影響（`start_at` 是 NULL）、只有真的描述成區間時才會兩個欄位都有值，屬於最小改動；相應地，「前 30 分鐘提醒」的判斷基準改用 `COALESCE(start_at, due_at)`（區間以開始時間為準、單一時間點仍以到期時間為準），「每日 08:00 摘要」改為同時檢查 `due_at`／`start_at` 落在今天的情況，且去重條件從「`daily_pushed_on IS NULL`（曾經推播過就不再推播）」放寬為「`daily_pushed_on IS NULL OR daily_pushed_on != 今天`（只看今天有沒有推播過）」，讓區間待辦可以在開始日、結束日分別各推播一次；沒有另外加索引（`idx_todos_due_at` 沿用即可），因為這是個人使用的生活小助手，`todos` 資料量不會大到需要額外複合索引
 
 ---
 

@@ -631,24 +631,31 @@ _TODO_TIME_PARSE_PROMPT = (
     "使用者想要記錄一筆待辦事項，原始描述是：「{original_text}」，Robinson 反問了確切時間，"
     "這是使用者這一則的回覆：「{time_reply}」。\n"
     "【現在的日期（台灣時區，計算相對日期時間一律以此為準）】\n{current_date_text}\n\n"
+    "這筆待辦事項可能是「單一時間點」（例如「明天下午三點」），也可能是「一段時間區間」（例如"
+    "「這週五早上8點到下週一下午5點」「8/2到8/5」這種同時講出明確開始與結束的描述）；只有原始"
+    "描述或這次回覆明確講出「開始」跟「結束」兩個時間點時，才算是區間，其餘一律當成單一時間點。\n"
     "請判斷使用者是否已經講清楚明確的日期與時間，並嚴格照下面格式輸出，每個欄位各自一行，"
     "不要輸出其他任何文字：\n"
     "STATUS: CLEAR 或 UNCLEAR。必須同時滿足下面兩個條件才能填 CLEAR，只要有一個條件不滿足就"
-    "一律填 UNCLEAR，絕對不可以自己猜測、幫使用者補上「今天」或「上午/下午」：\n"
+    "一律填 UNCLEAR，絕對不可以自己猜測、幫使用者補上「今天」或「上午/下午」；如果判斷是區間，"
+    "以下兩個條件對「開始」跟「結束」兩個時間點都要分別成立才算 CLEAR，只要其中一個時間點不滿足"
+    "就整體視為 UNCLEAR：\n"
     "  條件一（日期要明確）：『原始描述』或『這次回覆』裡面，至少有一項要明確提到是哪一天"
-    "（例如「今天」「明天」「後天」「星期五」「8/5」等），如果兩邊都完全沒提到任何日期線索，"
+    "（例如「今天」「明天」「後天」「星期五」「8/5」等），如果完全沒提到任何日期線索，"
     "一律視為 UNCLEAR；\n"
     "  條件二（時段要明確）：時間本身不可以有上午/下午的歧義。小時數是 13～23（或 0 點/00:xx，"
     "代表午夜）的寫法本來就只可能是下午/晚上或凌晨，視為已經明確，不需要再額外加註時段字眼；"
     "但小時數是 1～12 的寫法（不論寫成「5:30」「05:30」還是「五點半」，只要小時數落在 1～12），"
     "一律必須額外明確講出時段（例如「上午/下午/中午/凌晨/早上/晚上」，例如「下午5:30」「下午"
-    "五點半」）才算清楚；只要使用者只給了「數字:數字」或「幾點幾分」卻沒有額外講時段，"
+    "五點半」）才算清楚；只要只給了「數字:數字」或「幾點幾分」卻沒有額外講時段，"
     "就一律視為 UNCLEAR，絕對不可以自己猜是上午還是下午。\n"
-    "以上兩個條件都滿足時才填 CLEAR，換算並填寫下面兩個欄位；否則兩個條件只要有一個不滿足，"
-    "都填 UNCLEAR，並把 CONTENT／DUE_AT 兩欄省略：\n"
+    "以上兩個條件都滿足時才填 CLEAR，換算並填寫下面欄位；否則兩個條件只要有一個不滿足，"
+    "都填 UNCLEAR，並把 CONTENT／START_AT／DUE_AT 全部省略：\n"
     "CONTENT: 待辦事項內容摘要，精簡具體，不需要包含時間（STATUS 為 UNCLEAR 時可省略）\n"
-    "DUE_AT: 換算後的完整日期時間，格式一律為 YYYY-MM-DD HH:MM（24 小時制，STATUS 為 UNCLEAR 時"
-    "可省略）"
+    "START_AT: 只有判斷是「區間」時才需要填寫，換算後的區間開始時間，格式一律為 YYYY-MM-DD HH:MM"
+    "（24 小時制）；如果是單一時間點，這一行整行不要輸出\n"
+    "DUE_AT: 換算後的完整日期時間，格式一律為 YYYY-MM-DD HH:MM（24 小時制）。單一時間點時就是"
+    "那個時間點本身；區間時則是區間的結束/截止時間（STATUS 為 UNCLEAR 時可省略）"
 )
 
 _TODO_REMINDER_CONFIRM_PROMPT = (
@@ -707,6 +714,77 @@ def handle_todo_confirm_step(
     return "好的，請問是什麼時候呢？"
 
 
+def _parse_todo_datetime(raw: str) -> datetime | None:
+    """把 `_TODO_TIME_PARSE_PROMPT` 輸出的 `YYYY-MM-DD HH:MM` 字串換算成台灣時區 datetime；
+    格式不對（或空字串）回傳 None，交由呼叫端視為 UNCLEAR 處理。"""
+    if not raw:
+        return None
+    try:
+        # 下一行刻意先解析成不帶時區的 datetime，緊接著用 .replace(tzinfo=...) 補上台灣時區。
+        naive = datetime.strptime(raw, "%Y-%m-%d %H:%M")  # noqa: DTZ007
+    except ValueError:
+        return None
+    return naive.replace(tzinfo=_TAIWAN_TZ)
+
+
+def _format_ymd_hm(value: datetime) -> str:
+    return f"{value.year}/{value.month:02d}/{value.day:02d} {value.hour:02d}:{value.minute:02d}"
+
+
+def _digest_window_already_passed(day, now: datetime) -> bool:
+    """判斷「某一天早上 8 點的每日摘要」是否已經不可能發生：那天已經是過去的日期、或那天就是
+    今天但現在已經過了 8 點，都算已經錯過；今天還沒到 8 點、或那天是未來的日期，都還有機會。"""
+    if day < now.date():
+        return True
+    return day == now.date() and now.hour >= 8
+
+
+def _build_todo_time_confirmation_reply(start_at: datetime | None, due_at: datetime, now: datetime) -> str:
+    """組合「已收到 XXX，到時候早上 8 點會提醒你...」這句確認訊息（FR-32、FR-31b）。
+
+    2026-08-02 追加修正（Robin 回報：中午設定當天下午的待辦，卻還是講「當天早上 8 點會提醒」——
+    這句是不可能發生的事，因為 8 點早就過了）：每日 08:00 摘要（見 todo.check_and_push_daily_digest）
+    只在「現在剛好是 8 點那個小時」時才會觸發，所以只有『當天還沒到 8 點』或『日期是未來』這兩種
+    情況，這句提醒才有機會真的發生；已經過了那天 8 點的話，就不能再講這句承諾了。
+
+    2026-08-02 新增（FR-31b，區間待辦）：區間待辦的開始日、結束日各自是獨立的一次每日摘要機會
+    （見 todo.py 的去重邏輯調整），所以要分別判斷兩天是否都還來得及，依結果給出不同措辭；
+    開始日跟結束日是同一天（一日內區間）時，跟單一時間點待辦一樣只判斷一次。
+    """
+    if start_at is None:
+        when_text = _format_ymd_hm(due_at)
+        if _digest_window_already_passed(due_at.date(), now):
+            digest_note = "由於現在已經過了今天的早上 8 點，這筆不會收到當天早上的提醒摘要囉，"
+        else:
+            digest_note = "到時候當天早上 8 點會主動提醒你一次，"
+        return (
+            f"已收到 {when_text}，{digest_note}你也可以隨時查詢待辦事項清單，"
+            "需要在前 30 分鐘時再提醒你一次嗎？"
+        )
+
+    when_text = f"{_format_ymd_hm(start_at)} ～ {_format_ymd_hm(due_at)}"
+    if start_at.date() == due_at.date():
+        start_passed = due_passed = _digest_window_already_passed(start_at.date(), now)
+    else:
+        start_passed = _digest_window_already_passed(start_at.date(), now)
+        due_passed = _digest_window_already_passed(due_at.date(), now)
+
+    if not start_passed and not due_passed:
+        digest_note = "到時候開始那天跟結束那天的早上 8 點都會主動提醒你一次，"
+    elif start_passed and not due_passed:
+        digest_note = "由於已經過了開始那天的早上 8 點，這筆只會在結束那天的早上 8 點提醒你一次，"
+    else:
+        # due_passed 為 True（不論 start_passed 是不是也 True）都保守視為兩邊都已經錯過：
+        # 區間結構保證 start_at <= due_at，due 那天都過了，start 那天邏輯上不可能還沒過，
+        # 這裡用 else 收斂成同一句，避免講出「還會被提醒」這種理論上不會發生、講了也沒意義的話。
+        digest_note = "由於開始跟結束那天的早上 8 點都已經過了，這筆不會收到早上的提醒摘要囉，"
+
+    return (
+        f"已收到 {when_text}，{digest_note}你也可以隨時查詢待辦事項清單，"
+        "需要在前 30 分鐘時再提醒你一次嗎？"
+    )
+
+
 def handle_todo_time_step(
     db: CloudSQLClient,
     llm_client,
@@ -714,10 +792,11 @@ def handle_todo_time_step(
     telegram_user_id: int,
     text: str,
 ) -> str:
-    """處理 `pending_todo_time` 狀態下使用者提供的時間描述（FR-31、FR-56e 情境範例）。
+    """處理 `pending_todo_time` 狀態下使用者提供的時間描述（FR-31、FR-31b、FR-56e 情境範例）。
 
     使用者可能一次講清楚（例如「三點」），也可能還是模糊，這種情況停留在原本的狀態繼續反問，
-    不強迫往下一步走，避免存入一個猜錯的時間。
+    不強迫往下一步走，避免存入一個猜錯的時間；也可能是一段時間區間（FR-31b），這種情況
+    `_TODO_TIME_PARSE_PROMPT` 會多輸出一個 `START_AT` 欄位。
     """
     state = state_store.get(telegram_user_id)
     target_user_id = state["target_user_id"]
@@ -734,33 +813,28 @@ def handle_todo_time_step(
     if parsed.get("STATUS") != "CLEAR":
         return _TODO_TIME_UNCLEAR_REPLY
 
-    try:
-        # 下一行刻意先解析成不帶時區的 datetime，緊接著用 .replace(tzinfo=...) 補上台灣時區。
-        due_at_naive = datetime.strptime(parsed.get("DUE_AT", ""), "%Y-%m-%d %H:%M")  # noqa: DTZ007
-    except ValueError:
+    due_at = _parse_todo_datetime(parsed.get("DUE_AT", ""))
+    if due_at is None:
         return _TODO_TIME_UNCLEAR_REPLY
-    due_at = due_at_naive.replace(tzinfo=_TAIWAN_TZ)
+
+    # START_AT 是選填欄位（只有區間才會出現）：模型沒輸出、或輸出但格式錯誤，都當成單一時間點
+    # 處理，不會因為這個選填欄位解析失敗就整輪打回 UNCLEAR（那樣反而會拒絕原本清楚的單一時間點）。
+    start_at_raw = parsed.get("START_AT", "")
+    start_at = _parse_todo_datetime(start_at_raw) if start_at_raw else None
+
     content = parsed.get("CONTENT") or original_text
 
     state_store.set(
         telegram_user_id,
-        {"flow": "pending_todo_reminder", "target_user_id": target_user_id, "content": content, "due_at": due_at},
+        {
+            "flow": "pending_todo_reminder",
+            "target_user_id": target_user_id,
+            "content": content,
+            "due_at": due_at,
+            "start_at": start_at,
+        },
     )
-    # 2026-08-02 追加修正（Robin 回報：中午設定當天下午的待辦，卻還是講「當天早上 8 點會提醒」——
-    # 這句是不可能發生的事，因為 8 點早就過了）：每日 08:00 摘要（見 todo.check_and_push_daily_digest）
-    # 只在「現在剛好是 8 點那個小時」時才會觸發，所以只有「due 的日期不是今天」或「due 的日期是
-    # 今天、但現在還沒到 8 點」這兩種情況，這句提醒才有機會真的發生；已經過了今天 8 點的話，
-    # 這筆不會收到當天早上摘要（30 分鐘前提醒仍然不受影響，看使用者接下來要不要開）。
-    now = _now()
-    if due_at.date() == now.date() and now.hour >= 8:
-        digest_note = "由於現在已經過了今天的早上 8 點，這筆不會收到當天早上的提醒摘要囉，"
-    else:
-        digest_note = "到時候當天早上 8 點會主動提醒你一次，"
-    return (
-        f"已收到 {due_at.year}/{due_at.month:02d}/{due_at.day:02d} {due_at.hour:02d}:{due_at.minute:02d}，"
-        f"{digest_note}你也可以隨時查詢待辦事項清單，"
-        "需要在前 30 分鐘時再提醒你一次嗎？"
-    )
+    return _build_todo_time_confirmation_reply(start_at, due_at, _now())
 
 
 def handle_todo_reminder_step(
@@ -771,18 +845,19 @@ def handle_todo_reminder_step(
     text: str,
 ) -> str:
     """處理 `pending_todo_reminder` 狀態下使用者對「需要在前 30 分鐘時提醒你嗎？」的回覆，
-    確定後才真正寫入 todos（FR-31、FR-32）。
+    確定後才真正寫入 todos（FR-31、FR-31b、FR-32）。
     """
     state = state_store.get(telegram_user_id)
     target_user_id = state["target_user_id"]
     content = state["content"]
     due_at = state["due_at"]
+    start_at = state.get("start_at")
     state_store.clear(telegram_user_id)
 
     decision = llm_client.generate_text(_TODO_REMINDER_CONFIRM_PROMPT.format(text=text)).strip()
     remind_before_30min = decision == "CONFIRM"
 
-    todo_module.create_todo(db, target_user_id, content, due_at, remind_before_30min)
+    todo_module.create_todo(db, target_user_id, content, due_at, remind_before_30min, start_at=start_at)
     return "好的，已經幫你記錄好了！"
 
 

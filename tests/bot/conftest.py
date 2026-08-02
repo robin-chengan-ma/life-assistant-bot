@@ -89,24 +89,32 @@ class FakeCloudSQLClient:
             return row.get("user_id") == params[0] and row.get("status") == params[1]
         if where == "status = %s AND due_at < %s":
             return row.get("status") == params[0] and row.get("due_at") < params[1]
+        # 2026-08-02 追加（見 robinson SPEC.md FR-31b，區間待辦事項）：提醒基準時間改用
+        # COALESCE(start_at, due_at)，區間待辦以 start_at 為準、單一時間點待辦仍以 due_at 為準。
         if where == (
             "status = %s AND remind_before_30min = %s AND reminded_30min_sent_at IS NULL "
-            "AND due_at > %s AND due_at <= %s"
+            "AND COALESCE(start_at, due_at) > %s AND COALESCE(start_at, due_at) <= %s"
         ):
+            anchor = row.get("start_at") or row.get("due_at")
             return (
                 row.get("status") == params[0]
                 and row.get("remind_before_30min") == params[1]
                 and row.get("reminded_30min_sent_at") is None
-                and row.get("due_at") > params[2]
-                and row.get("due_at") <= params[3]
+                and anchor > params[2]
+                and anchor <= params[3]
             )
-        if where == "status = %s AND due_at >= %s AND due_at < %s AND daily_pushed_on IS NULL":
-            return (
-                row.get("status") == params[0]
-                and row.get("due_at") >= params[1]
-                and row.get("due_at") < params[2]
-                and row.get("daily_pushed_on") is None
-            )
+        # 2026-08-02 追加（見 robinson SPEC.md FR-31b）：每日摘要改為「今天到期」或「今天開始」皆算，
+        # 去重也從「曾經推播過」改為「今天是否已推播過」，讓區間待辦能在開始日/結束日各推播一次。
+        if where == (
+            "status = %s AND ((due_at >= %s AND due_at < %s) OR (start_at >= %s AND start_at < %s)) "
+            "AND (daily_pushed_on IS NULL OR daily_pushed_on != %s)"
+        ):
+            due_at = row.get("due_at")
+            start_at = row.get("start_at")
+            due_today = due_at is not None and params[1] <= due_at < params[2]
+            starts_today = start_at is not None and params[3] <= start_at < params[4]
+            pushed_today = row.get("daily_pushed_on") is not None and row.get("daily_pushed_on") == params[5]
+            return row.get("status") == params[0] and (due_today or starts_today) and not pushed_today
         # 2026-08-02（Step 1.8，見 robinson SPEC.md FR-49/FR-50）：心情小記查詢條件，只有測試用得到
         # （正式程式碼路徑只用 insert()／id 查詢，不需要這個 where，但整合測試需要驗證寫入結果）。
         if where == "user_id = %s AND mood_category = %s":

@@ -816,6 +816,92 @@ def test_handle_todo_time_step_keeps_digest_promise_for_future_due_date(fake_db,
     assert "已經過了" not in reply
 
 
+def test_handle_todo_time_step_parses_range_and_stores_start_at(fake_db, monkeypatch):
+    # FR-31b：Robin 詢問「待辦事項是不是只能存單一時間點」後新增的區間支援。
+    monkeypatch.setattr(commands, "_now", lambda: datetime(2026, 8, 1, 20, 0, tzinfo=commands._TAIWAN_TZ))
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_todo_time", "target_user_id": 42, "original_text": "我要出差"})
+    llm_client = _FakeLLMClient(
+        response_text="STATUS: CLEAR\nCONTENT: 出差\nSTART_AT: 2026-08-02 08:00\nDUE_AT: 2026-08-05 17:00"
+    )
+
+    reply = commands.handle_todo_time_step(
+        fake_db, llm_client, store, telegram_user_id=1, text="8/2早上8點到8/5下午5點"
+    )
+
+    assert "2026/08/02 08:00 ～ 2026/08/05 17:00" in reply
+    assert "開始那天跟結束那天的早上 8 點都會主動提醒你一次" in reply
+    state = store.get(1)
+    assert state["start_at"].strftime("%Y-%m-%d %H:%M") == "2026-08-02 08:00"
+    assert state["due_at"].strftime("%Y-%m-%d %H:%M") == "2026-08-05 17:00"
+
+
+def test_handle_todo_time_step_range_start_day_digest_already_passed(fake_db, monkeypatch):
+    # 現在是 8/2 中午，區間開始日就是今天、8 點早就過了；結束日還沒到，只會在結束日提醒。
+    monkeypatch.setattr(commands, "_now", lambda: datetime(2026, 8, 2, 12, 0, tzinfo=commands._TAIWAN_TZ))
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_todo_time", "target_user_id": 42, "original_text": "我要出差"})
+    llm_client = _FakeLLMClient(
+        response_text="STATUS: CLEAR\nCONTENT: 出差\nSTART_AT: 2026-08-02 06:00\nDUE_AT: 2026-08-05 17:00"
+    )
+
+    reply = commands.handle_todo_time_step(
+        fake_db, llm_client, store, telegram_user_id=1, text="今天早上6點到8/5下午5點"
+    )
+
+    assert "已經過了開始那天的早上 8 點" in reply
+    assert "只會在結束那天的早上 8 點提醒你一次" in reply
+
+
+def test_handle_todo_time_step_range_both_digest_windows_passed(fake_db, monkeypatch):
+    # 開始日、結束日都已經過了今天的 8 點（極端 edge case，仍要能講得通、不誤報）。
+    monkeypatch.setattr(commands, "_now", lambda: datetime(2026, 8, 5, 20, 0, tzinfo=commands._TAIWAN_TZ))
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_todo_time", "target_user_id": 42, "original_text": "我要出差"})
+    llm_client = _FakeLLMClient(
+        response_text="STATUS: CLEAR\nCONTENT: 出差\nSTART_AT: 2026-08-02 06:00\nDUE_AT: 2026-08-05 17:00"
+    )
+
+    reply = commands.handle_todo_time_step(
+        fake_db, llm_client, store, telegram_user_id=1, text="8/2早上6點到今天下午5點"
+    )
+
+    assert "開始跟結束那天的早上 8 點都已經過了" in reply
+    assert "不會收到早上的提醒摘要" in reply
+
+
+def test_handle_todo_time_step_range_single_day_uses_point_in_time_logic(fake_db, monkeypatch):
+    # 開始日跟結束日是同一天（一日內區間），跟單一時間點待辦一樣只判斷一次。
+    monkeypatch.setattr(commands, "_now", lambda: datetime(2026, 8, 2, 7, 0, tzinfo=commands._TAIWAN_TZ))
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_todo_time", "target_user_id": 42, "original_text": "全天會議"})
+    llm_client = _FakeLLMClient(
+        response_text="STATUS: CLEAR\nCONTENT: 全天會議\nSTART_AT: 2026-08-02 08:00\nDUE_AT: 2026-08-02 17:00"
+    )
+
+    reply = commands.handle_todo_time_step(
+        fake_db, llm_client, store, telegram_user_id=1, text="今天早上8點到今天下午5點"
+    )
+
+    assert "到時候開始那天跟結束那天的早上 8 點都會主動提醒你一次" in reply
+
+
+def test_handle_todo_time_step_ignores_unparseable_start_at_as_point_in_time(fake_db, monkeypatch):
+    # START_AT 格式壞掉時不該讓整輪打回 UNCLEAR，退化成只看 DUE_AT 的單一時間點待辦。
+    monkeypatch.setattr(commands, "_now", lambda: datetime(2026, 8, 2, 7, 0, tzinfo=commands._TAIWAN_TZ))
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_todo_time", "target_user_id": 42, "original_text": "買菜"})
+    llm_client = _FakeLLMClient(
+        response_text="STATUS: CLEAR\nCONTENT: 買菜\nSTART_AT: 亂七八糟\nDUE_AT: 2026-08-02 15:00"
+    )
+
+    reply = commands.handle_todo_time_step(fake_db, llm_client, store, telegram_user_id=1, text="下午三點")
+
+    assert "2026/08/02 15:00" in reply
+    assert "～" not in reply
+    assert store.get(1)["start_at"] is None
+
+
 def test_handle_todo_time_step_stays_when_unclear(fake_db):
     store = ConversationStateStore()
     original_state = {"flow": "pending_todo_time", "target_user_id": 42, "original_text": "我要做事"}
@@ -823,6 +909,20 @@ def test_handle_todo_time_step_stays_when_unclear(fake_db):
     llm_client = _FakeLLMClient(response_text="STATUS: UNCLEAR")
 
     reply = commands.handle_todo_time_step(fake_db, llm_client, store, telegram_user_id=1, text="呃再說")
+
+    assert "不太確定時間" in reply
+    assert store.get(1) == original_state
+
+
+def test_handle_todo_time_step_stays_when_due_at_missing_entirely(fake_db):
+    # 防呆：即使模型宣稱 CLEAR，但漏輸出 DUE_AT 這個必要欄位（格式不對的另一種情況：完全沒有，
+    # 不是格式錯誤），一樣要當成 UNCLEAR 處理，不能讓 due_at 是 None 卻繼續往下走。
+    store = ConversationStateStore()
+    original_state = {"flow": "pending_todo_time", "target_user_id": 42, "original_text": "我要做事"}
+    store.set(1, original_state)
+    llm_client = _FakeLLMClient(response_text="STATUS: CLEAR\nCONTENT: 做事")
+
+    reply = commands.handle_todo_time_step(fake_db, llm_client, store, telegram_user_id=1, text="怪怪的回覆")
 
     assert "不太確定時間" in reply
     assert store.get(1) == original_state
@@ -866,6 +966,30 @@ def test_handle_todo_reminder_step_creates_todo_without_reminder_when_declined(f
 
     rows = fake_db.select("todos", where="user_id = %s AND status = %s", params=(42, "pending"))
     assert rows[0]["remind_before_30min"] is False
+
+
+def test_handle_todo_reminder_step_passes_start_at_to_create_todo(fake_db):
+    # FR-31b：pending_todo_reminder 狀態帶著 start_at 時，寫入 todos 要一併帶上。
+    store = ConversationStateStore()
+    start_at = commands.datetime(2026, 8, 2, 8, 0, tzinfo=commands._TAIWAN_TZ)
+    due_at = commands.datetime(2026, 8, 5, 17, 0, tzinfo=commands._TAIWAN_TZ)
+    store.set(
+        1,
+        {
+            "flow": "pending_todo_reminder",
+            "target_user_id": 42,
+            "content": "出差",
+            "due_at": due_at,
+            "start_at": start_at,
+        },
+    )
+    llm_client = _FakeLLMClient(response_text="CONFIRM")
+
+    commands.handle_todo_reminder_step(fake_db, llm_client, store, telegram_user_id=1, text="好")
+
+    rows = fake_db.select("todos", where="user_id = %s AND status = %s", params=(42, "pending"))
+    assert rows[0]["start_at"] == start_at
+    assert rows[0]["due_at"] == due_at
 
 
 def test_start_todo_list_reports_no_todos_and_does_not_set_state(fake_db):

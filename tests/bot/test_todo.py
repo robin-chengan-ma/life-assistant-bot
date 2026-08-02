@@ -191,3 +191,133 @@ def test_check_and_push_daily_digest_noop_when_nothing_due_today(fake_db):
     todo.check_and_push_daily_digest(fake_db, telegram_client, now=now)
 
     telegram_client.send_text.assert_not_called()
+
+
+# --- 區間待辦事項（FR-31b，2026-08-02，Robin 詢問是否支援時間區間） ---
+
+
+def test_create_todo_with_start_at_inserts_range_row(fake_db):
+    todo_id = todo.create_todo(
+        fake_db, 1, "出差", _utc(2026, 8, 5, 9, 0), True, start_at=_utc(2026, 8, 2, 0, 0)
+    )
+
+    row = fake_db.select("todos", where="id = %s", params=(todo_id,), fetch_one=True)
+    assert row["start_at"] == _utc(2026, 8, 2, 0, 0)
+    assert row["due_at"] == _utc(2026, 8, 5, 9, 0)
+
+
+def test_format_todo_list_shows_range_when_start_at_present():
+    todos = [
+        {
+            "content": "出差",
+            "due_at": _utc(2026, 8, 5, 9, 0),  # 台灣 17:00
+            "start_at": _utc(2026, 8, 2, 0, 0),  # 台灣 08:00
+        }
+    ]
+
+    text = todo.format_todo_list(todos)
+
+    assert "1. 出差（2026/08/02 08:00 ～ 2026/08/05 17:00）" in text
+
+
+def test_check_and_push_reminders_range_todo_anchors_on_start_at(fake_db):
+    # 區間待辦的「前 30 分鐘提醒」以 start_at（開始時間）為準，不是 due_at（結束時間）。
+    fake_db.insert("users", {"telegram_user_id": 555, "role": "Robin", "is_owner": True})
+    now = _utc(2026, 8, 2, 10, 0)
+    todo.create_todo(
+        fake_db, 1, "出差", due_at=_utc(2026, 8, 5, 9, 0), remind_before_30min=True,
+        start_at=_utc(2026, 8, 2, 10, 20),
+    )
+    telegram_client = MagicMock()
+
+    todo.check_and_push_reminders(fake_db, telegram_client, now=now)
+
+    telegram_client.send_text.assert_called_once()
+    text = telegram_client.send_text.call_args.kwargs["text"]
+    assert "出差" in text
+    assert "再過 30 分鐘就要開始囉" in text
+
+
+def test_check_and_push_reminders_range_todo_ignores_due_at_within_window(fake_db):
+    # due_at 落在 30 分鐘窗口內、但 start_at 還很遠，不該提前提醒。
+    fake_db.insert("users", {"telegram_user_id": 555, "role": "Robin", "is_owner": True})
+    now = _utc(2026, 8, 2, 10, 0)
+    todo.create_todo(
+        fake_db, 1, "出差", due_at=_utc(2026, 8, 2, 10, 20), remind_before_30min=True,
+        start_at=_utc(2026, 8, 1, 0, 0),
+    )
+    telegram_client = MagicMock()
+
+    todo.check_and_push_reminders(fake_db, telegram_client, now=now)
+
+    telegram_client.send_text.assert_not_called()
+
+
+def test_check_and_push_daily_digest_range_todo_appears_on_start_day(fake_db):
+    fake_db.insert("users", {"telegram_user_id": 555, "role": "Robin", "is_owner": True})
+    now = _utc(2026, 8, 2, 0, 5)  # 台灣 08:05，8/2
+    todo.create_todo(
+        fake_db, 1, "出差", due_at=_utc(2026, 8, 5, 9, 0), remind_before_30min=False,
+        start_at=_utc(2026, 8, 1, 22, 0),  # 台灣 8/2 06:00
+    )
+    telegram_client = MagicMock()
+
+    todo.check_and_push_daily_digest(fake_db, telegram_client, now=now)
+
+    telegram_client.send_text.assert_called_once()
+    text = telegram_client.send_text.call_args.kwargs["text"]
+    assert "出差" in text
+    assert "開始" in text
+
+
+def test_check_and_push_daily_digest_range_todo_appears_again_on_due_day(fake_db):
+    # 開始日已經推播過一次；到了結束那天（不同的一天）應該要能再推播一次，
+    # 不能被「曾經推播過」擋住（這是這次改動的重點：去重改成「今天推播過沒」）。
+    fake_db.insert("users", {"telegram_user_id": 555, "role": "Robin", "is_owner": True})
+    start_day_now = _utc(2026, 8, 2, 0, 5)  # 台灣 8/2 08:05
+    due_day_now = _utc(2026, 8, 5, 0, 5)  # 台灣 8/5 08:05
+    todo.create_todo(
+        fake_db, 1, "出差", due_at=_utc(2026, 8, 5, 9, 0), remind_before_30min=False,  # 台灣 8/5 17:00
+        start_at=_utc(2026, 8, 1, 22, 0),  # 台灣 8/2 06:00
+    )
+    telegram_client = MagicMock()
+
+    todo.check_and_push_daily_digest(fake_db, telegram_client, now=start_day_now)
+    todo.check_and_push_daily_digest(fake_db, telegram_client, now=due_day_now)
+
+    assert telegram_client.send_text.call_count == 2
+    due_day_text = telegram_client.send_text.call_args.kwargs["text"]
+    assert "出差" in due_day_text
+    assert "截止" in due_day_text
+
+
+def test_check_and_push_daily_digest_range_todo_not_repeated_same_day(fake_db):
+    fake_db.insert("users", {"telegram_user_id": 555, "role": "Robin", "is_owner": True})
+    now = _utc(2026, 8, 2, 0, 5)
+    todo.create_todo(
+        fake_db, 1, "出差", due_at=_utc(2026, 8, 5, 9, 0), remind_before_30min=False,
+        start_at=_utc(2026, 8, 1, 22, 0),
+    )
+    telegram_client = MagicMock()
+
+    todo.check_and_push_daily_digest(fake_db, telegram_client, now=now)
+    todo.check_and_push_daily_digest(fake_db, telegram_client, now=_utc(2026, 8, 2, 0, 15))
+
+    telegram_client.send_text.assert_called_once()
+
+
+def test_check_and_push_daily_digest_range_todo_single_day_range_shows_both_times(fake_db):
+    # 頭尾在同一天的「一日內區間」，摘要文字要同時帶出開始跟結束時間。
+    fake_db.insert("users", {"telegram_user_id": 555, "role": "Robin", "is_owner": True})
+    now = _utc(2026, 8, 2, 0, 5)  # 台灣 8/2 08:05
+    todo.create_todo(
+        fake_db, 1, "全天會議", due_at=_utc(2026, 8, 2, 9, 0), remind_before_30min=False,  # 台灣 17:00
+        start_at=_utc(2026, 8, 2, 0, 0),  # 台灣 08:00
+    )
+    telegram_client = MagicMock()
+
+    todo.check_and_push_daily_digest(fake_db, telegram_client, now=now)
+
+    text = telegram_client.send_text.call_args.kwargs["text"]
+    assert "08:00" in text
+    assert "17:00" in text

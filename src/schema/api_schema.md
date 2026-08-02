@@ -95,14 +95,14 @@
 
 ### `/my_todos`（內部路由，非對外 HTTP 端點）
 
-**狀態**：已實作（`src/bot/commands.py::start_todo_list`，2026-08-02，Step 1.7，見 robinson SPEC.md FR-32）
+**狀態**：已實作（`src/bot/commands.py::start_todo_list`，2026-08-02，Step 1.7，見 robinson SPEC.md FR-32；2026-08-02 追加支援 FR-31b 區間顯示）
 **觸發方式**：使用者於對話框輸入「我的待辦事項」或 `/my_todos`
 **權限**：任何已驗證使用者（Robin 或家人，各自只能看到自己的待辦）
-**對應 FR**：FR-32
+**對應 FR**：FR-31b、FR-32
 
-**Response**：文字，列出目前 `status='pending'` 的待辦事項清單（依預定時間由近到遠排序），沒有資料時回「目前沒有待辦事項喔！」；有資料時額外附上「輸入編號可標記完成/取消」的提示，並進入 `pending_todo_list_action` 狀態等待下一則訊息。
+**Response**：文字，列出目前 `status='pending'` 的待辦事項清單（依預定時間由近到遠排序），沒有資料時回「目前沒有待辦事項喔！」；有資料時額外附上「輸入編號可標記完成/取消」的提示，並進入 `pending_todo_list_action` 狀態等待下一則訊息。單一時間點待辦顯示單一時間（例如「2026/08/02 15:00」），區間待辦（FR-31b，`start_at` 非 NULL）顯示「開始 ～ 結束」（例如「2026/08/02 08:00 ～ 2026/08/05 17:00」）。
 
-**備註**：這是 FR-32「使用者主動查詢」的入口；選定編號後（`pending_todo_list_action`）會反問「標記為完成還是取消」，下一輪由 LLM 判斷使用者意思（`pending_todo_action_confirm`，比照全專案既有的 CONFIRM/CANCEL 單次呼叫慣例）寫入 `status='completed'`／`'cancelled'`（FR-31a）。新增待辦不是走這支路由觸發，而是使用者在一般聊天中自然語言描述「什麼時候要做什麼事」時，由 `chat.py` 的 `_REQUEST_TODO_MARKER` 偵測後進入 `pending_todo_confirm`→`pending_todo_time`→`pending_todo_reminder` 三輪反問流程（見 chat-core 一般聊天路由、`src/bot/commands.py` 的 `handle_todo_confirm_step`／`handle_todo_time_step`／`handle_todo_reminder_step`），確認提醒設定後才真正寫入 `todos`（FR-31）。
+**備註**：這是 FR-32「使用者主動查詢」的入口；選定編號後（`pending_todo_list_action`）會反問「標記為完成還是取消」，下一輪由 LLM 判斷使用者意思（`pending_todo_action_confirm`，比照全專案既有的 CONFIRM/CANCEL 單次呼叫慣例）寫入 `status='completed'`／`'cancelled'`（FR-31a）。新增待辦不是走這支路由觸發，而是使用者在一般聊天中自然語言描述「什麼時候要做什麼事」時，由 `chat.py` 的 `_REQUEST_TODO_MARKER` 偵測後進入 `pending_todo_confirm`→`pending_todo_time`→`pending_todo_reminder` 三輪反問流程（見 chat-core 一般聊天路由、`src/bot/commands.py` 的 `handle_todo_confirm_step`／`handle_todo_time_step`／`handle_todo_reminder_step`），確認提醒設定後才真正寫入 `todos`（FR-31）；`handle_todo_time_step` 若判斷使用者描述的是有明確開始與結束的時間區間（FR-31b，例如「8/2早上8點到8/5下午5點」），會多解析出一個 `start_at`，兩個時間點都要同時滿足「日期明確」「時段不歧義」兩個條件才算 CLEAR，缺一就反問，不會自己猜。
 
 ---
 
