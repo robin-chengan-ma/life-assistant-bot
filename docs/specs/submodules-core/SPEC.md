@@ -56,6 +56,7 @@ submodules/
 - [x] FR-6：每個子模組資料夾一律只包含 `client.py`、`README.md`、`requirements.txt`、`.env.example` 四個檔案，不得拆成多個 `.py` 檔、不得加 `__init__.py`（見 ADR-4）
 - [x] FR-7（2026-07-31 新增，見 ADR-5）：`llm.client.LLMClient` 內建本地端節流保護 —— 呼叫 `generate_text`／`generate_with_image`／`generate_with_search` 任一方法前，先檢查「最近 60 秒內以同一把 `api_key` 呼叫的次數」，超過門檻（預設 8 次／分鐘）直接拋 `LLMQuotaGuardError`、不送出請求；門檻可透過建構子 `max_calls_per_minute` 參數調整
 - [x] FR-8（2026-08-01 新增，見 ADR-9）：`submodules/voice` 提供語音轉文字 Client（`VoiceClient.transcribe()`）；目前實際串接 Groq Whisper API，用 `requests` 直接呼叫其 OpenAI 相容 REST 端點，不安裝官方 `groq` SDK
+- [x] FR-9（2026-08-02 新增，見 ADR-10）：`submodules/gdrive` 改用 OAuth 2.0（以真人 Google 帳號身分）認證，不再使用 Service Account；`GDriveClient` 建構子改為 `refresh_token`／`client_id`／`client_secret`／`folder_id` 四個必要參數
 
 ### 非功能性需求
 
@@ -242,6 +243,32 @@ submodules/
 
 **狀態**：accepted
 
+### ADR-10：`gdrive` Client 改用 OAuth 2.0（真人帳號身分），supersede 原本的 Service Account 認證
+
+**背景**：2026-08-02 Robin 實測語音上傳功能，撞到 Google Drive API 回傳 `403 storageQuotaExceeded`。查證後確認這是 Google 的既定限制而非程式邏輯錯誤：Service Account 本身完全沒有 Drive 儲存額度，用它上傳檔案到任何一般（非 Shared Drive）資料夾一律會失敗，跟目的資料夾擁有者是誰、資料夾還有沒有空間完全無關；唯二解法是改用 Shared Drive（需要付費 Google Workspace，經查證 Robin 的個人 Gmail 帳號不具備）或改用 OAuth 2.0 讓程式以真人帳號身分上傳。
+
+**選項**：
+| 方案 | 優點 | 缺點 |
+|------|------|------|
+| A：改用 OAuth 2.0，以 Robin 本人帳號身分上傳 | 免費（沿用 Robin 既有的個人 Google 帳號儲存額度）、不需要額外付費服務 | 需要一次性互動授權流程取得 refresh token（無法純後端自動化，需要 Robin 手動跑一次本機腳本並在瀏覽器完成同意畫面）、多一組要保管的憑證（refresh token） |
+| B：升級 Google Workspace 開通 Shared Drive | 免費額度沿用官方 Service Account 對 Shared Drive 的原生支援，不需要互動授權流程 | 需要付費訂閱 Google Workspace，對個人/家庭規模的專案是不必要的成本 |
+| C：延後處理，暫時停用語音/圖片雲端備份功能 | 零開發成本 | 直接犧牲既有功能，非真正解法 |
+
+**決策**：採方案 A（2026-08-02，Robin 於 AskUserQuestion 選定「改用 OAuth 以你本人身份上傳（推薦）」）
+
+**理由**：免費、不需要額外訂閱，一次性互動授權的額外操作成本可接受（只需要 Robin 執行一次 `get_refresh_token.py` 取得長期 refresh token，之後 production 端全自動、不需要再互動）。
+
+**替代方案**：方案 B（升級 Workspace）、方案 C（延後處理）——均已否決，理由見上表。
+
+**後果**：
+- `submodules/gdrive/client.py`：`GDriveClient.__init__(refresh_token, client_id, client_secret, folder_id)` 四個必要參數（原本是 `key_file_path, folder_id` 兩個），內部用 `google.oauth2.credentials.Credentials` 建構憑證，`google-auth` 函式庫會在存取權杖過期時自動用 refresh_token 換發新的，不需要額外程式碼處理刷新邏輯
+- 新增 `submodules/gdrive/get_refresh_token.py`：一次性本機互動授權腳本（使用 `google_auth_oauthlib.flow.InstalledAppFlow`），只在本機執行一次取得 refresh token，不進入 production 依賴、不被 `webhook.py` 匯入
+- `submodules/gdrive/requirements.txt` 新增 `google-auth-oauthlib`（僅 `get_refresh_token.py` 本機執行需要；production 執行路徑用到的 `google-auth`／`google-api-python-client` 不變）
+- 環境變數由 `GDRIVE_KEY_FILE_PATH` 改為 `GDRIVE_OAUTH_CLIENT_ID`／`GDRIVE_OAUTH_CLIENT_SECRET`／`GDRIVE_OAUTH_REFRESH_TOKEN`（`GDRIVE_FOLDER_ID` 不變）；原本 Render 上的 Service Account JSON 金鑰 Secret File 不再被使用，可移除
+- OAuth 同意畫面發布狀態需設為「正式版（In production）」，否則「測試中」狀態核發的 refresh token 只有 7 天效期就會失效——這是 Google OAuth 的既定行為，不是本專案程式碼可以繞過的限制
+
+**狀態**：accepted
+
 ## 實作計畫
 
 ### Phase 0（對應 robinson SPEC.md 的 Step 0.1a）：建立子模組骨架
@@ -254,6 +281,7 @@ submodules/
 - [ ] Step S.6：撰寫對應單元測試（見下方「測試策略」）—— `llm.client.LLMClient` 已於 Phase 1 Step 1.3 補上（2026-07-31），並於同日追加 ADR-5 本地端節流保護測試；`telegram.client.TelegramClient` 已於 Step 1.3b 補上（2026-07-31，6 個測試，覆蓋率 100%，含 `get_file_bytes`）；`cloudsql` 仍待對應功能實際串接時補上
 - [x] Step S.7：建立 `submodules/gdrive/`（`client.py`、`README.md`、`requirements.txt`、`.env.example`），Step 1.3b 影像辨識需要（2026-07-31）——刻意只暴露 `upload_file()`，不做下載/列表/刪除，避免建置用不到的能力
 - [x] Step S.8（2026-08-01，見 ADR-9）：建立 `submodules/voice/`（`client.py`、`README.md`、`requirements.txt`、`.env.example`），Step 1.4 語音轉文字需要——`VoiceClient.transcribe()`，用 `requests` 直打 Groq Whisper 的 OpenAI 相容 REST API，不安裝官方 `groq` SDK
+- [x] Step S.9（2026-08-02，見 ADR-10）：`submodules/gdrive` 從 Service Account 認證改為 OAuth 2.0（真人帳號身分），修正 Service Account 無 Drive 儲存額度導致的 `storageQuotaExceeded`；新增 `get_refresh_token.py` 一次性互動授權腳本
 
 ## 測試策略
 
@@ -264,7 +292,7 @@ submodules/
 - [x] `telegram.client.TelegramClient`：mock `requests.post`/`requests.get`，驗證 `send_text`/`send_photo`/`send_chat_action` 組出的 payload 正確、`get_file_bytes` 兩段式下載（`getFile` 換 `file_path` 再打檔案專屬網域）正確；空 `bot_token` 應拋出 `ValueError`（2026-07-31，6 個測試，覆蓋率 100%）。**2026-08-02 更新**：`send_text()` 預設不再帶 `parse_mode`（原預設 `"Markdown"`），改為純文字傳送，見下方「2026-08-02」決策補充；新增 1 個測試涵蓋「明確傳入 `parse_mode` 時仍會帶上」的情境，共 7 個測試，覆蓋率維持 100%
 - [x] `llm.client.LLMClient`：mock `genai.Client`，驗證 `generate_text`/`generate_with_image` 呼叫參數正確；空 `api_key` 應拋出 `ValueError`（2026-07-31 依 ADR-8 移除 `generate_with_search` 測試，見 [chat-core SPEC.md](../chat-core/SPEC.md)）
 - [x] `llm.client.LLMClient` 本地端節流保護（ADR-5，2026-07-31，4 個測試）：超過門檻拋 `LLMQuotaGuardError` 且不呼叫底層 SDK／同一 `api_key` 跨 instance 共用計數／不同 `api_key` 互不影響／時間視窗過期後計數重置
-- [x] `gdrive.client.GDriveClient`：mock `service_account.Credentials.from_service_account_file`／`googleapiclient.discovery.build`，驗證 `upload_file()` 帶正確 `filename`/`parents`/`mimetype`，回傳 `webViewLink`；空 `key_file_path`／`folder_id` 應拋出 `ValueError`（2026-07-31，4 個測試，覆蓋率 100%）
+- [x] `gdrive.client.GDriveClient`：mock `google.oauth2.credentials.Credentials`／`googleapiclient.discovery.build`，驗證 `upload_file()` 帶正確 `filename`/`parents`/`mimetype`，回傳 `webViewLink`；空 `refresh_token`／`client_id`／`client_secret`／`folder_id` 應拋出 `ValueError`；`Credentials()` 收到正確的 OAuth 參數（2026-07-31，4 個測試，覆蓋率 100%；**2026-08-02 更新**：依 ADR-10 改為 OAuth 2.0 認證，建構子從 2 參數改為 4 參數，共 7 個測試，覆蓋率維持 100%）
 - [x] `voice.client.VoiceClient`（2026-08-01，ADR-9，6 個測試，覆蓋率 100%）：mock `requests.post`，驗證 `transcribe()` 組出正確的 multipart payload（`headers`／`files`／`data`）、回傳去除頭尾空白的純文字、支援自訂 `model`／`filename`／`mime_type`；空 `api_key` 應拋出 `ValueError`；底層 request 失敗（`raise_for_status()` 拋例外）應往外拋，不吞例外
 
 ### Integration Tests
@@ -298,3 +326,4 @@ submodules/
 | 2026-07-31 | Robin 換用新產生的 `GEMINI_API_BOT_KEY` 後 `gemini-2.5-flash` 回傳 404，排查後確認為 Gemini 2.5 世代對新專案關閉存取（非額度／掛工具問題），新增 ADR-8（supersede ADR-7）：`generate_with_search()`／`_SEARCH_MODEL`／`_used_search()` 全數移除；相關測試更新，全專案 174 個測試全過、覆蓋率 100%（見 [chat-core SPEC.md](../chat-core/SPEC.md) ADR-5） | Claude（依 Robin「移除所有上網查詢的部分」指示） |
 | 2026-08-01 | Phase 1 Step 1.4（語音轉文字）需要：新增 Step S.8、FR-8、ADR-9：建立 `submodules/voice/`（`VoiceClient`，用 `requests` 直打 Groq Whisper OpenAI 相容 REST API，不安裝官方 `groq` SDK，比照 `telegram` 子模組的 ADR-2 慣例）；同步補上頂部骨架示意圖遺漏已久的 `gdrive/` 資料夾；全專案 252 個測試全過、覆蓋率 100% | Claude（依 Robin「好」指示） |
 | 2026-08-02 | Robin 實測回報「我要看所有功能」觸發 Telegram `400 Bad Request`；排查後確認 `send_text()` 預設 `parse_mode="Markdown"`，但回覆文字是 LLM 自然語言生成，格式不保證符合 Telegram 舊版 Markdown 語法，一旦不符會整則被拒收，所有 LLM 生成的回覆都有此風險；Robin 選擇直接關閉 Markdown，改為預設純文字傳送（見上方 ADR-2 補充決策），呼叫端仍可視需要明確傳入 `parse_mode`；新增 1 個測試，全專案 285 個測試全過、覆蓋率 100% | Claude（依 Robin 選定方向實作） |
+| 2026-08-02 | Robin 實測語音上傳撞到 Google Drive API `403 storageQuotaExceeded`，查證確認 Service Account 完全沒有 Drive 儲存額度，跟資料夾空間無關；新增 FR-9、Step S.9、ADR-10：`submodules/gdrive` 改用 OAuth 2.0（真人帳號身分），`GDriveClient` 建構子改為 `refresh_token`／`client_id`／`client_secret`／`folder_id`，新增一次性本機互動授權腳本 `get_refresh_token.py`（`requirements.txt` 新增 `google-auth-oauthlib`）；`gdrive.client.GDriveClient` 測試改為 mock `google.oauth2.credentials.Credentials`，共 7 個測試；全專案 329 個測試全過、覆蓋率 100% | Claude（依 Robin 於 AskUserQuestion 選定方向實作） |

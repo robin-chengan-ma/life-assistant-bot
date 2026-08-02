@@ -420,7 +420,9 @@ def test_webhook_survives_unsupported_file_reply_send_failure(client, monkeypatc
 
 def _set_photo_env(monkeypatch):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
-    monkeypatch.setenv("GDRIVE_KEY_FILE_PATH", "fake-key.json")
+    monkeypatch.setenv("GDRIVE_OAUTH_REFRESH_TOKEN", "fake-refresh-token")
+    monkeypatch.setenv("GDRIVE_OAUTH_CLIENT_ID", "fake-client-id")
+    monkeypatch.setenv("GDRIVE_OAUTH_CLIENT_SECRET", "fake-client-secret")
     monkeypatch.setenv("GDRIVE_FOLDER_ID", "fake-folder-id")
     monkeypatch.setenv("GEMINI_API_IMAGE_KEY1", "fake-image-key1")
     monkeypatch.setenv("GEMINI_API_IMAGE_KEY2", "fake-image-key2")
@@ -449,7 +451,12 @@ def test_webhook_routes_photo_message_and_sends_reply(client, monkeypatch):
     response = client.post("/telegram/webhook", json=payload)
 
     assert response.status_code == 200
-    mock_gdrive_cls.assert_called_once_with(key_file_path="fake-key.json", folder_id="fake-folder-id")
+    mock_gdrive_cls.assert_called_once_with(
+        refresh_token="fake-refresh-token",
+        client_id="fake-client-id",
+        client_secret="fake-client-secret",
+        folder_id="fake-folder-id",
+    )
     assert mock_llm_client_cls.call_count == 2
     mock_llm_client_cls.assert_any_call(api_key="fake-image-key1")
     mock_llm_client_cls.assert_any_call(api_key="fake-image-key2")
@@ -490,7 +497,9 @@ def test_webhook_photo_message_swallows_unexpected_exception(client, monkeypatch
 
 def _set_voice_env(monkeypatch):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
-    monkeypatch.setenv("GDRIVE_KEY_FILE_PATH", "fake-key.json")
+    monkeypatch.setenv("GDRIVE_OAUTH_REFRESH_TOKEN", "fake-refresh-token")
+    monkeypatch.setenv("GDRIVE_OAUTH_CLIENT_ID", "fake-client-id")
+    monkeypatch.setenv("GDRIVE_OAUTH_CLIENT_SECRET", "fake-client-secret")
     monkeypatch.setenv("GDRIVE_FOLDER_ID", "fake-folder-id")
     monkeypatch.setenv("VOICE_API_KEY", "fake-voice-key")
     monkeypatch.setenv("GEMINI_API_BOT_KEY", "fake-gemini-bot-key")
@@ -526,7 +535,12 @@ def test_webhook_routes_voice_message_and_sends_reply(client, monkeypatch):
     response = client.post("/telegram/webhook", json=payload)
 
     assert response.status_code == 200
-    mock_gdrive_cls.assert_called_once_with(key_file_path="fake-key.json", folder_id="fake-folder-id")
+    mock_gdrive_cls.assert_called_once_with(
+        refresh_token="fake-refresh-token",
+        client_id="fake-client-id",
+        client_secret="fake-client-secret",
+        folder_id="fake-folder-id",
+    )
     mock_voice_cls.assert_called_once_with(api_key="fake-voice-key")
     assert mock_llm_client_cls.call_count == 2
     mock_llm_client_cls.assert_any_call(api_key="fake-gemini-bot-key")

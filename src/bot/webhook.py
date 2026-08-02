@@ -193,8 +193,12 @@ def telegram_webhook():
             _, file_id, caption = photo_extracted
             telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
             # 影像辨識用的兩把 Key（見 robinson SPEC.md ADR-13），隨機挑一把使用，分散額度消耗。
+            # gdrive 認證方式見 docs/specs/submodules-core/SPEC.md ADR-10（OAuth 2.0，真人帳號身分）。
             gdrive_client = GDriveClient(
-                key_file_path=os.environ["GDRIVE_KEY_FILE_PATH"], folder_id=os.environ["GDRIVE_FOLDER_ID"]
+                refresh_token=os.environ["GDRIVE_OAUTH_REFRESH_TOKEN"],
+                client_id=os.environ["GDRIVE_OAUTH_CLIENT_ID"],
+                client_secret=os.environ["GDRIVE_OAUTH_CLIENT_SECRET"],
+                folder_id=os.environ["GDRIVE_FOLDER_ID"],
             )
             image_llm_clients = [
                 LLMClient(api_key=os.environ["GEMINI_API_IMAGE_KEY1"]),
@@ -215,7 +219,10 @@ def telegram_webhook():
             _, file_id, duration_seconds, mime_type = voice_extracted
             telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
             gdrive_client = GDriveClient(
-                key_file_path=os.environ["GDRIVE_KEY_FILE_PATH"], folder_id=os.environ["GDRIVE_FOLDER_ID"]
+                refresh_token=os.environ["GDRIVE_OAUTH_REFRESH_TOKEN"],
+                client_id=os.environ["GDRIVE_OAUTH_CLIENT_ID"],
+                client_secret=os.environ["GDRIVE_OAUTH_CLIENT_SECRET"],
+                folder_id=os.environ["GDRIVE_FOLDER_ID"],
             )
             voice_client = VoiceClient(api_key=os.environ["VOICE_API_KEY"])
             # 轉出來的文字會被當成一般文字訊息處理（見 router.handle_voice_message），
