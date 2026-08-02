@@ -786,7 +786,7 @@ def test_handle_voice_message_allows_voice_again_after_lockout_expires(fake_db, 
         voice_lockout_store=lockout_store,
     )
 
-    assert reply == templates.APPENDIX_A_TEXT
+    assert reply == templates.APPENDIX_A_TEXT + router._VOICE_TRANSCRIBED_REMINDER
     assert voice_client.last_audio_bytes == b"raw-ogg"
 
 
@@ -803,7 +803,7 @@ def test_handle_voice_message_does_not_enforce_lockout_when_store_not_provided(f
         _FakeTelegramClient(b"raw-ogg"), _FakeGDriveClient(), voice_client,
     )
 
-    assert reply == templates.APPENDIX_A_TEXT
+    assert reply == templates.APPENDIX_A_TEXT + router._VOICE_TRANSCRIBED_REMINDER
 
 
 def test_handle_voice_message_rejects_within_correction_window(fake_db, monkeypatch):
@@ -843,8 +843,8 @@ def test_handle_voice_message_transcribes_and_routes_as_text(fake_db, monkeypatc
         telegram_client, _FakeGDriveClient(), voice_client,
     )
 
-    # 轉出來的文字（"/rule"）比照一般文字訊息，走完整的指令分派
-    assert reply == templates.APPENDIX_A_TEXT
+    # 轉出來的文字（"/rule"）比照一般文字訊息，走完整的指令分派；後面附註 FR-15 修正窗口提醒
+    assert reply == templates.APPENDIX_A_TEXT + router._VOICE_TRANSCRIBED_REMINDER
     assert telegram_client.last_file_id == "voice123"
     assert voice_client.last_audio_bytes == b"raw-ogg-bytes"
     rows = fake_db.select("media_uploads")
@@ -879,7 +879,7 @@ def test_handle_voice_message_works_for_owner(fake_db, monkeypatch):
         _FakeTelegramClient(b"raw-ogg"), _FakeGDriveClient(), voice_client,
     )
 
-    assert reply == templates.APPENDIX_A_TEXT
+    assert reply == templates.APPENDIX_A_TEXT + router._VOICE_TRANSCRIBED_REMINDER
     owner_row = fake_db.select("users", where="telegram_user_id = %s", params=(ROBIN_ID,), fetch_one=True)
     assert owner_row is not None
 
@@ -896,7 +896,7 @@ def test_handle_voice_message_clears_stale_pending_flow_first(fake_db, monkeypat
         _FakeTelegramClient(b"raw-ogg"), _FakeGDriveClient(), voice_client,
     )
 
-    assert reply == templates.APPENDIX_A_TEXT
+    assert reply == templates.APPENDIX_A_TEXT + router._VOICE_TRANSCRIBED_REMINDER
     assert store.get(FAMILY_ID) is None
 
 

@@ -22,6 +22,14 @@ _VOICE_DURATION_LOCKOUT_REPLY = (
 )
 _VOICE_CORRECTION_WINDOW_REPLY = "你剛剛才傳過語音，15 分鐘內麻煩先用打字修正或補充喔，超過 15 分鐘語音模式就會自動恢復！"
 
+# 2026-08-02 追加：語音成功轉出文字後（代表 FR-15 修正窗口已經開始），主動附註提醒，不要讓使用者
+# 只能靠「又傳一次語音被拒絕」才被動發現這 15 分鐘語音功能被鎖定；鎖定到期時目前沒有主動通知
+# （機器人本身被動回應訊息，沒有排程推播機制），使用者下次互動時語音自然就能用了。
+_VOICE_TRANSCRIBED_REMINDER = (
+    "\n\n（提醒：接下來 15 分鐘內如果想修正或補充剛剛這則語音的內容，麻煩先用打字喔，"
+    "超過 15 分鐘語音功能就會恢復正常！）"
+)
+
 _SET_INVITE_CODES_TRIGGERS = {"/set_invite_codes", "設定通關密碼"}
 _RULE_TRIGGERS = {"/rule", "我要看使用規則"}
 _FUNCTION_TRIGGERS = {"/function", "我要看所有功能"}
@@ -212,6 +220,11 @@ def handle_voice_message(
     使用者最近一次是否因單次語音超過 10 分鐘而被鎖定」——這 15 分鐘內語音功能整體關閉，跟
     FR-15 只鎖「修正情境」是兩條獨立規則。呼叫端沒傳的話（例如既有測試不關心這個行為）就地
     建立一個新的、不會跨呼叫共用的 store，等於停用這個檢查，不影響其餘行為。
+
+    2026-08-02（Robin 問鎖定/解除有沒有提醒使用者）：轉錄成功時代表 FR-15 修正窗口正式開始，
+    在 `handle_message()` 的回覆後面主動附註一句提醒（見 `_VOICE_TRANSCRIBED_REMINDER`），
+    不讓使用者只能靠「又傳一次語音被拒絕」才被動發現被鎖定；鎖定解除本身沒有主動通知
+    （機器人是被動回應訊息的架構，沒有排程推播機制，下次互動語音自然就恢復可用）。
     """
     user = _get_identified_user(db, telegram_user_id)
     if user is None:
@@ -244,10 +257,12 @@ def handle_voice_message(
 
     # via_voice=True（FR-16a）：讓其餘一般聊天/指令分派也能識別這則訊息是語音轉出來的（目前只有
     # pending_*_final_confirm 這幾個 flow 會用到，其餘分支不受影響）。
-    return handle_message(
+    reply = handle_message(
         db, state_store, telegram_user_id, transcribed_text,
         llm_client=llm_client, text_llm_client=text_llm_client, via_voice=True,
     )
+    # 2026-08-02：主動附註 FR-15 修正窗口提醒，見上方 _VOICE_TRANSCRIBED_REMINDER 說明。
+    return reply + _VOICE_TRANSCRIBED_REMINDER
 
 
 def _dispatch_active_flow(
