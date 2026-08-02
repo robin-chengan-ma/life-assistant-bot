@@ -15,7 +15,7 @@ updated: 2026-08-01
 
 ## 目前階段
 
-**Phase 1（MVP）進行中 — Step 1.1、Step 1.2、Step 1.3（Gemini 對話核心）、Step 1.3a（`/function` 改版）、Step 1.3b（影像辨識基礎流程）、Step 1.4（語音轉文字）、Step 1.5（個資偵測與遮蔽機制）已完成，下一步 Step 1.6（基礎錯誤處理層）**
+**Phase 1（MVP）進行中 — Step 1.1、Step 1.2、Step 1.3（Gemini 對話核心）、Step 1.3a（`/function` 改版）、Step 1.3b（影像辨識基礎流程）、Step 1.4（語音轉文字）、Step 1.5（個資偵測與遮蔽機制）、Step 1.6（基礎錯誤處理層）已完成，下一步 Step 1.7（待辦事項模組）**
 
 ## 目標時程（2026-07-30 更新：改為三週制，因新增多模態影像/語音處理架構）
 
@@ -110,6 +110,7 @@ updated: 2026-08-01
 | 2026-08-02 | **修正 Telegram send_text 400 錯誤 + 排查 gdrive 金鑰路徑**：Robin 實測回報兩個部署後問題：① `/function` 觸發 Telegram `sendMessage` 400 Bad Request，根因是 `send_text()` 預設 `parse_mode="Markdown"`，但 LLM 生成的回覆文字無法保證符合 Telegram 舊版 Markdown 語法，格式不符會整則被拒收——所有 LLM 生成回覆都有此風險，非 `/function` 獨有；Robin 選擇直接關閉 Markdown，改為預設純文字傳送 ② 語音功能因 `GDriveClient` 找不到 Service Account 金鑰檔而失敗，確認是 Robin 把金鑰放在 Render Secret Files（實際掛載路徑 `/etc/secrets/<filename>`），但 `GDRIVE_KEY_FILE_PATH` 環境變數設定的是相對路徑，兩者對不上——純屬 Render 環境變數設定問題，非程式碼錯誤，待 Robin 調整環境變數即可解決；全專案 285 個測試全過、覆蓋率 100% |
 | 2026-08-02 | **Phase 1 Step 1.5 完成**：個資偵測與遮蔽機制，FR-13／FR-13a～FR-13d 全數完成，展開為獨立 [docs/specs/privacy-masking/SPEC.md](../privacy-masking/SPEC.md)；Robin 確認語意層 LLM 呼叫改用新申請的專用 Key（`GEMINI_API_PRIVACY_KEY`），不佔用既有聊天配額（吸取先前多次 429 的教訓）；新增 `src/bot/privacy.py`（Regex 硬規則＋LLM 語意雙層防線），整合進一般聊天核心與圖片說明文字，語音因統一轉文字後走既有流程天然涵蓋；`/clean-target-dialog` 的搜尋主題刻意排除遮蔽，避免使用者用個資內容當關鍵字搜尋刪除時功能失效；全專案 326 個測試全過、覆蓋率 100% |
 | 2026-08-02 | **gdrive 改用 OAuth 2.0（真人帳號身分）**：Robin 實測語音上傳撞到 Google Drive API `403 storageQuotaExceeded`，查證確認 Service Account 完全沒有 Drive 儲存額度，改用 Shared Drive 需要付費 Google Workspace；經 AskUserQuestion 確認，Robin 選擇改用 OAuth 讓程式以本人身分上傳；`submodules/gdrive/client.py` 建構子改為 `refresh_token`／`client_id`／`client_secret`／`folder_id`，新增一次性本機互動授權腳本 `get_refresh_token.py`；`webhook.py` 兩處建構呼叫與環境變數同步更新；新增 submodules-core SPEC.md ADR-10、robinson SPEC.md ADR-13 補充決策；全專案 329 個測試全過、覆蓋率 100%；**待 Robin 執行的手動步驟**：Google Cloud Console 建立 OAuth 用戶端 ID、發布狀態設為正式版、本機跑 `get_refresh_token.py` 取得 refresh token、設定 Render 環境變數 |
+| 2026-08-02 | **Phase 1 Step 1.6 完成**：基礎錯誤處理層，FR-19a／FR-20／FR-21 完成（FR-19b～FR-19i 的 AI 自主診斷／分級降級／重試機制仍留待 Phase 2 Step 2.4～2.6）。經 AskUserQuestion 確認兩個範圍決策：① FR-20 新增 Owner 專屬指令 `/recovered`，Robin 判斷修好後手動觸發，廣播固定文案給所有已綁定家人（排除 Robin 自己）② FR-21 Gemini 免費額度監控 Phase 1 先跳過（官方無查詢即時用量的 API），只做 Neon 容量監控（新增 `src/bot/monitoring.py` 的 `NeonCapacityMonitor`，借用 `/healthz` 既有的 10 分鐘 cron 頻率，達 80% 私訊 Robin、回落後重置避免重複告警）；FR-19a：`webhook.py` 新增 `_notify_robin_of_error()`／`_summarize_user_input()`，例外發生時除了記錄 Traceback＋情境到 log，額外私訊 Robin 完整原始內容；`submodules/cloudsql/client.py` 新增 `execute_query()` 供監控查詢使用；全專案 352 個測試全過、覆蓋率 100% |
 
 ## 待決事項
 
@@ -122,6 +123,6 @@ updated: 2026-08-01
 
 ## 下一步
 
-1. **Step 1.5：個資偵測與刪除機制**——Regex 硬規則 + LLM 語意雙層防線（FR-13、FR-13a～FR-13d）
-2. 接續 Step 1.6（基礎錯誤處理層）
+1. **Step 1.7：待辦事項模組**（FR-31、FR-32）
+2. 接續 Step 1.8（心情小記模組）、Step 1.9（客訴收集模組）
 3. 每天對照「建議每日分配」檢查進度，落後時優先保住 Phase 1 核心體驗（對話核心、待辦、心情小記），Step 1.9 客訴收集等次要 Step 可延後不必硬趕

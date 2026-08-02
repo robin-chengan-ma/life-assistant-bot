@@ -31,6 +31,8 @@ _VOICE_TRANSCRIBED_REMINDER = (
 )
 
 _SET_INVITE_CODES_TRIGGERS = {"/set_invite_codes", "設定通關密碼"}
+# 2026-08-02（Step 1.6，見 robinson SPEC.md FR-20）：Owner 專屬，廣播「我康復了」給所有家人。
+_RECOVERED_TRIGGERS = {"/recovered"}
 _RULE_TRIGGERS = {"/rule", "我要看使用規則"}
 _FUNCTION_TRIGGERS = {"/function", "我要看所有功能"}
 _MY_TOGGLES_TRIGGERS = {"/my_toggles", "我的功能設定"}
@@ -61,6 +63,7 @@ def handle_message(
     image_llm_clients: list | None = None,
     via_voice: bool = False,
     privacy_llm_client=None,
+    telegram_client=None,
 ) -> str:
     """處理一則來自 Telegram 的文字訊息，回傳要回覆的文字。
 
@@ -79,6 +82,9 @@ def handle_message(
     `privacy_llm_client`（2026-08-02，見 docs/specs/privacy-masking/SPEC.md）：個資遮蔽 LLM 語意層
     專用的獨立 Key，只會透傳到 `chat.handle_chat_message()`（見該函式 docstring）；`None` 時遮蔽
     只跑免費的 Regex 層，不影響其餘指令/對話流程分支。
+
+    `telegram_client`（2026-08-02，Step 1.6，見 robinson SPEC.md FR-20）：只有 `/recovered`
+    這個 Owner 專屬指令會用到（廣播「我康復了」給所有已綁定家人），其餘分支不需要。
     """
     text = (text or "").strip()
     is_owner = auth.is_owner(telegram_user_id)
@@ -102,6 +108,8 @@ def handle_message(
             return commands.start_set_toggle(db, state_store, telegram_user_id)
         if text in _MY_TOGGLES_TRIGGERS:
             return commands.start_my_toggles(db, state_store, telegram_user_id, user_id)
+        if text in _RECOVERED_TRIGGERS:
+            return commands.handle_recovered(db, telegram_client)
     else:
         user = auth.find_user_by_telegram_id(db, telegram_user_id)
         if user is None:

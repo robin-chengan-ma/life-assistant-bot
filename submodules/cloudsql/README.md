@@ -45,6 +45,13 @@ db.close()
 db.execute("CREATE TABLE IF NOT EXISTS todos (id serial primary key, title text)")
 ```
 
+執行任意「會回傳資料列」的 SQL（`select()` 的 table/columns/where 介面無法表達的查詢，例如系統函式）：
+
+```python
+rows = db.execute_query("SELECT pg_database_size(current_database()) AS size_bytes")
+size_bytes = rows[0]["size_bytes"]
+```
+
 ## 設計限制（務必遵守）
 
 1. `table` 與 `columns` 只能傳入程式內部信任的字串常數，**絕對不可以**把使用者輸入直接當成 table/column 名稱帶入。
@@ -52,6 +59,7 @@ db.execute("CREATE TABLE IF NOT EXISTS todos (id serial primary key, title text)
 3. `update()` / `delete()` 都要求必填 `where`，避免誤改/誤刪整張表。
 4. 連線池上限預設 `max_conn=5`，對應 Neon 免費方案的連線數限制；若升級付費方案可自行調整。
 5. `execute()` 是繞過參數化保護的逃生口，只給程式內部信任的 SQL（如 migration 檔案）使用，絕對不可以把使用者輸入拼進去；目前唯一呼叫端是 `src/migrations/runner.py`（見 ADR-11）。
+6. `execute_query()` 跟 `execute()` 一樣是逃生口，差別只在於它會回傳資料列，用於系統層級查詢（例如 `src/bot/monitoring.py` 查 Neon 容量），一樣不可以把使用者輸入拼進去。
 
 ## 對應 Spec
 

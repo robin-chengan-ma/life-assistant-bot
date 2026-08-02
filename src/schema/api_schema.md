@@ -43,7 +43,7 @@
 {"status": "ok"}
 ```
 
-**備註**：純 keep-alive 用途，避免 Render 免費方案 15 分鐘無請求即休眠。
+**備註**：純 keep-alive 用途，避免 Render 免費方案 15 分鐘無請求即休眠。**2026-08-02 新增（Step 1.6，見 robinson SPEC.md FR-21）**：順便觸發 `main._check_neon_capacity()`，借用 cron-job.org 既有的每 10 分鐘呼叫頻率檢查 Neon 資料庫容量，達 80% 門檻時私訊 Robin（`src/bot/monitoring.py` 的 `NeonCapacityMonitor`），不影響本端點回應內容與狀態碼；監控邏輯本身包一層 try/except，絕對不會讓健康檢查端點回傳失敗。
 
 ---
 
@@ -54,7 +54,7 @@
 **權限**：依訊息內容與使用者身分於內部再判斷（通關密碼驗證、功能開關等）
 **對應 FR**：FR-1、FR-2、FR-5～FR-8、FR-17
 
-**備註**：所有使用者文字/圖片訊息的統一入口，內部依訊息類型分三路：① `document`/`video`/`video_note`/`animation`/`sticker` 等不支援格式 → 直接回覆固定拒絕文案，不進入 DB/Gemini 流程；② 圖片訊息（`message.photo`）→ 呼叫 `router.handle_photo_message()`（見下方「圖片訊息」路由）；③ 其餘文字訊息 → 依內容路由到 `/rule`、`/function`、`/complaint` 或各功能模組的處理邏輯。`voice`/`audio` 依規格本來就該支援，Step 1.4 實作前暫沿用「忽略、不回覆」的既有行為。**2026-07-31 新增（platform-auth SPEC.md FR-7）**：`handle_message()`／`handle_photo_message()` 拋出未預期例外時（例如 Gemini API 額度超限），一律記錄 Traceback、回覆固定安全用語，並仍回傳 HTTP 200——避免 Telegram 因收不到 200 而重送同一則訊息，形成重試風暴加速燒 API 額度；完整錯誤分級處理仍待 robinson SPEC.md Step 1.6。
+**備註**：所有使用者文字/圖片訊息的統一入口，內部依訊息類型分三路：① `document`/`video`/`video_note`/`animation`/`sticker` 等不支援格式 → 直接回覆固定拒絕文案，不進入 DB/Gemini 流程；② 圖片訊息（`message.photo`）→ 呼叫 `router.handle_photo_message()`（見下方「圖片訊息」路由）；③ 其餘文字訊息 → 依內容路由到 `/rule`、`/function`、`/complaint` 或各功能模組的處理邏輯。`voice`/`audio` 依規格本來就該支援，Step 1.4 實作前暫沿用「忽略、不回覆」的既有行為。**2026-07-31 新增（platform-auth SPEC.md FR-7）**：`handle_message()`／`handle_photo_message()` 拋出未預期例外時（例如 Gemini API 額度超限），一律記錄 Traceback、回覆固定安全用語，並仍回傳 HTTP 200——避免 Telegram 因收不到 200 而重送同一則訊息，形成重試風暴加速燒 API 額度。**2026-08-02 補充（Step 1.6，見 FR-19a）**：記錄的 Traceback 附上「觸發功能」（photo/voice/text）與使用者輸入摘要，並額外私訊 Robin 完整原始內容（`webhook._notify_robin_of_error()`），讓他自己判斷原因；FR-19f／FR-19g 的「一般感冒級／重大疾病級」分級降級仍待 Phase 2 Step 2.6。
 
 ---
 
@@ -66,6 +66,19 @@
 **對應 FR**：FR-6d、FR-55
 
 **Response**：固定文字，見 `docs/specs/robinson/SPEC.md` 附錄 A，不經過 LLM 生成。
+
+---
+
+### `/recovered`（內部路由，非對外 HTTP 端點）
+
+**狀態**：已實作（`src/bot/commands.py::handle_recovered`，2026-08-02，Step 1.6，見 robinson SPEC.md FR-20）
+**觸發方式**：Robin 於對話框輸入 `/recovered`
+**權限**：僅 Owner（Robin）
+**對應 FR**：FR-20
+
+**Response**：文字，回報實際成功通知的家人人數（例如「好的！已經通知 2 位家人我恢復正常運作了！」）
+
+**備註**：Phase 1 沒有 Step 2.4 的 AI 自主修復／GitHub PR 機制，「有沒有修好」完全由 Robin 自己判斷，這個指令只負責「廣播」這個動作本身——查詢所有已綁定家人（`users.telegram_user_id IS NOT NULL AND is_owner = FALSE`），逐一發送固定的「我康復了」文案；刻意排除 Robin 自己（他就是下指令的人，不需要廣播給自己）；單一家人傳送失敗不影響其他人，記錄失敗但繼續廣播下一位。非 Owner 輸入 `/recovered` 不會觸發任何動作，會落入一般聊天核心當成普通文字處理。
 
 ---
 

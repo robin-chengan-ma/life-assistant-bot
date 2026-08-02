@@ -1,7 +1,9 @@
 """Telegram Webhook 入口（對應 docs/specs/platform-auth/SPEC.md FR-1）。"""
 import logging
 import os
+import traceback
 from collections import OrderedDict
+from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request
 
@@ -24,8 +26,9 @@ _voice_lockout_store = ConversationStateStore()
 
 _logger = logging.getLogger(__name__)
 
-# Step 1.6（FR-19）完整版之前的暫時性安全網文案：任何未預期例外（例如 Gemini 429 額度超限）
-# 都回這句，不揭露技術細節；正式的「生病了」人格化用語與 Robin 私訊通知留給 Step 1.6 一併做。
+# FR-19：對外一律回這句安全用語，不揭露技術細節（Traceback 只私訊 Robin，見 FR-19a）。
+# 完整的「一般感冒級／重大疾病級」分級降級（FR-19f/FR-19g，需要區分是不是 LLM 本身掛掉）
+# 留待 Phase 2 Step 2.6，Phase 1 先用同一句安全用語涵蓋所有未預期例外。
 _UNEXPECTED_ERROR_REPLY = "羅賓森好像不太舒服，等一下再試試看喔！"
 
 # 目前支援文字、圖片、語音（voice 與 audio 兩種訊息類型都算，見 _extract_voice），
@@ -40,6 +43,57 @@ _UNSUPPORTED_FILE_KEYS = ("document", "video", "video_note", "animation", "stick
 # 避免同一則訊息被重複拿去打 Gemini。上限避免長時間運行下記憶體無限增長。
 _PROCESSED_UPDATE_IDS_MAXLEN = 1000
 _processed_update_ids: "OrderedDict[int, None]" = OrderedDict()
+
+
+# 2026-08-02（Step 1.6，見 robinson SPEC.md FR-19a）：簡化版通知，Phase 1 不含 AI 自主診斷
+# （那是 Step 2.4 的事），只把完整 Traceback 加上發生情境私訊給 Robin，讓他自己判斷原因。
+_ROBIN_ERROR_NOTIFY_TEMPLATE = (
+    "🐛 系統發生未預期例外\n"
+    "時間：{timestamp}\n"
+    "觸發功能：{feature}\n"
+    "使用者 Telegram ID：{telegram_user_id}\n"
+    "輸入摘要：{input_summary}\n\n"
+    "Traceback：\n{traceback_text}"
+)
+
+
+def _summarize_user_input(text: str | None, max_len: int = 300) -> str:
+    """FR-19a：私訊 Robin 的錯誤通知裡附上「使用者輸入摘要」，過長時截斷，避免整則訊息
+    （摘要 + Traceback）超過 Telegram 單則訊息 4096 字元上限。
+    """
+    if not text:
+        return "(無文字內容)"
+    text = text.strip()
+    if len(text) > max_len:
+        return text[:max_len] + "...（已截斷）"
+    return text
+
+
+def _notify_robin_of_error(feature: str, telegram_user_id: int, input_summary: str) -> None:
+    """FR-19a 簡化版通知：例外發生時，除了 log（見呼叫端的 `_logger.exception`），額外私訊
+    Robin 完整原始 Traceback，讓他自己判斷原因並決定要不要修復；修復後可用 `/recovered`
+    （FR-20）廣播給所有人。
+
+    整段包在 try/except 裡：私訊失敗（例如 Telegram API 本身也在鬧脾氣、或
+    `ROBIN_TELEGRAM_TOKEN`／`TELEGRAM_BOT_TOKEN` 沒設定）絕對不能反過來讓這個「錯誤通知」
+    本身變成另一個未被捕捉的例外，那樣就本末倒置了；沒設定必要環境變數時直接跳過，不視為錯誤。
+    """
+    owner_chat_id = os.environ.get("ROBIN_TELEGRAM_TOKEN")
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    if not owner_chat_id or not bot_token:
+        return
+    try:
+        message = _ROBIN_ERROR_NOTIFY_TEMPLATE.format(
+            timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+            feature=feature,
+            telegram_user_id=telegram_user_id,
+            input_summary=input_summary,
+            # Telegram 訊息長度上限 4096 字元，扣掉模板其餘欄位後留給 Traceback 的緩衝空間。
+            traceback_text=traceback.format_exc()[-3200:],
+        )
+        TelegramClient(bot_token).send_text(chat_id=owner_chat_id, text=message)
+    except Exception:
+        _logger.exception("私訊 Robin 錯誤通知失敗")
 
 
 def _build_privacy_llm_client() -> LLMClient | None:
@@ -178,20 +232,28 @@ def telegram_webhook():
             _logger.exception("傳送不支援格式提示失敗（telegram_user_id=%s）", unsupported_user_id)
         return jsonify({"ok": True}), 200
 
+    # 2026-08-02（Step 1.6，見 FR-19a）：先把「觸發功能」與「使用者輸入摘要」算出來，不論後面
+    # 哪個分支拋例外，except 區塊都能直接拿來組私訊 Robin 的錯誤通知內容。
     if photo_extracted is not None:
         telegram_user_id = photo_extracted[0]
+        error_feature = "photo"
+        error_input_summary = _summarize_user_input(photo_extracted[2])
     elif voice_extracted is not None:
         telegram_user_id = voice_extracted[0]
+        error_feature = "voice"
+        error_input_summary = f"語音/音檔訊息（duration={voice_extracted[2]}s, mime_type={voice_extracted[3]}）"
     else:
         telegram_user_id = text_extracted[0]
+        error_feature = "text"
+        error_input_summary = _summarize_user_input(text_extracted[1])
 
     reply = _UNEXPECTED_ERROR_REPLY
     db = None
     try:
         db = CloudSQLClient()
+        telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
         if photo_extracted is not None:
             _, file_id, caption = photo_extracted
-            telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
             # 影像辨識用的兩把 Key（見 robinson SPEC.md ADR-13），隨機挑一把使用，分散額度消耗。
             # gdrive 認證方式見 docs/specs/submodules-core/SPEC.md ADR-10（OAuth 2.0，真人帳號身分）。
             gdrive_client = GDriveClient(
@@ -217,7 +279,6 @@ def telegram_webhook():
             )
         elif voice_extracted is not None:
             _, file_id, duration_seconds, mime_type = voice_extracted
-            telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
             gdrive_client = GDriveClient(
                 refresh_token=os.environ["GDRIVE_OAUTH_REFRESH_TOKEN"],
                 client_id=os.environ["GDRIVE_OAUTH_CLIENT_ID"],
@@ -252,18 +313,22 @@ def telegram_webhook():
             text_llm_client = LLMClient(api_key=os.environ["GEMINI_API_TEXT_KEY"])
             reply = handle_message(
                 db, _state_store, telegram_user_id, text, llm_client=llm_client, text_llm_client=text_llm_client,
-                privacy_llm_client=_build_privacy_llm_client(),
+                privacy_llm_client=_build_privacy_llm_client(), telegram_client=telegram_client,
             )
     except Exception:
-        # 暫時性安全網（Step 1.6／FR-19a 完整版之前）：任何未預期例外（例如 Gemini 429 額度超限、
-        # 本地端節流保護 LLMQuotaGuardError、DB 連線失敗等）都要在這裡吞掉，改回安全用語並仍然
-        # 回 200——否則 Flask 會回 500，Telegram 收不到 200 就會自動重送同一則訊息，變成
-        # 「失敗 → 重試 → 再失敗」的迴圈，把 API 額度燒得更快。
+        # 安全網（見 FR-19f/FR-19g，Phase 2 才會做完整的分級降級）：任何未預期例外（例如 Gemini
+        # 429 額度超限、本地端節流保護 LLMQuotaGuardError、DB 連線失敗等）都要在這裡吞掉，改回
+        # 安全用語並仍然回 200——否則 Flask 會回 500，Telegram 收不到 200 就會自動重送同一則
+        # 訊息，變成「失敗 → 重試 → 再失敗」的迴圈，把 API 額度燒得更快。
+        # FR-19a：除了記錄完整 Traceback 與情境到 log，額外私訊 Robin 原始 log（簡化版通知，
+        # Phase 1 不含 AI 自主診斷，見 Step 2.4）。
         _logger.exception(
-            "處理 Telegram 訊息時發生未預期例外（telegram_user_id=%s），已回覆安全用語並停止重試",
+            "處理 Telegram 訊息時發生未預期例外（觸發功能=%s，telegram_user_id=%s），已回覆安全用語並停止重試",
+            error_feature,
             telegram_user_id,
         )
         reply = _UNEXPECTED_ERROR_REPLY
+        _notify_robin_of_error(error_feature, telegram_user_id, error_input_summary)
     finally:
         if db is not None:
             db.close()

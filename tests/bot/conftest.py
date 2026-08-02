@@ -79,6 +79,8 @@ class FakeCloudSQLClient:
             return row.get("category") == params[0] and row.get("user_id") == params[1]
         if where == "user_id = %s AND media_type = %s":
             return row.get("user_id") == params[0] and row.get("media_type") == params[1]
+        if where == "telegram_user_id IS NOT NULL AND is_owner = FALSE":
+            return row.get("telegram_user_id") is not None and row.get("is_owner") is False
 
         raise NotImplementedError(f"FakeCloudSQLClient 尚未支援這個 where 條件：{where}")
 

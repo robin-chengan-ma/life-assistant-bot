@@ -214,6 +214,7 @@ def test_webhook_routes_valid_message_and_sends_reply(client, monkeypatch):
         llm_client=mock_bot_llm_instance,
         text_llm_client=mock_text_llm_instance,
         privacy_llm_client=None,
+        telegram_client=mock_telegram_instance,
     )
     mock_db_instance.close.assert_called_once()
     mock_telegram_instance.send_text.assert_called_once_with(chat_id=123, text="哈囉！")
@@ -293,6 +294,75 @@ def test_webhook_swallows_unexpected_exception_and_still_returns_200(client, mon
     mock_telegram_instance.send_text.assert_called_once_with(
         chat_id=123, text=webhook._UNEXPECTED_ERROR_REPLY
     )
+
+
+def test_webhook_exception_notifies_robin_when_configured(client, monkeypatch):
+    # FR-19a（Step 1.6）：ROBIN_TELEGRAM_TOKEN 有設定時，例外發生應該額外私訊 Robin 完整
+    # Traceback，跟回覆給原本觸發訊息的使用者是兩個獨立的 send_text 呼叫。
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", "999")
+    monkeypatch.setenv("GEMINI_API_BOT_KEY", "fake-gemini-bot-key")
+    monkeypatch.setenv("GEMINI_API_TEXT_KEY", "fake-gemini-text-key")
+
+    monkeypatch.setattr(
+        webhook, "handle_message", MagicMock(side_effect=RuntimeError("429 RESOURCE_EXHAUSTED"))
+    )
+    monkeypatch.setattr(webhook, "CloudSQLClient", MagicMock(return_value=MagicMock()))
+    monkeypatch.setattr(webhook, "LLMClient", MagicMock())
+
+    mock_telegram_instance = MagicMock()
+    monkeypatch.setattr(webhook, "TelegramClient", MagicMock(return_value=mock_telegram_instance))
+
+    payload = {"message": {"from": {"id": 123}, "text": "今天天氣如何？"}}
+    response = client.post("/telegram/webhook", json=payload)
+
+    assert response.status_code == 200
+    assert mock_telegram_instance.send_text.call_count == 2
+    robin_call = next(
+        call for call in mock_telegram_instance.send_text.call_args_list if call.kwargs["chat_id"] == "999"
+    )
+    assert "429 RESOURCE_EXHAUSTED" in robin_call.kwargs["text"]
+    assert "觸發功能：text" in robin_call.kwargs["text"]
+    assert "今天天氣如何？" in robin_call.kwargs["text"]
+    user_call = next(
+        call for call in mock_telegram_instance.send_text.call_args_list if call.kwargs["chat_id"] == 123
+    )
+    assert user_call.kwargs["text"] == webhook._UNEXPECTED_ERROR_REPLY
+
+
+def test_summarize_user_input_returns_placeholder_for_empty():
+    assert webhook._summarize_user_input(None) == "(無文字內容)"
+    assert webhook._summarize_user_input("") == "(無文字內容)"
+
+
+def test_summarize_user_input_truncates_long_text():
+    long_text = "a" * 500
+    summary = webhook._summarize_user_input(long_text, max_len=300)
+    assert len(summary) < len(long_text)
+    assert summary.endswith("（已截斷）")
+
+
+def test_summarize_user_input_strips_and_returns_short_text():
+    assert webhook._summarize_user_input("  哈囉  ") == "哈囉"
+
+
+def test_notify_robin_of_error_skips_when_env_vars_missing(monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    mock_telegram_cls = MagicMock()
+    monkeypatch.setattr(webhook, "TelegramClient", mock_telegram_cls)
+
+    webhook._notify_robin_of_error("text", 123, "摘要")
+
+    mock_telegram_cls.assert_not_called()
+
+
+def test_notify_robin_of_error_swallows_send_failure(monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", "999")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+    monkeypatch.setattr(webhook, "TelegramClient", MagicMock(side_effect=RuntimeError("Telegram 掛了")))
+
+    webhook._notify_robin_of_error("text", 123, "摘要")  # 不應該往外拋
 
 
 # --- update_id 去重（FR-7a）---

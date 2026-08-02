@@ -124,3 +124,19 @@ class CloudSQLClient:
         with self._get_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(query, params or ())
+
+    def execute_query(self, query: str, params: tuple | None = None) -> list[dict[str, Any]]:
+        """執行任意「會回傳資料列」的 SQL 語句（SELECT 類），回傳結果列。
+
+        跟 execute() 一樣是繞過 select() 的 table/columns/where 介面的逃生口，用於 select()
+        無法表達的查詢（例如 `SELECT pg_database_size(current_database())` 這種沒有實體
+        table 可對應的系統函式呼叫）。2026-08-02（Step 1.6，見 robinson SPEC.md FR-21）：
+        `src/bot/monitoring.py` 用這個方法查詢 Neon 資料庫目前佔用容量。
+
+        安全注意事項：跟 execute() 一樣，query 內容一律只能是程式內部信任的字串常數，絕對不可以
+        把使用者輸入直接拼進 query。
+        """
+        with self._get_connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute(query, params or ())
+                return [dict(row) for row in cursor.fetchall()]

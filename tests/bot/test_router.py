@@ -3,7 +3,7 @@ from io import BytesIO
 
 from PIL import Image
 
-from src.bot import router, templates, voice
+from src.bot import commands, router, templates, voice
 from src.bot.state import ConversationStateStore
 
 
@@ -295,6 +295,48 @@ def test_general_message_with_pii_gets_masked_and_reminder(fake_db, monkeypatch)
 
     assert "0912345678" not in llm_client.last_prompt
     assert "提醒" in reply
+
+
+# --- /recovered（FR-20，Step 1.6，Owner 專屬）---
+
+
+class _FakeTelegramClientForRecovered:
+    """模擬 submodules.telegram.client.TelegramClient，只實作 send_text（與下方 photo/voice
+    測試用的 `_FakeTelegramClient`（只實作 `get_file_bytes`）刻意分開命名，避免同名覆蓋）。"""
+
+    def __init__(self):
+        self.sent = []
+
+    def send_text(self, chat_id, text):
+        self.sent.append((chat_id, text))
+
+
+def test_recovered_command_broadcasts_to_family_when_owner(fake_db, monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
+    fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "媽媽", "is_owner": False})
+    store = ConversationStateStore()
+    telegram_client = _FakeTelegramClientForRecovered()
+
+    reply = router.handle_message(fake_db, store, ROBIN_ID, "/recovered", telegram_client=telegram_client)
+
+    assert "1 位家人" in reply
+    assert telegram_client.sent == [(FAMILY_ID, commands._RECOVERED_BROADCAST_TEXT)]
+
+
+def test_recovered_command_ignored_for_non_owner(fake_db, monkeypatch):
+    # 非 Owner 傳「/recovered」不應該觸發廣播，只會落入一般聊天核心當成一般文字處理。
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+    telegram_client = _FakeTelegramClientForRecovered()
+    llm_client = _FakeLLMClient(response_text="收到！")
+
+    router.handle_message(
+        fake_db, store, FAMILY_ID, "/recovered", llm_client=llm_client, telegram_client=telegram_client,
+    )
+
+    assert telegram_client.sent == []
 
 
 def test_chat_core_unknown_reply_sets_pending_user_knowledge_state(fake_db, monkeypatch):
