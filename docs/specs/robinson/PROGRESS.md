@@ -15,7 +15,7 @@ updated: 2026-08-01
 
 ## 目前階段
 
-**Phase 1（MVP）進行中 — Step 1.1、Step 1.2、Step 1.3（Gemini 對話核心）、Step 1.3a（`/function` 改版）、Step 1.3b（影像辨識基礎流程）、Step 1.4（語音轉文字）已完成，下一步 Step 1.5（個資偵測與刪除機制）**
+**Phase 1（MVP）進行中 — Step 1.1、Step 1.2、Step 1.3（Gemini 對話核心）、Step 1.3a（`/function` 改版）、Step 1.3b（影像辨識基礎流程）、Step 1.4（語音轉文字）、Step 1.5（個資偵測與遮蔽機制）已完成，下一步 Step 1.6（基礎錯誤處理層）**
 
 ## 目標時程（2026-07-30 更新：改為三週制，因新增多模態影像/語音處理架構）
 
@@ -49,7 +49,7 @@ updated: 2026-08-01
 | Phase | 內容 | 狀態 | 目標日期 | 備註 |
 | --- | --- | --- | --- | --- |
 | Phase 0 | 專案基礎建設（repo 結構、金鑰串接、Render/Neon/cron-job、DB 初始化） | 🟢 已完成 | 7/29～7/30 | 全部 Step 完成：`submodules/`、`src/schema/`、`src/migrations/`（ADR-11）骨架就緒；`/healthz` 已部署上線並掛上 cron-job.org；第一批 5 張表（`users`／`invite_codes`／`knowledge_base`／`conversation_logs`／`feature_toggles`）已核准並套用成功 |
-| Phase 1（MVP） | 核心平台（通關密碼對話式設定、歡迎訊息、`/rule`／`/function`／`/complaint` 內建指令、功能開關、Gemini 對話+知識庫、影像辨識、語音、個資遮蔽、基礎錯誤處理）＋待辦事項＋心情小記＋客訴收集 | 🟡 進行中 | 7/31～8/7 | Step 1.1、1.2、1.3、1.3a、1.3b、1.4 完成；FR-56 全面改版為總覽＋按需深入＋情境範例（FR-56a～FR-56d） |
+| Phase 1（MVP） | 核心平台（通關密碼對話式設定、歡迎訊息、`/rule`／`/function`／`/complaint` 內建指令、功能開關、Gemini 對話+知識庫、影像辨識、語音、個資遮蔽、基礎錯誤處理）＋待辦事項＋心情小記＋客訴收集 | 🟡 進行中 | 7/31～8/7 | Step 1.1、1.2、1.3、1.3a、1.3b、1.4、1.5 完成；FR-56 全面改版為總覽＋按需深入＋情境範例（FR-56a～FR-56d） |
 | Phase 2 | 記帳＋體態管理＋重要通知＋異常自主診斷與 GitHub PR 治理＋重試機制＋分級降級 | ⚪ 未開始 | 8/8～8/11 | Step 2.4～2.6 為新增範圍，技術複雜度最高，已獨立預留兩天；體態模組飲食分析需附誤差聲明（FR-17c） |
 | Phase 3 | 個人技能成長（TOEIC 雙軌題庫 Pipeline＋YouTube 技術情報模組，僅 Robin）＋好友模式 | ⚪ 未開始 | 8/12～8/14 | 新增 YouTube 模組（FR-57～FR-59，見 ADR-9）；TOEIC 語音處理改用 Groq Whisper（ADR-12） |
 | Phase 4 | 求職模組（104 爬蟲＋評分） | ⚪ 未開始 | 8/15～8/16 | 爬蟲策略已定案：每週一次、AJAX API、無登入態、禮貌性延遲、ETL 去重（FR-34a～FR-34d） |
@@ -108,6 +108,7 @@ updated: 2026-08-01
 | 2026-08-02 | **補上 FR-14 規則 1（語音超時全面鎖定）**：Robin 指出印象中 15 分鐘鎖定應該是「單次錄音超過 10 分鐘才觸發」，核對後發現這其實跟 FR-15「修正情境鎖定」是兩條獨立規則，目前只做了後者，前者完全沒實作；確認兩條都要做，新增 `voice.mark_duration_violation()`／`is_locked_out_from_duration_violation()`，`webhook.py` 新增長期持有的 `_voice_lockout_store`；全專案 284 個測試全過、覆蓋率 100% |
 | 2026-08-02 | **FR-15 修正窗口主動提醒**：Robin 追問語音功能被限制/恢復時會不會提醒使用者；盤點後發現 FR-14 規則 1 的拒絕回覆已有主動提示，但 FR-15 修正窗口開始當下、鎖定到期時都沒有主動通知（機器人被動回應訊息，沒有排程/推播機制）；Robin 選擇先聚焦較簡單的一項，新增 `router._VOICE_TRANSCRIBED_REMINDER`，語音成功轉出文字後於回覆末尾附註 15 分鐘修正窗口提醒；鎖定到期主動通知維持現狀；全專案 284 個測試全過、覆蓋率 100% |
 | 2026-08-02 | **修正 Telegram send_text 400 錯誤 + 排查 gdrive 金鑰路徑**：Robin 實測回報兩個部署後問題：① `/function` 觸發 Telegram `sendMessage` 400 Bad Request，根因是 `send_text()` 預設 `parse_mode="Markdown"`，但 LLM 生成的回覆文字無法保證符合 Telegram 舊版 Markdown 語法，格式不符會整則被拒收——所有 LLM 生成回覆都有此風險，非 `/function` 獨有；Robin 選擇直接關閉 Markdown，改為預設純文字傳送 ② 語音功能因 `GDriveClient` 找不到 Service Account 金鑰檔而失敗，確認是 Robin 把金鑰放在 Render Secret Files（實際掛載路徑 `/etc/secrets/<filename>`），但 `GDRIVE_KEY_FILE_PATH` 環境變數設定的是相對路徑，兩者對不上——純屬 Render 環境變數設定問題，非程式碼錯誤，待 Robin 調整環境變數即可解決；全專案 285 個測試全過、覆蓋率 100% |
+| 2026-08-02 | **Phase 1 Step 1.5 完成**：個資偵測與遮蔽機制，FR-13／FR-13a～FR-13d 全數完成，展開為獨立 [docs/specs/privacy-masking/SPEC.md](../privacy-masking/SPEC.md)；Robin 確認語意層 LLM 呼叫改用新申請的專用 Key（`GEMINI_API_PRIVACY_KEY`），不佔用既有聊天配額（吸取先前多次 429 的教訓）；新增 `src/bot/privacy.py`（Regex 硬規則＋LLM 語意雙層防線），整合進一般聊天核心與圖片說明文字，語音因統一轉文字後走既有流程天然涵蓋；`/clean-target-dialog` 的搜尋主題刻意排除遮蔽，避免使用者用個資內容當關鍵字搜尋刪除時功能失效；全專案 326 個測試全過、覆蓋率 100% |
 
 ## 待決事項
 

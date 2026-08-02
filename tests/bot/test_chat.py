@@ -108,6 +108,76 @@ def test_handle_chat_message_prompt_forbids_fabricating_facts(fake_db):
     assert "絕對不能捏造任何具體事實" in llm_client.last_prompt
 
 
+# --- 個資遮蔽整合（2026-08-02，見 docs/specs/privacy-masking/SPEC.md FR-4） ---
+
+def test_handle_chat_message_masks_pii_before_prompt_and_log(fake_db):
+    _seed_general(fake_db)
+    llm_client = _FakeLLMClient(response_text="收到！")
+    text_llm_client = _FakeTextLLMClient()
+    store = ConversationStateStore()
+
+    reply = chat.handle_chat_message(
+        fake_db, llm_client, text_llm_client, store,
+        telegram_user_id=1, user_id=1, text="我的手機是 0912345678",
+    )
+
+    assert "0912345678" not in llm_client.last_prompt
+    assert "[已遮蔽個資]" in llm_client.last_prompt
+    logs = fake_db.select("conversation_logs", where="user_id = %s", params=(1,))
+    assert logs[0]["content"] == "我的手機是 [已遮蔽個資]"
+    assert "0912345678" not in logs[0]["content"]
+    assert "提醒" in reply
+    assert reply.startswith("收到！")
+
+
+def test_handle_chat_message_no_reminder_when_no_pii_detected(fake_db):
+    _seed_general(fake_db)
+    llm_client = _FakeLLMClient(response_text="收到！")
+    text_llm_client = _FakeTextLLMClient()
+    store = ConversationStateStore()
+
+    reply = chat.handle_chat_message(
+        fake_db, llm_client, text_llm_client, store, telegram_user_id=1, user_id=1, text="早安",
+    )
+
+    assert reply == "收到！"
+
+
+def test_handle_chat_message_privacy_llm_client_none_only_runs_regex_layer(fake_db):
+    """`privacy_llm_client` 預設 None，不影響既有呼叫端（webhook.py 未設定 GEMINI_API_PRIVACY_KEY
+    時的優雅降級行為，見 privacy-masking SPEC.md ADR-2）。"""
+    _seed_general(fake_db)
+    llm_client = _FakeLLMClient(response_text="收到！")
+    text_llm_client = _FakeTextLLMClient()
+    store = ConversationStateStore()
+
+    reply = chat.handle_chat_message(
+        fake_db, llm_client, text_llm_client, store,
+        telegram_user_id=1, user_id=1, text="我的手機是 0912345678",
+        privacy_llm_client=None,
+    )
+
+    assert "提醒" in reply
+
+
+def test_handle_chat_message_uses_dedicated_privacy_llm_client_for_semantic_layer(fake_db):
+    _seed_general(fake_db)
+    llm_client = _FakeLLMClient(response_text="收到！")
+    text_llm_client = _FakeTextLLMClient()
+    privacy_llm_client = _FakeLLMClient(response_text="今天天氣真好")
+    store = ConversationStateStore()
+
+    chat.handle_chat_message(
+        fake_db, llm_client, text_llm_client, store,
+        telegram_user_id=1, user_id=1, text="今天天氣真好",
+        privacy_llm_client=privacy_llm_client,
+    )
+
+    # 語意層真的有被呼叫到（用獨立的 privacy_llm_client，不是聊天用的 llm_client）。
+    assert privacy_llm_client.last_prompt is not None
+    assert llm_client.last_prompt is not None
+
+
 def test_handle_chat_message_prompt_includes_pronoun_resolution_rule(fake_db):
     # Robin 回報：問「小布丁是誰」後接著問「他大概幾歲」，Robinson 誤把「他」理解成
     # 上一輪回答裡順便提到的照顧者（爺爺），而不是真正在討論的小布丁；使用者糾正

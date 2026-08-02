@@ -60,6 +60,7 @@ def handle_message(
     text_llm_client=None,
     image_llm_clients: list | None = None,
     via_voice: bool = False,
+    privacy_llm_client=None,
 ) -> str:
     """處理一則來自 Telegram 的文字訊息，回傳要回覆的文字。
 
@@ -74,6 +75,10 @@ def handle_message(
     `handle_voice_message()` 呼叫這裡時固定傳 `True`，webhook.py 處理一般文字訊息時維持預設的
     `False`。只有 `pending_*_final_confirm` 這幾個「最終執行確認」狀態會用到，見
     `_dispatch_active_flow()`；其餘分支不受影響。
+
+    `privacy_llm_client`（2026-08-02，見 docs/specs/privacy-masking/SPEC.md）：個資遮蔽 LLM 語意層
+    專用的獨立 Key，只會透傳到 `chat.handle_chat_message()`（見該函式 docstring）；`None` 時遮蔽
+    只跑免費的 Regex 層，不影響其餘指令/對話流程分支。
     """
     text = (text or "").strip()
     is_owner = auth.is_owner(telegram_user_id)
@@ -83,7 +88,7 @@ def handle_message(
         if state is not None:
             return _dispatch_active_flow(
                 db, state_store, telegram_user_id, text, state,
-                llm_client, text_llm_client, image_llm_clients, via_voice,
+                llm_client, text_llm_client, image_llm_clients, via_voice, privacy_llm_client,
             )
 
         if text in _SET_INVITE_CODES_TRIGGERS:
@@ -110,7 +115,7 @@ def handle_message(
         if state is not None:
             return _dispatch_active_flow(
                 db, state_store, telegram_user_id, text, state,
-                llm_client, text_llm_client, image_llm_clients, via_voice,
+                llm_client, text_llm_client, image_llm_clients, via_voice, privacy_llm_client,
             )
 
         user_id = user["id"]
@@ -135,7 +140,8 @@ def handle_message(
         )
 
     return chat.handle_chat_message(
-        db, llm_client, text_llm_client, state_store, telegram_user_id, user_id, text
+        db, llm_client, text_llm_client, state_store, telegram_user_id, user_id, text,
+        privacy_llm_client=privacy_llm_client,
     )
 
 
@@ -155,12 +161,16 @@ def handle_photo_message(
     telegram_client,
     gdrive_client,
     image_llm_clients: list,
+    privacy_llm_client=None,
 ) -> str:
     """處理使用者傳來的圖片訊息（對應 robinson SPEC.md FR-17、ADR-13）。
 
     未綁定通關密碼者一律先擋下，不消耗任何 Drive/Gemini 額度；已綁定者才下載圖片並交給
     `src/bot/image.py` 的商業邏輯處理。若使用者原本卡在某個未完成的對話流程（例如上一輪的
     圖片澄清問答還沒回答完就又傳了新圖片），直接以新圖片覆蓋、清除舊流程狀態，避免卡死。
+
+    `privacy_llm_client`（2026-08-02，見 docs/specs/privacy-masking/SPEC.md FR-5）：透傳給
+    `image.handle_image_message()`，用來在 `caption` 送進 Gemini 前先做個資遮蔽。
     """
     user = _get_identified_user(db, telegram_user_id)
     if user is None:
@@ -179,6 +189,7 @@ def handle_photo_message(
         user["role"],
         image_bytes,
         caption,
+        privacy_llm_client=privacy_llm_client,
     )
 
 
@@ -195,6 +206,7 @@ def handle_voice_message(
     text_llm_client=None,
     mime_type: str = "audio/ogg",
     voice_lockout_store: ConversationStateStore | None = None,
+    privacy_llm_client=None,
 ) -> str:
     """處理使用者傳來的語音/音檔訊息（對應 robinson SPEC.md FR-14、FR-15、FR-17、ADR-12、ADR-13）。
 
@@ -260,6 +272,7 @@ def handle_voice_message(
     reply = handle_message(
         db, state_store, telegram_user_id, transcribed_text,
         llm_client=llm_client, text_llm_client=text_llm_client, via_voice=True,
+        privacy_llm_client=privacy_llm_client,
     )
     # 2026-08-02：主動附註 FR-15 修正窗口提醒，見上方 _VOICE_TRANSCRIBED_REMINDER 說明。
     return reply + _VOICE_TRANSCRIBED_REMINDER
@@ -275,6 +288,7 @@ def _dispatch_active_flow(
     text_llm_client=None,
     image_llm_clients: list | None = None,
     via_voice: bool = False,
+    privacy_llm_client=None,
 ) -> str:
     """依進行中對話流程的 `flow` 標記分派到對應處理函式（見各 flow 對應 spec 的 ADR）。"""
     flow = state.get("flow")
@@ -286,12 +300,14 @@ def _dispatch_active_flow(
         return chat.handle_chat_message(
             db, llm_client, text_llm_client, state_store, telegram_user_id,
             state["target_user_id"], text, pending_question=state.get("original_question"),
+            privacy_llm_client=privacy_llm_client,
         )
     if flow == "pending_name_confirm":
         # 2026-08-01（ADR-7）：打字誤植改為先反問確認，等使用者這則回覆才真正回答原本的問題。
         return chat.handle_chat_message(
             db, llm_client, text_llm_client, state_store, telegram_user_id,
             state["target_user_id"], text, confirming_question=state.get("original_question"),
+            privacy_llm_client=privacy_llm_client,
         )
     if flow == "pending_image_confirm":
         return image.handle_image_confirm_step(image_llm_clients, state_store, telegram_user_id, text)

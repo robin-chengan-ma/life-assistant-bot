@@ -42,6 +42,19 @@ _PROCESSED_UPDATE_IDS_MAXLEN = 1000
 _processed_update_ids: "OrderedDict[int, None]" = OrderedDict()
 
 
+def _build_privacy_llm_client() -> LLMClient | None:
+    """建立個資遮蔽語意層專用的 LLMClient（見 docs/specs/privacy-masking/SPEC.md ADR-1／ADR-2）。
+
+    用獨立的 `GEMINI_API_PRIVACY_KEY`，不佔用聊天/長記憶/圖片辨識既有 Key 的配額。這把 Key
+    是選配的：還沒設定環境變數時回傳 `None`，`privacy.mask_text()` 會優雅降級成只跑免費的
+    Regex 層，不會讓整個訊息處理流程因為這把 Key 沒設好而失敗。
+    """
+    api_key = os.environ.get("GEMINI_API_PRIVACY_KEY")
+    if not api_key:
+        return None
+    return LLMClient(api_key=api_key)
+
+
 def _is_duplicate_update(update_id: int) -> bool:
     return update_id in _processed_update_ids
 
@@ -196,6 +209,7 @@ def telegram_webhook():
                 telegram_client,
                 gdrive_client,
                 image_llm_clients,
+                privacy_llm_client=_build_privacy_llm_client(),
             )
         elif voice_extracted is not None:
             _, file_id, duration_seconds, mime_type = voice_extracted
@@ -221,6 +235,7 @@ def telegram_webhook():
                 text_llm_client=text_llm_client,
                 mime_type=mime_type,
                 voice_lockout_store=_voice_lockout_store,
+                privacy_llm_client=_build_privacy_llm_client(),
             )
         else:
             _, text = text_extracted
@@ -229,7 +244,8 @@ def telegram_webhook():
             llm_client = LLMClient(api_key=os.environ["GEMINI_API_BOT_KEY"])
             text_llm_client = LLMClient(api_key=os.environ["GEMINI_API_TEXT_KEY"])
             reply = handle_message(
-                db, _state_store, telegram_user_id, text, llm_client=llm_client, text_llm_client=text_llm_client
+                db, _state_store, telegram_user_id, text, llm_client=llm_client, text_llm_client=text_llm_client,
+                privacy_llm_client=_build_privacy_llm_client(),
             )
     except Exception:
         # 暫時性安全網（Step 1.6／FR-19a 完整版之前）：任何未預期例外（例如 Gemini 429 額度超限、

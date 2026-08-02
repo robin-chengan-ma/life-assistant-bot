@@ -11,6 +11,7 @@ from io import BytesIO
 
 from PIL import Image
 
+from src.bot import privacy
 from src.bot.media import save_media_upload
 from src.bot.state import ConversationStateStore
 from submodules.cloudsql.client import CloudSQLClient
@@ -58,9 +59,13 @@ def handle_image_message(
     user_role: str,
     image_bytes: bytes,
     caption: str | None,
+    privacy_llm_client=None,
 ) -> str:
     """處理使用者傳來的圖片：上傳原始檔到 Drive、記錄 media_uploads、壓縮後隨機挑一把
     圖片辨識 Key 呼叫 Gemini，回傳要回覆給使用者的文字。
+
+    `privacy_llm_client`（2026-08-02，見 docs/specs/privacy-masking/SPEC.md FR-5）：`caption`
+    送進 Gemini 前先呼叫 `privacy.mask_text()` 遮蔽疑似個資，`None` 時只跑免費的 Regex 層。
     """
     gdrive_url = gdrive_client.upload_file(
         filename=build_upload_filename(user_role),
@@ -69,6 +74,7 @@ def handle_image_message(
     )
     save_media_upload(db, user_id, "image", gdrive_url)
 
+    caption, _ = privacy.mask_text(caption or "", privacy_llm_client)
     compressed_bytes = compress_image(image_bytes)
     llm_client = random.choice(image_llm_clients)
     prompt = _BASE_PROMPT + f"\n使用者的問題／說明：{caption or '（無，請直接描述圖片內容）'}"

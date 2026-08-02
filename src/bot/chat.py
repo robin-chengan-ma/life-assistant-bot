@@ -56,14 +56,29 @@ Robin 回報連續問「小雯有養動物嗎」→（中間插入「小猴是�
 動作」模式）。依 Robin 決策：只有 Owner（Robin）可以選擇寫入共用的 `general_family`／
 `general_persona`，其他使用者一律只能寫入自己的 `custom` 知識庫；因此上方誠實性規則（FR-3g）
 也一併更新，改為涵蓋這個新流程，不再只提「請轉告 Robin 手動新增」。
+
+2026-08-02 新增（見 docs/specs/privacy-masking/SPEC.md FR-4）：文字進入這裡的第一件事就是先
+呼叫 `privacy.mask_text()`，把疑似個資的內容換成固定遮蔽文字，後續組 Prompt、寫入
+`conversation_logs`、（若走 `pending_save_knowledge_confirm` 流程）存進 `knowledge_base` 的
+`original_request`，一律用遮蔽後的版本，明碼不會送到 Gemini、也不會落地存下來；有偵測到的話，
+在最終回覆最後附加提醒文案，請使用者盡快到 Telegram 對話中自行刪除原始訊息（機器人沒有權限
+代為刪除使用者自己傳送的訊息）。`/clean-target-dialog` 的搜尋主題刻意不套用這個遮蔽（見
+privacy-masking SPEC.md FR-7），因為那支指令本來就需要讓使用者用個資內容當關鍵字搜尋要刪除
+的紀錄，遮蔽反而會讓功能失效。
 """
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from submodules.cloudsql.client import CloudSQLClient
 
-from src.bot import auth, knowledge, memory, templates
+from src.bot import auth, knowledge, memory, privacy, templates
 from src.bot.state import ConversationStateStore
+
+# 2026-08-02（privacy-masking SPEC.md FR-4）：偵測到疑似個資時附加在回覆最後的固定提醒文案。
+_PII_DETECTED_REMINDER = (
+    "\n\n（提醒：這則訊息裡有偵測到疑似個人敏感資料，我已經自動遮蔽、不會存下明碼，"
+    "但麻煩你盡快到對話紀錄裡手動刪除原始訊息喔，我沒辦法代為刪除你自己傳送的訊息！）"
+)
 
 # 系統內部標記，只用來讓程式碼判斷模型的判斷結果，不會出現在使用者看到的回覆裡
 # （prompt 已明確指示模型不要跟使用者解釋這些標記）。
@@ -98,6 +113,7 @@ def handle_chat_message(
     text: str,
     pending_question: str | None = None,
     confirming_question: str | None = None,
+    privacy_llm_client=None,
 ) -> str:
     """處理一般聊天訊息，回傳要回覆的文字。
 
@@ -111,8 +127,14 @@ def handle_chat_message(
     `confirming_question`：不是 None 時，代表使用者上一輪問了 {confirming_question}，其中的
     人名疑似打字誤植，Robinson 已經反問確認過是不是問知識庫裡最相近的那個人，這一輪由 router 的
     `pending_name_confirm` 分支呼叫（見 ADR-7），交給模型判斷使用者是在確認／回覆，還是問了別的事。
+
+    `privacy_llm_client`（2026-08-02，見 privacy-masking SPEC.md ADR-1／ADR-2）：個資遮蔽 LLM
+    語意層專用的獨立 Key（`GEMINI_API_PRIVACY_KEY`），不佔用 `llm_client`／`text_llm_client` 的
+    配額；`None` 時 `privacy.mask_text()` 會優雅降級成只跑免費的 Regex 層，不影響其餘邏輯。
     """
     is_owner = auth.is_owner(telegram_user_id)
+    text, pii_detected = privacy.mask_text(text, privacy_llm_client)
+
     context = knowledge.build_context(db, user_id)
     long_memory = memory.get_summary(db, user_id)
     prompt = _build_prompt(context, long_memory, text, pending_question, confirming_question, is_owner)
@@ -164,6 +186,11 @@ def handle_chat_message(
     # 確保就算摘要更新失敗，使用者仍然會收到這次的正常回覆。
     memory.maybe_update_summary(db, text_llm_client, user_id)
 
+    # 2026-08-02（privacy-masking SPEC.md FR-4）：提醒文案只附加在「回給使用者看」的這次回傳值，
+    # 不寫進 conversation_logs（比照 router._VOICE_TRANSCRIBED_REMINDER 的做法），避免提醒文字
+    # 汙染對話紀錄本身、也避免之後被當成對話上下文重新餵給 LLM。
+    if pii_detected:
+        return final_reply + _PII_DETECTED_REMINDER
     return final_reply
 
 

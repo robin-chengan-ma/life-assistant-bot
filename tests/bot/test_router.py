@@ -281,6 +281,22 @@ def test_owner_general_message_routes_to_chat_core(fake_db, monkeypatch):
     assert reply == "早安！"
 
 
+def test_general_message_with_pii_gets_masked_and_reminder(fake_db, monkeypatch):
+    # 2026-08-02（privacy-masking SPEC.md FR-4）：一般聊天訊息含個資時，經 router 分派後
+    # 應該由 chat.handle_chat_message() 遮蔽並附加提醒，驗證 privacy_llm_client 有正確透傳。
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+    llm_client = _FakeLLMClient(response_text="收到！")
+
+    reply = router.handle_message(
+        fake_db, store, FAMILY_ID, "我的手機是 0912345678", llm_client=llm_client,
+    )
+
+    assert "0912345678" not in llm_client.last_prompt
+    assert "提醒" in reply
+
+
 def test_chat_core_unknown_reply_sets_pending_user_knowledge_state(fake_db, monkeypatch):
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
@@ -499,6 +515,29 @@ def test_known_family_member_can_trigger_clean_target_dialog_by_natural_language
     assert "確定要清除嗎" in reply
     assert store.get(FAMILY_ID)["flow"] == "pending_clean_target_dialog_confirm"
     assert store.get(FAMILY_ID)["topic"] == "范麗芳"
+
+
+def test_clean_target_dialog_topic_containing_pii_is_not_masked(fake_db, monkeypatch):
+    # 2026-08-02（privacy-masking SPEC.md FR-7）：這支指令的 topic 刻意不遮蔽，因為使用者很可能
+    # 就是要用個資內容當關鍵字搜尋要刪除的紀錄，遮蔽會讓比對用的關鍵字直接消失、功能失效。
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    fake_db.insert(
+        "conversation_logs",
+        {"user_id": user_id, "role": "user", "content": "我的手機是 0912345678", "deleted_at": None},
+    )
+    store = ConversationStateStore()
+    llm_client = _FakeLLMClient(response_text="1")
+
+    reply = router.handle_message(
+        fake_db, store, FAMILY_ID, "我想刪除有關0912345678的紀錄", llm_client=llm_client,
+    )
+
+    # topic 明碼原樣送進比對用的 Prompt，沒有被換成 [已遮蔽個資]。
+    assert "0912345678" in llm_client.last_prompt
+    assert "[已遮蔽個資]" not in llm_client.last_prompt
+    assert store.get(FAMILY_ID)["topic"] == "0912345678"
+    assert "跟「0912345678」有關" in reply
 
 
 def test_owner_can_trigger_clean_target_dialog_via_slash_command_with_topic(fake_db, monkeypatch):
@@ -850,6 +889,26 @@ def test_handle_voice_message_transcribes_and_routes_as_text(fake_db, monkeypatc
     rows = fake_db.select("media_uploads")
     assert len(rows) == 1
     assert rows[0]["media_type"] == "audio"
+
+
+def test_handle_voice_message_masks_pii_in_transcribed_text_before_logging(fake_db, monkeypatch):
+    # 2026-08-02（privacy-masking SPEC.md）：語音轉出文字含個資時，天然經過
+    # handle_message() → chat.handle_chat_message() 遮蔽，conversation_logs 存的不是明碼。
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+    telegram_client = _FakeTelegramClient(b"raw-ogg-bytes")
+    voice_client = _FakeVoiceClient(response_text="我的手機是 0912345678")
+    llm_client = _FakeLLMClient(response_text="收到！")
+
+    reply = router.handle_voice_message(
+        fake_db, store, FAMILY_ID, "voice123", 30,
+        telegram_client, _FakeGDriveClient(), voice_client, llm_client=llm_client,
+    )
+
+    assert "0912345678" not in reply
+    logs = fake_db.select("conversation_logs", where="user_id = %s", params=(user_id,))
+    assert logs[0]["content"] == "我的手機是 [已遮蔽個資]"
 
 
 def test_handle_voice_message_passes_through_mime_type_for_uploaded_audio(fake_db, monkeypatch):

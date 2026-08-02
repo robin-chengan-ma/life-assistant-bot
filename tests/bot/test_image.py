@@ -164,6 +164,23 @@ def test_handle_image_message_prompt_includes_caption(fake_db):
     assert "這道菜熱量多少？" in llm_client.last_prompt
 
 
+def test_handle_image_message_masks_pii_in_caption_before_prompt(fake_db):
+    """2026-08-02（privacy-masking SPEC.md FR-5）：caption 含個資時，送進 Gemini Prompt 的是
+    遮蔽後版本，不是明碼。"""
+    original_bytes = _make_test_image_bytes()
+    gdrive_client = _FakeGDriveClient()
+    llm_client = _FakeImageLLMClient()
+    store = ConversationStateStore()
+
+    image.handle_image_message(
+        fake_db, gdrive_client, [llm_client], store, telegram_user_id=1, user_id=1,
+        user_role="爸爸", image_bytes=original_bytes, caption="這是我朋友，手機 0912345678",
+    )
+
+    assert "0912345678" not in llm_client.last_prompt
+    assert "[已遮蔽個資]" in llm_client.last_prompt
+
+
 def test_handle_image_message_sets_pending_state_when_uncertain(fake_db):
     original_bytes = _make_test_image_bytes()
     gdrive_client = _FakeGDriveClient()

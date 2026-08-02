@@ -213,9 +213,59 @@ def test_webhook_routes_valid_message_and_sends_reply(client, monkeypatch):
         "/rule",
         llm_client=mock_bot_llm_instance,
         text_llm_client=mock_text_llm_instance,
+        privacy_llm_client=None,
     )
     mock_db_instance.close.assert_called_once()
     mock_telegram_instance.send_text.assert_called_once_with(chat_id=123, text="哈囉！")
+
+
+# --- 個資遮蔽 LLM 語意層專用 Key（2026-08-02，見 docs/specs/privacy-masking/SPEC.md ADR-1/ADR-2） ---
+
+def test_build_privacy_llm_client_returns_none_when_key_not_set(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_PRIVACY_KEY", raising=False)
+
+    assert webhook._build_privacy_llm_client() is None
+
+
+def test_build_privacy_llm_client_builds_client_when_key_set(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_PRIVACY_KEY", "fake-privacy-key")
+    mock_instance = MagicMock()
+    mock_llm_client_cls = MagicMock(return_value=mock_instance)
+    monkeypatch.setattr(webhook, "LLMClient", mock_llm_client_cls)
+
+    result = webhook._build_privacy_llm_client()
+
+    mock_llm_client_cls.assert_called_once_with(api_key="fake-privacy-key")
+    assert result is mock_instance
+
+
+def test_webhook_routes_valid_message_with_privacy_key_set(client, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("GEMINI_API_BOT_KEY", "fake-gemini-bot-key")
+    monkeypatch.setenv("GEMINI_API_TEXT_KEY", "fake-gemini-text-key")
+    monkeypatch.setenv("GEMINI_API_PRIVACY_KEY", "fake-privacy-key")
+
+    mock_handle_message = MagicMock(return_value="哈囉！")
+    monkeypatch.setattr(webhook, "handle_message", mock_handle_message)
+
+    mock_db_instance = MagicMock()
+    monkeypatch.setattr(webhook, "CloudSQLClient", MagicMock(return_value=mock_db_instance))
+
+    mock_privacy_llm_instance = MagicMock()
+
+    def _fake_llm_client(api_key):
+        if api_key == "fake-privacy-key":
+            return mock_privacy_llm_instance
+        return MagicMock()
+
+    monkeypatch.setattr(webhook, "LLMClient", MagicMock(side_effect=_fake_llm_client))
+    monkeypatch.setattr(webhook, "TelegramClient", MagicMock(return_value=MagicMock()))
+
+    payload = {"message": {"from": {"id": 123}, "text": "/rule"}}
+    response = client.post("/telegram/webhook", json=payload)
+
+    assert response.status_code == 200
+    assert mock_handle_message.call_args.kwargs["privacy_llm_client"] is mock_privacy_llm_instance
 
 
 def test_webhook_swallows_unexpected_exception_and_still_returns_200(client, monkeypatch):
