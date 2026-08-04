@@ -158,12 +158,19 @@
 
 ### `/set_budget`（內部路由，非對外 HTTP 端點）
 
-**狀態**：已實作（`src/bot/commands.py::start_finance_budget`／`handle_finance_budget_step`，2026-08-04，Step 2.1，見 robinson SPEC.md FR-41）
+**狀態**：已實作（`src/bot/commands.py::start_finance_budget` 起一系列多輪函式，2026-08-04，Step 2.1＋當日擴充，見 robinson SPEC.md FR-41／FR-41a）
 **觸發方式**：使用者於對話框輸入「設定記帳預算」或 `/set_budget`
 **權限**：任何已驗證使用者（Robin 或家人，各自只會設定自己的預算）
-**對應 FR**：FR-41
+**對應 FR**：FR-41、FR-41a
 
-**Response**：先問「每月支出預算上限是多少呢？」（`pending_finance_budget`），使用者輸入金額（純數字比對，不需要 LLM，接受「120」「120元」「NT$120」「1,200」等常見寫法，見 `commands._parse_amount()`）後寫入 `users.monthly_budget`，回覆「已經幫你把每月支出預算設定為 XXXX 元囉！」；金額格式錯誤時停留原地反問，不會存入猜錯的數字。
+**Response**：2026-08-04 擴充（Robin 提出「某幾個月固定開銷較高，想單獨設定」的回饋後改成多輪）：
+
+1. 先問「要調整全部月份都套用的預設預算，還是只調整某幾個月呢？」（`pending_finance_budget_scope`，`finance.resolve_budget_scope()` 判斷）
+2. 選「全部月份」：若 `users.monthly_budget` 已有舊值，先反問「你目前的預設每月支出預算是 X 元，確認要改成新的金額嗎？」（`pending_finance_budget_global_confirm`，簡單一輪 LLM CONFIRM/CANCEL）；沒有舊值就直接問金額
+3. 選「只套用某幾個月」：問「要套用在幾月呢？」（`pending_finance_budget_months`，`finance.parse_months()` 解析「8」「8,9」「8月」等寫法，一律套用今年，尚不支援跨年）；選定的月份中若有已經設定過覆蓋值的，先列出舊值反問確認（`pending_finance_budget_override_confirm`）
+4. 最後問金額（`pending_finance_budget_amount`，純數值解析，接受「120」「120元」「NT$120」「1,200」等常見寫法，見 `commands._parse_amount()`），選「全部月份」寫入 `users.monthly_budget`（`finance.set_monthly_budget()`），選「某幾個月」對每個指定月份寫入/更新 `budget_overrides`（`finance.set_budget_override()`）
+
+金額或月份格式錯誤時停留原地反問，不會存入猜錯的數字；確認步驟選擇取消則維持原值不變。
 
 ---
 
@@ -224,7 +231,18 @@
 **權限**：系統排程，無使用者互動
 **對應 FR**：FR-43
 
-**行為**：50% 門檻只在每月 15 日（含）以前檢查，代表「早期警示」；80% 門檻整月都檢查，代表「不管現在是月初還是月底，只要花超過就要提醒」；兩個門檻各自每月最多推播一次，去重狀態存在 `users.budget_alert_50_sent_month`／`budget_alert_80_sent_month`（存已推播過的月份第一天，比照 `todos.daily_pushed_on` 存在資料列本身而非記憶體，跨 Render 重啟仍正確）。只檢查已設定 `monthly_budget`（非 NULL 且 > 0）且有綁定 `telegram_user_id` 的使用者。
+**行為**：50% 門檻只在每月 15 日（含）以前檢查，代表「早期警示」；80% 門檻整月都檢查，代表「不管現在是月初還是月底，只要花超過就要提醒」；兩個門檻各自每月最多推播一次，去重狀態存在 `users.budget_alert_50_sent_month`／`budget_alert_80_sent_month`（存已推播過的月份第一天，比照 `todos.daily_pushed_on` 存在資料列本身而非記憶體，跨 Render 重啟仍正確）。只檢查「這個月有生效預算」（`finance._users_with_effective_budget()`，全局預設或當月覆蓋皆算，2026-08-04 擴充後改用，見 FR-41a）且該金額 > 0、且有綁定 `telegram_user_id` 的使用者。
+
+---
+
+### FR-42a 每日記帳提醒（`main.py` `/healthz` 借用頻率，非獨立路由）
+
+**狀態**：已實作（`src/bot/finance.py::check_and_push_finance_reminders`，`main.py::_check_finance_reminders`，2026-08-04，記帳模組擴充，見 robinson SPEC.md FR-42a）
+**觸發方式**：不是使用者主動觸發，同樣借用 `/healthz` 既有的 10 分鐘 cron 頻率，只在台灣時間 23:00 這個小時內執行
+**權限**：系統排程，無使用者互動
+**對應 FR**：FR-42a
+
+**行為**：Robin 提出「有設定支出目標的話，應該每天固定時間提醒記帳，但當天已記錄就不必提醒；收入不需要每天記錄，不用走提醒機制」的回饋後新增。對「這個月有生效預算（全局預設或當月覆蓋皆算）」且「今天完全沒有支出紀錄」且「今天還沒推播過」的使用者，各推播一次「今天好像還沒記帳喔」的提醒；去重狀態存在 `users.finance_reminder_sent_date`（比照 `todos.daily_pushed_on`）。收入不檢查，理由是預算門檻本來就只針對支出設，收入沒有「每天都要記」的急迫性。
 
 ---
 

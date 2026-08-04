@@ -19,7 +19,28 @@ FR-44 文字摘要組裝。不處理任何 Telegram 對話流程或 LLM 呼叫�
 ④ FR-44「定期視覺化支出/儲蓄趨勢」Phase 1 這版先做「使用者主動查詢時組成文字摘要」
    （`format_monthly_summary()`），不做圖表圖片、也不做主動排程推播月報——真正「定期」的部分
    由 FR-43 的門檻預警負責，摘要本身留待有實際使用需求後再考慮升級成圖表或排程推播。
+
+2026-08-04 追加（Robin 提出記帳模組使用回饋後新增，經 AskUserQuestion 確認的設計決策）：
+⑤ FR-41a「預算特殊月份覆蓋」：`users.monthly_budget` 保留當「全局預設值」，另外新增
+   `budget_overrides` 表只存「跟預設值不同」的特殊月份；查詢某年某月「實際生效」的預算時
+   （`get_effective_monthly_budget()`），優先用 `budget_overrides` 裡這個月的值，沒有才
+   fallback 用全局預設。這個設計選擇（而非「每個月都各自存一筆」）是因為：改全局預設不會
+   動到已經設定過的特殊月份、資料量小、查詢邏輯只多一層 fallback。FR-43 門檻預警、FR-42a
+   每日提醒都改用 `_users_with_effective_budget()` 這個共用 helper 找出「這個月有生效預算」
+   的使用者清單（可能來自全局預設，也可能只有這個月的覆蓋值、從未設定過全局預設）。
+   使用者每次呼叫「設定記帳預算」都會先被反問要套用全部月份還是只套用某幾個月
+   （`resolve_budget_scope()`／`format_budget_scope_prompt()`）；若選某幾個月，
+   `parse_months()` 解析使用者輸入的月份清單（1~12，逗號/頓號/空白分隔，`8月` 也接受），
+   一律套用「今年」，這是本次的簡化假設，尚不支援跨年設定。若選定的月份中有已經設定過覆蓋值的，
+   會先組合成一則確認訊息列出舊值（`format_budget_override_confirm_prompt()`），需使用者
+   明確確認才會覆蓋；全局預設同理，已有舊值時也會先確認（`format_budget_global_confirm_prompt()`）。
+⑥ FR-42a「每日記帳提醒」：每天台灣時間 23:00（`check_and_push_finance_reminders()`，
+   一樣借用 `/healthz` 的 10 分鐘 cron 頻率）檢查「這個月有生效預算」且「今天完全沒有支出紀錄」
+   且「今天還沒推播過」的使用者，推播一次記帳提醒；去重欄位是 `users.finance_reminder_sent_date`
+   （比照 `todos.daily_pushed_on`）。收入不檢查——理財預算本來就只針對支出設門檻，收入沒有
+   「每天都要記」的急迫性，跟 FR-42 交易本身仍支援「支出／收入」兩種類型記帳不衝突。
 """
+import re
 from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -40,6 +61,13 @@ INCOME_CATEGORIES: list[str] = ["薪資", "獎金", "其他"]
 _MID_MONTH_ALERT_THRESHOLD = 0.5
 _MID_MONTH_ALERT_DAY_CUTOFF = 15
 _SEVERE_ALERT_THRESHOLD = 0.8
+
+# FR-42a 每日記帳提醒的推播時刻（台灣時間），決策⑥。
+_DAILY_REMINDER_HOUR = 23
+
+# FR-41a 預算套用範圍選項：全局預設 vs 只套用某幾個月，決策⑤。
+_BUDGET_SCOPE_OPTIONS: list[tuple[str, str]] = [("global", "全部月份"), ("months", "只套用某幾個月")]
+_BUDGET_SCOPE_CODE_BY_LABEL = {label: code for code, label in _BUDGET_SCOPE_OPTIONS}
 
 
 def format_type_prompt() -> str:
@@ -90,6 +118,70 @@ def resolve_category(transaction_type: str, text: str) -> str | None:
             return categories[index - 1]
         return None
     return text if text in categories else None
+
+
+def format_budget_scope_prompt() -> str:
+    """FR-41a：組出讓使用者選擇預算套用範圍（全部月份／只套用某幾個月）的提示文字。"""
+    lines = ["要調整全部月份都套用的預設預算，還是只調整某幾個月呢？", ""]
+    for index, (_, label) in enumerate(_BUDGET_SCOPE_OPTIONS, start=1):
+        lines.append(f"{index}. {label}")
+    return "\n".join(lines)
+
+
+def resolve_budget_scope(text: str) -> str | None:
+    """把使用者輸入解析成預算套用範圍代碼（`global`／`months`）；接受編號或關鍵字，
+    無法辨識時回傳 None，交由呼叫端反問。"""
+    text = text.strip()
+    if text.isdigit():
+        index = int(text)
+        if 1 <= index <= len(_BUDGET_SCOPE_OPTIONS):
+            return _BUDGET_SCOPE_OPTIONS[index - 1][0]
+        return None
+    if text in _BUDGET_SCOPE_CODE_BY_LABEL:
+        return _BUDGET_SCOPE_CODE_BY_LABEL[text]
+    if text in ("全部", "全部套用"):
+        return "global"
+    if text in ("某幾個月", "某幾個月份", "指定月份", "特定月份"):
+        return "months"
+    return None
+
+
+def parse_months(text: str) -> list[int] | None:
+    """把使用者輸入的月份文字解析成月份數字清單（決策⑤）：接受逗號／頓號／空白分隔，
+    也接受「8月」這種寫法；任何一個 token 無法解析成 1~12 的數字，整體回傳 None（觸發重問）。
+    """
+    tokens = re.split(r"[,，、\s]+", text.strip())
+    months: list[int] = []
+    for token in tokens:
+        token = token.strip().removesuffix("月")
+        if not token.isdigit():
+            return None
+        month = int(token)
+        if not 1 <= month <= 12:
+            return None
+        if month not in months:
+            months.append(month)
+    return months or None
+
+
+def format_months_label(months: list[int]) -> str:
+    """把月份數字清單格式化成「8月、9月」這種顯示用文字。"""
+    return "、".join(f"{month}月" for month in months)
+
+
+def format_budget_global_confirm_prompt(current_amount: float) -> str:
+    """FR-41a：全局預設預算已有舊值時，先反問是否確定要覆蓋。"""
+    return f"你目前的預設每月支出預算是 {current_amount:.0f} 元，確認要改成新的金額嗎？"
+
+
+def format_budget_override_confirm_prompt(conflicts: list[tuple[int, float]]) -> str:
+    """FR-41a：選定的月份中有已經設定過覆蓋值的，先列出舊值反問是否確定要改。"""
+    lines = ["你已經設定過以下月份的預算：", ""]
+    for month, amount in conflicts:
+        lines.append(f"- {month}月：{amount:.0f} 元")
+    lines.append("")
+    lines.append("確認都要改成新的金額嗎？")
+    return "\n".join(lines)
 
 
 def create_transaction(
@@ -179,6 +271,64 @@ def get_monthly_budget(db: CloudSQLClient, user_id: int) -> float | None:
     return float(budget) if budget is not None else None
 
 
+def get_budget_override(db: CloudSQLClient, user_id: int, year: int, month: int) -> float | None:
+    """查詢某使用者某年某月是否有特殊覆蓋預算（FR-41a）；沒有回傳 None，代表要 fallback 用全局預設。"""
+    row = db.select(
+        "budget_overrides",
+        where="user_id = %s AND year = %s AND month = %s",
+        params=(user_id, year, month),
+        fetch_one=True,
+    )
+    return float(row["amount"]) if row is not None else None
+
+
+def set_budget_override(db: CloudSQLClient, user_id: int, year: int, month: int, amount: float) -> None:
+    """設定/更新某使用者某年某月的特殊覆蓋預算（FR-41a）；已存在就更新，不存在就新增一筆。"""
+    existing = db.select(
+        "budget_overrides",
+        where="user_id = %s AND year = %s AND month = %s",
+        params=(user_id, year, month),
+        fetch_one=True,
+    )
+    if existing is not None:
+        db.update("budget_overrides", {"amount": amount}, where="id = %s", params=(existing["id"],))
+    else:
+        db.insert("budget_overrides", {"user_id": user_id, "year": year, "month": month, "amount": amount})
+
+
+def get_effective_monthly_budget(db: CloudSQLClient, user_id: int, year: int, month: int) -> float | None:
+    """查詢某使用者某年某月「實際生效」的預算上限（FR-41a）：優先用該月的特殊覆蓋值，
+    沒有才 fallback 用全局預設值；兩者都沒設定時回傳 None。"""
+    override = get_budget_override(db, user_id, year, month)
+    if override is not None:
+        return override
+    return get_monthly_budget(db, user_id)
+
+
+def _users_with_effective_budget(db: CloudSQLClient, year: int, month: int) -> list[tuple[dict, float]]:
+    """回傳「這個月有生效預算」的所有使用者列與各自的生效預算金額（決策⑤），供 FR-42a 每日提醒、
+    FR-43 門檻預警共用：候選使用者可能來自全局預設（`users.monthly_budget`），也可能只有這個月的
+    覆蓋值、從未設定過全局預設。"""
+    users_with_default = db.select("users", where="monthly_budget IS NOT NULL")
+    overrides_this_month = db.select("budget_overrides", where="year = %s AND month = %s", params=(year, month))
+    override_by_user_id = {row["user_id"]: float(row["amount"]) for row in overrides_this_month}
+
+    by_user_id: dict[int, dict] = {user["id"]: user for user in users_with_default}
+    for user_id in override_by_user_id:
+        if user_id not in by_user_id:
+            user = db.select("users", where="id = %s", params=(user_id,), fetch_one=True)
+            if user is not None:
+                by_user_id[user_id] = user
+
+    result: list[tuple[dict, float]] = []
+    for user_id, user in by_user_id.items():
+        budget = override_by_user_id.get(user_id)
+        if budget is None:
+            budget = float(user["monthly_budget"])
+        result.append((user, budget))
+    return result
+
+
 def _month_range(year: int, month: int) -> tuple[date, date]:
     """回傳某年某月的 [起始日, 下個月起始日) 範圍，供月加總查詢的 WHERE 條件使用。"""
     start = date(year, month, 1)
@@ -224,7 +374,7 @@ def format_monthly_summary(db: CloudSQLClient, user_id: int, today: date) -> str
     """組合 FR-44 文字版月支出/收入摘要：本月支出/收入總額、預算使用率、分類佔比、跟上個月比較。"""
     expense_total = monthly_expense_total(db, user_id, today.year, today.month)
     income_total = monthly_income_total(db, user_id, today.year, today.month)
-    budget = get_monthly_budget(db, user_id)
+    budget = get_effective_monthly_budget(db, user_id, today.year, today.month)
     breakdown = monthly_expense_breakdown(db, user_id, today.year, today.month)
 
     lines = [f"📊 {today.year}/{today.month} 記帳摘要", "", f"支出總計：{expense_total:.0f} 元", f"收入總計：{income_total:.0f} 元"]
@@ -265,11 +415,9 @@ def check_and_push_budget_alerts(db: CloudSQLClient, telegram_client, now: datet
     today_local = now_local.date()
     month_start = today_local.replace(day=1)
 
-    users = db.select("users", where="monthly_budget IS NOT NULL")
-    for user in users:
+    for user, budget in _users_with_effective_budget(db, today_local.year, today_local.month):
         if user.get("telegram_user_id") is None:
             continue
-        budget = float(user["monthly_budget"])
         if budget <= 0:
             continue
 
@@ -303,3 +451,39 @@ def check_and_push_budget_alerts(db: CloudSQLClient, telegram_client, now: datet
             db.update(
                 "users", {"budget_alert_80_sent_month": month_start}, where="id = %s", params=(user["id"],)
             )
+
+
+def check_and_push_finance_reminders(db: CloudSQLClient, telegram_client, now: datetime | None = None) -> None:
+    """FR-42a：每日 23:00 記帳提醒（決策⑥）。「這個月有生效預算」（全局預設或當月覆蓋皆算）
+    且「今天完全沒有支出紀錄」且「今天還沒推播過」的使用者，推播一次提醒；收入不檢查。
+
+    比照 `todo.check_and_push_daily_digest()` 的做法，借用 `/healthz` 既有的 10 分鐘 cron 頻率，
+    只在台灣時間 23 點這個小時內執行，靠 `users.finance_reminder_sent_date` 避免同一天內重複推播。
+    """
+    now = now or datetime.now(timezone.utc)
+    now_local = now.astimezone(_TAIWAN_TZ)
+    if now_local.hour != _DAILY_REMINDER_HOUR:
+        return
+    today_local = now_local.date()
+
+    for user, _budget in _users_with_effective_budget(db, today_local.year, today_local.month):
+        if user.get("telegram_user_id") is None:
+            continue
+        if user.get("finance_reminder_sent_date") == today_local:
+            continue
+
+        today_expenses = db.select(
+            "transactions",
+            where="user_id = %s AND type = %s AND transaction_date = %s",
+            params=(user["id"], "expense", today_local),
+        )
+        if today_expenses:
+            continue
+
+        telegram_client.send_text(
+            chat_id=user["telegram_user_id"],
+            text="🌙 提醒你，今天好像還沒記帳喔，要不要花個一分鐘記一下今天的花費？",
+        )
+        db.update(
+            "users", {"finance_reminder_sent_date": today_local}, where="id = %s", params=(user["id"],)
+        )

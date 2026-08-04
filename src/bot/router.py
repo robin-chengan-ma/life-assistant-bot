@@ -427,8 +427,17 @@ def _dispatch_active_flow(
         return commands.handle_mood_delete_confirm_step(db, llm_client, state_store, telegram_user_id, text)
     # 2026-08-04（Step 2.1，見 robinson SPEC.md FR-41～FR-44）：記帳多輪對話流，結構比照心情小記
     # 的補記/更新/刪除擴充，見 commands.py「記帳」區塊開頭說明。
-    if flow == "pending_finance_budget":
-        return commands.handle_finance_budget_step(db, state_store, telegram_user_id, text)
+    # 2026-08-04 擴充（見 robinson SPEC.md FR-41a）：設定預算改成多輪，見 commands.py 該擴充說明。
+    if flow == "pending_finance_budget_scope":
+        return commands.handle_finance_budget_scope_step(db, state_store, telegram_user_id, text)
+    if flow == "pending_finance_budget_months":
+        return commands.handle_finance_budget_months_step(db, state_store, telegram_user_id, text)
+    if flow == "pending_finance_budget_global_confirm":
+        return commands.handle_finance_budget_global_confirm_step(llm_client, state_store, telegram_user_id, text)
+    if flow == "pending_finance_budget_override_confirm":
+        return commands.handle_finance_budget_override_confirm_step(llm_client, state_store, telegram_user_id, text)
+    if flow == "pending_finance_budget_amount":
+        return commands.handle_finance_budget_amount_step(db, state_store, telegram_user_id, text)
     if flow == "pending_transaction_backfill_date":
         return commands.handle_transaction_backfill_date_step(llm_client, state_store, telegram_user_id, text)
     if flow == "pending_transaction_type":

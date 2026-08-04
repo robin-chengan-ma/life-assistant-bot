@@ -740,18 +740,73 @@ def test_mood_list_update_and_delete_full_flow(fake_db, monkeypatch):
 # --- 記帳（robinson SPEC.md FR-41～FR-44，Step 2.1）---
 
 
-def test_finance_set_budget_full_flow(fake_db, monkeypatch):
+def test_finance_set_budget_full_flow_global_scope(fake_db, monkeypatch):
+    """FR-41a：選「全部月份」，第一次設定沒有舊值，直接問金額。"""
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     store = ConversationStateStore()
 
     reply1 = router.handle_message(fake_db, store, FAMILY_ID, "設定記帳預算")
-    assert "每月支出預算上限" in reply1
-    assert store.get(FAMILY_ID)["flow"] == "pending_finance_budget"
+    assert "全部月份" in reply1
+    assert store.get(FAMILY_ID)["flow"] == "pending_finance_budget_scope"
 
-    reply2 = router.handle_message(fake_db, store, FAMILY_ID, "15000")
-    assert "15000 元" in reply2
+    reply2 = router.handle_message(fake_db, store, FAMILY_ID, "1")
+    assert "每月支出預算上限" in reply2
+    assert store.get(FAMILY_ID)["flow"] == "pending_finance_budget_amount"
+
+    reply3 = router.handle_message(fake_db, store, FAMILY_ID, "15000")
+    assert "15000 元" in reply3
     assert store.get(FAMILY_ID) is None
+
+
+def test_finance_set_budget_full_flow_months_scope_with_override_confirm(fake_db, monkeypatch):
+    """FR-41a：選「只套用某幾個月」，指定的月份已有舊覆蓋值時要先反問確認才能改。"""
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    commands.finance.set_budget_override(fake_db, user_id, 2026, 8, 43000)
+    store = ConversationStateStore()
+
+    router.handle_message(fake_db, store, FAMILY_ID, "設定記帳預算")
+    reply1 = router.handle_message(fake_db, store, FAMILY_ID, "2")
+    assert "幾月" in reply1
+    assert store.get(FAMILY_ID)["flow"] == "pending_finance_budget_months"
+
+    reply2 = router.handle_message(fake_db, store, FAMILY_ID, "8,9")
+    assert "8月：43000 元" in reply2
+    assert store.get(FAMILY_ID)["flow"] == "pending_finance_budget_override_confirm"
+
+    confirm_llm_client = _FakeLLMClient(response_text="CONFIRM")
+    reply3 = router.handle_message(fake_db, store, FAMILY_ID, "對", llm_client=confirm_llm_client)
+    assert "多少金額" in reply3
+    assert store.get(FAMILY_ID)["flow"] == "pending_finance_budget_amount"
+
+    reply4 = router.handle_message(fake_db, store, FAMILY_ID, "50000")
+    assert "8月、9月" in reply4
+    assert store.get(FAMILY_ID) is None
+    assert commands.finance.get_budget_override(fake_db, user_id, 2026, 8) == 50000.0
+    assert commands.finance.get_budget_override(fake_db, user_id, 2026, 9) == 50000.0
+
+
+def test_finance_set_budget_global_scope_with_existing_value_asks_confirm(fake_db, monkeypatch):
+    """FR-41a：選「全部月份」，全局預設已有舊值時先反問確認。"""
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    commands.finance.set_monthly_budget(fake_db, user_id, 15000)
+    store = ConversationStateStore()
+
+    router.handle_message(fake_db, store, FAMILY_ID, "設定記帳預算")
+    reply1 = router.handle_message(fake_db, store, FAMILY_ID, "1")
+    assert "15000 元" in reply1
+    assert store.get(FAMILY_ID)["flow"] == "pending_finance_budget_global_confirm"
+
+    confirm_llm_client = _FakeLLMClient(response_text="CONFIRM")
+    reply2 = router.handle_message(fake_db, store, FAMILY_ID, "對", llm_client=confirm_llm_client)
+    assert "多少" in reply2
+    assert store.get(FAMILY_ID)["flow"] == "pending_finance_budget_amount"
+
+    reply3 = router.handle_message(fake_db, store, FAMILY_ID, "20000")
+    assert "20000 元" in reply3
+    assert commands.finance.get_monthly_budget(fake_db, user_id) == 20000.0
 
 
 def test_finance_add_transaction_full_flow_records_entry(fake_db, monkeypatch):

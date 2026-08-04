@@ -1,6 +1,7 @@
 """內建指令與對話式設定流程（對應 docs/specs/platform-auth/SPEC.md FR-4～FR-6、
 docs/specs/feature-toggles/SPEC.md FR-1～FR-2、docs/specs/chat-core/SPEC.md ADR-4、FR-10～FR-12、
-docs/specs/robinson/SPEC.md FR-20、FR-31、FR-31a、FR-32、FR-41～FR-44、FR-49、FR-50、FR-60～FR-63）。"""
+docs/specs/robinson/SPEC.md FR-20、FR-31、FR-31a、FR-32、FR-41～FR-44、FR-41a、FR-42a、FR-49、FR-50、
+FR-60～FR-63）。"""
 import logging
 from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
@@ -1351,6 +1352,15 @@ def handle_complaint_content_step(
 # FR-41 設定預算、FR-43 門檻預警推播（`finance.check_and_push_budget_alerts()`，借用 `/healthz`
 # 頻率，見 `main.py`）、FR-44 文字摘要查詢，三者都不需要 LLM；FR-42 的補記日期解析、更新/刪除
 # 選擇、刪除確認才需要 LLM（跟待辦事項/心情小記一致，純固定選項的步驟不呼叫 LLM）。
+#
+# 2026-08-04 擴充（Robin 提出記帳模組使用回饋，見 robinson SPEC.md FR-41a/FR-42a）：
+# - 設定預算改成多輪：pending_finance_budget_scope（全部月份／某幾個月）
+#   → 選全部月份：若全局預設已有舊值 → pending_finance_budget_global_confirm 反問確認
+#   → 選某幾個月：pending_finance_budget_months 問月份 → 若選定月份有舊覆蓋值 →
+#     pending_finance_budget_override_confirm 反問確認 → pending_finance_budget_amount 問金額
+#   確認步驟一樣是簡單一輪 LLM CONFIRM/CANCEL（風險等級同記帳刪除確認）。
+# - FR-42a 每日 23:00 記帳提醒：`finance.check_and_push_finance_reminders()`，同樣借用 `/healthz`
+#   頻率，不需要對話狀態機，也不需要 LLM。
 # ---------------------------------------------------------------------------
 
 _FINANCE_BACKFILL_DATE_PARSE_PROMPT = (
@@ -1383,6 +1393,16 @@ _TRANSACTION_DELETE_CONFIRM_PROMPT = (
     "(2) 不要刪除、想取消、或其實在問別的事 → CANCEL"
 )
 
+# 2026-08-04 追加（記帳擴充，見 robinson SPEC.md FR-41a）：預算已有舊值時的覆蓋確認，簡單一輪
+# LLM CONFIRM/CANCEL（風險等級同記帳刪除確認，理由同上）。
+_FINANCE_BUDGET_CHANGE_CONFIRM_PROMPT = (
+    "使用者剛被 Robinson 反問是否要把已經設定過的記帳預算改成新的金額，這是使用者這一則的回覆："
+    "「{text}」。\n"
+    "請判斷使用者的意思，整則回覆只能輸出以下其中一個固定字，不要輸出其他任何文字：\n"
+    "(1) 確定要改 → CONFIRM\n"
+    "(2) 不要改、想取消、或其實在問別的事 → CANCEL"
+)
+
 
 def _parse_amount(text: str) -> float | None:
     """把使用者輸入的金額文字換算成正數 float；接受「120」「120元」「NT$120」「1,200」等常見寫法，
@@ -1399,26 +1419,185 @@ def _parse_amount(text: str) -> float | None:
 
 
 def start_finance_budget(state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
-    """「設定記帳預算」／`/set_budget`：開始設定每月支出預算上限（FR-41）。"""
-    state_store.set(telegram_user_id, {"flow": "pending_finance_budget", "target_user_id": user_id})
-    return "好的，請問每月支出預算上限是多少呢？（例如：15000）"
+    """「設定記帳預算」／`/set_budget`：開始設定支出預算（FR-41／FR-41a）。
+
+    2026-08-04 擴充（見 robinson SPEC.md FR-41a）：每次都先問套用範圍（全部月份 vs 只套用某幾個月），
+    而不是直接問金額——理由是 Robin 提出某幾個月（報稅、包紅包）固定開銷較高，需要能單獨設定，
+    又不想每次調整全局預設時被牽動。完整流程見本模組「記帳」區塊開頭的擴充說明。
+    """
+    state_store.set(telegram_user_id, {"flow": "pending_finance_budget_scope", "target_user_id": user_id})
+    return finance.format_budget_scope_prompt()
 
 
-def handle_finance_budget_step(
+def handle_finance_budget_scope_step(
     db: CloudSQLClient,
     state_store: ConversationStateStore,
     telegram_user_id: int,
     text: str,
 ) -> str:
-    """處理 `pending_finance_budget` 狀態下使用者提供的預算金額（FR-41）。"""
+    """處理 `pending_finance_budget_scope` 狀態下使用者選擇的套用範圍（FR-41a）。
+
+    選「全部月份」：若全局預設已有舊值，先反問確認才能改；沒有舊值就直接問金額。
+    選「只套用某幾個月」：接著問要套用哪幾個月。
+    """
+    state = state_store.get(telegram_user_id)
+    target_user_id = state["target_user_id"]
+
+    scope = finance.resolve_budget_scope(text)
+    if scope is None:
+        return "不好意思，我沒看懂，麻煩從下面選一個喔：\n\n" + finance.format_budget_scope_prompt()
+
+    if scope == "months":
+        state_store.set(telegram_user_id, {"flow": "pending_finance_budget_months", "target_user_id": target_user_id})
+        return "好的，要套用在幾月呢？可以輸入多個，用逗號分隔（例如：8,9）："
+
+    current = finance.get_monthly_budget(db, target_user_id)
+    if current is not None:
+        state_store.set(
+            telegram_user_id,
+            {"flow": "pending_finance_budget_global_confirm", "target_user_id": target_user_id},
+        )
+        return finance.format_budget_global_confirm_prompt(current)
+
+    state_store.set(
+        telegram_user_id,
+        {"flow": "pending_finance_budget_amount", "target_user_id": target_user_id, "scope": "global"},
+    )
+    return "好的，請問每月支出預算上限是多少呢？（例如：15000）"
+
+
+def handle_finance_budget_months_step(
+    db: CloudSQLClient,
+    state_store: ConversationStateStore,
+    telegram_user_id: int,
+    text: str,
+) -> str:
+    """處理 `pending_finance_budget_months` 狀態下使用者輸入的月份清單（FR-41a）。
+
+    一律套用「今年」（今天所在的年份），這是本次的簡化假設，尚不支援跨年設定。若選定的月份中
+    有已經設定過覆蓋值的，先組合成一則確認訊息列出舊值；沒有衝突就直接問金額。
+    """
+    state = state_store.get(telegram_user_id)
+    target_user_id = state["target_user_id"]
+
+    months = finance.parse_months(text)
+    if months is None:
+        return "不好意思，我沒看懂月份，可以用「8」或「8,9」這樣的方式告訴我嗎？（1~12）"
+
+    year = _now().date().year
+    conflicts = [
+        (month, override)
+        for month in months
+        if (override := finance.get_budget_override(db, target_user_id, year, month)) is not None
+    ]
+
+    if conflicts:
+        state_store.set(
+            telegram_user_id,
+            {
+                "flow": "pending_finance_budget_override_confirm",
+                "target_user_id": target_user_id,
+                "months": months,
+                "year": year,
+            },
+        )
+        return finance.format_budget_override_confirm_prompt(conflicts)
+
+    state_store.set(
+        telegram_user_id,
+        {
+            "flow": "pending_finance_budget_amount",
+            "target_user_id": target_user_id,
+            "scope": "months",
+            "months": months,
+            "year": year,
+        },
+    )
+    return "好的，請問要設定多少金額呢？（例如：15000）"
+
+
+def handle_finance_budget_global_confirm_step(
+    llm_client,
+    state_store: ConversationStateStore,
+    telegram_user_id: int,
+    text: str,
+) -> str:
+    """處理 `pending_finance_budget_global_confirm` 狀態下使用者對「要不要改全局預設預算」的回覆
+    （簡單一輪 CONFIRM/CANCEL，理由見 `_FINANCE_BUDGET_CHANGE_CONFIRM_PROMPT`）。"""
+    state = state_store.get(telegram_user_id)
+    target_user_id = state["target_user_id"]
+
+    decision = llm_client.generate_text(_FINANCE_BUDGET_CHANGE_CONFIRM_PROMPT.format(text=text)).strip()
+    if decision != "CONFIRM":
+        state_store.clear(telegram_user_id)
+        return "好的，維持原本的預算不變！"
+
+    state_store.set(
+        telegram_user_id,
+        {"flow": "pending_finance_budget_amount", "target_user_id": target_user_id, "scope": "global"},
+    )
+    return "好的，請問每月支出預算上限要改成多少呢？（例如：15000）"
+
+
+def handle_finance_budget_override_confirm_step(
+    llm_client,
+    state_store: ConversationStateStore,
+    telegram_user_id: int,
+    text: str,
+) -> str:
+    """處理 `pending_finance_budget_override_confirm` 狀態下使用者對「要不要改某幾個月的覆蓋預算」
+    的回覆（簡單一輪 CONFIRM/CANCEL）。"""
+    state = state_store.get(telegram_user_id)
+    target_user_id = state["target_user_id"]
+    months = state["months"]
+    year = state["year"]
+
+    decision = llm_client.generate_text(_FINANCE_BUDGET_CHANGE_CONFIRM_PROMPT.format(text=text)).strip()
+    if decision != "CONFIRM":
+        state_store.clear(telegram_user_id)
+        return "好的，維持原本的預算不變！"
+
+    state_store.set(
+        telegram_user_id,
+        {
+            "flow": "pending_finance_budget_amount",
+            "target_user_id": target_user_id,
+            "scope": "months",
+            "months": months,
+            "year": year,
+        },
+    )
+    return "好的，請問要改成多少金額呢？（例如：15000）"
+
+
+def handle_finance_budget_amount_step(
+    db: CloudSQLClient,
+    state_store: ConversationStateStore,
+    telegram_user_id: int,
+    text: str,
+) -> str:
+    """處理 `pending_finance_budget_amount` 狀態下使用者提供的金額，依 `scope` 分別寫入全局預設
+    （`finance.set_monthly_budget()`）或指定月份的覆蓋值（`finance.set_budget_override()`）。"""
     state = state_store.get(telegram_user_id)
     amount = _parse_amount(text)
     if amount is None:
         return "不好意思，我沒看懂金額，麻煩輸入一個數字喔（例如：15000）"
 
-    finance.set_monthly_budget(db, state["target_user_id"], amount)
+    target_user_id = state["target_user_id"]
     state_store.clear(telegram_user_id)
-    return f"好的，已經幫你把每月支出預算設定為 {amount:.0f} 元囉！"
+
+    if state["scope"] == "global":
+        finance.set_monthly_budget(db, target_user_id, amount)
+        return (
+            f"好的，已經幫你把預設每月支出預算設定為 {amount:.0f} 元囉！之後每個月都會自動套用這個"
+            "金額（除非你有針對某幾個月另外設定）。"
+        )
+
+    months = state["months"]
+    year = state["year"]
+    for month in months:
+        finance.set_budget_override(db, target_user_id, year, month, amount)
+    return f"好的，已經把 {finance.format_months_label(months)} 的支出預算設定為 {amount:.0f} 元囉！"
 
 
 def start_finance_add(state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:

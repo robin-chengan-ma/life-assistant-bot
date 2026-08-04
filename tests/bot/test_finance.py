@@ -361,3 +361,220 @@ def test_check_and_push_budget_alerts_default_now_uses_utc_now(fake_db, monkeypa
     fake_db.insert("users", {"telegram_user_id": 1, "role": "Robin", "is_owner": True})
 
     finance.check_and_push_budget_alerts(fake_db, _FakeTelegramClient())
+
+
+# --- FR-41a 預算套用範圍/月份解析 ---
+
+
+def test_format_budget_scope_prompt_lists_both_options():
+    text = finance.format_budget_scope_prompt()
+    assert "1. 全部月份" in text
+    assert "2. 只套用某幾個月" in text
+
+
+def test_resolve_budget_scope_accepts_index_and_keyword():
+    assert finance.resolve_budget_scope("1") == "global"
+    assert finance.resolve_budget_scope("2") == "months"
+    assert finance.resolve_budget_scope("全部月份") == "global"
+    assert finance.resolve_budget_scope("只套用某幾個月") == "months"
+    assert finance.resolve_budget_scope("全部") == "global"
+    assert finance.resolve_budget_scope("某幾個月") == "months"
+
+
+def test_resolve_budget_scope_rejects_unrecognized_text():
+    assert finance.resolve_budget_scope("0") is None
+    assert finance.resolve_budget_scope("3") is None
+    assert finance.resolve_budget_scope("隨便") is None
+
+
+def test_parse_months_accepts_comma_and_dun_separator():
+    assert finance.parse_months("8,9") == [8, 9]
+    assert finance.parse_months("8、9") == [8, 9]
+    assert finance.parse_months("8月, 9月") == [8, 9]
+    assert finance.parse_months("8") == [8]
+
+
+def test_parse_months_dedupes_and_preserves_order():
+    assert finance.parse_months("9,8,9") == [9, 8]
+
+
+def test_parse_months_rejects_out_of_range_or_non_numeric():
+    assert finance.parse_months("13") is None
+    assert finance.parse_months("0") is None
+    assert finance.parse_months("八月") is None
+    assert finance.parse_months("") is None
+
+
+def test_format_months_label_joins_with_dun():
+    assert finance.format_months_label([8, 9]) == "8月、9月"
+
+
+def test_format_budget_global_confirm_prompt_shows_current_amount():
+    text = finance.format_budget_global_confirm_prompt(43000)
+    assert "43000 元" in text
+    assert "確認要改成新的金額嗎" in text
+
+
+def test_format_budget_override_confirm_prompt_lists_conflicts():
+    text = finance.format_budget_override_confirm_prompt([(8, 43000.0), (9, 50000.0)])
+    assert "8月：43000 元" in text
+    assert "9月：50000 元" in text
+
+
+# --- FR-41a 預算覆蓋 CRUD / 生效預算查詢 ---
+
+
+def test_get_budget_override_returns_none_when_unset(fake_db):
+    assert finance.get_budget_override(fake_db, 1, 2026, 8) is None
+
+
+def test_set_budget_override_inserts_new_row(fake_db):
+    finance.set_budget_override(fake_db, 1, 2026, 8, 43000)
+
+    assert finance.get_budget_override(fake_db, 1, 2026, 8) == 43000.0
+
+
+def test_set_budget_override_updates_existing_row(fake_db):
+    finance.set_budget_override(fake_db, 1, 2026, 8, 43000)
+    finance.set_budget_override(fake_db, 1, 2026, 8, 50000)
+
+    assert finance.get_budget_override(fake_db, 1, 2026, 8) == 50000.0
+    assert len(fake_db.select("budget_overrides", where="user_id = %s", params=(1,))) == 1
+
+
+def test_get_effective_monthly_budget_prefers_override_over_default(fake_db):
+    user_id = fake_db.insert("users", {"telegram_user_id": 1, "role": "Robin", "is_owner": True})
+    finance.set_monthly_budget(fake_db, user_id, 15000)
+    finance.set_budget_override(fake_db, user_id, 2026, 8, 43000)
+
+    assert finance.get_effective_monthly_budget(fake_db, user_id, 2026, 8) == 43000.0
+    assert finance.get_effective_monthly_budget(fake_db, user_id, 2026, 9) == 15000.0
+
+
+def test_get_effective_monthly_budget_none_when_neither_set(fake_db):
+    user_id = fake_db.insert("users", {"telegram_user_id": 1, "role": "Robin", "is_owner": True})
+
+    assert finance.get_effective_monthly_budget(fake_db, user_id, 2026, 8) is None
+
+
+def test_format_monthly_summary_uses_override_budget(fake_db):
+    user_id = fake_db.insert("users", {"telegram_user_id": 1, "role": "Robin", "is_owner": True})
+    finance.set_monthly_budget(fake_db, user_id, 1000)
+    finance.set_budget_override(fake_db, user_id, 2026, 8, 2000)
+    finance.create_transaction(fake_db, user_id, "expense", "餐飲", 1000, None, date(2026, 8, 1))
+
+    text = finance.format_monthly_summary(fake_db, user_id, date(2026, 8, 4))
+
+    assert "預算上限：2000 元（已使用 50%）" in text
+
+
+def test_check_and_push_budget_alerts_uses_override_only_user_without_default(fake_db):
+    """使用者從未設定全局預設，只針對這個月設了覆蓋值，門檻預警仍要抓得到（決策⑤）。"""
+    user_id = fake_db.insert("users", {"telegram_user_id": 1, "role": "Robin", "is_owner": True})
+    finance.set_budget_override(fake_db, user_id, 2026, 8, 1000)
+    finance.create_transaction(fake_db, user_id, "expense", "餐飲", 900, None, date(2026, 8, 20))
+    telegram_client = _FakeTelegramClient()
+
+    finance.check_and_push_budget_alerts(
+        fake_db, telegram_client, now=datetime(2026, 8, 20, 3, 0, tzinfo=timezone.utc)
+    )
+
+    assert len(telegram_client.sent) == 1
+    assert "80%" in telegram_client.sent[0][1] or "90%" in telegram_client.sent[0][1]
+
+
+# --- FR-42a 每日記帳提醒 ---
+
+
+def test_check_and_push_finance_reminders_sends_when_no_expense_today(fake_db):
+    user_id = fake_db.insert("users", {"telegram_user_id": 1, "role": "Robin", "is_owner": True})
+    finance.set_monthly_budget(fake_db, user_id, 15000)
+    telegram_client = _FakeTelegramClient()
+
+    finance.check_and_push_finance_reminders(
+        fake_db, telegram_client, now=datetime(2026, 8, 4, 15, 0, tzinfo=timezone.utc)  # 台灣時間 23:00
+    )
+
+    assert len(telegram_client.sent) == 1
+    assert telegram_client.sent[0][0] == 1
+    row = fake_db.select("users", where="id = %s", params=(user_id,), fetch_one=True)
+    assert row["finance_reminder_sent_date"] == date(2026, 8, 4)
+
+
+def test_check_and_push_finance_reminders_skips_when_already_recorded_today(fake_db):
+    user_id = fake_db.insert("users", {"telegram_user_id": 1, "role": "Robin", "is_owner": True})
+    finance.set_monthly_budget(fake_db, user_id, 15000)
+    finance.create_transaction(fake_db, user_id, "expense", "餐飲", 100, None, date(2026, 8, 4))
+    telegram_client = _FakeTelegramClient()
+
+    finance.check_and_push_finance_reminders(
+        fake_db, telegram_client, now=datetime(2026, 8, 4, 15, 0, tzinfo=timezone.utc)
+    )
+
+    assert telegram_client.sent == []
+
+
+def test_check_and_push_finance_reminders_skips_outside_reminder_hour(fake_db):
+    user_id = fake_db.insert("users", {"telegram_user_id": 1, "role": "Robin", "is_owner": True})
+    finance.set_monthly_budget(fake_db, user_id, 15000)
+    telegram_client = _FakeTelegramClient()
+
+    finance.check_and_push_finance_reminders(
+        fake_db, telegram_client, now=datetime(2026, 8, 4, 3, 0, tzinfo=timezone.utc)  # 台灣時間 11:00
+    )
+
+    assert telegram_client.sent == []
+
+
+def test_check_and_push_finance_reminders_skips_user_without_budget(fake_db):
+    fake_db.insert("users", {"telegram_user_id": 1, "role": "Robin", "is_owner": True})
+    telegram_client = _FakeTelegramClient()
+
+    finance.check_and_push_finance_reminders(
+        fake_db, telegram_client, now=datetime(2026, 8, 4, 15, 0, tzinfo=timezone.utc)
+    )
+
+    assert telegram_client.sent == []
+
+
+def test_check_and_push_finance_reminders_skips_user_without_telegram_id(fake_db):
+    user_id = fake_db.insert("users", {"telegram_user_id": None, "role": "媽媽", "is_owner": False})
+    finance.set_monthly_budget(fake_db, user_id, 15000)
+    telegram_client = _FakeTelegramClient()
+
+    finance.check_and_push_finance_reminders(
+        fake_db, telegram_client, now=datetime(2026, 8, 4, 15, 0, tzinfo=timezone.utc)
+    )
+
+    assert telegram_client.sent == []
+
+
+def test_check_and_push_finance_reminders_does_not_resend_same_day(fake_db):
+    user_id = fake_db.insert("users", {"telegram_user_id": 1, "role": "Robin", "is_owner": True})
+    finance.set_monthly_budget(fake_db, user_id, 15000)
+    telegram_client = _FakeTelegramClient()
+    now = datetime(2026, 8, 4, 15, 0, tzinfo=timezone.utc)
+
+    finance.check_and_push_finance_reminders(fake_db, telegram_client, now=now)
+    finance.check_and_push_finance_reminders(fake_db, telegram_client, now=now)
+
+    assert len(telegram_client.sent) == 1
+
+
+def test_check_and_push_finance_reminders_uses_override_only_user_without_default(fake_db):
+    user_id = fake_db.insert("users", {"telegram_user_id": 1, "role": "Robin", "is_owner": True})
+    finance.set_budget_override(fake_db, user_id, 2026, 8, 20000)
+    telegram_client = _FakeTelegramClient()
+
+    finance.check_and_push_finance_reminders(
+        fake_db, telegram_client, now=datetime(2026, 8, 4, 15, 0, tzinfo=timezone.utc)
+    )
+
+    assert len(telegram_client.sent) == 1
+
+
+def test_check_and_push_finance_reminders_default_now_uses_utc_now(fake_db):
+    """防禦性測試：不傳 now 時應該使用目前的真實時間，而不是拋出例外。"""
+    fake_db.insert("users", {"telegram_user_id": 1, "role": "Robin", "is_owner": True})
+
+    finance.check_and_push_finance_reminders(fake_db, _FakeTelegramClient())

@@ -64,6 +64,7 @@ COMMENT ON COLUMN users.created_at IS '這筆使用者記錄建立的時間（�
 | 日期 | 變更內容 | 原因 | Migration 檔案 |
 | --- | --- | --- | --- |
 | 2026-08-04 | 新增 `monthly_budget`（每月支出預算上限）、`budget_alert_50_sent_month`／`budget_alert_80_sent_month`（FR-43 門檻預警去重用） | Step 2.1 記帳模組 FR-41／FR-43，設計理由見下方 `transactions` 表 | `0018_add_budget_fields_to_users.sql` |
+| 2026-08-04 | 新增 `finance_reminder_sent_date`（FR-42a 每日記帳提醒去重用） | Robin 提出「有設定預算時應每天固定時間提醒記帳」的回饋，設計比照 `todos.daily_pushed_on`，詳見下方 `budget_overrides` 表 | `0021_add_finance_reminder_field_to_users.sql` |
 
 ---
 
@@ -434,3 +435,37 @@ COMMENT ON COLUMN transactions.created_at IS '這筆交易記錄建立的時間'
 - `amount` 用 `NUMERIC(12,2)` 存實際金額（非整數分），並用 `CHECK (amount > 0)` 強制正數，方向完全由 `type` 決定，避免正負號與 type 語意互相矛盾的資料
 - `transaction_date` 必填且一律由 app 端依台灣時區算好日期後寫入，不依賴資料庫預設值，設計理由與 `mood_journals.entry_date` 完全相同（支援補記過去日期、避免 DB 伺服器時區在台灣午夜前後產生差一天的 bug）
 - 只建 `user_id` 單欄索引，用途與 `mood_journals`／`complaints` 相同（查某人的記帳紀錄／月加總），不需要額外複合索引——月加總查詢（`user_id`／`type`／`transaction_date` 範圍）目前資料量小，個人使用不需要為此額外建複合索引
+
+---
+
+### budget_overrides
+
+**建立日期**：2026-08-04
+**用途**：預算特殊月份覆蓋，對應 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) FR-41a。Robin 提出「某幾個月固定開銷較高（報稅、包紅包），想單獨設定跟平常不同的預算」的回饋後新增。
+**Migration 檔案**：`src/migrations/0020_create_budget_overrides_table.sql`
+
+```sql
+CREATE TABLE budget_overrides (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id),
+    year INT NOT NULL,
+    month INT NOT NULL CHECK (month BETWEEN 1 AND 12),
+    amount NUMERIC(12,2) NOT NULL CHECK (amount > 0),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (user_id, year, month)
+);
+
+COMMENT ON TABLE budget_overrides IS 'FR-41a 預算特殊月份覆蓋：使用者可對某幾個月設定跟全局預設（users.monthly_budget）不同的支出預算上限，查詢當月生效預算時優先用這裡的值，沒有才 fallback 用全局預設';
+COMMENT ON COLUMN budget_overrides.id IS '內部主鍵';
+COMMENT ON COLUMN budget_overrides.user_id IS '所屬使用者，對應 users.id';
+COMMENT ON COLUMN budget_overrides.year IS '這筆覆蓋值套用的年份';
+COMMENT ON COLUMN budget_overrides.month IS '這筆覆蓋值套用的月份（1~12）';
+COMMENT ON COLUMN budget_overrides.amount IS '這個月的特殊預算上限金額，一律為正數';
+COMMENT ON COLUMN budget_overrides.created_at IS '這筆覆蓋值建立的時間';
+```
+
+**設計理由**：
+- 2026-08-04 經 AskUserQuestion 與 Robin 確認：預算跟月份的關聯採「全局預設值＋特殊月份覆蓋」設計，而非「每個月都各自存一筆」——`users.monthly_budget` 保留當全局預設，這張表只存「跟預設值不同」的特殊月份，好處是改全局預設不會動到已經設定過的特殊月份、資料量小、查詢邏輯只多一層 fallback（`finance.get_effective_monthly_budget()`）
+- `UNIQUE (user_id, year, month)` 確保同一個使用者同一年同一月只會有一筆覆蓋值，寫入邏輯是「已存在就 UPDATE，不存在就 INSERT」（`finance.set_budget_override()`），不是資料庫層 `ON CONFLICT`
+- `year`／`month` 分開存而不是存一個 `DATE`，因為這裡的語意是「套用範圍」而非「某一天」，`month` 額外加 `CHECK (month BETWEEN 1 AND 12)` 防呆
+- 沒有另外建索引：查詢一律帶 `user_id`／`year`／`month`（有 `UNIQUE` 約束自帶索引）或只帶 `year`／`month`（FR-43 門檻預警、FR-42a 每日提醒找出「這個月有覆蓋值」的使用者），資料量小，個人使用不需要額外複合索引

@@ -1597,47 +1597,218 @@ def test_handle_todo_action_confirm_step_keeps_status_when_unclassifiable(fake_d
 # --- 記帳（2026-08-04，Step 2.1，見 robinson SPEC.md FR-41～FR-44）---
 
 
-def test_start_finance_budget_asks_amount():
+def test_start_finance_budget_asks_scope():
     store = ConversationStateStore()
 
     reply = commands.start_finance_budget(store, telegram_user_id=1, user_id=42)
 
-    assert "每月支出預算上限" in reply
-    assert store.get(1) == {"flow": "pending_finance_budget", "target_user_id": 42}
+    assert "全部月份" in reply
+    assert store.get(1) == {"flow": "pending_finance_budget_scope", "target_user_id": 42}
 
 
-def test_handle_finance_budget_step_valid_amount_sets_budget(fake_db):
+# --- FR-41a：選「全部月份」，沒有舊值時直接問金額 ---
+
+
+def test_handle_finance_budget_scope_step_global_without_existing_asks_amount(fake_db):
     user_id = fake_db.insert("users", {"telegram_user_id": 1, "role": "爸爸", "is_owner": False})
     store = ConversationStateStore()
-    store.set(1, {"flow": "pending_finance_budget", "target_user_id": user_id})
+    store.set(1, {"flow": "pending_finance_budget_scope", "target_user_id": user_id})
 
-    reply = commands.handle_finance_budget_step(fake_db, store, telegram_user_id=1, text="15000")
+    reply = commands.handle_finance_budget_scope_step(fake_db, store, telegram_user_id=1, text="1")
+
+    assert "每月支出預算上限" in reply
+    assert store.get(1) == {
+        "flow": "pending_finance_budget_amount", "target_user_id": user_id, "scope": "global",
+    }
+
+
+def test_handle_finance_budget_scope_step_unrecognized_reprompts(fake_db):
+    store = ConversationStateStore()
+    original_state = {"flow": "pending_finance_budget_scope", "target_user_id": 42}
+    store.set(1, original_state)
+
+    reply = commands.handle_finance_budget_scope_step(fake_db, store, telegram_user_id=1, text="不知道")
+
+    assert "沒看懂" in reply
+    assert store.get(1) == original_state
+
+
+def test_handle_finance_budget_scope_step_global_with_existing_asks_confirm(fake_db):
+    user_id = fake_db.insert("users", {"telegram_user_id": 1, "role": "爸爸", "is_owner": False})
+    commands.finance.set_monthly_budget(fake_db, user_id, 43000)
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_finance_budget_scope", "target_user_id": user_id})
+
+    reply = commands.handle_finance_budget_scope_step(fake_db, store, telegram_user_id=1, text="全部月份")
+
+    assert "43000 元" in reply
+    assert store.get(1) == {
+        "flow": "pending_finance_budget_global_confirm", "target_user_id": user_id,
+    }
+
+
+def test_handle_finance_budget_global_confirm_step_confirm_asks_amount(fake_db):
+    user_id = 42
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_finance_budget_global_confirm", "target_user_id": user_id})
+    llm_client = _FakeLLMClient(response_text="CONFIRM")
+
+    reply = commands.handle_finance_budget_global_confirm_step(llm_client, store, telegram_user_id=1, text="好")
+
+    assert "多少" in reply
+    assert store.get(1) == {
+        "flow": "pending_finance_budget_amount", "target_user_id": user_id, "scope": "global",
+    }
+
+
+def test_handle_finance_budget_global_confirm_step_cancel_clears_state(fake_db):
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_finance_budget_global_confirm", "target_user_id": 42})
+    llm_client = _FakeLLMClient(response_text="CANCEL")
+
+    reply = commands.handle_finance_budget_global_confirm_step(llm_client, store, telegram_user_id=1, text="不用了")
+
+    assert "維持原本" in reply
+    assert store.get(1) is None
+
+
+# --- FR-41a：選「只套用某幾個月」---
+
+
+def test_handle_finance_budget_scope_step_months_asks_which_months(fake_db):
+    user_id = fake_db.insert("users", {"telegram_user_id": 1, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_finance_budget_scope", "target_user_id": user_id})
+
+    reply = commands.handle_finance_budget_scope_step(fake_db, store, telegram_user_id=1, text="2")
+
+    assert "幾月" in reply
+    assert store.get(1) == {"flow": "pending_finance_budget_months", "target_user_id": user_id}
+
+
+def test_handle_finance_budget_months_step_without_conflict_asks_amount(fake_db, monkeypatch):
+    monkeypatch.setattr(commands, "_now", lambda: datetime(2026, 8, 4, 9, 0, tzinfo=commands._TAIWAN_TZ))
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_finance_budget_months", "target_user_id": 42})
+
+    reply = commands.handle_finance_budget_months_step(fake_db, store, telegram_user_id=1, text="8,9")
+
+    assert "多少金額" in reply
+    assert store.get(1) == {
+        "flow": "pending_finance_budget_amount", "target_user_id": 42,
+        "scope": "months", "months": [8, 9], "year": 2026,
+    }
+
+
+def test_handle_finance_budget_months_step_unrecognized_reprompts(fake_db):
+    store = ConversationStateStore()
+    original_state = {"flow": "pending_finance_budget_months", "target_user_id": 42}
+    store.set(1, original_state)
+
+    reply = commands.handle_finance_budget_months_step(fake_db, store, telegram_user_id=1, text="不知道")
+
+    assert "沒看懂月份" in reply
+    assert store.get(1) == original_state
+
+
+def test_handle_finance_budget_months_step_with_conflict_asks_confirm(fake_db, monkeypatch):
+    monkeypatch.setattr(commands, "_now", lambda: datetime(2026, 8, 4, 9, 0, tzinfo=commands._TAIWAN_TZ))
+    commands.finance.set_budget_override(fake_db, 42, 2026, 8, 43000)
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_finance_budget_months", "target_user_id": 42})
+
+    reply = commands.handle_finance_budget_months_step(fake_db, store, telegram_user_id=1, text="8,9")
+
+    assert "8月：43000 元" in reply
+    assert store.get(1) == {
+        "flow": "pending_finance_budget_override_confirm", "target_user_id": 42,
+        "months": [8, 9], "year": 2026,
+    }
+
+
+def test_handle_finance_budget_override_confirm_step_confirm_asks_amount(fake_db):
+    store = ConversationStateStore()
+    store.set(1, {
+        "flow": "pending_finance_budget_override_confirm", "target_user_id": 42,
+        "months": [8, 9], "year": 2026,
+    })
+    llm_client = _FakeLLMClient(response_text="CONFIRM")
+
+    reply = commands.handle_finance_budget_override_confirm_step(llm_client, store, telegram_user_id=1, text="好")
+
+    assert "多少金額" in reply
+    assert store.get(1) == {
+        "flow": "pending_finance_budget_amount", "target_user_id": 42,
+        "scope": "months", "months": [8, 9], "year": 2026,
+    }
+
+
+def test_handle_finance_budget_override_confirm_step_cancel_clears_state(fake_db):
+    store = ConversationStateStore()
+    store.set(1, {
+        "flow": "pending_finance_budget_override_confirm", "target_user_id": 42,
+        "months": [8, 9], "year": 2026,
+    })
+    llm_client = _FakeLLMClient(response_text="CANCEL")
+
+    reply = commands.handle_finance_budget_override_confirm_step(llm_client, store, telegram_user_id=1, text="算了")
+
+    assert "維持原本" in reply
+    assert store.get(1) is None
+
+
+# --- FR-41a：最後一步，輸入金額並寫入 ---
+
+
+def test_handle_finance_budget_amount_step_global_sets_default_budget(fake_db):
+    user_id = fake_db.insert("users", {"telegram_user_id": 1, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_finance_budget_amount", "target_user_id": user_id, "scope": "global"})
+
+    reply = commands.handle_finance_budget_amount_step(fake_db, store, telegram_user_id=1, text="15000")
 
     assert "15000 元" in reply
     assert store.get(1) is None
     assert commands.finance.get_monthly_budget(fake_db, user_id) == 15000.0
 
 
-def test_handle_finance_budget_step_accepts_amount_with_symbols(fake_db):
+def test_handle_finance_budget_amount_step_accepts_amount_with_symbols(fake_db):
     user_id = fake_db.insert("users", {"telegram_user_id": 1, "role": "爸爸", "is_owner": False})
     store = ConversationStateStore()
-    store.set(1, {"flow": "pending_finance_budget", "target_user_id": user_id})
+    store.set(1, {"flow": "pending_finance_budget_amount", "target_user_id": user_id, "scope": "global"})
 
-    commands.handle_finance_budget_step(fake_db, store, telegram_user_id=1, text="NT$15,000元")
+    commands.handle_finance_budget_amount_step(fake_db, store, telegram_user_id=1, text="NT$15,000元")
 
     assert commands.finance.get_monthly_budget(fake_db, user_id) == 15000.0
 
 
-def test_handle_finance_budget_step_invalid_amount_reprompts(fake_db):
+def test_handle_finance_budget_amount_step_invalid_amount_reprompts(fake_db):
     user_id = fake_db.insert("users", {"telegram_user_id": 1, "role": "爸爸", "is_owner": False})
     store = ConversationStateStore()
-    original_state = {"flow": "pending_finance_budget", "target_user_id": user_id}
+    original_state = {"flow": "pending_finance_budget_amount", "target_user_id": user_id, "scope": "global"}
     store.set(1, original_state)
 
-    reply = commands.handle_finance_budget_step(fake_db, store, telegram_user_id=1, text="不知道")
+    reply = commands.handle_finance_budget_amount_step(fake_db, store, telegram_user_id=1, text="不知道")
 
     assert "沒看懂金額" in reply
     assert store.get(1) == original_state
+
+
+def test_handle_finance_budget_amount_step_months_sets_override_for_each_month(fake_db):
+    user_id = fake_db.insert("users", {"telegram_user_id": 1, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+    store.set(1, {
+        "flow": "pending_finance_budget_amount", "target_user_id": user_id,
+        "scope": "months", "months": [8, 9], "year": 2026,
+    })
+
+    reply = commands.handle_finance_budget_amount_step(fake_db, store, telegram_user_id=1, text="43000")
+
+    assert "8月、9月" in reply
+    assert "43000 元" in reply
+    assert store.get(1) is None
+    assert commands.finance.get_budget_override(fake_db, user_id, 2026, 8) == 43000.0
+    assert commands.finance.get_budget_override(fake_db, user_id, 2026, 9) == 43000.0
 
 
 def test_start_finance_add_asks_type_and_sets_state(monkeypatch):

@@ -22,6 +22,7 @@ class FakeCloudSQLClient:
             "mood_journals": [],
             "complaints": [],
             "transactions": [],
+            "budget_overrides": [],
         }
         self._id_counter = itertools.count(1)
 
@@ -134,6 +135,18 @@ class FakeCloudSQLClient:
         # 2026-08-04（Step 2.1，見 robinson SPEC.md FR-43）：找出所有已設定預算上限的使用者。
         if where == "monthly_budget IS NOT NULL":
             return row.get("monthly_budget") is not None
+        # 2026-08-04 追加（記帳擴充，見 robinson SPEC.md FR-41a）：預算特殊月份覆蓋查詢。
+        if where == "user_id = %s AND year = %s AND month = %s":
+            return row.get("user_id") == params[0] and row.get("year") == params[1] and row.get("month") == params[2]
+        if where == "year = %s AND month = %s":
+            return row.get("year") == params[0] and row.get("month") == params[1]
+        # 2026-08-04 追加（記帳擴充，見 robinson SPEC.md FR-42a）：查詢某使用者今天是否已有支出紀錄。
+        if where == "user_id = %s AND type = %s AND transaction_date = %s":
+            return (
+                row.get("user_id") == params[0]
+                and row.get("type") == params[1]
+                and row.get("transaction_date") == params[2]
+            )
 
         raise NotImplementedError(f"FakeCloudSQLClient 尚未支援這個 where 條件：{where}")
 

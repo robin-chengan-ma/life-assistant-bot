@@ -101,6 +101,31 @@ def _check_finance_alerts() -> None:
         db.close()
 
 
+def _check_finance_reminders() -> None:
+    """在 /healthz 被呼叫時順便檢查每日記帳提醒（記帳模組擴充，見 robinson SPEC.md FR-42a）：
+    台灣時間 23:00，對「這個月有生效預算、今天還沒記過支出、今天還沒推播過」的使用者各推播一次，
+    詳見 src/bot/finance.py 模組 docstring 決策⑥。
+
+    跟 `_check_finance_alerts()` 一樣包一層 try/except 且不需要 `ROBIN_TELEGRAM_TOKEN`。
+    """
+    if not (os.environ.get("DATABASE_URL") and os.environ.get("TELEGRAM_BOT_TOKEN")):
+        return
+
+    from submodules.cloudsql.client import CloudSQLClient
+    from submodules.telegram.client import TelegramClient
+
+    from src.bot import finance
+
+    db = CloudSQLClient()
+    try:
+        telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
+        finance.check_and_push_finance_reminders(db, telegram_client)
+    except Exception:
+        logger.exception("每日記帳提醒檢查失敗，不影響健康檢查端點本身")
+    finally:
+        db.close()
+
+
 def _run_startup_migrations() -> None:
     """開機自動套用尚未執行過的 DB migration（ADR-11）。
 
@@ -146,10 +171,14 @@ def health_check():
 
     2026-08-04（Step 2.1，見 FR-43）：同樣借用這個頻率，順便觸發記帳預算門檻預警檢查，
     見 `_check_finance_alerts()`。
+
+    2026-08-04（記帳模組擴充，見 FR-42a）：同樣借用這個頻率，順便觸發每日記帳提醒檢查，
+    見 `_check_finance_reminders()`。
     """
     _check_neon_capacity()
     _check_todo_pushes()
     _check_finance_alerts()
+    _check_finance_reminders()
     return jsonify({"status": "ok"}), 200
 
 
