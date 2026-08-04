@@ -1,7 +1,7 @@
 ---
 title: Robinson 產品開發階段紀錄
 spec: docs/specs/robinson/SPEC.md
-updated: 2026-08-02
+updated: 2026-08-04
 ---
 
 # Robinson 產品開發階段紀錄
@@ -15,7 +15,7 @@ updated: 2026-08-02
 
 ## 目前階段
 
-**Phase 1（MVP）全部 Step 完成；Phase 2 Step 2.1（記帳模組）完成，下一步是 Step 2.2（體態管理）**
+**Phase 1（MVP）全部 Step 完成；Phase 2 Step 2.1（記帳模組）、Step 2.2（體態管理模組）完成，下一步是 Step 2.3（重要通知模組）**
 
 ## 目標時程（2026-07-30 更新：改為三週制，因新增多模態影像/語音處理架構）
 
@@ -50,7 +50,7 @@ updated: 2026-08-02
 | --- | --- | --- | --- | --- |
 | Phase 0 | 專案基礎建設（repo 結構、金鑰串接、Render/Neon/cron-job、DB 初始化） | 🟢 已完成 | 7/29～7/30 | 全部 Step 完成：`submodules/`、`src/schema/`、`src/migrations/`（ADR-11）骨架就緒；`/healthz` 已部署上線並掛上 cron-job.org；第一批 5 張表（`users`／`invite_codes`／`knowledge_base`／`conversation_logs`／`feature_toggles`）已核准並套用成功 |
 | Phase 1（MVP） | 核心平台（通關密碼對話式設定、歡迎訊息、`/rule`／`/function`／`/complaint` 內建指令、功能開關、Gemini 對話+知識庫、影像辨識、語音、個資遮蔽、基礎錯誤處理）＋待辦事項＋心情小記＋客訴收集 | 🟢 已完成 | 7/31～8/2 | Step 1.1～1.9 全數完成（實際 8/2 就全數完成，早於原訂 8/7 目標）；FR-56 全面改版為總覽＋按需深入＋情境範例（FR-56a～FR-56d） |
-| Phase 2 | 記帳＋體態管理＋重要通知＋異常自主診斷與 GitHub PR 治理＋重試機制＋分級降級 | 🟡 進行中 | 8/8～8/11 | Step 2.1（記帳，FR-41～FR-44）已於 8/4 完成，早於原訂時程；Step 2.4～2.6 為新增範圍，技術複雜度最高，已獨立預留兩天；體態模組飲食分析需附誤差聲明（FR-17c） |
+| Phase 2 | 記帳＋體態管理＋重要通知＋異常自主診斷與 GitHub PR 治理＋重試機制＋分級降級 | 🟡 進行中 | 8/8～8/11 | Step 2.1（記帳，FR-41～FR-44）、Step 2.2（體態管理，FR-45～FR-48）皆已於 8/4 完成，早於原訂時程；Step 2.4～2.6 為新增範圍，技術複雜度最高，已獨立預留兩天 |
 | Phase 3 | 個人技能成長（TOEIC 雙軌題庫 Pipeline＋YouTube 技術情報模組，僅 Robin）＋好友模式 | ⚪ 未開始 | 8/12～8/14 | 新增 YouTube 模組（FR-57～FR-59，見 ADR-9）；TOEIC 語音處理改用 Groq Whisper（ADR-12） |
 | Phase 4 | 求職模組（104 爬蟲＋評分） | ⚪ 未開始 | 8/15～8/16 | 爬蟲策略已定案：每週一次、AJAX API、無登入態、禮貌性延遲、ETL 去重（FR-34a～FR-34d） |
 | Phase 5 | Notion 後台 | ⚪ 未開始 | 8/18 之後 | 獨立拆出的最終階段，須等 Phase 0～4（含 FR-19 治理機制）穩定後才開始；期間僅維持資料層 API 抽象化彈性 |
@@ -122,6 +122,7 @@ updated: 2026-08-02
 | 2026-08-04 | **Bug 修正：個資遮蔽語意層暫時性外部錯誤導致整則訊息完全無回覆**。Robin 實測記帳擴充功能時對 Robinson 追問「這兩句話有什麼差異？」，撞到 Gemini `503 UNAVAILABLE`（模型暫時過載，非額度或程式問題），`privacy.mask_with_llm()` 呼叫未捕捉例外，導致整則訊息處理中斷、完全沒收到回覆（Owner 另外收到 FR-19a 例外通報私訊，內含完整 Traceback）。修正 `privacy.mask_text()` 呼叫語意層時新增 `try/except Exception`，任何暫時性外部錯誤都優雅降級成只回傳 Regex 層結果，理由與既有 ADR-2（Key 缺失時降級）一致，記錄為 privacy-masking SPEC.md ADR-3；完整外部 API 重試機制仍留待 FR-19i（Phase 2 Step 2.5）；全專案 579 個測試全過、覆蓋率 100% |
 | 2026-08-04 | **記帳模組擴充：新增 FR-44a（月底自動推播月報）**。Robin 詢問記帳摘要會不會自動推播，確認目前只有主動查詢後，指示「記帳摘要請在每月底自動推一次月報」。經 AskUserQuestion 確認：① 推播時刻 21:00，刻意跟 FR-42a 每日提醒的 23:00 錯開 ② 只推給「這個月有生效預算或有記帳」的使用者，避免沒在用記帳功能的家人收到全部 0 元的空洞報告。新增 `users.finance_monthly_report_sent_month` 去重欄位（Robin 依 ADR-10 核准 `0022_add_finance_monthly_report_field_to_users.sql`）；新增 `finance.check_and_push_monthly_report()`（借用 `/healthz` 頻率，「是不是月底」用「明天是不是 1 號」判斷，不寫死月份天數）與共用 helper `finance._users_with_finance_activity()`；`main.py` 新增 `_check_finance_monthly_report()`；內容沿用既有 `format_monthly_summary()`；全專案 589 個測試全過、覆蓋率 100% |
 | 2026-08-04 | **記帳模組擴充：新增 FR-41a（預算特殊月份覆蓋）、FR-42a（每日記帳提醒）**。Robin 實測後提出三點回饋：① 有設定預算時應每天固定時間提醒記帳，但當天已記錄就不必提醒、收入不用檢查 ② 能不能隨意改預算、是否每月自動套用、某幾個月（報稅、包紅包）固定開銷較高想單獨設定，希望設定時能問要套用全部月份還是某幾個月、調整已設定的月份時要先反問確認 ③ 也發現「調整剛剛設定的 43,000 元」跟「重新設定這個月的記帳預算」這兩句反問其實沒有差異，因為當時系統沒有「月份」維度，這正好點出①②的缺口。經 AskUserQuestion 確認設計：提醒時間 23:00；預算跟月份的關聯採「全局預設值（`users.monthly_budget`）＋特殊月份覆蓋（新表 `budget_overrides`）」設計而非逐月各自存一筆——改全局預設不動已設定的特殊月，查詢當月生效預算優先用覆蓋值、沒有才 fallback 用預設值（`finance.get_effective_monthly_budget()`）；`/set_budget` 每次都先問套用範圍，選定範圍已有舊值時一律先反問確認才能真正寫入。新增 migration `0020_create_budget_overrides_table.sql`／`0021_add_finance_reminder_field_to_users.sql`（Robin 依 ADR-10 核准）；`/set_budget` 從單輪改成最多四輪的狀態機（scope→months→confirm→amount）；新增 `finance.check_and_push_finance_reminders()`（FR-42a，比照 FR-32 每日摘要借用 `/healthz` 頻率，只在台灣時間 23 點執行）；FR-43 門檻預警、FR-44 摘要都已改用生效預算查詢邏輯，新增共用 helper `finance._users_with_effective_budget()`；月份輸入一律套用今年，尚不支援跨年設定，是本次的簡化假設；`/function` 記帳說明文案補上「以一個月為單位」提醒；全專案 577 個測試全過、覆蓋率 100% |
+| 2026-08-04 | **Phase 2 Step 2.2 完成：體態管理模組（FR-45～FR-48）**。Robin 確認「下個階段就是 Phase 2.2 了」後指示開發，經 AskUserQuestion 確認四項設計：① 運動消耗卡路里改用 LLM 估算（而非 MET 公式），沿用 `GEMINI_API_BOT_KEY`，符合 FR-56g 情境3「自然口吻回覆＋估算免責聲明」示範 ② 飲食三大營養素拆算同樣沿用 `GEMINI_API_BOT_KEY`（沒有食物資料庫，只能靠 LLM 語意判斷）③ FR-45 預警情境定案為目標達成通知（體重目標即時檢查、運動目標借用 `/healthz` 頻率排程加總累積分鐘數）＋目標期限前 7 天提醒＋BMI 異常提醒（記錄體重當下就地附加）④ 身高體重/運動/飲食三個子功能的目標設定共用一張 `body_goals` 表，用 `goal_type` 區分（比照 `budget_overrides` 精神）；運動目標的 `target_value` 單位原提案用公里數，Robin 指出「不是只有跑步」，改用累積運動分鐘數（各種運動都適用的共同單位）。新建 `body_weight_logs`／`exercise_logs`／`diet_logs`／`body_goals` 四張表、`users` 新增 `height_cm`（Robin 依 ADR-10 核准 `0023`～`0027` migration）；新增 `src/bot/body.py`（BMI 計算與分級、LLM 卡路里/營養估算、目標達成判斷、FR-45 排程檢查函式）；身高體重/運動/飲食三個子功能從一開始就內建完整 CRUD（新增/補記/查詢/更新/刪除），比照記帳模組；飲食目標因太主觀（例如「飲食完美控制」）不做自動達成判斷，只能手動取消，是刻意的已知簡化；`commands.py` 新增 12 個觸發詞與對應多輪反問流程、`router.py` 完成觸發詞與 flow 分派、`main.py` 新增 `_check_body_goal_alerts()` 借用 `/healthz` 頻率；`src/bot/body.py` 達到 100% 覆蓋率，全專案 661 個測試全過 |
 
 ## 待決事項
 
@@ -137,9 +138,9 @@ updated: 2026-08-02
 Phase 1（MVP）已全數完成，進入 **Phase 2：記帳＋體態管理＋重要通知＋系統韌性與自主診斷治理**：
 
 1. ~~**Step 2.1：記帳模組**（FR-41～FR-44）~~ **已於 2026-08-04 完成**（設定預算、記帳/補記/更新/刪除、門檻預警、文字摘要，見上方里程碑紀錄）
-2. **Step 2.2：體態管理模組**（FR-45～FR-48，可複用記帳的告警/圖表邏輯；FR-31 待辦事項的跨模組歧義判斷可在此補上，見 Step 1.7 備註；從一開始就要內建補記/更新/刪除 CRUD，理由同記帳模組）
+2. ~~**Step 2.2：體態管理模組**（FR-45～FR-48）~~ **已於 2026-08-04 完成**（身高體重/運動/飲食三個子功能皆內建補記/更新/刪除 CRUD、共用一張目標表、三種 FR-45 預警情境，見上方里程碑紀錄；FR-31 待辦事項的跨模組歧義判斷這版尚未回頭補上，留待有實際使用回饋再處理）
 3. **Step 2.3：重要通知模組**（FR-53，生日/節日排程 + 排除對象邏輯）
 4. **Step 2.4：異常自主診斷與 GitHub PR 自動化**（FR-19b～FR-19e）—— 技術複雜度最高，獨立預留較多時間
 5. **Step 2.5：外部 API 重試機制**（FR-19i）
-6. **Step 2.6：例外分級降級與決策執行狀態閉環回饋**（FR-19f～FR-19h），套用到 Phase 1 已完成的待辦事項/心情小記、本 Phase 的記帳模組，以及後續的體態模組
+6. **Step 2.6：例外分級降級與決策執行狀態閉環回饋**（FR-19f～FR-19h），套用到 Phase 1 已完成的待辦事項/心情小記、本 Phase 的記帳/體態模組
 7. 每天對照「建議每日分配」檢查進度

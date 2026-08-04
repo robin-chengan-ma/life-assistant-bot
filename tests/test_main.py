@@ -99,6 +99,49 @@ def test_check_todo_pushes_swallows_exception(monkeypatch):
     fake_db.close.assert_called_once()
 
 
+def test_check_body_goal_alerts_skips_when_env_vars_missing(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+
+    main._check_body_goal_alerts()  # 不應該拋例外，直接跳過
+
+
+def test_check_body_goal_alerts_calls_body_module_when_env_vars_set(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+
+    fake_db = MagicMock()
+    monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", MagicMock(return_value=fake_db))
+    fake_telegram = MagicMock()
+    monkeypatch.setattr("submodules.telegram.client.TelegramClient", MagicMock(return_value=fake_telegram))
+
+    fake_check_exercise = MagicMock()
+    fake_check_deadline = MagicMock()
+    monkeypatch.setattr("src.bot.body.check_and_push_exercise_goal_achievements", fake_check_exercise)
+    monkeypatch.setattr("src.bot.body.check_and_push_goal_deadline_reminders", fake_check_deadline)
+
+    main._check_body_goal_alerts()
+
+    fake_check_exercise.assert_called_once_with(fake_db, fake_telegram)
+    fake_check_deadline.assert_called_once_with(fake_db, fake_telegram)
+    fake_db.close.assert_called_once()
+
+
+def test_check_body_goal_alerts_swallows_exception(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+
+    fake_db = MagicMock()
+    monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", MagicMock(return_value=fake_db))
+    monkeypatch.setattr(
+        "submodules.telegram.client.TelegramClient", MagicMock(side_effect=RuntimeError("boom"))
+    )
+
+    main._check_body_goal_alerts()  # 不應該往外拋
+
+    fake_db.close.assert_called_once()
+
+
 def test_healthz_endpoint_still_returns_ok(monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)

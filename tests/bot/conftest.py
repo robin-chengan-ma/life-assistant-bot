@@ -23,6 +23,10 @@ class FakeCloudSQLClient:
             "complaints": [],
             "transactions": [],
             "budget_overrides": [],
+            "body_weight_logs": [],
+            "exercise_logs": [],
+            "diet_logs": [],
+            "body_goals": [],
         }
         self._id_counter = itertools.count(1)
 
@@ -151,6 +155,19 @@ class FakeCloudSQLClient:
         # 供月報推播找出「這個月有記帳」的候選使用者。
         if where == "transaction_date >= %s AND transaction_date < %s":
             return row.get("transaction_date") >= params[0] and row.get("transaction_date") < params[1]
+        # 2026-08-04（Step 2.2，見 robinson SPEC.md FR-45~FR-48）：體態管理模組的查詢條件。
+        if where == "user_id = %s AND goal_type = %s AND status = %s":
+            return (
+                row.get("user_id") == params[0]
+                and row.get("goal_type") == params[1]
+                and row.get("status") == params[2]
+            )
+        if where == "goal_type = %s AND status = %s":
+            return row.get("goal_type") == params[0] and row.get("status") == params[1]
+        if where == "user_id = %s AND entry_date >= %s":
+            return row.get("user_id") == params[0] and row.get("entry_date") >= params[1]
+        if where == "status = %s AND target_date IS NOT NULL":
+            return row.get("status") == params[0] and row.get("target_date") is not None
 
         raise NotImplementedError(f"FakeCloudSQLClient 尚未支援這個 where 條件：{where}")
 

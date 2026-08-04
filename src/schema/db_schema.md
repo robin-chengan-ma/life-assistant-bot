@@ -66,6 +66,7 @@ COMMENT ON COLUMN users.created_at IS '這筆使用者記錄建立的時間（�
 | 2026-08-04 | 新增 `monthly_budget`（每月支出預算上限）、`budget_alert_50_sent_month`／`budget_alert_80_sent_month`（FR-43 門檻預警去重用） | Step 2.1 記帳模組 FR-41／FR-43，設計理由見下方 `transactions` 表 | `0018_add_budget_fields_to_users.sql` |
 | 2026-08-04 | 新增 `finance_reminder_sent_date`（FR-42a 每日記帳提醒去重用） | Robin 提出「有設定預算時應每天固定時間提醒記帳」的回饋，設計比照 `todos.daily_pushed_on`，詳見下方 `budget_overrides` 表 | `0021_add_finance_reminder_field_to_users.sql` |
 | 2026-08-04 | 新增 `finance_monthly_report_sent_month`（FR-44a 月底記帳月報推播去重用） | Robin 要求「記帳摘要請在每月底自動推一次月報」，設計比照 `budget_alert_50_sent_month`／`budget_alert_80_sent_month` | `0022_add_finance_monthly_report_field_to_users.sql` |
+| 2026-08-04 | 新增 `height_cm`（身高，初始設定、變動才修正） | Step 2.2 體態管理模組 FR-46，設計理由見下方 `body_weight_logs` 表 | `0023_add_height_to_users.sql` |
 
 ---
 
@@ -470,3 +471,127 @@ COMMENT ON COLUMN budget_overrides.created_at IS '這筆覆蓋值建立的時間
 - `UNIQUE (user_id, year, month)` 確保同一個使用者同一年同一月只會有一筆覆蓋值，寫入邏輯是「已存在就 UPDATE，不存在就 INSERT」（`finance.set_budget_override()`），不是資料庫層 `ON CONFLICT`
 - `year`／`month` 分開存而不是存一個 `DATE`，因為這裡的語意是「套用範圍」而非「某一天」，`month` 額外加 `CHECK (month BETWEEN 1 AND 12)` 防呆
 - 沒有另外建索引：查詢一律帶 `user_id`／`year`／`month`（有 `UNIQUE` 約束自帶索引）或只帶 `year`／`month`（FR-43 門檻預警、FR-42a 每日提醒找出「這個月有覆蓋值」的使用者），資料量小，個人使用不需要額外複合索引
+
+---
+
+### body_weight_logs
+
+**建立日期**：2026-08-04
+**用途**：體重紀錄，對應 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) FR-46（Step 2.2）。
+**Migration 檔案**：`src/migrations/0024_create_body_weight_logs_table.sql`
+
+```sql
+CREATE TABLE body_weight_logs (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id),
+    weight_kg NUMERIC(5,1) NOT NULL CHECK (weight_kg >= 40),
+    entry_date DATE NOT NULL,
+    note TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_body_weight_logs_user_id ON body_weight_logs (user_id);
+```
+
+**設計理由**：
+- 2026-08-04 經 AskUserQuestion 與 Robin 確認：身高「初始設定、變動才修正」放在 `users.height_cm`（見 `users` 表變更紀錄），體重「有量才記」則需要獨立的多筆歷史紀錄表
+- `weight_kg` 用 `CHECK (weight_kg >= 40)` 做 FR-46 合理範圍檢查的最後一道防線，App 層（`body.is_weight_reasonable()`）會先擋一次並反問使用者確認，不直接讓明顯異常的數字寫入
+- `entry_date` 設計比照 `mood_journals.entry_date`／`transactions.transaction_date`：一律由 app 端依台灣時區算好日期後寫入，支援補記過去日期
+- 只建 `user_id` 單欄索引，用途同其餘個人紀錄表（查某人的體重紀錄／算 BMI 趨勢），資料量小不需要額外複合索引
+
+---
+
+### exercise_logs
+
+**建立日期**：2026-08-04
+**用途**：運動紀錄，對應 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) FR-47（Step 2.2）。
+**Migration 檔案**：`src/migrations/0025_create_exercise_logs_table.sql`
+
+```sql
+CREATE TABLE exercise_logs (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id),
+    activity TEXT NOT NULL,
+    duration_minutes INT NOT NULL CHECK (duration_minutes > 0),
+    heart_rate INT,
+    estimated_calories NUMERIC(6,1),
+    entry_date DATE NOT NULL,
+    note TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_exercise_logs_user_id ON exercise_logs (user_id);
+```
+
+**設計理由**：
+- 2026-08-04 經 AskUserQuestion 與 Robin 確認：消耗卡路里改用 LLM 估算（而非 MET 公式），沿用 `GEMINI_API_BOT_KEY`（見 `src/bot/body.py` `estimate_exercise_calories()`），符合 FR-56g 情境3「自然口吻回覆＋估算免責聲明」的示範；估算失敗時 `estimated_calories` 允許 `NULL`，不擋下整筆紀錄
+- `activity` 用自由文字而非固定分類清單，因為運動項目種類差異太大，不像記帳/心情小記能窮舉
+- `heart_rate` 選填，對應 FR-56g 情境3「有沒有心率紀錄」的示範
+
+---
+
+### diet_logs
+
+**建立日期**：2026-08-04
+**用途**：飲食與飲水紀錄，對應 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) FR-48（Step 2.2）。
+**Migration 檔案**：`src/migrations/0026_create_diet_logs_table.sql`
+
+```sql
+CREATE TABLE diet_logs (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id),
+    entry_type TEXT NOT NULL CHECK (entry_type IN ('food', 'water')),
+    description TEXT NOT NULL,
+    water_ml INT,
+    estimated_calories NUMERIC(6,1),
+    protein_g NUMERIC(6,1),
+    carbs_g NUMERIC(6,1),
+    fat_g NUMERIC(6,1),
+    entry_date DATE NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_diet_logs_user_id ON diet_logs (user_id);
+```
+
+**設計理由**：
+- 2026-08-04 經 AskUserQuestion 與 Robin 確認：飲食與飲水用同一張表、`entry_type` 區分（比照 `transactions.type` 的做法），而非兩張獨立表，因為兩者共用大部分欄位結構（使用者/日期/描述），只有飲食才需要營養拆算欄位
+- 三大營養素與熱量拆算沿用 `GEMINI_API_BOT_KEY`（見 `src/bot/body.py` `estimate_diet_macros()`），因為沒有食物資料庫，本來就只能靠 LLM 語意判斷；估算失敗時各欄位允許 `NULL`，不擋下整筆紀錄；回覆務必附上 FR-17c 估算誤差聲明
+- `water_ml` 只有 `entry_type=water` 才有值，`estimated_calories`／`protein_g`／`carbs_g`／`fat_g` 只有 `entry_type=food` 才有值，兩者互斥但都設計成可為 `NULL` 的欄位，不拆成兩張表換取查詢/程式碼簡潔
+
+---
+
+### body_goals
+
+**建立日期**：2026-08-04
+**用途**：體態目標（身高體重/運動/飲食三個子功能共用一張），對應 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) FR-46～FR-48、FR-45（Step 2.2）。
+**Migration 檔案**：`src/migrations/0027_create_body_goals_table.sql`
+
+```sql
+CREATE TABLE body_goals (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id),
+    goal_type TEXT NOT NULL CHECK (goal_type IN ('weight', 'exercise', 'diet')),
+    target_description TEXT NOT NULL,
+    target_value NUMERIC(6,2),
+    baseline_value NUMERIC(6,2),
+    target_date DATE,
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'achieved', 'cancelled')),
+    achieved_notified BOOLEAN NOT NULL DEFAULT FALSE,
+    deadline_reminder_sent BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_body_goals_user_id ON body_goals (user_id);
+```
+
+**設計理由**：
+- 2026-08-04 經 AskUserQuestion 與 Robin 確認：三個子功能的目標設定共用一張表、用 `goal_type` 區分（比照 `budget_overrides` 的精神），而非各自獨立建表；代價是 `target_value`／`baseline_value` 的語意隨 `goal_type` 而不同，由 App 層（`src/bot/body.py`）負責正確解讀
+- `baseline_value` 只有 `goal_type=weight` 使用：設定目標當下記錄的體重，用來判斷這個目標是「要瘦」還是「要增」（`target_value` 跟 `baseline_value` 比大小），每次記體重時即時檢查是否達成（`check_weight_goal_achieved()`）
+- `goal_type=exercise` 的 `target_value` 語意是「累積運動分鐘數」（Robin 指出用公里數對非跑步類運動不通用，分鐘數才是各種運動都適用的共同單位）；因為需要跨多筆 `exercise_logs` 加總才能判斷達成，改成借用 `/healthz` 頻率的排程檢查（`check_and_push_exercise_goal_achievements()`），不像體重目標能在單次記錄當下就地判斷
+- `goal_type=diet` 目前不支援自動達成判斷（太主觀，例如「飲食完美控制」無法量化），`target_value` 固定為 `NULL`，只能由使用者手動標記完成/取消——這是已知的刻意簡化
+- `deadline_reminder_sent`：期限前 7 天固定提醒一次（`check_and_push_goal_deadline_reminders()`），跟記帳月報不同，這裡不用「月份」去重，因為目標的期限提醒本來就只會觸發一次（不像月報是每月重複事件）

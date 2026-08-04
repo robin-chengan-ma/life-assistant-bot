@@ -52,6 +52,19 @@ _FINANCE_ADD_TRIGGERS = {"/add_transaction", "我要記帳"}
 _FINANCE_BACKFILL_TRIGGERS = {"/backfill_transaction", "我要補記帳"}
 _MY_TRANSACTIONS_TRIGGERS = {"/my_transactions", "我的記帳紀錄"}
 _FINANCE_SUMMARY_TRIGGERS = {"/my_finance_summary", "我的記帳摘要"}
+# 2026-08-04（Step 2.2，見 robinson SPEC.md FR-45～FR-48）：體態管理模組觸發詞，設計比照記帳/心情小記。
+_SET_HEIGHT_TRIGGERS = {"/set_height", "設定身高"}
+_LOG_WEIGHT_TRIGGERS = {"/log_weight", "我要記錄體重"}
+_BACKFILL_WEIGHT_TRIGGERS = {"/backfill_weight", "我要補記體重"}
+_MY_WEIGHT_LOGS_TRIGGERS = {"/my_weight_logs", "我的體重紀錄"}
+_LOG_EXERCISE_TRIGGERS = {"/log_exercise", "我要記錄運動"}
+_BACKFILL_EXERCISE_TRIGGERS = {"/backfill_exercise", "我要補記運動"}
+_MY_EXERCISE_LOGS_TRIGGERS = {"/my_exercise_logs", "我的運動紀錄"}
+_LOG_DIET_TRIGGERS = {"/log_diet", "我要記錄飲食"}
+_BACKFILL_DIET_TRIGGERS = {"/backfill_diet", "我要補記飲食"}
+_MY_DIET_LOGS_TRIGGERS = {"/my_diet_logs", "我的飲食紀錄"}
+_SET_BODY_GOAL_TRIGGERS = {"/set_body_goal", "我要設定體態管理目標"}
+_MY_BODY_GOALS_TRIGGERS = {"/my_body_goals", "我的體態目標"}
 # 2026-08-02（Step 1.9，見 robinson SPEC.md FR-60）：任何身分皆可觸發客訴收集流程。
 _COMPLAINT_TRIGGERS = {"/complaint", "我要客訴你"}
 _CLEAN_ALL_DIALOG_TRIGGERS = {"/clean-all-dialog", "我想要刪除所有對話紀錄"}
@@ -180,6 +193,34 @@ def handle_message(
     if text in _FINANCE_SUMMARY_TRIGGERS:
         # 2026-08-04（FR-44）：單次查詢當月記帳文字摘要，不需要對話狀態機。
         return commands.handle_finance_summary(db, user_id)
+    if text in _SET_HEIGHT_TRIGGERS:
+        # 2026-08-04（Step 2.2，見 robinson SPEC.md FR-46）：設定身高，單輪。
+        return commands.start_set_height(state_store, telegram_user_id, user_id)
+    if text in _LOG_WEIGHT_TRIGGERS:
+        return commands.start_weight_log(state_store, telegram_user_id, user_id)
+    if text in _BACKFILL_WEIGHT_TRIGGERS:
+        return commands.start_weight_backfill(state_store, telegram_user_id, user_id)
+    if text in _MY_WEIGHT_LOGS_TRIGGERS:
+        return commands.start_weight_list(db, state_store, telegram_user_id, user_id)
+    if text in _LOG_EXERCISE_TRIGGERS:
+        # 2026-08-04（FR-47）：開始記錄運動流程，先問項目。
+        return commands.start_exercise_log(state_store, telegram_user_id, user_id)
+    if text in _BACKFILL_EXERCISE_TRIGGERS:
+        return commands.start_exercise_backfill(state_store, telegram_user_id, user_id)
+    if text in _MY_EXERCISE_LOGS_TRIGGERS:
+        return commands.start_exercise_list(db, state_store, telegram_user_id, user_id)
+    if text in _LOG_DIET_TRIGGERS:
+        # 2026-08-04（FR-48）：開始記錄飲食/飲水流程，先問類型。
+        return commands.start_diet_log(state_store, telegram_user_id, user_id)
+    if text in _BACKFILL_DIET_TRIGGERS:
+        return commands.start_diet_backfill(state_store, telegram_user_id, user_id)
+    if text in _MY_DIET_LOGS_TRIGGERS:
+        return commands.start_diet_list(db, state_store, telegram_user_id, user_id)
+    if text in _SET_BODY_GOAL_TRIGGERS:
+        # 2026-08-04（FR-46～FR-48）：設定體態管理目標，先問類型。
+        return commands.start_body_goal(state_store, telegram_user_id, user_id)
+    if text in _MY_BODY_GOALS_TRIGGERS:
+        return commands.start_body_goal_list(db, state_store, telegram_user_id, user_id)
     if text in _COMPLAINT_TRIGGERS:
         # 2026-08-02（Step 1.9，見 robinson SPEC.md FR-60）：固定提問，不經過 LLM。
         return commands.start_complaint(state_store, telegram_user_id, user_id)
@@ -456,6 +497,65 @@ def _dispatch_active_flow(
         return commands.handle_transaction_action_choice_step(db, llm_client, state_store, telegram_user_id, text)
     if flow == "pending_transaction_delete_confirm":
         return commands.handle_transaction_delete_confirm_step(db, llm_client, state_store, telegram_user_id, text)
+    # 2026-08-04（Step 2.2，見 robinson SPEC.md FR-45～FR-48）：體態管理多輪對話流，結構比照記帳。
+    if flow == "pending_height_value":
+        return commands.handle_height_value_step(db, state_store, telegram_user_id, text)
+    if flow == "pending_weight_backfill_date":
+        return commands.handle_weight_backfill_date_step(llm_client, state_store, telegram_user_id, text)
+    if flow == "pending_weight_value":
+        return commands.handle_weight_value_step(db, state_store, telegram_user_id, text)
+    if flow == "pending_weight_list_action":
+        return commands.handle_weight_list_action_step(state_store, telegram_user_id, text)
+    if flow == "pending_weight_action_choice":
+        return commands.handle_weight_action_choice_step(db, llm_client, state_store, telegram_user_id, text)
+    if flow == "pending_weight_delete_confirm":
+        return commands.handle_weight_delete_confirm_step(db, llm_client, state_store, telegram_user_id, text)
+    if flow == "pending_exercise_backfill_date":
+        return commands.handle_exercise_backfill_date_step(llm_client, state_store, telegram_user_id, text)
+    if flow == "pending_exercise_activity":
+        return commands.handle_exercise_activity_step(state_store, telegram_user_id, text)
+    if flow == "pending_exercise_duration":
+        return commands.handle_exercise_duration_step(state_store, telegram_user_id, text)
+    if flow == "pending_exercise_heart_rate":
+        return commands.handle_exercise_heart_rate_step(db, llm_client, state_store, telegram_user_id, text)
+    if flow == "pending_exercise_list_action":
+        return commands.handle_exercise_list_action_step(state_store, telegram_user_id, text)
+    if flow == "pending_exercise_action_choice":
+        return commands.handle_exercise_action_choice_step(db, llm_client, state_store, telegram_user_id, text)
+    if flow == "pending_exercise_delete_confirm":
+        return commands.handle_exercise_delete_confirm_step(db, llm_client, state_store, telegram_user_id, text)
+    if flow == "pending_diet_backfill_date":
+        return commands.handle_diet_backfill_date_step(llm_client, state_store, telegram_user_id, text)
+    if flow == "pending_diet_entry_type":
+        return commands.handle_diet_entry_type_step(state_store, telegram_user_id, text)
+    if flow == "pending_diet_description":
+        return commands.handle_diet_description_step(
+            db, llm_client, state_store, telegram_user_id, text, privacy_llm_client=privacy_llm_client
+        )
+    if flow == "pending_diet_water_amount":
+        return commands.handle_diet_water_amount_step(db, state_store, telegram_user_id, text)
+    if flow == "pending_diet_list_action":
+        return commands.handle_diet_list_action_step(state_store, telegram_user_id, text)
+    if flow == "pending_diet_action_choice":
+        return commands.handle_diet_action_choice_step(db, llm_client, state_store, telegram_user_id, text)
+    if flow == "pending_diet_delete_confirm":
+        return commands.handle_diet_delete_confirm_step(db, llm_client, state_store, telegram_user_id, text)
+    if flow == "pending_goal_type":
+        return commands.handle_goal_type_step(state_store, telegram_user_id, text)
+    if flow == "pending_goal_weight_value":
+        return commands.handle_goal_weight_value_step(db, state_store, telegram_user_id, text)
+    if flow == "pending_goal_exercise_minutes":
+        return commands.handle_goal_exercise_minutes_step(state_store, telegram_user_id, text)
+    if flow == "pending_goal_diet_description":
+        return commands.handle_goal_diet_description_step(
+            state_store, telegram_user_id, text, privacy_llm_client=privacy_llm_client
+        )
+    if flow == "pending_goal_deadline":
+        return commands.handle_goal_deadline_step(db, llm_client, state_store, telegram_user_id, text)
+    if flow == "pending_goal_list_action":
+        return commands.handle_goal_list_action_step(state_store, telegram_user_id, text)
+    if flow == "pending_goal_cancel_confirm":
+        return commands.handle_goal_cancel_confirm_step(db, llm_client, state_store, telegram_user_id, text)
     if flow == "pending_complaint_content":
         # 2026-08-02（Step 1.9，見 robinson SPEC.md FR-61、FR-62）：寫入客訴＋Gemini 分析私訊 Robin。
         return commands.handle_complaint_content_step(
