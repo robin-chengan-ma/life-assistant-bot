@@ -39,9 +39,17 @@ FR-44 文字摘要組裝。不處理任何 Telegram 對話流程或 LLM 呼叫�
    且「今天還沒推播過」的使用者，推播一次記帳提醒；去重欄位是 `users.finance_reminder_sent_date`
    （比照 `todos.daily_pushed_on`）。收入不檢查——理財預算本來就只針對支出設門檻，收入沒有
    「每天都要記」的急迫性，跟 FR-42 交易本身仍支援「支出／收入」兩種類型記帳不衝突。
+
+2026-08-04 再追加（見 FR-44a，Robin 要求「記帳摘要請在每月底自動推一次月報」）：
+⑦ FR-44a「月底自動月報推播」：`check_and_push_monthly_report()` 一樣借用 `/healthz` 頻率，
+   只在台灣時間 21:00（跟 FR-42a 的 23:00 錯開，不會同一小時堆兩則推播）且「今天是這個月最後
+   一天」（用「明天日期的 `day` 是不是 1」判斷，不寫死 28～31）才執行；推播對象是「這個月有生效
+   預算（全局預設或當月覆蓋皆算）或這個月有任一筆記帳交易」的使用者，避免完全沒用記帳功能的
+   家人收到一則全部是 0 元的空洞報告；內容直接沿用 `format_monthly_summary()` 加上月報開頭文案；
+   去重欄位是 `users.finance_monthly_report_sent_month`（比照 FR-43 的 `budget_alert_*_sent_month`）。
 """
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from submodules.cloudsql.client import CloudSQLClient
@@ -64,6 +72,9 @@ _SEVERE_ALERT_THRESHOLD = 0.8
 
 # FR-42a 每日記帳提醒的推播時刻（台灣時間），決策⑥。
 _DAILY_REMINDER_HOUR = 23
+
+# FR-44a 月底月報推播的推播時刻（台灣時間），決策⑦；刻意跟 _DAILY_REMINDER_HOUR 錯開。
+_MONTHLY_REPORT_HOUR = 21
 
 # FR-41a 預算套用範圍選項：全局預設 vs 只套用某幾個月，決策⑤。
 _BUDGET_SCOPE_OPTIONS: list[tuple[str, str]] = [("global", "全部月份"), ("months", "只套用某幾個月")]
@@ -486,4 +497,57 @@ def check_and_push_finance_reminders(db: CloudSQLClient, telegram_client, now: d
         )
         db.update(
             "users", {"finance_reminder_sent_date": today_local}, where="id = %s", params=(user["id"],)
+        )
+
+
+def _users_with_finance_activity(db: CloudSQLClient, year: int, month: int) -> list[dict]:
+    """回傳「這個月有生效預算，或這個月有任一筆記帳交易」的使用者列（決策⑦），供 FR-44a 月報
+    推播篩選對象，避免完全沒用記帳功能的家人收到一則全部是 0 元的空洞月報。"""
+    by_id = {user["id"]: user for user, _budget in _users_with_effective_budget(db, year, month)}
+
+    start, end = _month_range(year, month)
+    transactions_this_month = db.select(
+        "transactions", where="transaction_date >= %s AND transaction_date < %s", params=(start, end)
+    )
+    for row in transactions_this_month:
+        user_id = row["user_id"]
+        if user_id not in by_id:
+            user = db.select("users", where="id = %s", params=(user_id,), fetch_one=True)
+            if user is not None:
+                by_id[user_id] = user
+
+    return list(by_id.values())
+
+
+def check_and_push_monthly_report(db: CloudSQLClient, telegram_client, now: datetime | None = None) -> None:
+    """FR-44a：每月最後一天台灣時間 21:00 自動推播一次月報（決策⑦），內容沿用 FR-44 的
+    `format_monthly_summary()`。只推給「這個月有生效預算，或這個月有任一筆記帳交易」的使用者。
+
+    比照 `check_and_push_finance_reminders()` 的做法，借用 `/healthz` 既有的 10 分鐘 cron 頻率；
+    「是不是月底最後一天」用「明天的日期是不是 1 號」判斷，不寫死 28～31 這種月份長度；去重欄位
+    `users.finance_monthly_report_sent_month` 避免同一天內（21 點這個小時會被 cron 命中好幾次）
+    重複推播。
+    """
+    now = now or datetime.now(timezone.utc)
+    now_local = now.astimezone(_TAIWAN_TZ)
+    if now_local.hour != _MONTHLY_REPORT_HOUR:
+        return
+    today_local = now_local.date()
+    if (today_local + timedelta(days=1)).day != 1:
+        return
+    month_start = today_local.replace(day=1)
+
+    for user in _users_with_finance_activity(db, today_local.year, today_local.month):
+        if user.get("telegram_user_id") is None:
+            continue
+        if user.get("finance_monthly_report_sent_month") == month_start:
+            continue
+
+        summary = format_monthly_summary(db, user["id"], today_local)
+        telegram_client.send_text(
+            chat_id=user["telegram_user_id"],
+            text=f"📅 這個月要結束囉，來看看這個月的記帳月報吧！\n\n{summary}",
+        )
+        db.update(
+            "users", {"finance_monthly_report_sent_month": month_start}, where="id = %s", params=(user["id"],)
         )

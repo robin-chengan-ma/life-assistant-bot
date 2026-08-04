@@ -147,6 +147,10 @@ class FakeCloudSQLClient:
                 and row.get("type") == params[1]
                 and row.get("transaction_date") == params[2]
             )
+        # 2026-08-04 追加（記帳擴充，見 robinson SPEC.md FR-44a）：查詢這個月所有記帳交易（不篩 user_id），
+        # 供月報推播找出「這個月有記帳」的候選使用者。
+        if where == "transaction_date >= %s AND transaction_date < %s":
+            return row.get("transaction_date") >= params[0] and row.get("transaction_date") < params[1]
 
         raise NotImplementedError(f"FakeCloudSQLClient 尚未支援這個 where 條件：{where}")
 

@@ -246,6 +246,17 @@
 
 ---
 
+### FR-44a 月底自動月報推播（`main.py` `/healthz` 借用頻率，非獨立路由）
+
+**狀態**：已實作（`src/bot/finance.py::check_and_push_monthly_report`，`main.py::_check_finance_monthly_report`，2026-08-04，記帳模組擴充，見 robinson SPEC.md FR-44a）
+**觸發方式**：不是使用者主動觸發，同樣借用 `/healthz` 既有的 10 分鐘 cron 頻率，只在「每月最後一天」的台灣時間 21:00 這個小時內執行
+**權限**：系統排程，無使用者互動
+**對應 FR**：FR-44a
+
+**行為**：Robin 要求「記帳摘要請在每月底自動推一次月報」後新增。內容直接沿用 FR-44 的 `finance.format_monthly_summary()`，加上月報開頭文案；只推給「這個月有生效預算（全局預設或當月覆蓋皆算），或這個月有任一筆記帳交易」的使用者（`finance._users_with_finance_activity()`），避免完全沒用記帳功能的家人收到一則全部是 0 元的空洞報告。「是不是月底最後一天」用「明天日期是不是 1 號」判斷，不寫死每個月 28～31 天的長度；推播時刻刻意選 21:00、跟 FR-42a 每日記帳提醒的 23:00 錯開，不會同一小時堆兩則推播；去重狀態存在 `users.finance_monthly_report_sent_month`（比照 FR-43 的 `budget_alert_*_sent_month`）。
+
+---
+
 ### `/set_invite_codes`（內部路由，非對外 HTTP 端點）
 
 **狀態**：已實作（`src/bot/commands.py::start_set_invite_codes`／`handle_set_invite_codes_step`）

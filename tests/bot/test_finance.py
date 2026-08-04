@@ -578,3 +578,130 @@ def test_check_and_push_finance_reminders_default_now_uses_utc_now(fake_db):
     fake_db.insert("users", {"telegram_user_id": 1, "role": "Robin", "is_owner": True})
 
     finance.check_and_push_finance_reminders(fake_db, _FakeTelegramClient())
+
+
+# --- FR-44a 月底自動月報推播 ---
+
+
+def test_check_and_push_monthly_report_sends_on_last_day_at_21(fake_db):
+    user_id = fake_db.insert("users", {"telegram_user_id": 1, "role": "Robin", "is_owner": True})
+    finance.set_monthly_budget(fake_db, user_id, 15000)
+    finance.create_transaction(fake_db, user_id, "expense", "餐飲", 100, None, date(2026, 8, 31))
+    telegram_client = _FakeTelegramClient()
+
+    finance.check_and_push_monthly_report(
+        fake_db, telegram_client, now=datetime(2026, 8, 31, 13, 0, tzinfo=timezone.utc)  # 台灣時間 21:00
+    )
+
+    assert len(telegram_client.sent) == 1
+    assert telegram_client.sent[0][0] == 1
+    assert "月報" in telegram_client.sent[0][1]
+    assert "支出總計：100 元" in telegram_client.sent[0][1]
+    row = fake_db.select("users", where="id = %s", params=(user_id,), fetch_one=True)
+    assert row["finance_monthly_report_sent_month"] == date(2026, 8, 1)
+
+
+def test_check_and_push_monthly_report_skips_when_not_last_day(fake_db):
+    user_id = fake_db.insert("users", {"telegram_user_id": 1, "role": "Robin", "is_owner": True})
+    finance.set_monthly_budget(fake_db, user_id, 15000)
+    telegram_client = _FakeTelegramClient()
+
+    finance.check_and_push_monthly_report(
+        fake_db, telegram_client, now=datetime(2026, 8, 30, 13, 0, tzinfo=timezone.utc)  # 台灣時間 21:00，非月底
+    )
+
+    assert telegram_client.sent == []
+
+
+def test_check_and_push_monthly_report_skips_outside_report_hour(fake_db):
+    user_id = fake_db.insert("users", {"telegram_user_id": 1, "role": "Robin", "is_owner": True})
+    finance.set_monthly_budget(fake_db, user_id, 15000)
+    telegram_client = _FakeTelegramClient()
+
+    finance.check_and_push_monthly_report(
+        fake_db, telegram_client, now=datetime(2026, 8, 31, 15, 0, tzinfo=timezone.utc)  # 台灣時間 23:00
+    )
+
+    assert telegram_client.sent == []
+
+
+def test_check_and_push_monthly_report_skips_user_without_activity(fake_db):
+    """沒設預算、這個月也沒記帳的使用者不應該收到空洞月報。"""
+    fake_db.insert("users", {"telegram_user_id": 1, "role": "媽媽", "is_owner": False})
+    telegram_client = _FakeTelegramClient()
+
+    finance.check_and_push_monthly_report(
+        fake_db, telegram_client, now=datetime(2026, 8, 31, 13, 0, tzinfo=timezone.utc)
+    )
+
+    assert telegram_client.sent == []
+
+
+def test_check_and_push_monthly_report_sends_to_user_with_transactions_but_no_budget(fake_db):
+    """使用者從未設定預算，但這個月有記帳，仍要收到月報。"""
+    user_id = fake_db.insert("users", {"telegram_user_id": 1, "role": "媽媽", "is_owner": False})
+    finance.create_transaction(fake_db, user_id, "expense", "餐飲", 200, None, date(2026, 8, 15))
+    telegram_client = _FakeTelegramClient()
+
+    finance.check_and_push_monthly_report(
+        fake_db, telegram_client, now=datetime(2026, 8, 31, 13, 0, tzinfo=timezone.utc)
+    )
+
+    assert len(telegram_client.sent) == 1
+
+
+def test_check_and_push_monthly_report_sends_to_user_with_override_only(fake_db):
+    """使用者只設定了當月覆蓋預算，沒有全局預設，仍要收到月報。"""
+    user_id = fake_db.insert("users", {"telegram_user_id": 1, "role": "媽媽", "is_owner": False})
+    finance.set_budget_override(fake_db, user_id, 2026, 8, 20000)
+    telegram_client = _FakeTelegramClient()
+
+    finance.check_and_push_monthly_report(
+        fake_db, telegram_client, now=datetime(2026, 8, 31, 13, 0, tzinfo=timezone.utc)
+    )
+
+    assert len(telegram_client.sent) == 1
+
+
+def test_check_and_push_monthly_report_skips_user_without_telegram_id(fake_db):
+    user_id = fake_db.insert("users", {"telegram_user_id": None, "role": "媽媽", "is_owner": False})
+    finance.set_monthly_budget(fake_db, user_id, 15000)
+    telegram_client = _FakeTelegramClient()
+
+    finance.check_and_push_monthly_report(
+        fake_db, telegram_client, now=datetime(2026, 8, 31, 13, 0, tzinfo=timezone.utc)
+    )
+
+    assert telegram_client.sent == []
+
+
+def test_check_and_push_monthly_report_does_not_resend_same_month(fake_db):
+    user_id = fake_db.insert("users", {"telegram_user_id": 1, "role": "Robin", "is_owner": True})
+    finance.set_monthly_budget(fake_db, user_id, 15000)
+    telegram_client = _FakeTelegramClient()
+    now = datetime(2026, 8, 31, 13, 0, tzinfo=timezone.utc)
+
+    finance.check_and_push_monthly_report(fake_db, telegram_client, now=now)
+    finance.check_and_push_monthly_report(fake_db, telegram_client, now=now)
+
+    assert len(telegram_client.sent) == 1
+
+
+def test_check_and_push_monthly_report_handles_december_last_day(fake_db):
+    """12/31 是跨年邊界，「明天是 1 號」的判斷要能正確處理年份進位。"""
+    user_id = fake_db.insert("users", {"telegram_user_id": 1, "role": "Robin", "is_owner": True})
+    finance.set_monthly_budget(fake_db, user_id, 15000)
+    telegram_client = _FakeTelegramClient()
+
+    finance.check_and_push_monthly_report(
+        fake_db, telegram_client, now=datetime(2026, 12, 31, 13, 0, tzinfo=timezone.utc)
+    )
+
+    assert len(telegram_client.sent) == 1
+
+
+def test_check_and_push_monthly_report_default_now_uses_utc_now(fake_db):
+    """防禦性測試：不傳 now 時應該使用目前的真實時間，而不是拋出例外。"""
+    fake_db.insert("users", {"telegram_user_id": 1, "role": "Robin", "is_owner": True})
+
+    finance.check_and_push_monthly_report(fake_db, _FakeTelegramClient())
