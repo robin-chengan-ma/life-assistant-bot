@@ -3,7 +3,7 @@ title: Robinson — Robin 與家人們的生活小助手
 slug: robinson
 status: draft
 created: 2026-07-29
-updated: 2026-08-02
+updated: 2026-08-04
 owner: Robin
 ---
 
@@ -11,7 +11,7 @@ owner: Robin
 
 ## 概要
 
-Robinson 是一個以 Telegram 為前台介面的家庭生活小助手，Robin 是產品負責人兼管理者，家人們透過通關密碼取得使用權限。所有 AI 能力統一使用共用的 Gemini API（`gemini-3.5-flash-lite`，見 submodules-core SPEC.md ADR-6），資料分別存放在 Neon PostgreSQL（結構化資料）與 Google Drive（靜態圖像），Notion 作為視覺化後台（獨立於最終 Phase，可延後）。核心設計理念是「越少 UI 設定越好」，使用者以打字或語音跟 Robinson 對話即可完成大部分操作。
+Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 LUI（Language User Interface，語言型使用者介面），負責所有自然語言輸入（文字/語音/照片）、系統設定與資料的 CRUD 控制；Mobile App（React Native + Expo）作為唯讀的 Rich GUI，專注 BI 圖表展示（例如記帳消費圓餅圖、體態體重折線圖）與動態數據篩選，不提供任何寫入操作入口（**2026-08-04 更新，見 ADR-14**：原規劃的 Notion 視覺化後台已由 Mobile App 取代）。Robin 是產品負責人兼管理者，家人們透過通關密碼（Telegram）或 APP Access Token（Mobile App）取得使用權限。所有 AI 能力統一使用共用的 Gemini API（`gemini-3.5-flash-lite`，見 submodules-core SPEC.md ADR-6），資料分別存放在 Neon PostgreSQL（結構化資料）與 Google Drive（靜態圖像）。核心設計理念是「越少 UI 設定越好」，使用者以打字或語音跟 Robinson 對話即可完成大部分操作，Mobile App 僅補足 Telegram 不擅長呈現的圖表視覺化需求。
 
 **專案緣起**：2026-07-28 Robin 先自行完成所有外部服務的註冊與 API 金鑰申請、Telegram Bot 基礎設定，並與 Gemini 進行腦力激盪與方案收斂 —— 梳理生活痛點、評估技術可行性、把發散的想法轉化為具體的 PRD 雛形；2026-07-29 才開始與 Claude Code 協作，產出本 spec 與 Codebase 規範等標準文件（詳見 [PROGRESS.md](./PROGRESS.md) 里程碑紀錄）。
 
@@ -26,6 +26,7 @@ Robinson 是一個以 Telegram 為前台介面的家庭生活小助手，Robin �
 | 通關密碼 | Robin 為每位家人設定的一次性密碼，`is_used=1` 後失效，僅能被一人使用 |
 | 功能開關 | 每個大功能模組都有獨立開關，全部關閉時 Robinson 退化為純聊天 Bot |
 | 知識庫 | 分 4 類：通用背景、通用故事、使用者客製、使用者對話紀錄（詳見「知識庫架構」） |
+| APP Access Token | Mobile App 專用的登入憑證（2026-08-04 新增，見 ADR-14），與 Telegram 的通關密碼機制彼此獨立、互不取代；一般使用者登入需另外搭配 `user_name`／稱謂，Robin 僅需 `user_name` |
 
 ## 系統架構總覽
 
@@ -36,7 +37,7 @@ Robinson 是一個以 Telegram 為前台介面的家庭生活小助手，Robin �
 | AI 層 | Groq API（Whisper） | 語音轉文字（含多益錄音檔切割），對應 `VOICE_API_KEY`（見 ADR-12，取代先前「語音一律用 Gemini」的舊決策） |
 | 資料層 | Neon PostgreSQL | 結構化資料（使用者、知識庫、待辦、記帳…） |
 | 資料層 | Google Drive | 使用者上傳的圖片/語音檔案原始檔（含證照題目截圖），URL 統一記錄於 Neon（見 ADR-13） |
-| 後台 | Notion（Phase 5，全專案最終階段） | 視覺化圖表 / 表格檢視 |
+| 前台（唯讀） | Mobile App（React Native + Expo，Phase 4，見 ADR-14） | BI Dashboard：圖表視覺化（消費圓餅圖、體重折線圖等）與動態數據篩選；後端計算好圖表 JSON 結構後回傳，App 端只負責渲染，不提供任何寫入/CRUD 入口（**取代原規劃的 Notion 後台**） |
 | 排程 | cron-job.org | 每 10 分鐘打一次 keep-alive API，避免 Render 睡眠 |
 | 部署 | Render（免費方案，750 hr/月） | 應用程式 Host |
 | 治理 | GitHub API | Robinson 自主診斷後開立修復分支與 PR，供 Robin 人工審核 merge（見 FR-19e、ADR-7） |
@@ -230,17 +231,42 @@ Robinson 是一個以 Telegram 為前台介面的家庭生活小助手，Robin �
 
 - [ ] FR-53：特殊節日/生日自動發送提醒給相關成員（例如父親節不發給父親本人）
 
-### 功能性需求 — Notion 後台（Phase 5，全專案最終階段）
+### 功能性需求 — Mobile App（BI Dashboard，Phase 4，2026-08-04 取代原 Notion 後台，見 ADR-14）
 
-- [ ] FR-54：將資料視覺化為圖表/表格呈現於 Notion，作為家人共同查看的後台；必須等 Phase 0～4（含 FR-19 系列的 AI 監控與治理機制）全部完工且穩定運作後才開始；現階段（Phase 0～4）程式碼只需透過 `submodules/cloudsql` 保持資料層 API 抽象化彈性即可，暫不撰寫任何 Notion 相關程式碼
+> 本節僅先定調架構、技術棧與資料模型方向；登入流程與 App 各頁面的詳細互動邏輯留待 Phase 4 對應 Step 開工時展開獨立 spec（`docs/specs/mobile-app/SPEC.md`，屆時建立），此處視為 **Placeholder**。
+
+- [ ] FR-64：唯讀 BI Dashboard 視覺化——將記帳、體態管理等模組的資料計算為圖表（消費圓餅圖、體重/運動趨勢折線圖等）與篩選介面，呈現於 Mobile App；App 端不提供任何新增/修改/刪除資料的操作入口，所有寫入操作仍一律透過 Telegram Bot 完成（取代原 FR-54 的 Notion 方案）
+- [ ] FR-65：多用戶登入機制——App 面向所有使用者（Multi-user，不僅限於 Robin）：
+  - [ ] FR-65a：一般使用者登入需輸入 `user_name`、稱謂、`APP Access Token` 三項完成驗證
+  - [ ] FR-65b：Robin（Owner）登入僅需輸入 `user_name`、`APP Access Token` 兩項（比照 Telegram 免通關密碼的管理者身分簡化）
+  - [ ] FR-65c：Token 的產生、過期、刷新機制與各頁面詳細互動流程，留待 Phase 4 深入討論（見上方 Placeholder 說明）
+
+**技術細節補充（Robin 對 App 開發較不熟悉，由 Claude 主動提出以下標準做法供 Phase 4 展開時參考）**：
+
+1. **API 設計原則**：後端（沿用現有 `src/` Flask 分層，未來若獨立拆分則遵循 AGENTS.md 的 `backend/` 樣板）新增獨立的 `/api/app/*` 路由群組，與既有 Telegram webhook 路由區隔；每個圖表對應一支 API，後端算好「圖表就緒」的 JSON 結構（例如 `{"type": "pie", "labels": [...], "values": [...]}`）後直接回傳，App 端不做任何二次聚合運算，只負責渲染——確保同一份計算邏輯只維護一處，未來若要多加一個前端（例如 Web Dashboard）也能直接複用；所有 `/api/app/*` 路由需在 `Authorization` header 帶入 `APP Access Token` 驗證身分。
+2. **React Native + Expo 基礎路由結構**（Expo Router，file-based routing，實際建立時機為 Phase 4 開工時）：
+
+   ```
+   mobile/                    # 新增頂層目錄，與 src/ 平級獨立（比照 AGENTS.md 職責分離原則）
+   └── app/
+       ├── _layout.tsx        # 根 Layout，處理登入態導轉
+       ├── login.tsx          # 登入頁（user_name／稱謂／APP Access Token）
+       └── (tabs)/
+           ├── _layout.tsx    # 底部 Tab 導覽
+           ├── dashboard.tsx  # 總覽（各模組摘要卡片）
+           ├── finance.tsx    # 記帳圖表（消費圓餅圖、月趨勢折線圖）
+           └── body.tsx       # 體態圖表（體重折線圖、運動/飲食統計）
+   ```
+
+3. **資料模型補充**：`users` 表新增 `app_access_token`（`TEXT UNIQUE`，供 App 登入驗證，與 Telegram 的 `invite_codes` 機制彼此獨立、互不取代）；圖表本身不另建資料表儲存，一律即時從既有業務表（`transactions`／`body_weight_logs`／`exercise_logs`／`diet_logs` 等）聚合運算後回傳，避免資料重複與不同步。實際建表 SQL 仍依 ADR-10「先審核後執行」流程，於 Phase 4 開工、Robin 核准後才建立，此處僅為方向性的欄位規劃。
 
 ### 非功能性需求
 
-- [ ] NFR-1：成本 — 所有服務一律使用免費方案（Render / Neon / Gemini x2 / Notion / Google Drive / cron-job.org）
+- [ ] NFR-1：成本 — 所有服務一律使用免費方案（Render / Neon / Gemini x2 / Google Drive / cron-job.org / Expo 免費方案）
 - [ ] NFR-2：可用性 — Render 免費方案 15 分鐘無請求會休眠，需 cron-job 每 10 分鐘打 keep-alive API 維持喚醒
 - [ ] NFR-3：容量 — Neon 免費額度僅 0.5GB，圖片一律存 Google Drive，不進資料庫；容量達 80% 需主動告警
 - [ ] NFR-4：安全 — 通關密碼一次性使用、使用者資料互相隔離（FR-10、FR-11）、個資偵測與刪除機制（FR-13）
-- [ ] NFR-5：安全 — 敏感金鑰（Telegram Token、Notion API Key、Gemini API Key ×4：`GEMINI_API_BOT_KEY`／`GEMINI_API_IMAGE_KEY1`／`GEMINI_API_IMAGE_KEY2`／`GEMINI_API_TEXT_KEY`、Groq API Key `VOICE_API_KEY`、Neon 連線字串、Google Service Account JSON、Gmail 密碼、GitHub Personal Access Token、YouTube Data API Key）一律透過 `.env` 管理，不進版控
+- [ ] NFR-5：安全 — 敏感金鑰（Telegram Token、Gemini API Key ×4：`GEMINI_API_BOT_KEY`／`GEMINI_API_IMAGE_KEY1`／`GEMINI_API_IMAGE_KEY2`／`GEMINI_API_TEXT_KEY`、Groq API Key `VOICE_API_KEY`、Neon 連線字串、Google Service Account JSON、Gmail 密碼、GitHub Personal Access Token、YouTube Data API Key）一律透過 `.env` 管理，不進版控；`users.app_access_token`（Mobile App 登入用，見 FR-65）為逐使用者資料庫欄位而非全域金鑰，不適用本條「.env 管理」規則，但仍需注意不可在 log 或錯誤訊息中明碼印出
 - [ ] NFR-6：可維護性 — 錯誤訊息對使用者一律去技術化（FR-19），技術 log 僅回報 Robin
 - [ ] NFR-7：Token 節流 — 不支援會議/長演講錄音轉譯，語音上限 10 分鐘，避免大量消耗 Gemini 免費額度
 - [ ] NFR-8：安全 — 修復動作一律採 Human-in-the-Loop：AI 只能診斷與建議並開立 PR，絕不直接推送或部署到 `main` branch，正式部署一律由 Robin 在 GitHub Merge PR 觸發（FR-19e）
@@ -266,7 +292,7 @@ Robinson 是一個以 Telegram 為前台介面的家庭生活小助手，Robin �
 
 **後果**：Notion 整合可獨立於核心對話邏輯之外開發，允許排在最後或先不做而不影響 MVP 可用性。
 
-**狀態**：accepted
+**狀態**：accepted（後台選型「Notion」的部分 superseded by ADR-14，2026-08-04，改採 Mobile App＋React Native/Expo；Telegram 前台與 Neon/GDrive 資料層的決策維持不變）
 
 ### ADR-2：Gemini API 金鑰拆分策略
 
@@ -302,18 +328,18 @@ Robinson 是一個以 Telegram 為前台介面的家庭生活小助手，Robin �
 
 ### ADR-4：MVP 分期策略
 
-**背景**：需求涵蓋 10+ 個功能模組（技能成長、待辦、求職、記帳、體態、心情小記、好友模式、重要通知、Notion 後台…），若全部視為 MVP 會拉長首次上線時間、且違反「MVP」定義。
+**背景**：需求涵蓋 10+ 個功能模組（技能成長、待辦、求職、記帳、體態、心情小記、好友模式、重要通知、視覺化後台…），若全部視為 MVP 會拉長首次上線時間、且違反「MVP」定義。
 
-**決策**：MVP（Phase 1）僅涵蓋「平台基礎設施 + 權限治理 + 對話核心（含知識庫）+ 待辦事項 + 心情小記 + 健康監控告警」；其餘功能模組依複雜度與相依性分至 Phase 2～5（詳見「實作計畫」，Phase 5 為獨立拆出的 Notion 後台，見 ADR-4 理由 4 與待確認事項 Q5 的回覆）。
+**決策**：MVP（Phase 1）僅涵蓋「平台基礎設施 + 權限治理 + 對話核心（含知識庫）+ 待辦事項 + 心情小記 + 健康監控告警」；其餘功能模組依複雜度與相依性分至 Phase 2～4（詳見「實作計畫」；**2026-08-04 更新**：原規劃獨立拆出的 Phase 5「Notion 後台」已取消，視覺化後台改為 Mobile App，併入 Phase 4，見 ADR-14 與待確認事項 Q5 的回覆註記）。
 
 **理由**：
 1. 待辦事項與心情小記是最高頻、最輕量的日常互動，且待辦事項已被使用者明訂為「唯一可自行調整排程」的功能，適合最先驗證聊天式互動的可用性。
 2. 求職（104 爬蟲 + 評分模型）與技能成長（TOEIC 題庫 + 排程提醒邏輯）複雜度高、依賴多個外部資料源，適合在核心架構穩定後再疊加。
 3. 記帳與體態管理邏輯相似（目標 + 每日紀錄 + 預警 + 視覺化），適合放在同一 Phase 一起做，複用告警與圖表邏輯。
-4. Notion 後台屬於「錦上添花」的視覺化層，Robin 已確認獨立拆成 Phase 5、排在全專案最終階段，須等其他所有 Phase（含 FR-19 系列的 AI 監控與治理機制）穩定運作後才開始。
+4. 視覺化後台屬於「錦上添花」的展示層，原規劃獨立拆成 Phase 5（Notion）、排在全專案最終階段；**2026-08-04 更新**：Notion 方案已取消，改為 Mobile App（React Native + Expo），且因技術棧與求職模組（Phase 4）性質相近（皆屬於「錦上添花、可與核心對話功能並行推進」的模組），併入 Phase 4 一併規劃，見 ADR-14。
 
 **替代方案**：
-- 方案 A：技術棧驗證優先（先做 Notion + 圖表 pipeline）— 缺點是使用者感受不到「聊天助手」的核心價值
+- 方案 A：技術棧驗證優先（先做視覺化後台 + 圖表 pipeline）— 缺點是使用者感受不到「聊天助手」的核心價值
 - 方案 B：全功能一次到位 — 缺點是開發週期過長，且不符合 SDD/TDD 逐步驗證的精神
 
 **後果**：使用者需在確認本 spec 時，明確同意或調整此分期順序（見「待確認事項」）。
@@ -517,6 +543,37 @@ Robinson 是一個以 Telegram 為前台介面的家庭生活小助手，Robin �
 
 **狀態**：accepted
 
+### ADR-14：視覺化後台改採 Mobile App（React Native + Expo），取代 Notion（supersede ADR-1 的後台選型部分）
+
+**背景**：ADR-1 原本選定 Notion 作為視覺化後台，理由是「上手快、適合非工程背景的家人瀏覽」。Robin 重新評估後，希望改用自建的 Mobile App，取得更客製化的 BI Dashboard 體驗、獨立的多用戶登入機制，並讓「Telegram 負責輸入、App 負責視覺化」的分工更明確。
+
+**決策**：
+1. 移除所有 Notion API 串接與資料同步邏輯（原 FR-54 全數移除，改為 FR-64／FR-65，見上方「功能性需求 — Mobile App」）。
+2. 系統架構確立為「Telegram Bot（LUI）+ Mobile App（Rich GUI）」兩前台分工：
+   - **Telegram Bot**：負責所有自然語言輸入（文字/語音/照片）、系統設定與資料的 CRUD 控制，沿用既有 FR-1～FR-63 全數功能，不受本次調整影響。
+   - **Mobile App**：專注 BI 圖表展示（消費圓餅圖、體重折線圖等）與動態數據篩選，**唯讀**，不提供任何寫入/CRUD 操作入口。
+3. Mobile App 技術棧確定採用 **React Native + Expo**。
+4. 新增多用戶登入機制（FR-65）：App 面向所有使用者而非僅限 Robin；一般使用者需輸入 `user_name`／稱謂／`APP Access Token` 三項，Robin 僅需 `user_name`／`APP Access Token` 兩項。
+5. API 設計原則、React Native + Expo 基礎路由結構、資料模型補充（`users.app_access_token`），詳見上方「功能性需求 — Mobile App」的技術細節補充段落。
+6. 登入與 App 各頁面的詳細互動邏輯留待 Phase 4 對應 Step 開工時再深入討論展開獨立 spec，本 ADR 僅先定調架構與技術棧方向。
+
+**理由**：
+- Notion 雖然上手快，但客製化互動式篩選能力弱、且沒有原生的多用戶權限控管機制，需要額外拼湊；自建 App 能完全掌控圖表呈現方式與登入權限模型。
+- 家人主要透過手機使用，Native App 的操作體驗優於瀏覽器版 Notion 頁面或另建 Web Dashboard。
+- React Native + Expo 是目前最成熟的跨平台（iOS/Android）方案之一，免費方案（Expo Go／EAS 免費額度）足敷家庭規模使用，符合 NFR-1 全免費原則。
+
+**替代方案**：
+- 方案 A：維持 Notion——優點是零開發成本；缺點是客製化程度低、多用戶登入機制需另外拼湊，且 Robin 已明確改變主意，已否決
+- 方案 B：改建 Web Dashboard（React/Vue SPA）——優點是不需要處理 App Store／Google Play 上架流程；缺點是家人主要透過手機使用，Native App 體驗更佳，且與既有「越少 UI 越好、聊天優先」的產品理念相比，一個安裝一次即可用的 App 比每次開瀏覽器輸入網址更貼近日常使用情境，已否決
+
+**後果**：
+- Phase 5（Notion 後台）自實作計畫移除；相關工作併入 Phase 4，與求職模組並列（見「實作計畫」Phase 4）。
+- 未來 Phase 4 開工時，新增頂層 `mobile/` 目錄放置 Expo 專案，與 `src/`（後端）平級獨立，遵循 AGENTS.md 職責分離原則；本次調整**不**立即建立任何程式碼或目錄骨架，純屬規格層級的架構調整。
+- `users` 資料表未來需新增 `app_access_token` 欄位（見 FR-65），實際建表時機與 SQL 仍依 ADR-10「先審核後執行」流程，於 Phase 4 開工、Robin 核准後才建立。
+- NFR-1、NFR-5 已同步移除 Notion 相關描述（見上方非功能性需求）。
+
+**狀態**：accepted
+
 ## 實作計畫
 
 > 分期原則見 ADR-4；每個 Phase 完成後才進入下一個 Phase 的詳細 spec 與 TDD 循環。本 spec 僅列到模組層級，各模組進入實作前應個別建立 `docs/specs/<feature-slug>/SPEC.md` 展開 API 設計與資料表結構。
@@ -563,18 +620,15 @@ Robinson 是一個以 Telegram 為前台介面的家庭生活小助手，Robin �
 - [ ] Step 3.4：YouTube 技術情報模組（FR-57～FR-59，見 ADR-9）—— YouTube Data API 擷取、三層 Top 3 篩選、每週四自動推播、配額監控與 Fallback 降級
 - [ ] Step 3.5：好友模式（FR-51、FR-52）
 
-### Phase 4：求職模組
+### Phase 4：求職模組 + Mobile App（BI Dashboard）
+
+> **2026-08-04 更新**：原獨立拆出的 Phase 5「Notion 後台」已取消，Mobile App（React Native + Expo）併入本 Phase，見 ADR-14。Step 4.4／4.5 僅為 Placeholder，詳細規劃留待本 Phase 開工、對應 Step 展開獨立 spec（`docs/specs/mobile-app/SPEC.md`）時再確認。
 
 - [ ] Step 4.1：104 職缺爬蟲（FR-33、FR-34a～FR-34d：無登入態直呼叫 AJAX API、每週一次、UA/Referer + 2～4 秒隨機延遲、禁併發、ETL 去重）與職缺內容解析（FR-35、FR-36）
 - [ ] Step 4.2：Gemini 契合度評分與技能缺口分析（FR-37、FR-38）
 - [ ] Step 4.3：應徵成效追蹤（FR-39、FR-40）
-
-### Phase 5：Notion 後台（全專案最終階段，兩週＋緩衝／8/12 之後排程）
-
-> 見 ADR-4 理由 4：必須等 Phase 0～4（含 FR-19 系列治理機制）全部完工且穩定運作後才開始。Phase 0～4 期間，資料存取一律經由 `submodules/cloudsql` 抽象層，保留未來讓 Notion 直接串接的彈性，暫不撰寫任何 Notion 相關程式碼。
-
-- [ ] Step 5.1：Notion API 串接與資料同步（FR-54）
-- [ ] Step 5.2：儀表板/資料庫視圖設計（FR-54）
+- [ ] Step 4.4（Placeholder）：Mobile App 基礎建設與登入機制（FR-65）—— 建立 `mobile/` Expo 專案骨架、`users.app_access_token` 建表（依 ADR-10 流程）、登入頁與 `/api/app/*` 驗證中介層
+- [ ] Step 4.5（Placeholder）：BI Dashboard 圖表頁面（FR-64）—— 記帳/體態模組的圖表 API（消費圓餅圖、體重折線圖等）與對應的 App 頁面
 
 ## 測試策略
 
@@ -651,7 +705,7 @@ Robinson 是一個以 Telegram 為前台介面的家庭生活小助手，Robin �
 - [x] 通關密碼的分發方式？→ Robin 私訊告知家人；設定方式改為僅限 Owner 觸發的引導式對話流（見 FR-6a～FR-6c、ADR-8），不做後台表單
 - [x] TOEIC 題庫來源？→ 雙軌混合架構：軌道一 Robin 拍照/音檔上傳 + Gemini Vision/STT 解析入庫、軌道二 Gemini 即時生成單字題（見 FR-25a～FR-25f）
 - [x] 104 爬蟲的合規性？→ 不使用瀏覽器自動化、直接呼叫 AJAX/JSON API、每週僅一次、標準 UA/Referer、分頁間 2～4 秒隨機延遲、禁併發（見 FR-34a～FR-34c）
-- [x] Notion 後台排程順序？→ 獨立拆成 **Phase 5**，排在全專案最終階段；Phase 0～4 期間僅需維持資料層 API 抽象化彈性（見 FR-54、實作計畫 Phase 5）。原訂 8/4 之後開始，因 2026-07-30 時程改為兩週制順延至 8/11 之後，同日再因新增 YouTube 模組追加 1 天緩衝，目前為 **8/12 之後**（見 PROGRESS.md）
+- [x] Notion 後台排程順序？→ 獨立拆成 **Phase 5**，排在全專案最終階段；Phase 0～4 期間僅需維持資料層 API 抽象化彈性（見 FR-54、實作計畫 Phase 5）。原訂 8/4 之後開始，因 2026-07-30 時程改為兩週制順延至 8/11 之後，同日再因新增 YouTube 模組追加 1 天緩衝，目前為 **8/12 之後**（見 PROGRESS.md）（**2026-08-04 更新**：此決策已由 ADR-14 取代——Notion 改為 Mobile App，Phase 5 取消、併入 Phase 4，詳見 ADR-14 與實作計畫）
 - [x] 個資偵測規則的具體格式？→ Regex 硬規則 + LLM 語意辨識雙層防線，覆蓋 8 類台灣個資格式，排除生日與 LINE ID（見 FR-13a～FR-13d）
 - [x] FR-19e「核准後執行修復」的執行機制範圍？→ Render 線上自主運維模組：AI 診斷後透過 GitHub API 開分支與 PR，Robin 在 GitHub 審核 Merge 後才觸發部署，Robinson 不具備直接推送 `main` 的權限（見 FR-19e-1～FR-19e-5、ADR-7）
 
@@ -751,3 +805,5 @@ FR-56 的 `/function` 路由目前只定義了「回傳範圍」（所有功能�
 | 2026-08-02 | **新增 FR-31b：待辦事項支援時間區間**：Robin 詢問「待辦事項是不是只能存單一時間點，不能存像『8/2 08:00～8/5 17:00』這種區間」，確認需要後開發。經 AskUserQuestion 確認三個設計決策：① `todos` 新增可選的 `start_at` 欄位（Robin 依 ADR-10 核准 `0016_add_start_at_to_todos.sql`），既有單一時間點待辦不受影響（`start_at` 為 NULL）② 前 30 分鐘提醒對區間待辦以 `start_at` 為基準（提醒「準備要開始了」）③ 每日 08:00 摘要對區間待辦只在開始日、結束日各出現一次，`todo.py` 的去重判斷從「曾經推播過就不再推播」改為「今天是否已經推播過」。`commands._TODO_TIME_PARSE_PROMPT` 新增選填的 `START_AT` 欄位，只有原始描述或回覆同時講出明確開始與結束時間才判斷為區間，開始/結束兩個時間點都要分別滿足既有的「日期明確」「時段不歧義」條件；`todo.py` 新增 `_format_when()`／`_format_digest_when()` 依是否為區間顯示不同文字，`check_and_push_reminders()` 改用 `COALESCE(start_at, due_at)` 判斷提醒基準；`commands.py` 新增 `_build_todo_time_confirmation_reply()` 依開始日/結束日的 8 點摘要是否還來得及組合不同措辭；全專案 436 個測試全過、覆蓋率 100% | Claude（依 Robin「現在就開始規劃設計」指示，經 AskUserQuestion 確認範圍與 SQL 後實作） |
 | 2026-08-02 | **FR-49 補記/更新/刪除擴充**：Robin 提出「記帳、心情小記、體重、飲食、運動習慣都要有補記、更新、刪除、新增的功能」，經 AskUserQuestion 確認範圍：心情小記優先實作，記帳／體態管理（Phase 2 才開始的模組）從一開始就會內建 CRUD、不需要另外補。經 AskUserQuestion 確認兩個設計決策：① `mood_journals` 新增可選的 `entry_date` 欄位（Robin 依 ADR-10 核准 `0017_add_entry_date_to_mood_journals.sql`），設計比照 `todos.start_at`：一律由 app 端算好台灣時區日期後寫入，不依賴資料庫預設值 ② 刪除確認採簡單一輪 LLM CONFIRM/CANCEL（跟待辦事項完成/取消同一等級），不套用 FR-16a 逐字打字最終確認——FR-16a 保留給 `/clean-all-dialog`／`/clean-target-dialog`／主動記知識三個「一旦誤刪就大量、跨紀錄不可逆遺失資料」的高風險流程，心情小記單筆刪除錯了還能重新補記。新增「我要補記心情」／`/backfill_mood`（先問要補記哪一天，LLM 解析日期、只接受今天或過去，講清楚後接到既有分類/內容/成就三輪反問，寫入時 `entry_date` 用解析出的日期）與「我的心情紀錄」／`/my_mood_journals`（列出最近 10 筆，依 `entry_date` 新到舊排序，選編號後反問更新還是刪除——更新沿用原 `entry_date` 重新走一次分類/內容流程並改成 `UPDATE`，刪除走簡單一輪 CONFIRM/CANCEL）；`mood.py` 新增 `list_mood_journals()`／`format_mood_journal_list()`／`update_mood_journal()`／`delete_mood_journal()`，既有的 `create_mood_journal()` 新增必填的 `entry_date` 參數；`commands.py` 新增 6 個 flow 處理函式（`start_mood_backfill`／`handle_mood_backfill_date_step`／`start_mood_list`／`handle_mood_list_action_step`／`handle_mood_action_choice_step`／`handle_mood_delete_confirm_step`），既有的分類/內容兩步驟改為同時支援新增（`journal_id` 為 None）與編輯（`journal_id` 非 None，改用 `UPDATE`）；`router.py` 整合新觸發詞與 6 個新 flow 分派；全專案 465 個測試全過、覆蓋率 100% | Claude（依 Robin「繼續開發啊」指示，經 AskUserQuestion 確認範圍與 SQL 後實作） |
 | 2026-08-04 | **Phase 2 Step 2.1 完成：記帳模組（FR-41～FR-44）**，Phase 2 第一個 Step。Robin 確認「下個階段就是 Phase 2 了」後說「請開始開發」，經 AskUserQuestion 確認範圍與 SQL：① FR-41「理財目標」解讀為「每月支出預算上限」，不需要收入-支出結餘概念，但交易紀錄本身仍支出/收入兩種都做 ② 交易分類採固定清單（比照心情小記）③ FR-44 視覺化這版先做文字摘要，不做圖表 ④ `users` 新增 `monthly_budget`／`budget_alert_50_sent_month`／`budget_alert_80_sent_month` 三欄（`0018_add_budget_fields_to_users.sql`）、新建 `transactions` 表（`0019_create_transactions_table.sql`，Robin 已核准兩份 SQL）⑤ FR-43 兩門檻觸發時機：50% 只在每月 15 日前檢查、80% 整月都檢查，各自每月最多推播一次。記帳從一開始就內建完整 CRUD（不像心情小記事後才補）：新增 `src/bot/finance.py`（分類清單/解析、交易 CRUD、月加總、FR-43 門檻判斷、FR-44 摘要組裝）、`commands.py` 12 個新 flow 處理函式（設定預算、新增/補記/更新/刪除記帳四步驟共用、查詢清單、摘要查詢）、`router.py` 整合 5 個新觸發詞與 9 個新 flow 分派、`main.py` 新增 `_check_finance_alerts()` 借用 `/healthz` 頻率觸發 FR-43 推播；全專案 539 個測試全過、覆蓋率 100% | Claude（依 Robin「請開始開發」指示，經 AskUserQuestion 確認範圍與 SQL 後實作） |
+| 2026-08-04 | **Phase 2 Step 2.2 完成：體態管理模組（FR-45～FR-48）**。經 AskUserQuestion 確認四項設計：① 運動消耗卡路里改用 LLM 估算（而非 MET 公式），沿用 `GEMINI_API_BOT_KEY` ② 飲食三大營養素拆算同樣沿用 `GEMINI_API_BOT_KEY`（沒有食物資料庫，只能靠 LLM 語意判斷）③ FR-45 預警情境定案為目標達成通知（體重目標即時檢查、運動目標借用 `/healthz` 頻率排程加總累積分鐘數）＋目標期限前 7 天提醒＋BMI 異常提醒 ④ 三個子功能的目標設定共用一張 `body_goals` 表，用 `goal_type` 區分；運動目標單位由公里數改為累積運動分鐘數（Robin 指出「不是只有跑步」）。新建 `body_weight_logs`／`exercise_logs`／`diet_logs`／`body_goals` 四張表、`users` 新增 `height_cm`（`0023`～`0027` migration，Robin 依 ADR-10 核准）；新增 `src/bot/body.py`；身高體重/運動/飲食三個子功能從一開始就內建完整 CRUD；飲食目標因太主觀不做自動達成判斷，只能手動取消，是刻意的已知簡化；`commands.py`／`router.py`／`main.py` 完成整合；`src/bot/body.py` 達到 100% 覆蓋率，全專案 661 個測試全過 | Claude（經 AskUserQuestion 確認範圍與 SQL 後實作） |
+| 2026-08-04 | **移除 Notion 後台，改採 Mobile App（React Native + Expo）**，新增 ADR-14（supersede ADR-1 的後台選型部分）。Robin 指示系統架構確立為「Telegram Bot（LUI）+ Mobile App（Rich GUI，唯讀 BI Dashboard）」；移除原 FR-54（Notion 相關描述），新增 FR-64（唯讀視覺化）、FR-65／FR-65a～FR-65c（多用戶登入機制：一般使用者 `user_name`／稱謂／`APP Access Token`，Robin 僅需 `user_name`／`APP Access Token`）；補充技術細節：`/api/app/*` API 設計原則（後端算好圖表 JSON 結構回傳，App 端只負責渲染）、React Native + Expo（Expo Router）基礎路由結構、資料模型補充（`users.app_access_token`）；登入與 App 詳細功能邏輯留待 Phase 4 對應 Step 開工時再深入展開，本次僅為 Placeholder。原獨立拆出的 Phase 5（Notion）取消，Mobile App 相關 Step 4.4／4.5（Placeholder）併入 Phase 4（與求職模組並列）；同步更新概要、系統架構總覽表、名詞定義（新增 APP Access Token）、NFR-1／NFR-5、ADR-4 理由 4、待確認事項 Notion 項次註記；本次僅為規格層級調整，未建立任何程式碼或資料表 | Claude（依 Robin 詳細指示調整規格） |

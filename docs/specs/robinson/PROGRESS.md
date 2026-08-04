@@ -17,10 +17,9 @@ updated: 2026-08-04
 
 **Phase 1（MVP）全部 Step 完成；Phase 2 Step 2.1（記帳模組）、Step 2.2（體態管理模組）完成，下一步是 Step 2.3（重要通知模組）**
 
-## 目標時程（2026-07-30 更新：改為三週制，因新增多模態影像/語音處理架構）
+## 目標時程（2026-07-30 更新：改為三週制，因新增多模態影像/語音處理架構；2026-08-04 更新：Phase 5「Notion 後台」取消，Mobile App 併入 Phase 4，見 SPEC.md ADR-14）
 
-- **Phase 0～4：2026-07-29 ～ 2026-08-18（三週）**，不含 Notion 後台
-- **Phase 5（Notion 後台）：2026-08-18 之後再排**
+- **Phase 0～4：2026-07-29 ～ 2026-08-18（三週）**，Mobile App（原 Notion 後台）已併入 Phase 4，不再是獨立的最終階段
 
 原本兩週＋1 天緩衝（7/29～8/12）的規劃，因本次新增大量架構性內容而順延至三週：① 四把 Gemini Key 依用途分流＋語音改用 Groq Whisper（ADR-12）② 影像/語音「先上雲端、後壓縮、再辨識」的完整處理流程與命名規則（ADR-13）③ `/function` 全面改版為「總覽＋按需深入＋情境範例」＋所有對話回覆需符合人格化語氣（FR-56～FR-56d）④ 影像辨識的個資警語、不確定需詢問、飲食誤差聲明（FR-17～FR-17c）。這些改動主要集中在 Phase 1 Step 1.3（Gemini 對話核心）附近，新增 Step 1.3a／1.3b，工作量顯著增加，Robin 已同意延長至三週（若進度超前則不用真的用滿三週）。
 
@@ -40,9 +39,8 @@ updated: 2026-08-04
 | 8/8～8/9 | Phase 2：記帳、體態管理（含飲食誤差聲明 FR-17c）、重要通知 |
 | 8/10～8/11 | Phase 2：Step 2.4～2.6（GitHub PR 自主診斷、重試機制、分級降級），技術複雜度最高，獨立預留兩天 |
 | 8/12～8/14 | Phase 3：技能成長（TOEIC 雙軌 Pipeline，語音改用 Groq Whisper）＋ YouTube 技術情報模組 ＋ 好友模式 |
-| 8/15～8/16 | Phase 4：104 求職爬蟲＋整合測試 |
+| 8/15～8/16 | Phase 4：104 求職爬蟲＋整合測試＋ Mobile App（Step 4.4／4.5 Placeholder，詳細規劃留待開工時展開） |
 | 8/17～8/18 | 全 Phase 整合測試／緩衝日 |
-| 8/18 之後 | Phase 5：Notion 後台 |
 
 ## 階段總覽
 
@@ -52,8 +50,7 @@ updated: 2026-08-04
 | Phase 1（MVP） | 核心平台（通關密碼對話式設定、歡迎訊息、`/rule`／`/function`／`/complaint` 內建指令、功能開關、Gemini 對話+知識庫、影像辨識、語音、個資遮蔽、基礎錯誤處理）＋待辦事項＋心情小記＋客訴收集 | 🟢 已完成 | 7/31～8/2 | Step 1.1～1.9 全數完成（實際 8/2 就全數完成，早於原訂 8/7 目標）；FR-56 全面改版為總覽＋按需深入＋情境範例（FR-56a～FR-56d） |
 | Phase 2 | 記帳＋體態管理＋重要通知＋異常自主診斷與 GitHub PR 治理＋重試機制＋分級降級 | 🟡 進行中 | 8/8～8/11 | Step 2.1（記帳，FR-41～FR-44）、Step 2.2（體態管理，FR-45～FR-48）皆已於 8/4 完成，早於原訂時程；Step 2.4～2.6 為新增範圍，技術複雜度最高，已獨立預留兩天 |
 | Phase 3 | 個人技能成長（TOEIC 雙軌題庫 Pipeline＋YouTube 技術情報模組，僅 Robin）＋好友模式 | ⚪ 未開始 | 8/12～8/14 | 新增 YouTube 模組（FR-57～FR-59，見 ADR-9）；TOEIC 語音處理改用 Groq Whisper（ADR-12） |
-| Phase 4 | 求職模組（104 爬蟲＋評分） | ⚪ 未開始 | 8/15～8/16 | 爬蟲策略已定案：每週一次、AJAX API、無登入態、禮貌性延遲、ETL 去重（FR-34a～FR-34d） |
-| Phase 5 | Notion 後台 | ⚪ 未開始 | 8/18 之後 | 獨立拆出的最終階段，須等 Phase 0～4（含 FR-19 治理機制）穩定後才開始；期間僅維持資料層 API 抽象化彈性 |
+| Phase 4 | 求職模組（104 爬蟲＋評分）＋ Mobile App（BI Dashboard，React Native + Expo） | ⚪ 未開始 | 8/15～8/16 | 爬蟲策略已定案：每週一次、AJAX API、無登入態、禮貌性延遲、ETL 去重（FR-34a～FR-34d）；**2026-08-04 新增**：原獨立拆出的 Phase 5（Notion 後台）已取消，Mobile App 併入本 Phase（Step 4.4／4.5，皆為 Placeholder），見 SPEC.md ADR-14，詳細規劃留待開工時展開 |
 
 狀態圖例：⚪ 未開始　🟡 進行中／規劃中　🟢 已完成　🔴 阻塞
 
@@ -123,6 +120,7 @@ updated: 2026-08-04
 | 2026-08-04 | **記帳模組擴充：新增 FR-44a（月底自動推播月報）**。Robin 詢問記帳摘要會不會自動推播，確認目前只有主動查詢後，指示「記帳摘要請在每月底自動推一次月報」。經 AskUserQuestion 確認：① 推播時刻 21:00，刻意跟 FR-42a 每日提醒的 23:00 錯開 ② 只推給「這個月有生效預算或有記帳」的使用者，避免沒在用記帳功能的家人收到全部 0 元的空洞報告。新增 `users.finance_monthly_report_sent_month` 去重欄位（Robin 依 ADR-10 核准 `0022_add_finance_monthly_report_field_to_users.sql`）；新增 `finance.check_and_push_monthly_report()`（借用 `/healthz` 頻率，「是不是月底」用「明天是不是 1 號」判斷，不寫死月份天數）與共用 helper `finance._users_with_finance_activity()`；`main.py` 新增 `_check_finance_monthly_report()`；內容沿用既有 `format_monthly_summary()`；全專案 589 個測試全過、覆蓋率 100% |
 | 2026-08-04 | **記帳模組擴充：新增 FR-41a（預算特殊月份覆蓋）、FR-42a（每日記帳提醒）**。Robin 實測後提出三點回饋：① 有設定預算時應每天固定時間提醒記帳，但當天已記錄就不必提醒、收入不用檢查 ② 能不能隨意改預算、是否每月自動套用、某幾個月（報稅、包紅包）固定開銷較高想單獨設定，希望設定時能問要套用全部月份還是某幾個月、調整已設定的月份時要先反問確認 ③ 也發現「調整剛剛設定的 43,000 元」跟「重新設定這個月的記帳預算」這兩句反問其實沒有差異，因為當時系統沒有「月份」維度，這正好點出①②的缺口。經 AskUserQuestion 確認設計：提醒時間 23:00；預算跟月份的關聯採「全局預設值（`users.monthly_budget`）＋特殊月份覆蓋（新表 `budget_overrides`）」設計而非逐月各自存一筆——改全局預設不動已設定的特殊月，查詢當月生效預算優先用覆蓋值、沒有才 fallback 用預設值（`finance.get_effective_monthly_budget()`）；`/set_budget` 每次都先問套用範圍，選定範圍已有舊值時一律先反問確認才能真正寫入。新增 migration `0020_create_budget_overrides_table.sql`／`0021_add_finance_reminder_field_to_users.sql`（Robin 依 ADR-10 核准）；`/set_budget` 從單輪改成最多四輪的狀態機（scope→months→confirm→amount）；新增 `finance.check_and_push_finance_reminders()`（FR-42a，比照 FR-32 每日摘要借用 `/healthz` 頻率，只在台灣時間 23 點執行）；FR-43 門檻預警、FR-44 摘要都已改用生效預算查詢邏輯，新增共用 helper `finance._users_with_effective_budget()`；月份輸入一律套用今年，尚不支援跨年設定，是本次的簡化假設；`/function` 記帳說明文案補上「以一個月為單位」提醒；全專案 577 個測試全過、覆蓋率 100% |
 | 2026-08-04 | **Phase 2 Step 2.2 完成：體態管理模組（FR-45～FR-48）**。Robin 確認「下個階段就是 Phase 2.2 了」後指示開發，經 AskUserQuestion 確認四項設計：① 運動消耗卡路里改用 LLM 估算（而非 MET 公式），沿用 `GEMINI_API_BOT_KEY`，符合 FR-56g 情境3「自然口吻回覆＋估算免責聲明」示範 ② 飲食三大營養素拆算同樣沿用 `GEMINI_API_BOT_KEY`（沒有食物資料庫，只能靠 LLM 語意判斷）③ FR-45 預警情境定案為目標達成通知（體重目標即時檢查、運動目標借用 `/healthz` 頻率排程加總累積分鐘數）＋目標期限前 7 天提醒＋BMI 異常提醒（記錄體重當下就地附加）④ 身高體重/運動/飲食三個子功能的目標設定共用一張 `body_goals` 表，用 `goal_type` 區分（比照 `budget_overrides` 精神）；運動目標的 `target_value` 單位原提案用公里數，Robin 指出「不是只有跑步」，改用累積運動分鐘數（各種運動都適用的共同單位）。新建 `body_weight_logs`／`exercise_logs`／`diet_logs`／`body_goals` 四張表、`users` 新增 `height_cm`（Robin 依 ADR-10 核准 `0023`～`0027` migration）；新增 `src/bot/body.py`（BMI 計算與分級、LLM 卡路里/營養估算、目標達成判斷、FR-45 排程檢查函式）；身高體重/運動/飲食三個子功能從一開始就內建完整 CRUD（新增/補記/查詢/更新/刪除），比照記帳模組；飲食目標因太主觀（例如「飲食完美控制」）不做自動達成判斷，只能手動取消，是刻意的已知簡化；`commands.py` 新增 12 個觸發詞與對應多輪反問流程、`router.py` 完成觸發詞與 flow 分派、`main.py` 新增 `_check_body_goal_alerts()` 借用 `/healthz` 頻率；`src/bot/body.py` 達到 100% 覆蓋率，全專案 661 個測試全過 |
+| 2026-08-04 | **移除 Notion 後台，改採 Mobile App（React Native + Expo）**，SPEC.md 新增 ADR-14（supersede ADR-1 的後台選型部分）。Robin 指示系統架構確立為「Telegram Bot（LUI）負責所有自然語言輸入與 CRUD 控制＋Mobile App（Rich GUI）專注唯讀 BI 圖表展示」；移除原 FR-54（Notion 相關描述），新增 FR-64（唯讀視覺化）、FR-65／FR-65a～FR-65c（多用戶登入機制：一般使用者 `user_name`／稱謂／`APP Access Token`，Robin 僅需 `user_name`／`APP Access Token`）；補充技術細節供 Phase 4 展開時參考：`/api/app/*` API 設計原則（後端算好圖表 JSON 結構回傳，App 端只負責渲染）、React Native + Expo（Expo Router）基礎路由結構、資料模型補充（`users.app_access_token`）；登入與 App 詳細功能邏輯明確標記為 Placeholder，留待 Phase 4 對應 Step 開工時再深入展開。原獨立拆出的 Phase 5（Notion）取消，相關工作併入 Phase 4（與求職模組並列，新增 Step 4.4／4.5）；本次純屬規格層級調整，未建立任何程式碼、目錄或資料表 | Claude（依 Robin 詳細指示調整規格） |
 
 ## 待決事項
 
