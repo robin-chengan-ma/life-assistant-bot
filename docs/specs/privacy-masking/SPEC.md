@@ -65,6 +65,23 @@ owner: Robin
 
 **狀態**：accepted
 
+### ADR-3：語意層呼叫遇到暫時性外部錯誤時的降級行為
+
+**背景**：2026-08-04 Robin 實際使用時，`mask_with_llm()` 呼叫 Gemini 撞到 `503 UNAVAILABLE`（官方訊息「模型目前需求量大，通常是暫時性的」，屬於外部服務短暫過載，非本專案額度或程式問題），但 `mask_text()` 當時沒有捕捉這個例外，導致整則訊息處理完全中斷、使用者完全沒收到任何回覆（只有 Owner 才會額外收到 FR-19a 的例外通報私訊）。ADR-2 只處理了「Key 缺失」這種確定性的降級情境，沒有涵蓋「Key 存在、呼叫當下卻失敗」的情境。
+
+**決策**：`mask_text()` 呼叫 `mask_with_llm()` 時包一層 `try/except Exception`，任何例外都優雅降級成只回傳 Regex 層結果（`masked, regex_detected`），並記錄一筆 warning log，不拋出例外、不中斷訊息處理流程
+
+**理由**：跟 ADR-2 同一個理由——語意層是輔助防線，Regex 層本身不依賴任何外部服務、永遠可以運作；不應該讓這層選配的輔助防線因為外部服務暫時性故障就讓整個訊息處理失敗。完整的重試/退避機制屬於 FR-19i（外部 API 重試機制，Phase 2 Step 2.5）的範疇，這裡先做「失敗就降級」這個最小必要的防禦，不等 Step 2.5 才處理，因為這個問題會直接讓使用者完全收不到回覆，風險層級高於「重試後才成功」的體驗優化
+
+**替代方案**：
+- 方案 A（採用）：`except Exception` 全面捕捉＋降級成 Regex-only：實作最簡單，跟 ADR-2 精神一致，缺點是連真正的程式錯誤（如 Prompt 格式錯誤）也會被吞掉、只留 log，但個資遮蔽本來就是「錯了也不該讓訊息處理失敗」的輔助防線，可接受
+- 方案 B：只捕捉已知的暫時性錯誤類型（例如判斷例外訊息含 `503`／`UNAVAILABLE`）：更精確，但 `google.genai` 的例外類型／訊息格式屬於第三方套件內部細節，用字串比對耦合度高、日後套件改版容易失效
+- 方案 C：等 FR-19i 完整重試機制一起做（指數退避重試 N 次後才降級）：更完整，但範圍大、要等到 Phase 2 Step 2.5 才會實作，這段期間使用者持續會撞到同樣的完全無回覆問題，不接受
+
+**後果**：任何 `llm_client.generate_text()` 呼叫失敗（不只 503，包含逾時、其他 5xx、網路錯誤等）都會讓這則訊息的個資偵測退化成只有 Regex 層，使用者收到的回覆會正常送出、只是少了語意層可能補抓到的變形寫法；日後 FR-19i 上線後，可以在 `mask_with_llm()` 或呼叫端疊加重試邏輯，`mask_text()` 這層的 `try/except` 降級網不需要拿掉，仍是最後一道防線
+
+**狀態**：accepted
+
 ## 實作計畫
 
 - [x] Step 1：`src/bot/privacy.py` —— `mask_regex()`（8 類 Regex 硬規則＋固定遮蔽文字）、`mask_with_llm()`（語意層 Prompt，排除生日／LINE ID）、`mask_text()`（統一入口，串接兩層，`llm_client=None` 時降級只跑 Regex）
@@ -73,13 +90,14 @@ owner: Robin
 - [x] Step 4：`webhook.py` 新增 `privacy_llm_client`（讀 `GEMINI_API_PRIVACY_KEY`，缺失時傳 `None`），注入 `handle_message()`／`handle_photo_message()` 呼叫
 - [x] Step 5：`.env.example` 新增 `GEMINI_API_PRIVACY_KEY` 說明
 - [x] Step 6：更新 `src/schema/api_schema.md`、robinson SPEC.md（FR-13 checkbox、Step 1.5 連結）、PROGRESS.md
+- [x] Step 7（2026-08-04 追加，ADR-3）：`mask_text()` 呼叫 `mask_with_llm()` 包一層 `try/except Exception`，語意層暫時性外部錯誤（Gemini 503 等）優雅降級成只回傳 Regex 層結果，不中斷訊息處理
 
 ## 測試策略
 
 ### Unit Tests
 - [x] `mask_regex()`：FR-13a 8 類格式各自的正例（依 spec 列出的範例格式）都會被遮蔽；生日格式（如「1998/05/20」「82年3月」）、LINE ID（如「@robinma」）不會被誤判遮蔽
 - [x] `mask_with_llm()`：mock LLM 回傳含遮蔽結果時正確判定 `detected=True`；LLM 回傳原文不變時 `detected=False`
-- [x] `mask_text()`：兩層都沒偵測到 → 原文不變、`detected=False`；只有 Regex 偵測到 → LLM 收到的是已遮蔽文字（不會把明碼送進 Prompt）；`llm_client=None` 時只執行 Regex 層、不報錯
+- [x] `mask_text()`：兩層都沒偵測到 → 原文不變、`detected=False`；只有 Regex 偵測到 → LLM 收到的是已遮蔽文字（不會把明碼送進 Prompt）；`llm_client=None` 時只執行 Regex 層、不報錯；`llm_client` 呼叫拋例外時優雅降級成只回傳 Regex 層結果，不拋出例外（ADR-3，2026-08-04 追加）
 
 ### Integration Tests
 - [x] `chat.handle_chat_message()`：使用者傳送含身分證字號的文字 → 回覆附加提醒文案、`conversation_logs` 存的是遮蔽後文字；一般不含個資的訊息 → 回覆不受影響，無提醒文案
@@ -98,6 +116,7 @@ owner: Robin
 | Regex 誤判一般數字為個資（例如 12 位健保卡號跟其他隨機 12 位數字碼撞格式） | 低 | 中 | 已知限制，先接受；正式使用後若發現高頻誤判案例再收斂規則 |
 | Regex 漏抓刻意變形寫法（全形數字、中文數字、額外符號） | 中 | 中 | 由 FR-2 語意層補強；若語意層 Key 未設定則退化成只有 Regex 層，仍優於完全沒有防護 |
 | 語意層增加訊息處理延遲（多一次 Gemini 呼叫） | 低 | 高（必然） | 屬於安全防線的必要成本，Robin 已確認可接受；用獨立 Key 至少不會因為額度不足而失敗 |
+| 語意層呼叫遇到暫時性外部錯誤（Gemini 過載/逾時） | 中 | 低～中（實際已發生過一次） | ADR-3：`mask_text()` 優雅降級成只回傳 Regex 層結果，不中斷訊息處理；完整重試機制留待 FR-19i |
 
 ## 變更記錄
 
@@ -105,3 +124,4 @@ owner: Robin
 |------|----------|--------|
 | 2026-08-02 | 初版建立，展開 robinson SPEC.md Phase 1 Step 1.5 為獨立 spec；記錄 ADR-1（語意層改用獨立 `GEMINI_API_PRIVACY_KEY`，不佔用聊天配額）、ADR-2（Key 缺失時優雅降級只跑 Regex 層）；Robin 確認策略後展開實作計畫 | Claude（依 Robin「先做吧」指示，經 AskUserQuestion 確認額度策略） |
 | 2026-08-02 | **TDD 實作完成**：新增 `src/bot/privacy.py`（`mask_regex()`／`mask_with_llm()`／`mask_text()`）；`chat.handle_chat_message()`、`image.handle_image_message()` 整合遮蔽；`router.py` 透傳 `privacy_llm_client` 到 `handle_message()`／`handle_photo_message()`／`handle_voice_message()`（語音因為統一走 `handle_message()` 天然涵蓋）；`webhook.py` 新增 `_build_privacy_llm_client()`（讀 `GEMINI_API_PRIVACY_KEY`，缺失時優雅降級）；`.env.example` 補上新 Key 說明；刻意排除 `/clean-target-dialog` 的 `topic`（FR-7，避免刪除功能失效）；全專案 326 個測試全過、覆蓋率 100% | Claude（依 Robin 確認的架構實作） |
+| 2026-08-04 | **Bug 修正（ADR-3）：語意層暫時性外部錯誤導致整則訊息完全無回覆**。Robin 實測時對 Robinson 提問「這兩句話有什麼差異？」（追問記帳預算確認訊息的措辭），撞到 Gemini `503 UNAVAILABLE`（模型暫時過載），`mask_with_llm()` 未捕捉例外，整則訊息處理中斷、完全沒有回覆（只有 Owner 收到 FR-19a 的例外通報私訊）。`mask_text()` 呼叫 `mask_with_llm()` 新增 `try/except Exception`，任何呼叫失敗都優雅降級成只回傳 Regex 層結果並記錄 warning log，理由與 ADR-2 一致；完整重試機制留待 FR-19i（Phase 2 Step 2.5）；全專案 579 個測試全過、覆蓋率 100% | Claude（依 Robin 回報的真實錯誤診斷並修正） |

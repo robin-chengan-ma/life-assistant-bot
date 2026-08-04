@@ -11,11 +11,22 @@
 `mask_text()` 是統一入口：先跑 Regex 層，把已遮蔽的文字（不是明碼）送進 LLM 語意層（見 FR-3）；
 `llm_client=None` 時只執行 Regex 層、不報錯（見 ADR-2 優雅降級）。
 
+2026-08-04 追加（見 privacy-masking SPEC.md ADR-3）：`llm_client` 有給，但實際呼叫時遇到暫時性
+外部錯誤（Gemini 503 過載、逾時等）也要優雅降級成只回傳 Regex 層結果，不能讓整個訊息處理流程
+被這一層輔助防線的暫時性故障拖垮。Robin 實際使用時撞到 Gemini `503 UNAVAILABLE`（「模型目前需求
+量大」，屬於外部服務短暫過載，非本專案額度或程式問題），觸發 `mask_with_llm()` 未捕捉例外，導致
+整則訊息完全沒有回覆、只跳出「系統發生未預期例外」；`mask_text()` 因此新增 try/except，理由與
+ADR-2「Key 缺失時只跑 Regex 層」完全一致——語意層是輔助防線，永遠不該讓必要的訊息處理失敗。
+完整的外部 API 重試機制（FR-19i）仍留待 Phase 2 Step 2.5，這裡先做最小必要的防禦性降級。
+
 已知限制（見 spec「風險與緩解」）：Regex 對純數字格式（銀行帳戶／健保卡號／信用卡號）刻意抓寬
 （10～16 碼連續數字），可能誤判其他無關的長數字為個資；地址規則只涵蓋常見「城市+路街+號」寫法，
 不是完整地址剖析器。這些都是刻意的「寧可誤判也不要漏抓」取捨，符合個人使用場景的保守防護原則。
 """
+import logging
 import re
+
+logger = logging.getLogger("robinson.privacy")
 
 _MASK_TEXT = "[已遮蔽個資]"
 
@@ -86,11 +97,17 @@ def mask_text(text: str, llm_client=None) -> tuple[str, bool]:
     """統一入口：先跑 Regex 層，再（若有提供 `llm_client`）跑 LLM 語意層。
 
     回傳（最終遮蔽後文字, 兩層任一層是否有偵測到）。`llm_client=None` 時只執行 Regex 層，
-    不拋出例外（見 ADR-2 優雅降級）。
+    不拋出例外（見 ADR-2 優雅降級）；`llm_client` 有給但呼叫時遇到暫時性外部錯誤（例如 Gemini
+    過載、逾時）同樣優雅降級成只回傳 Regex 層結果，不拋出例外（見 ADR-3 優雅降級）。
     """
     masked, regex_detected = mask_regex(text)
     if llm_client is None:
         return masked, regex_detected
 
-    masked, llm_detected = mask_with_llm(masked, llm_client)
+    try:
+        masked, llm_detected = mask_with_llm(masked, llm_client)
+    except Exception:
+        logger.exception("個資遮蔽語意層呼叫失敗，優雅降級成只使用 Regex 層結果")
+        return masked, regex_detected
+
     return masked, regex_detected or llm_detected

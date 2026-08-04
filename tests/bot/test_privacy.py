@@ -147,3 +147,28 @@ def test_mask_text_both_layers_find_nothing():
 
     assert masked == "今天天氣真好"
     assert detected is False
+
+
+# --- mask_text：ADR-3 語意層暫時性外部錯誤優雅降級 ---
+
+
+def test_mask_text_falls_back_to_regex_only_when_llm_call_raises():
+    """Robin 實測撞到的真實情境：Gemini 503 過載，語意層呼叫拋例外，不應讓整則訊息處理失敗，
+    優雅降級成只回傳 Regex 層結果。"""
+    llm_client = MagicMock()
+    llm_client.generate_text.side_effect = RuntimeError("503 UNAVAILABLE")
+
+    masked, detected = privacy.mask_text("手機是 0912345678", llm_client=llm_client)
+
+    assert masked == "手機是 " + MASKED
+    assert detected is True  # Regex 層有偵測到
+
+
+def test_mask_text_falls_back_to_regex_only_when_llm_call_raises_and_regex_found_nothing():
+    llm_client = MagicMock()
+    llm_client.generate_text.side_effect = RuntimeError("503 UNAVAILABLE")
+
+    masked, detected = privacy.mask_text("今天天氣真好", llm_client=llm_client)
+
+    assert masked == "今天天氣真好"
+    assert detected is False
