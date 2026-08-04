@@ -60,6 +60,11 @@ COMMENT ON COLUMN users.created_at IS '這筆使用者記錄建立的時間（�
 - `is_owner` 由程式邏輯依 `telegram_user_id` 是否等於環境變數 `ROBIN_TELEGRAM_TOKEN`（Robin 的 Telegram 使用者 ID）判斷後寫入，用於 FR-5 的管理者權限判斷
 - 用 `BIGINT`／`BIGSERIAL` 是因為 Telegram user ID 可能超過一般 `INT` 上限
 
+**變更紀錄**：
+| 日期 | 變更內容 | 原因 | Migration 檔案 |
+| --- | --- | --- | --- |
+| 2026-08-04 | 新增 `monthly_budget`（每月支出預算上限）、`budget_alert_50_sent_month`／`budget_alert_80_sent_month`（FR-43 門檻預警去重用） | Step 2.1 記帳模組 FR-41／FR-43，設計理由見下方 `transactions` 表 | `0018_add_budget_fields_to_users.sql` |
+
 ---
 
 ### invite_codes
@@ -387,3 +392,45 @@ COMMENT ON COLUMN complaints.created_at IS '這筆客訴建立的時間';
 - `content` 套用 FR-13 個資遮蔽（跟一般聊天／圖片說明文字／語音轉文字／心情小記四個既有入口一致，2026-08-02 與 Robin 確認：FR-62 的隱私例外只是允許 Robin 看到客訴內容，不代表個資保護防線可以跳過，兩者是不同層面的隱私考量）
 - FR-62 的 Gemini 分析結果只透過私訊即時送給 Robin，刻意不落地存進這張表——分析報告是輔助判讀用途，Robin 看過即可，不需要永久保留一份重複於私訊內容的資料
 - 只建 `user_id` 單欄索引，用途與 `mood_journals` 相同（查某人的客訴紀錄），不需要額外複合索引
+
+---
+
+### transactions
+
+**建立日期**：2026-08-04
+**用途**：記帳交易紀錄，對應 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) FR-42（Step 2.1）。
+**Migration 檔案**：`src/migrations/0019_create_transactions_table.sql`
+
+```sql
+CREATE TABLE transactions (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id),
+    type TEXT NOT NULL CHECK (type IN ('expense', 'income')),
+    category TEXT NOT NULL CHECK (category IN (
+        '餐飲', '交通', '購物', '居住', '娛樂', '醫療', '薪資', '獎金', '其他'
+    )),
+    amount NUMERIC(12,2) NOT NULL CHECK (amount > 0),
+    note TEXT,
+    transaction_date DATE NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_transactions_user_id ON transactions (user_id);
+
+COMMENT ON TABLE transactions IS '記帳交易表：對應 FR-42，使用者的支出/收入紀錄，支援補記/更新/刪除';
+COMMENT ON COLUMN transactions.id IS '內部主鍵';
+COMMENT ON COLUMN transactions.user_id IS '所屬使用者，對應 users.id';
+COMMENT ON COLUMN transactions.type IS '交易類型：expense=支出, income=收入';
+COMMENT ON COLUMN transactions.category IS '交易分類（固定清單）：餐飲/交通/購物/居住/娛樂/醫療三類屬於支出常見分類，薪資/獎金屬於收入常見分類，其他兩種皆可用；分類與 type 的合理搭配由應用層驗證，不由資料庫層限制';
+COMMENT ON COLUMN transactions.amount IS '交易金額，一律為正數，方向由 type 決定';
+COMMENT ON COLUMN transactions.note IS '備註，可能含個資，已經過 FR-13 個資遮蔽處理，選填';
+COMMENT ON COLUMN transactions.transaction_date IS '這筆交易實際發生的日期（可補記過去日期）；一律由 app 端依台灣時區算好日期後寫入，不依賴資料庫預設值，設計比照 mood_journals.entry_date';
+COMMENT ON COLUMN transactions.created_at IS '這筆交易記錄建立的時間';
+```
+
+**設計理由**：
+- 2026-08-04 經 AskUserQuestion 與 Robin 確認：FR-41「理財目標」解讀為「每月支出預算上限」（單一數字），不是「每月儲蓄目標」，所以不需要算「收入-支出」結餘去比對目標；但交易紀錄本身仍然「支出」「收入」兩種都做，保留未來需要結餘概念時的彈性，`monthly_budget` 因此存在 `users` 表而不是這張表（見上方 `users`「變更紀錄」）
+- `type`／`category` 都用 `CHECK` 鎖定固定清單，設計比照 `mood_journals.mood_category`；分類清單全部是中文，不像 `mood_journals` 需要英文代碼＋中文標籤兩層
+- `amount` 用 `NUMERIC(12,2)` 存實際金額（非整數分），並用 `CHECK (amount > 0)` 強制正數，方向完全由 `type` 決定，避免正負號與 type 語意互相矛盾的資料
+- `transaction_date` 必填且一律由 app 端依台灣時區算好日期後寫入，不依賴資料庫預設值，設計理由與 `mood_journals.entry_date` 完全相同（支援補記過去日期、避免 DB 伺服器時區在台灣午夜前後產生差一天的 bug）
+- 只建 `user_id` 單欄索引，用途與 `mood_journals`／`complaints` 相同（查某人的記帳紀錄／月加總），不需要額外複合索引——月加總查詢（`user_id`／`type`／`transaction_date` 範圍）目前資料量小，個人使用不需要為此額外建複合索引

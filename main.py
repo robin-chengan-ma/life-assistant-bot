@@ -75,6 +75,32 @@ def _check_todo_pushes() -> None:
         db.close()
 
 
+def _check_finance_alerts() -> None:
+    """在 /healthz 被呼叫時順便檢查記帳預算門檻預警（Step 2.1，見 robinson SPEC.md FR-43）：
+    50% 門檻只在每月 15 日（含）以前檢查、80% 門檻整月都檢查，各自每月最多推播一次，
+    詳見 src/bot/finance.py 模組 docstring 的完整說明。
+
+    跟 `_check_todo_pushes()` 一樣包一層 try/except 且不需要 `ROBIN_TELEGRAM_TOKEN`
+    （推播對象是每一位有設定預算的使用者自己，不是固定通知 Robin）。
+    """
+    if not (os.environ.get("DATABASE_URL") and os.environ.get("TELEGRAM_BOT_TOKEN")):
+        return
+
+    from submodules.cloudsql.client import CloudSQLClient
+    from submodules.telegram.client import TelegramClient
+
+    from src.bot import finance
+
+    db = CloudSQLClient()
+    try:
+        telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
+        finance.check_and_push_budget_alerts(db, telegram_client)
+    except Exception:
+        logger.exception("記帳預算門檻預警檢查失敗，不影響健康檢查端點本身")
+    finally:
+        db.close()
+
+
 def _run_startup_migrations() -> None:
     """開機自動套用尚未執行過的 DB migration（ADR-11）。
 
@@ -117,9 +143,13 @@ def health_check():
 
     2026-08-02（Step 1.7，見 FR-31a、FR-32）：同樣借用這個頻率，順便觸發待辦事項的逾期標記與
     兩種推播檢查，見 `_check_todo_pushes()`。
+
+    2026-08-04（Step 2.1，見 FR-43）：同樣借用這個頻率，順便觸發記帳預算門檻預警檢查，
+    見 `_check_finance_alerts()`。
     """
     _check_neon_capacity()
     _check_todo_pushes()
+    _check_finance_alerts()
     return jsonify({"status": "ok"}), 200
 
 

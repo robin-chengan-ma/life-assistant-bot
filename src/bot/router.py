@@ -46,6 +46,12 @@ _MOOD_JOURNAL_TRIGGERS = {"/mood_journal", "我想做心情筆記"}
 # 查詢並進入可更新/刪除模式，觸發詞設計比照上面 _MOOD_JOURNAL_TRIGGERS／_MY_TODOS_TRIGGERS。
 _MOOD_BACKFILL_TRIGGERS = {"/backfill_mood", "我要補記心情"}
 _MY_MOOD_JOURNALS_TRIGGERS = {"/my_mood_journals", "我的心情紀錄"}
+# 2026-08-04（Step 2.1，見 robinson SPEC.md FR-41～FR-44）：記帳模組觸發詞，設計比照心情小記。
+_FINANCE_SET_BUDGET_TRIGGERS = {"/set_budget", "設定記帳預算"}
+_FINANCE_ADD_TRIGGERS = {"/add_transaction", "我要記帳"}
+_FINANCE_BACKFILL_TRIGGERS = {"/backfill_transaction", "我要補記帳"}
+_MY_TRANSACTIONS_TRIGGERS = {"/my_transactions", "我的記帳紀錄"}
+_FINANCE_SUMMARY_TRIGGERS = {"/my_finance_summary", "我的記帳摘要"}
 # 2026-08-02（Step 1.9，見 robinson SPEC.md FR-60）：任何身分皆可觸發客訴收集流程。
 _COMPLAINT_TRIGGERS = {"/complaint", "我要客訴你"}
 _CLEAN_ALL_DIALOG_TRIGGERS = {"/clean-all-dialog", "我想要刪除所有對話紀錄"}
@@ -159,6 +165,21 @@ def handle_message(
     if text in _MY_MOOD_JOURNALS_TRIGGERS:
         # 2026-08-02 追加（FR-49 更新/刪除擴充）：查詢清單並進入可更新/刪除的模式。
         return commands.start_mood_list(db, state_store, telegram_user_id, user_id)
+    if text in _FINANCE_SET_BUDGET_TRIGGERS:
+        # 2026-08-04（Step 2.1，見 robinson SPEC.md FR-41）：設定每月支出預算上限。
+        return commands.start_finance_budget(state_store, telegram_user_id, user_id)
+    if text in _FINANCE_ADD_TRIGGERS:
+        # 2026-08-04（FR-42）：開始記帳流程，先問交易類型。
+        return commands.start_finance_add(state_store, telegram_user_id, user_id)
+    if text in _FINANCE_BACKFILL_TRIGGERS:
+        # 2026-08-04（FR-42）：補記過去日期的記帳，先問是哪一天。
+        return commands.start_finance_backfill(state_store, telegram_user_id, user_id)
+    if text in _MY_TRANSACTIONS_TRIGGERS:
+        # 2026-08-04（FR-42）：查詢記帳清單並進入可更新/刪除的模式。
+        return commands.start_finance_list(db, state_store, telegram_user_id, user_id)
+    if text in _FINANCE_SUMMARY_TRIGGERS:
+        # 2026-08-04（FR-44）：單次查詢當月記帳文字摘要，不需要對話狀態機。
+        return commands.handle_finance_summary(db, user_id)
     if text in _COMPLAINT_TRIGGERS:
         # 2026-08-02（Step 1.9，見 robinson SPEC.md FR-60）：固定提問，不經過 LLM。
         return commands.start_complaint(state_store, telegram_user_id, user_id)
@@ -404,6 +425,28 @@ def _dispatch_active_flow(
         return commands.handle_mood_action_choice_step(db, llm_client, state_store, telegram_user_id, text)
     if flow == "pending_mood_delete_confirm":
         return commands.handle_mood_delete_confirm_step(db, llm_client, state_store, telegram_user_id, text)
+    # 2026-08-04（Step 2.1，見 robinson SPEC.md FR-41～FR-44）：記帳多輪對話流，結構比照心情小記
+    # 的補記/更新/刪除擴充，見 commands.py「記帳」區塊開頭說明。
+    if flow == "pending_finance_budget":
+        return commands.handle_finance_budget_step(db, state_store, telegram_user_id, text)
+    if flow == "pending_transaction_backfill_date":
+        return commands.handle_transaction_backfill_date_step(llm_client, state_store, telegram_user_id, text)
+    if flow == "pending_transaction_type":
+        return commands.handle_transaction_type_step(state_store, telegram_user_id, text)
+    if flow == "pending_transaction_category":
+        return commands.handle_transaction_category_step(state_store, telegram_user_id, text)
+    if flow == "pending_transaction_amount":
+        return commands.handle_transaction_amount_step(state_store, telegram_user_id, text)
+    if flow == "pending_transaction_note":
+        return commands.handle_transaction_note_step(
+            db, state_store, telegram_user_id, text, privacy_llm_client=privacy_llm_client
+        )
+    if flow == "pending_transaction_list_action":
+        return commands.handle_transaction_list_action_step(state_store, telegram_user_id, text)
+    if flow == "pending_transaction_action_choice":
+        return commands.handle_transaction_action_choice_step(db, llm_client, state_store, telegram_user_id, text)
+    if flow == "pending_transaction_delete_confirm":
+        return commands.handle_transaction_delete_confirm_step(db, llm_client, state_store, telegram_user_id, text)
     if flow == "pending_complaint_content":
         # 2026-08-02（Step 1.9，見 robinson SPEC.md FR-61、FR-62）：寫入客訴＋Gemini 分析私訊 Robin。
         return commands.handle_complaint_content_step(

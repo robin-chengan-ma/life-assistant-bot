@@ -737,6 +737,154 @@ def test_mood_list_update_and_delete_full_flow(fake_db, monkeypatch):
     assert fake_db.select("mood_journals") == []
 
 
+# --- 記帳（robinson SPEC.md FR-41～FR-44，Step 2.1）---
+
+
+def test_finance_set_budget_full_flow(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+
+    reply1 = router.handle_message(fake_db, store, FAMILY_ID, "設定記帳預算")
+    assert "每月支出預算上限" in reply1
+    assert store.get(FAMILY_ID)["flow"] == "pending_finance_budget"
+
+    reply2 = router.handle_message(fake_db, store, FAMILY_ID, "15000")
+    assert "15000 元" in reply2
+    assert store.get(FAMILY_ID) is None
+
+
+def test_finance_add_transaction_full_flow_records_entry(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+
+    reply1 = router.handle_message(fake_db, store, FAMILY_ID, "我要記帳")
+    assert "1. 支出" in reply1
+    assert store.get(FAMILY_ID)["flow"] == "pending_transaction_type"
+
+    reply2 = router.handle_message(fake_db, store, FAMILY_ID, "支出")
+    assert "1. 餐飲" in reply2
+    assert store.get(FAMILY_ID)["flow"] == "pending_transaction_category"
+
+    reply3 = router.handle_message(fake_db, store, FAMILY_ID, "1")
+    assert reply3 == "請問金額是多少呢？（例如：120）"
+    assert store.get(FAMILY_ID)["flow"] == "pending_transaction_amount"
+
+    reply4 = router.handle_message(fake_db, store, FAMILY_ID, "120")
+    assert "備註" in reply4
+    assert store.get(FAMILY_ID)["flow"] == "pending_transaction_note"
+
+    reply5 = router.handle_message(fake_db, store, FAMILY_ID, "午餐")
+    assert reply5 == "已經幫你記錄好了！"
+    assert store.get(FAMILY_ID) is None
+
+    rows = fake_db.select("transactions", where="user_id = %s", params=(user_id,))
+    assert len(rows) == 1
+    assert rows[0]["category"] == "餐飲"
+    assert rows[0]["amount"] == 120.0
+    assert rows[0]["note"] == "午餐"
+
+
+def test_finance_backfill_full_flow_records_entry_with_given_date(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+
+    reply1 = router.handle_message(fake_db, store, FAMILY_ID, "我要補記帳")
+    assert "哪一天" in reply1
+    assert store.get(FAMILY_ID)["flow"] == "pending_transaction_backfill_date"
+
+    date_llm_client = _FakeLLMClient(response_text="STATUS: CLEAR\nDATE: 2026-08-01")
+    reply2 = router.handle_message(fake_db, store, FAMILY_ID, "前天", llm_client=date_llm_client)
+    assert "1. 支出" in reply2
+    assert store.get(FAMILY_ID)["flow"] == "pending_transaction_type"
+
+    router.handle_message(fake_db, store, FAMILY_ID, "收入")
+    router.handle_message(fake_db, store, FAMILY_ID, "薪資")
+    router.handle_message(fake_db, store, FAMILY_ID, "50000")
+    router.handle_message(fake_db, store, FAMILY_ID, "沒有")
+
+    rows = fake_db.select("transactions")
+    assert rows[0]["transaction_date"].isoformat() == "2026-08-01"
+    assert rows[0]["type"] == "income"
+    assert rows[0]["category"] == "薪資"
+
+
+def test_finance_list_update_and_delete_full_flow(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    fake_db.insert(
+        "transactions",
+        {
+            "user_id": user_id,
+            "type": "expense",
+            "category": "餐飲",
+            "amount": 100,
+            "note": None,
+            "transaction_date": date(2026, 8, 1),
+        },
+    )
+    store = ConversationStateStore()
+
+    reply1 = router.handle_message(fake_db, store, FAMILY_ID, "我的記帳紀錄")
+    assert "更新或刪除" in reply1
+    assert store.get(FAMILY_ID)["flow"] == "pending_transaction_list_action"
+
+    reply2 = router.handle_message(fake_db, store, FAMILY_ID, "1")
+    assert "更新" in reply2 and "刪除" in reply2
+    assert store.get(FAMILY_ID)["flow"] == "pending_transaction_action_choice"
+
+    update_llm_client = _FakeLLMClient(response_text="UPDATE")
+    reply3 = router.handle_message(fake_db, store, FAMILY_ID, "我要改內容", llm_client=update_llm_client)
+    assert "重新選一次交易類型" in reply3
+    assert store.get(FAMILY_ID)["flow"] == "pending_transaction_type"
+
+    router.handle_message(fake_db, store, FAMILY_ID, "支出")
+    router.handle_message(fake_db, store, FAMILY_ID, "交通")
+    router.handle_message(fake_db, store, FAMILY_ID, "50")
+    router.handle_message(fake_db, store, FAMILY_ID, "結束")
+
+    rows = fake_db.select("transactions")
+    assert len(rows) == 1
+    assert rows[0]["category"] == "交通"
+    assert rows[0]["amount"] == 50.0
+
+    router.handle_message(fake_db, store, FAMILY_ID, "我的記帳紀錄")
+    router.handle_message(fake_db, store, FAMILY_ID, "1")
+    delete_llm_client = _FakeLLMClient(response_text="DELETE")
+    reply_delete_ask = router.handle_message(fake_db, store, FAMILY_ID, "刪掉", llm_client=delete_llm_client)
+    assert "沒辦法復原" in reply_delete_ask
+    assert store.get(FAMILY_ID)["flow"] == "pending_transaction_delete_confirm"
+
+    confirm_llm_client = _FakeLLMClient(response_text="CONFIRM")
+    reply_deleted = router.handle_message(fake_db, store, FAMILY_ID, "對", llm_client=confirm_llm_client)
+    assert "已經刪除" in reply_deleted
+    assert fake_db.select("transactions") == []
+
+
+def test_finance_summary_returns_text_without_flow(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    fake_db.insert(
+        "transactions",
+        {
+            "user_id": user_id,
+            "type": "expense",
+            "category": "餐飲",
+            "amount": 100,
+            "note": None,
+            "transaction_date": datetime.now(timezone.utc).date(),
+        },
+    )
+    store = ConversationStateStore()
+
+    reply = router.handle_message(fake_db, store, FAMILY_ID, "我的記帳摘要")
+
+    assert "記帳摘要" in reply
+    assert store.get(FAMILY_ID) is None
+
+
 # --- 客訴收集（robinson SPEC.md FR-60～FR-63，Step 1.9）---
 
 

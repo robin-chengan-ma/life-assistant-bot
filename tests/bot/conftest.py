@@ -21,6 +21,7 @@ class FakeCloudSQLClient:
             "todos": [],
             "mood_journals": [],
             "complaints": [],
+            "transactions": [],
         }
         self._id_counter = itertools.count(1)
 
@@ -122,6 +123,17 @@ class FakeCloudSQLClient:
         # 2026-08-02（Step 1.9，見 robinson SPEC.md FR-60~FR-63）：客訴流程查 Robin 的 users 記錄。
         if where == "is_owner = %s":
             return row.get("is_owner") == params[0]
+        # 2026-08-04（Step 2.1，見 robinson SPEC.md FR-42/FR-43/FR-44）：記帳模組的月加總查詢。
+        if where == "user_id = %s AND type = %s AND transaction_date >= %s AND transaction_date < %s":
+            return (
+                row.get("user_id") == params[0]
+                and row.get("type") == params[1]
+                and row.get("transaction_date") >= params[2]
+                and row.get("transaction_date") < params[3]
+            )
+        # 2026-08-04（Step 2.1，見 robinson SPEC.md FR-43）：找出所有已設定預算上限的使用者。
+        if where == "monthly_budget IS NOT NULL":
+            return row.get("monthly_budget") is not None
 
         raise NotImplementedError(f"FakeCloudSQLClient 尚未支援這個 where 條件：{where}")
 

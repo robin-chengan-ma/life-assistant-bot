@@ -156,6 +156,78 @@
 
 ---
 
+### `/set_budget`（內部路由，非對外 HTTP 端點）
+
+**狀態**：已實作（`src/bot/commands.py::start_finance_budget`／`handle_finance_budget_step`，2026-08-04，Step 2.1，見 robinson SPEC.md FR-41）
+**觸發方式**：使用者於對話框輸入「設定記帳預算」或 `/set_budget`
+**權限**：任何已驗證使用者（Robin 或家人，各自只會設定自己的預算）
+**對應 FR**：FR-41
+
+**Response**：先問「每月支出預算上限是多少呢？」（`pending_finance_budget`），使用者輸入金額（純數字比對，不需要 LLM，接受「120」「120元」「NT$120」「1,200」等常見寫法，見 `commands._parse_amount()`）後寫入 `users.monthly_budget`，回覆「已經幫你把每月支出預算設定為 XXXX 元囉！」；金額格式錯誤時停留原地反問，不會存入猜錯的數字。
+
+---
+
+### `/add_transaction`（內部路由，非對外 HTTP 端點）
+
+**狀態**：已實作（`src/bot/commands.py::start_finance_add`，2026-08-04，Step 2.1，見 robinson SPEC.md FR-42）
+**觸發方式**：使用者於對話框輸入「我要記帳」或 `/add_transaction`
+**權限**：任何已驗證使用者
+**對應 FR**：FR-42
+
+**Response**：文字，依序走四輪反問：先問交易類型（`finance.format_type_prompt()`，支出/收入二選一）→ 依類型問對應的固定分類清單（`finance.format_category_prompt()`）→ 問金額 → 問備註（可跳過），寫入 `transactions` 後回覆「已經幫你記錄好了！」。這是「一般新增」入口，`transaction_date` 固定是今天；補記過去日期請走下面的 `/backfill_transaction`。
+
+**備註**：全程只有補記日期解析、更新/刪除選擇、刪除確認三步需要 LLM（跟心情小記一致），類型/分類/金額三步驟純比對或純數值解析即可。備註是自由文字，可能含個資，寫入前一律先過 `privacy.mask_text()`。
+
+---
+
+### `/backfill_transaction`（內部路由，非對外 HTTP 端點）
+
+**狀態**：已實作（`src/bot/commands.py::start_finance_backfill`／`handle_transaction_backfill_date_step`，2026-08-04，見 robinson SPEC.md FR-42）
+**觸發方式**：使用者於對話框輸入「我要補記帳」或 `/backfill_transaction`
+**權限**：任何已驗證使用者
+**對應 FR**：FR-42
+
+**Response**：先問「要補記哪一天的帳呢？」（`pending_transaction_backfill_date`），LLM 解析日期（`_FINANCE_BACKFILL_DATE_PARSE_PROMPT`，設計與 `/backfill_mood` 完全一致），只接受今天或過去的日期；日期確定後接到 `/add_transaction` 同一組類型/分類/金額/備註四輪反問，寫入時 `transaction_date` 使用這裡解析出的日期。
+
+---
+
+### `/my_transactions`（內部路由，非對外 HTTP 端點）
+
+**狀態**：已實作（`src/bot/commands.py::start_finance_list`，2026-08-04，見 robinson SPEC.md FR-42）
+**觸發方式**：使用者於對話框輸入「我的記帳紀錄」或 `/my_transactions`
+**權限**：任何已驗證使用者（各自只能看到自己的記帳紀錄）
+**對應 FR**：FR-42
+
+**Response**：文字，列出最近 10 筆記帳交易（`finance.list_transactions()`，依 `transaction_date` 由新到舊排序），沒有資料時回「目前還沒有記帳紀錄喔！」；有資料時附上「輸入編號可更新/刪除」的提示，進入 `pending_transaction_list_action` 狀態。
+
+**備註**：選定編號後（`pending_transaction_list_action`）反問「要更新這筆還是刪除呢？」，由 LLM 判斷意思（`pending_transaction_action_choice`，UPDATE/DELETE/OTHER 三選一，設計與心情小記一致）：選 UPDATE 沿用原本記錄的 `transaction_date`，重新走一次類型/分類/金額/備註四輪反問（`finance.update_transaction()` 改用 `UPDATE` 而非新增一筆）；選 DELETE 進入 `pending_transaction_delete_confirm`，由 LLM 判斷簡單一輪 CONFIRM/CANCEL（不套用 FR-16a 逐字打字最終確認，理由同心情小記：屬於中等風險、可事後補記修正的操作）；OTHER 一律清除狀態、提示重新查詢。
+
+---
+
+### `/my_finance_summary`（內部路由，非對外 HTTP 端點）
+
+**狀態**：已實作（`src/bot/commands.py::handle_finance_summary`，2026-08-04，見 robinson SPEC.md FR-44）
+**觸發方式**：使用者於對話框輸入「我的記帳摘要」或 `/my_finance_summary`
+**權限**：任何已驗證使用者
+**對應 FR**：FR-44
+
+**Response**：文字版當月記帳摘要（`finance.format_monthly_summary()`），不進入任何對話狀態機（單次查詢即回覆）。內容包含：本月支出/收入總計、預算使用率（已設定預算時）、支出分類佔比（由高到低排序）、跟上個月支出總額的增減百分比（上個月有資料時才顯示）。
+
+**備註**：Phase 1 這版先做「使用者主動查詢時的文字摘要」，不做圖表圖片、也不做主動排程推播月報（2026-08-04 與 Robin 確認）——真正「定期」的部分由 `/healthz` 借用頻率觸發的 FR-43 門檻預警負責（見下方 `_check_finance_alerts()`），文字摘要留待有實際使用需求後再考慮升級成圖表或排程推播。
+
+---
+
+### FR-43 記帳預算門檻預警（`main.py` `/healthz` 借用頻率，非獨立路由）
+
+**狀態**：已實作（`src/bot/finance.py::check_and_push_budget_alerts`，`main.py::_check_finance_alerts`，2026-08-04，見 robinson SPEC.md FR-43）
+**觸發方式**：不是使用者主動觸發，借用 `/healthz` 既有的 10 分鐘 cron 頻率（比照 FR-32 待辦推播、FR-21 Neon 容量監控的既有做法）
+**權限**：系統排程，無使用者互動
+**對應 FR**：FR-43
+
+**行為**：50% 門檻只在每月 15 日（含）以前檢查，代表「早期警示」；80% 門檻整月都檢查，代表「不管現在是月初還是月底，只要花超過就要提醒」；兩個門檻各自每月最多推播一次，去重狀態存在 `users.budget_alert_50_sent_month`／`budget_alert_80_sent_month`（存已推播過的月份第一天，比照 `todos.daily_pushed_on` 存在資料列本身而非記憶體，跨 Render 重啟仍正確）。只檢查已設定 `monthly_budget`（非 NULL 且 > 0）且有綁定 `telegram_user_id` 的使用者。
+
+---
+
 ### `/set_invite_codes`（內部路由，非對外 HTTP 端點）
 
 **狀態**：已實作（`src/bot/commands.py::start_set_invite_codes`／`handle_set_invite_codes_step`）

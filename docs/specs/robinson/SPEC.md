@@ -201,10 +201,10 @@ Robinson 是一個以 Telegram 為前台介面的家庭生活小助手，Robin �
 
 ### 功能性需求 — 記帳
 
-- [ ] FR-41：使用者設定理財目標（如每月存款金額）
-- [ ] FR-42：每日記帳（含補登與修正）
-- [ ] FR-43：預警通知：月中前已花超過目標 50%、月底前已超過 80% 等門檻告警
-- [ ] FR-44：定期視覺化支出/儲蓄趨勢
+- [x] FR-41：使用者設定理財目標（如每月存款金額）（**2026-08-04 Step 2.1 實作**：經 AskUserQuestion 確認解讀為「每月支出預算上限」，非「每月儲蓄目標」——不需要算「收入-支出」結餘去比對，直接比較「本月支出總額」與「預算上限」；「設定記帳預算」／`/set_budget` 觸發，寫入 `users.monthly_budget`）
+- [x] FR-42：每日記帳（含補登與修正）（**2026-08-04 實作**：從一開始就內建完整 CRUD，不像心情小記是事後才補上——「我要記帳」／`/add_transaction` 一般新增、「我要補記帳」／`/backfill_transaction` 補記過去日期、「我的記帳紀錄」／`/my_transactions` 查詢並可更新/刪除；交易分類固定清單（比照心情小記），支出/收入兩種交易類型都做；備註套用 FR-13 個資遮蔽；刪除採簡單一輪 LLM CONFIRM/CANCEL，不套用 FR-16a，理由同心情小記的補記/更新/刪除擴充）
+- [x] FR-43：預警通知：月中前已花超過目標 50%、月底前已超過 80% 等門檻告警（**2026-08-04 實作**：經 AskUserQuestion 確認觸發時機——50% 門檻只在每月 15 日（含）以前檢查，代表早期警示；80% 門檻整月都檢查，代表不管月初月底只要花超過就提醒；兩個門檻各自每月最多推播一次，去重狀態存在 `users.budget_alert_50_sent_month`／`budget_alert_80_sent_month`；比照 FR-32 待辦推播，借用 `main.py` `/healthz` 既有的 10 分鐘 cron 頻率，見 `finance.check_and_push_budget_alerts()`）
+- [x] FR-44：定期視覺化支出/儲蓄趨勢（**2026-08-04 實作**：Phase 1 這版先做「使用者主動查詢時的文字摘要」——「我的記帳摘要」／`/my_finance_summary`，內容包含本月支出/收入總計、預算使用率、支出分類佔比、跟上個月比較；不做圖表圖片、也不做主動排程推播月報，真正「定期」的部分由 FR-43 門檻預警負責，文字摘要留待有實際使用需求後再考慮升級成圖表或排程推播）
 
 ### 功能性需求 — 體態管理
 
@@ -545,7 +545,7 @@ Robinson 是一個以 Telegram 為前台介面的家庭生活小助手，Robin �
 
 ### Phase 2：記帳 + 體態管理 + 重要通知 + 系統韌性與自主診斷治理
 
-- [ ] Step 2.1：記帳模組（FR-41～FR-44）
+- [x] Step 2.1：記帳模組（FR-41～FR-44，**2026-08-04 完成**）
 - [ ] Step 2.2：體態管理模組（FR-45～FR-48，可複用記帳的告警/圖表邏輯）
 - [ ] Step 2.3：重要通知模組（FR-53，生日/節日排程 + 排除對象邏輯）
 - [ ] Step 2.4：異常自主診斷與 GitHub PR 自動化（FR-19b、FR-19c、FR-19d、FR-19e，見 ADR-7）—— Robin 錯誤發生時自動上網查可能原因、產生衝擊評估、透過 GitHub API 開分支與 PR（含程式碼異動紀錄）、私訊結構化建議報告與 PR 連結；Robin 於 GitHub Merge PR 後觸發 Render 自動部署
@@ -747,3 +747,4 @@ FR-56 的 `/function` 路由目前只定義了「回傳範圍」（所有功能�
 | 2026-08-02 | **Bug 追加修正（Robin 指出上一輪修的不是主因）**：Robin 實測完整重現：問氣溫觸發 `pending_user_knowledge` 後，緊接著講了一句完全無關的新事情「我要載妹妹到水里」（陳述句、不是問句），被誤判成「拒絕記錄」（回「好的，這次就不記錄囉！」），要再講一次才觸發正常的待辦流程；真正根因是 [chat-core SPEC.md](../chat-core/SPEC.md) ADR-6 三選一分流 prompt 裡「無關新內容」選項的措辭寫成「問一個新的『問題』」，用詞侷限在問句，使用者講陳述句時模型容易誤套進「拒絕」選項；修正把該選項改寫成「除了以上情況以外的任何內容」的 catch-all（詳見 chat-core SPEC.md ADR-6 追加修正）。同一次還一併修正 Robin 額外發現的兩個待辦事項問題：① 待辦時間解析（`commands._TODO_TIME_PARSE_PROMPT`）原本會在使用者只給「5:30」這種沒講上午/下午、也沒講哪一天的模糊時間時，自己猜成「今天下午」直接存檔，Robin 認為不該擅自猜測；改為明確要求日期與時段兩個條件都要有明確線索才算 CLEAR，否則一律 UNCLEAR 反問使用者講清楚 ② 建立待辦後固定回覆「到時候當天早上 8 點會主動提醒你一次」，但若建立當下已經過了今天的 8 點（例如中午設定當天下午要做的事），這句承諾其實不可能發生（`todo.check_and_push_daily_digest()` 只在剛好是 8 點那個小時才會觸發）；`commands.handle_todo_time_step()` 新增 `_now()`（比照 chat.py 同名函式方便測試 monkeypatch）判斷 due 日期是否為今天且現在是否已過 8 點，動態調整這句文案；全專案 421 個測試全過、覆蓋率 100% | Claude（依 Robin 回報排查並修正） |
 | 2026-08-02 | **新增 FR-31b：待辦事項支援時間區間**：Robin 詢問「待辦事項是不是只能存單一時間點，不能存像『8/2 08:00～8/5 17:00』這種區間」，確認需要後開發。經 AskUserQuestion 確認三個設計決策：① `todos` 新增可選的 `start_at` 欄位（Robin 依 ADR-10 核准 `0016_add_start_at_to_todos.sql`），既有單一時間點待辦不受影響（`start_at` 為 NULL）② 前 30 分鐘提醒對區間待辦以 `start_at` 為基準（提醒「準備要開始了」）③ 每日 08:00 摘要對區間待辦只在開始日、結束日各出現一次，`todo.py` 的去重判斷從「曾經推播過就不再推播」改為「今天是否已經推播過」。`commands._TODO_TIME_PARSE_PROMPT` 新增選填的 `START_AT` 欄位，只有原始描述或回覆同時講出明確開始與結束時間才判斷為區間，開始/結束兩個時間點都要分別滿足既有的「日期明確」「時段不歧義」條件；`todo.py` 新增 `_format_when()`／`_format_digest_when()` 依是否為區間顯示不同文字，`check_and_push_reminders()` 改用 `COALESCE(start_at, due_at)` 判斷提醒基準；`commands.py` 新增 `_build_todo_time_confirmation_reply()` 依開始日/結束日的 8 點摘要是否還來得及組合不同措辭；全專案 436 個測試全過、覆蓋率 100% | Claude（依 Robin「現在就開始規劃設計」指示，經 AskUserQuestion 確認範圍與 SQL 後實作） |
 | 2026-08-02 | **FR-49 補記/更新/刪除擴充**：Robin 提出「記帳、心情小記、體重、飲食、運動習慣都要有補記、更新、刪除、新增的功能」，經 AskUserQuestion 確認範圍：心情小記優先實作，記帳／體態管理（Phase 2 才開始的模組）從一開始就會內建 CRUD、不需要另外補。經 AskUserQuestion 確認兩個設計決策：① `mood_journals` 新增可選的 `entry_date` 欄位（Robin 依 ADR-10 核准 `0017_add_entry_date_to_mood_journals.sql`），設計比照 `todos.start_at`：一律由 app 端算好台灣時區日期後寫入，不依賴資料庫預設值 ② 刪除確認採簡單一輪 LLM CONFIRM/CANCEL（跟待辦事項完成/取消同一等級），不套用 FR-16a 逐字打字最終確認——FR-16a 保留給 `/clean-all-dialog`／`/clean-target-dialog`／主動記知識三個「一旦誤刪就大量、跨紀錄不可逆遺失資料」的高風險流程，心情小記單筆刪除錯了還能重新補記。新增「我要補記心情」／`/backfill_mood`（先問要補記哪一天，LLM 解析日期、只接受今天或過去，講清楚後接到既有分類/內容/成就三輪反問，寫入時 `entry_date` 用解析出的日期）與「我的心情紀錄」／`/my_mood_journals`（列出最近 10 筆，依 `entry_date` 新到舊排序，選編號後反問更新還是刪除——更新沿用原 `entry_date` 重新走一次分類/內容流程並改成 `UPDATE`，刪除走簡單一輪 CONFIRM/CANCEL）；`mood.py` 新增 `list_mood_journals()`／`format_mood_journal_list()`／`update_mood_journal()`／`delete_mood_journal()`，既有的 `create_mood_journal()` 新增必填的 `entry_date` 參數；`commands.py` 新增 6 個 flow 處理函式（`start_mood_backfill`／`handle_mood_backfill_date_step`／`start_mood_list`／`handle_mood_list_action_step`／`handle_mood_action_choice_step`／`handle_mood_delete_confirm_step`），既有的分類/內容兩步驟改為同時支援新增（`journal_id` 為 None）與編輯（`journal_id` 非 None，改用 `UPDATE`）；`router.py` 整合新觸發詞與 6 個新 flow 分派；全專案 465 個測試全過、覆蓋率 100% | Claude（依 Robin「繼續開發啊」指示，經 AskUserQuestion 確認範圍與 SQL 後實作） |
+| 2026-08-04 | **Phase 2 Step 2.1 完成：記帳模組（FR-41～FR-44）**，Phase 2 第一個 Step。Robin 確認「下個階段就是 Phase 2 了」後說「請開始開發」，經 AskUserQuestion 確認範圍與 SQL：① FR-41「理財目標」解讀為「每月支出預算上限」，不需要收入-支出結餘概念，但交易紀錄本身仍支出/收入兩種都做 ② 交易分類採固定清單（比照心情小記）③ FR-44 視覺化這版先做文字摘要，不做圖表 ④ `users` 新增 `monthly_budget`／`budget_alert_50_sent_month`／`budget_alert_80_sent_month` 三欄（`0018_add_budget_fields_to_users.sql`）、新建 `transactions` 表（`0019_create_transactions_table.sql`，Robin 已核准兩份 SQL）⑤ FR-43 兩門檻觸發時機：50% 只在每月 15 日前檢查、80% 整月都檢查，各自每月最多推播一次。記帳從一開始就內建完整 CRUD（不像心情小記事後才補）：新增 `src/bot/finance.py`（分類清單/解析、交易 CRUD、月加總、FR-43 門檻判斷、FR-44 摘要組裝）、`commands.py` 12 個新 flow 處理函式（設定預算、新增/補記/更新/刪除記帳四步驟共用、查詢清單、摘要查詢）、`router.py` 整合 5 個新觸發詞與 9 個新 flow 分派、`main.py` 新增 `_check_finance_alerts()` 借用 `/healthz` 頻率觸發 FR-43 推播；全專案 539 個測試全過、覆蓋率 100% | Claude（依 Robin「請開始開發」指示，經 AskUserQuestion 確認範圍與 SQL 後實作） |
