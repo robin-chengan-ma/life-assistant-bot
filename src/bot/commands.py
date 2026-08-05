@@ -6,7 +6,7 @@ import logging
 from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 
-from src.bot import auth, body, finance, knowledge, mood, privacy, templates, toggles
+from src.bot import auth, body, finance, knowledge, mood, notifications, privacy, templates, toggles
 from src.bot import complaint as complaint_module
 from src.bot import todo as todo_module
 from src.bot.state import ConversationStateStore
@@ -2651,3 +2651,72 @@ def handle_goal_cancel_confirm_step(db: CloudSQLClient, llm_client, state_store:
 
     body.cancel_goal(db, goal_id)
     return "好的，已經取消這個體態目標了！"
+
+
+# ---------------------------------------------------------------------------
+# 設定家人生日（2026-08-04，Step 2.3，見 robinson SPEC.md FR-53）
+#
+# 僅 Owner（Robin）能觸發，用來補齊 `0030_seed_family_birthdays.sql` 沒有涵蓋到的家人生日
+# （弟媳/大妹婿/小妹婿/阿姨等）。流程比照 /set_toggle：先列出所有已綁定使用者供選編號
+# （pending_family_birthday_select），選定後再問生日（pending_family_birthday_date），
+# 格式解析交給 notifications.parse_birthday_input()，失敗就停留在原地反問，不清空狀態。
+# ---------------------------------------------------------------------------
+
+
+def start_set_family_birthday(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int) -> str:
+    """/set_family_birthday：僅 Owner 觸發，列出所有已綁定使用者供選擇要設定誰的生日。"""
+    members = notifications.list_family_members(db)
+    if not members:
+        return "目前還沒有任何已綁定的使用者，沒有可以設定生日的對象喔！"
+
+    state_store.set(
+        telegram_user_id,
+        {
+            "flow": "pending_family_birthday_select",
+            "candidates": [member["id"] for member in members],
+        },
+    )
+    return notifications.format_family_member_prompt(members)
+
+
+def handle_family_birthday_select_step(
+    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, text: str
+) -> str:
+    """處理 `pending_family_birthday_select` 狀態下使用者輸入的編號，選定要設定生日的對象。"""
+    state = state_store.get(telegram_user_id)
+    if text in _EXIT_PHRASES:
+        state_store.clear(telegram_user_id)
+        return "好的，已結束設定家人生日模式！"
+
+    candidates = state["candidates"]
+    if not text.isdigit() or not (1 <= int(text) <= len(candidates)):
+        return f"請輸入 1～{len(candidates)} 之間的編號，或輸入「結束」離開喔！"
+
+    target_user_id = candidates[int(text) - 1]
+    state_store.set(
+        telegram_user_id,
+        {"flow": "pending_family_birthday_date", "target_user_id": target_user_id},
+    )
+    return "請問生日是幾月幾號呢？可以直接給「YYYY-MM-DD」，不確定出生年份的話給「M/D」也可以！"
+
+
+def handle_family_birthday_date_step(
+    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, text: str
+) -> str:
+    """處理 `pending_family_birthday_date` 狀態下使用者輸入的生日文字，解析失敗就停留原地反問。"""
+    state = state_store.get(telegram_user_id)
+    if text in _EXIT_PHRASES:
+        state_store.clear(telegram_user_id)
+        return "好的，已結束設定家人生日模式！"
+
+    birthday = notifications.parse_birthday_input(text)
+    if birthday is None:
+        return "生日格式看不懂喔，麻煩用「YYYY-MM-DD」或「M/D」再給我一次！"
+
+    target_user_id = state["target_user_id"]
+    notifications.set_birthday(db, target_user_id, birthday)
+    state_store.clear(telegram_user_id)
+
+    target_user = db.select("users", where="id = %s", params=(target_user_id,), fetch_one=True)
+    role = target_user["role"] if target_user else "這位家人"
+    return f"已經記下 {role} 的生日了，之後到了會自動提醒大家喔！"

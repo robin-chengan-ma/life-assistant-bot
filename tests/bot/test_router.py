@@ -256,6 +256,39 @@ def test_owner_can_delegate_toggle_for_family_member(fake_db, monkeypatch):
     assert any(not r["is_enabled"] for r in rows)
 
 
+# --- 設定家人生日（FR-53，Step 2.3）---
+
+
+def test_known_family_member_cannot_trigger_owner_only_set_family_birthday(fake_db, monkeypatch):
+    """權限邊界測試：家人輸入 Owner 專屬 /set_family_birthday，不應被授予設定生日的能力（改落入一般聊天核心）。"""
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+    llm_client = _FakeLLMClient(response_text="我不太懂這個指令耶！")
+
+    reply = router.handle_message(fake_db, store, FAMILY_ID, "/set_family_birthday", llm_client=llm_client)
+
+    assert reply == "我不太懂這個指令耶！"
+    assert store.get(FAMILY_ID) is None
+
+
+def test_owner_can_complete_set_family_birthday_flow(fake_db, monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
+    sister_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "大妹婿", "is_owner": False})
+    store = ConversationStateStore()
+
+    select_reply = router.handle_message(fake_db, store, ROBIN_ID, "設定家人生日")
+    date_reply = router.handle_message(fake_db, store, ROBIN_ID, "1")
+    save_reply = router.handle_message(fake_db, store, ROBIN_ID, "1988-11-20")
+
+    assert "大妹婿" in select_reply
+    assert "幾月幾號" in date_reply
+    assert "大妹婿" in save_reply
+    assert store.get(ROBIN_ID) is None
+    row = fake_db.select("users", where="id = %s", params=(sister_id,), fetch_one=True)
+    assert row["birthday"] == date(1988, 11, 20)
+
+
 # --- 一般聊天核心（docs/specs/chat-core/SPEC.md）---
 
 

@@ -6,3 +6,4 @@ python-dotenv
 Pillow
 google-api-python-client
 google-auth
+lunarcalendar

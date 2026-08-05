@@ -178,6 +178,32 @@ def _check_body_goal_alerts() -> None:
         db.close()
 
 
+def _check_important_notifications() -> None:
+    """在 /healthz 被呼叫時順便檢查重要通知（Step 2.3，見 robinson SPEC.md FR-53）：固定節日
+    （元旦/除夕/初一/掃墓提醒/中秋/端午/父親節/母親節）與家人生日，固定台灣時間 08:00 推播，
+    詳見 src/bot/notifications.py 模組 docstring。
+
+    跟 `_check_body_goal_alerts()` 一樣包一層 try/except 且不需要 `ROBIN_TELEGRAM_TOKEN`
+    （推播對象是所有已綁定的使用者，不是固定通知 Robin 一人）。
+    """
+    if not (os.environ.get("DATABASE_URL") and os.environ.get("TELEGRAM_BOT_TOKEN")):
+        return
+
+    from submodules.cloudsql.client import CloudSQLClient
+    from submodules.telegram.client import TelegramClient
+
+    from src.bot import notifications
+
+    db = CloudSQLClient()
+    try:
+        telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
+        notifications.check_and_push_important_notifications(db, telegram_client)
+    except Exception:
+        logger.exception("重要通知檢查失敗，不影響健康檢查端點本身")
+    finally:
+        db.close()
+
+
 def _run_startup_migrations() -> None:
     """開機自動套用尚未執行過的 DB migration（ADR-11）。
 
@@ -232,6 +258,9 @@ def health_check():
 
     2026-08-04（Step 2.2，見 FR-45）：同樣借用這個頻率，順便觸發體態目標的運動目標達成通知與
     期限將近提醒檢查，見 `_check_body_goal_alerts()`。
+
+    2026-08-04（Step 2.3，見 FR-53）：同樣借用這個頻率，順便觸發重要通知（固定節日/家人生日）
+    檢查，見 `_check_important_notifications()`。
     """
     _check_neon_capacity()
     _check_todo_pushes()
@@ -239,6 +268,7 @@ def health_check():
     _check_finance_reminders()
     _check_finance_monthly_report()
     _check_body_goal_alerts()
+    _check_important_notifications()
     return jsonify({"status": "ok"}), 200
 
 

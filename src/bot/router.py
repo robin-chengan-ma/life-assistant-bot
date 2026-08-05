@@ -37,6 +37,8 @@ _RULE_TRIGGERS = {"/rule", "我要看使用規則"}
 _FUNCTION_TRIGGERS = {"/function", "我要看所有功能"}
 _MY_TOGGLES_TRIGGERS = {"/my_toggles", "我的功能設定"}
 _SET_TOGGLE_TRIGGERS = {"/set_toggle", "設定家人功能開關"}
+# 2026-08-04（Step 2.3，見 robinson SPEC.md FR-53）：Owner 專屬，補齊家人生日資料，設計比照 /set_toggle。
+_SET_FAMILY_BIRTHDAY_TRIGGERS = {"/set_family_birthday", "設定家人生日"}
 # 2026-08-02（Step 1.7，見 robinson SPEC.md FR-32）：查詢待辦事項清單，所有使用者皆可用
 # （不像 /set_toggle 是 Owner 專屬），放在 is_owner/非 is_owner 分支都會落到的共用觸發詞區塊。
 _MY_TODOS_TRIGGERS = {"/my_todos", "我的待辦事項"}
@@ -137,6 +139,8 @@ def handle_message(
 
         if text in _SET_TOGGLE_TRIGGERS:
             return commands.start_set_toggle(db, state_store, telegram_user_id)
+        if text in _SET_FAMILY_BIRTHDAY_TRIGGERS:
+            return commands.start_set_family_birthday(db, state_store, telegram_user_id)
         if text in _MY_TOGGLES_TRIGGERS:
             return commands.start_my_toggles(db, state_store, telegram_user_id, user_id)
         if text in _RECOVERED_TRIGGERS:
@@ -556,6 +560,11 @@ def _dispatch_active_flow(
         return commands.handle_goal_list_action_step(state_store, telegram_user_id, text)
     if flow == "pending_goal_cancel_confirm":
         return commands.handle_goal_cancel_confirm_step(db, llm_client, state_store, telegram_user_id, text)
+    # 2026-08-04（Step 2.3，見 robinson SPEC.md FR-53）：設定家人生日，結構比照 /set_toggle。
+    if flow == "pending_family_birthday_select":
+        return commands.handle_family_birthday_select_step(db, state_store, telegram_user_id, text)
+    if flow == "pending_family_birthday_date":
+        return commands.handle_family_birthday_date_step(db, state_store, telegram_user_id, text)
     if flow == "pending_complaint_content":
         # 2026-08-02（Step 1.9，見 robinson SPEC.md FR-61、FR-62）：寫入客訴＋Gemini 分析私訊 Robin。
         return commands.handle_complaint_content_step(

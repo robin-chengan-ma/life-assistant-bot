@@ -67,6 +67,7 @@ COMMENT ON COLUMN users.created_at IS '這筆使用者記錄建立的時間（�
 | 2026-08-04 | 新增 `finance_reminder_sent_date`（FR-42a 每日記帳提醒去重用） | Robin 提出「有設定預算時應每天固定時間提醒記帳」的回饋，設計比照 `todos.daily_pushed_on`，詳見下方 `budget_overrides` 表 | `0021_add_finance_reminder_field_to_users.sql` |
 | 2026-08-04 | 新增 `finance_monthly_report_sent_month`（FR-44a 月底記帳月報推播去重用） | Robin 要求「記帳摘要請在每月底自動推一次月報」，設計比照 `budget_alert_50_sent_month`／`budget_alert_80_sent_month` | `0022_add_finance_monthly_report_field_to_users.sql` |
 | 2026-08-04 | 新增 `height_cm`（身高，初始設定、變動才修正） | Step 2.2 體態管理模組 FR-46，設計理由見下方 `body_weight_logs` 表 | `0023_add_height_to_users.sql` |
+| 2026-08-04 | 新增 `birthday`（生日，只比對月/日） | Step 2.3 重要通知模組 FR-53，設計理由見下方 `important_notifications_log` 表 | `0028_add_birthday_to_users.sql`；已知 5 位家人（弟弟／大妹／小妹／爸爸／媽媽）生日資料見 `0030_seed_family_birthdays.sql` |
 
 ---
 
@@ -595,3 +596,28 @@ CREATE INDEX idx_body_goals_user_id ON body_goals (user_id);
 - `goal_type=exercise` 的 `target_value` 語意是「累積運動分鐘數」（Robin 指出用公里數對非跑步類運動不通用，分鐘數才是各種運動都適用的共同單位）；因為需要跨多筆 `exercise_logs` 加總才能判斷達成，改成借用 `/healthz` 頻率的排程檢查（`check_and_push_exercise_goal_achievements()`），不像體重目標能在單次記錄當下就地判斷
 - `goal_type=diet` 目前不支援自動達成判斷（太主觀，例如「飲食完美控制」無法量化），`target_value` 固定為 `NULL`，只能由使用者手動標記完成/取消——這是已知的刻意簡化
 - `deadline_reminder_sent`：期限前 7 天固定提醒一次（`check_and_push_goal_deadline_reminders()`），跟記帳月報不同，這裡不用「月份」去重，因為目標的期限提醒本來就只會觸發一次（不像月報是每月重複事件）
+
+---
+
+### important_notifications_log
+
+**建立日期**：2026-08-04
+**用途**：重要通知模組的年度推播去重紀錄，對應 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) FR-53（Step 2.3）。
+**Migration 檔案**：`src/migrations/0029_create_important_notifications_log_table.sql`
+
+```sql
+CREATE TABLE important_notifications_log (
+    id BIGSERIAL PRIMARY KEY,
+    notification_key TEXT NOT NULL,
+    year INT NOT NULL,
+    sent_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (notification_key, year)
+);
+```
+
+**設計理由**：
+- 2026-08-04 經 AskUserQuestion 與 Robin 確認：農曆節日（除夕/初一/中秋/端午）改用 `lunarcalendar` 套件即時計算西曆日期（純 Python 計算、不需要網路），不維護每年日期對照表；父親節固定 8/8、母親節固定西曆 5 月第二個星期日，同樣不需要對照表
+- 一張表通用所有「固定節日」與「生日」兩種通知類型，用 `notification_key` 區分：固定節日用英文代碼（`new_year`／`fathers_day`／`mothers_day`／`lunar_new_year_eve`／`lunar_new_year_day1`／`tomb_sweeping`／`mid_autumn`／`dragon_boat`），生日用 `birthday_<user_id>`（每位使用者各自獨立去重，不會因為某人生日推播過就擋住別人）
+- `UNIQUE (notification_key, year)` 確保同一個通知類型同一年只會推播一次，即使 `/healthz` 每 10 分鐘觸發一次 cron 檢查、同一天內會被命中好幾次
+- 不用 `month`／`day` 額外欄位記錄實際觸發日期，因為「哪一天觸發」本來就是即時計算出來的（農曆節日每年日期不同），只需要知道「這一年這個類型推播過了沒」即可決定要不要再推播一次
+- 只用 `notification_key`＋`year` 做唯一約束就足夠當索引，資料量小（一年最多十幾筆），不需要額外複合索引

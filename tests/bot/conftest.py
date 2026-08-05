@@ -27,6 +27,7 @@ class FakeCloudSQLClient:
             "exercise_logs": [],
             "diet_logs": [],
             "body_goals": [],
+            "important_notifications_log": [],
         }
         self._id_counter = itertools.count(1)
 
@@ -168,6 +169,13 @@ class FakeCloudSQLClient:
             return row.get("user_id") == params[0] and row.get("entry_date") >= params[1]
         if where == "status = %s AND target_date IS NOT NULL":
             return row.get("status") == params[0] and row.get("target_date") is not None
+        # 2026-08-04（Step 2.3，見 robinson SPEC.md FR-53）：重要通知模組的查詢條件。
+        if where == "telegram_user_id IS NOT NULL":
+            return row.get("telegram_user_id") is not None
+        if where == "birthday IS NOT NULL":
+            return row.get("birthday") is not None
+        if where == "notification_key = %s AND year = %s":
+            return row.get("notification_key") == params[0] and row.get("year") == params[1]
 
         raise NotImplementedError(f"FakeCloudSQLClient 尚未支援這個 where 條件：{where}")
 

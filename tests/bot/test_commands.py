@@ -2235,3 +2235,118 @@ def test_handle_finance_summary_returns_text(fake_db, monkeypatch):
 
     assert "2026/8 記帳摘要" in reply
     assert "支出總計：100 元" in reply
+
+
+# --- 設定家人生日（FR-53，Step 2.3）---
+
+
+def test_start_set_family_birthday_with_no_members_returns_message_without_state(fake_db):
+    store = ConversationStateStore()
+
+    reply = commands.start_set_family_birthday(fake_db, store, telegram_user_id=1)
+
+    assert "還沒有任何已綁定的使用者" in reply
+    assert store.get(1) is None
+
+
+def test_start_set_family_birthday_lists_bound_members(fake_db):
+    fake_db.insert("users", {"telegram_user_id": 100, "role": "Robin", "is_owner": True, "birthday": None})
+    fake_db.insert(
+        "users", {"telegram_user_id": 200, "role": "爸爸", "is_owner": False, "birthday": date(1970, 8, 1)}
+    )
+    store = ConversationStateStore()
+
+    reply = commands.start_set_family_birthday(fake_db, store, telegram_user_id=1)
+
+    assert "1. Robin（尚未設定）" in reply
+    assert "2. 爸爸（目前：08/01）" in reply
+    assert store.get(1)["flow"] == "pending_family_birthday_select"
+    assert len(store.get(1)["candidates"]) == 2
+
+
+def test_handle_family_birthday_select_step_valid_index_moves_to_date_step(fake_db):
+    sister_id = fake_db.insert("users", {"telegram_user_id": 300, "role": "大妹", "is_owner": False})
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_family_birthday_select", "candidates": [sister_id]})
+
+    reply = commands.handle_family_birthday_select_step(fake_db, store, telegram_user_id=1, text="1")
+
+    assert "幾月幾號" in reply
+    assert store.get(1) == {"flow": "pending_family_birthday_date", "target_user_id": sister_id}
+
+
+def test_handle_family_birthday_select_step_invalid_index_reprompts(fake_db):
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_family_birthday_select", "candidates": [42]})
+
+    reply = commands.handle_family_birthday_select_step(fake_db, store, telegram_user_id=1, text="99")
+
+    assert "編號" in reply
+    assert store.get(1)["flow"] == "pending_family_birthday_select"
+
+
+def test_handle_family_birthday_select_step_non_numeric_reprompts(fake_db):
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_family_birthday_select", "candidates": [42]})
+
+    reply = commands.handle_family_birthday_select_step(fake_db, store, telegram_user_id=1, text="不是數字")
+
+    assert "編號" in reply
+
+
+def test_handle_family_birthday_select_step_exit_phrase_clears_state(fake_db):
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_family_birthday_select", "candidates": [42]})
+
+    reply = commands.handle_family_birthday_select_step(fake_db, store, telegram_user_id=1, text="沒有了")
+
+    assert store.get(1) is None
+    assert "結束" in reply
+
+
+def test_handle_family_birthday_date_step_valid_input_saves_and_clears_state(fake_db):
+    sister_id = fake_db.insert("users", {"telegram_user_id": 300, "role": "大妹婿", "is_owner": False})
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_family_birthday_date", "target_user_id": sister_id})
+
+    reply = commands.handle_family_birthday_date_step(fake_db, store, telegram_user_id=1, text="1999-10-06")
+
+    assert "大妹婿" in reply
+    assert store.get(1) is None
+    row = fake_db.select("users", where="id = %s", params=(sister_id,), fetch_one=True)
+    assert row["birthday"] == date(1999, 10, 6)
+
+
+def test_handle_family_birthday_date_step_month_day_only_uses_placeholder_year(fake_db):
+    aunt_id = fake_db.insert("users", {"telegram_user_id": 400, "role": "阿姨", "is_owner": False})
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_family_birthday_date", "target_user_id": aunt_id})
+
+    commands.handle_family_birthday_date_step(fake_db, store, telegram_user_id=1, text="10/6")
+
+    row = fake_db.select("users", where="id = %s", params=(aunt_id,), fetch_one=True)
+    assert row["birthday"] == date(1900, 10, 6)
+
+
+def test_handle_family_birthday_date_step_invalid_input_reprompts_and_keeps_state(fake_db):
+    sister_id = fake_db.insert("users", {"telegram_user_id": 300, "role": "小妹婿", "is_owner": False})
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_family_birthday_date", "target_user_id": sister_id})
+
+    reply = commands.handle_family_birthday_date_step(fake_db, store, telegram_user_id=1, text="不知道")
+
+    assert "格式看不懂" in reply
+    assert store.get(1) == {"flow": "pending_family_birthday_date", "target_user_id": sister_id}
+    row = fake_db.select("users", where="id = %s", params=(sister_id,), fetch_one=True)
+    assert row.get("birthday") is None
+
+
+def test_handle_family_birthday_date_step_exit_phrase_clears_state(fake_db):
+    sister_id = fake_db.insert("users", {"telegram_user_id": 300, "role": "弟媳", "is_owner": False})
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_family_birthday_date", "target_user_id": sister_id})
+
+    reply = commands.handle_family_birthday_date_step(fake_db, store, telegram_user_id=1, text="結束")
+
+    assert store.get(1) is None
+    assert "結束" in reply
