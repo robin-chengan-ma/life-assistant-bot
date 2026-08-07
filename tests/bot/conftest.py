@@ -29,6 +29,8 @@ class FakeCloudSQLClient:
             "body_goals": [],
             "important_notifications_log": [],
             "skill_growth_digests": [],
+            "toeic_questions": [],
+            "toeic_vocab_questions": [],
         }
         self._id_counter = itertools.count(1)
 
@@ -183,6 +185,9 @@ class FakeCloudSQLClient:
         # 2026-08-07（Step 3.1 修正，見 robinson SPEC.md FR-22/FR-23）：每日技術摘要收集/推播查詢。
         if where == "digest_date = %s":
             return row.get("digest_date") == params[0]
+        # 2026-08-07（Step 3.2，見 robinson SPEC.md FR-25a~FR-25f）：TOEIC 題庫 Pipeline 去重查詢。
+        if where == "source_image_filename = %s":
+            return row.get("source_image_filename") == params[0]
 
         raise NotImplementedError(f"FakeCloudSQLClient 尚未支援這個 where 條件：{where}")
 

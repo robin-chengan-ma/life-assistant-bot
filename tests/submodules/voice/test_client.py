@@ -146,3 +146,58 @@ def test_transcribe_raises_after_exhausting_retries_on_5xx(monkeypatch):
 
     assert mock_post.call_count == 3
     assert mock_sleep.call_args_list == [((1,),), ((2,),)]
+
+
+# --- transcribe_with_segments（2026-08-07，見 docs/specs/robinson/SPEC.md Step 3.2）---
+
+
+def _fake_verbose_json_response(segments):
+    response = MagicMock()
+    response.raise_for_status = MagicMock()
+    response.json = MagicMock(return_value={"segments": segments})
+    return response
+
+
+def test_transcribe_with_segments_returns_start_end_text(monkeypatch):
+    segments = [
+        {"id": 0, "start": 0.0, "end": 2.5, "text": "Question one.", "extra_field": "ignored"},
+        {"id": 1, "start": 5.0, "end": 8.2, "text": "Question two."},
+    ]
+    mock_post = MagicMock(return_value=_fake_verbose_json_response(segments))
+    monkeypatch.setattr(client_module.requests, "post", mock_post)
+
+    client = VoiceClient(api_key="fake-groq-key")
+    result = client.transcribe_with_segments(b"fake-audio-bytes", filename="whole.mp3", mime_type="audio/mpeg")
+
+    assert result == [
+        {"start": 0.0, "end": 2.5, "text": "Question one."},
+        {"start": 5.0, "end": 8.2, "text": "Question two."},
+    ]
+
+
+def test_transcribe_with_segments_posts_correct_payload(monkeypatch):
+    mock_post = MagicMock(return_value=_fake_verbose_json_response([]))
+    monkeypatch.setattr(client_module.requests, "post", mock_post)
+
+    client = VoiceClient(api_key="fake-groq-key")
+    client.transcribe_with_segments(b"fake-audio-bytes", filename="whole.mp3", mime_type="audio/mpeg")
+
+    assert mock_post.call_args.kwargs["files"] == {"file": ("whole.mp3", b"fake-audio-bytes", "audio/mpeg")}
+    assert mock_post.call_args.kwargs["data"] == {
+        "model": "whisper-large-v3",
+        "response_format": "verbose_json",
+        "timestamp_granularities[]": "segment",
+    }
+
+
+def test_transcribe_with_segments_returns_empty_list_when_no_segments_key(monkeypatch):
+    response = MagicMock()
+    response.raise_for_status = MagicMock()
+    response.json = MagicMock(return_value={})
+    mock_post = MagicMock(return_value=response)
+    monkeypatch.setattr(client_module.requests, "post", mock_post)
+
+    client = VoiceClient(api_key="fake-groq-key")
+    result = client.transcribe_with_segments(b"fake-audio-bytes")
+
+    assert result == []

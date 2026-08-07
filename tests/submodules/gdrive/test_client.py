@@ -43,9 +43,21 @@ class _FakeFiles:
         self._execute_side_effects = execute_side_effects
         self.last_create_call = None
         self.last_request = None
+        self.last_list_call = None
+        self.last_get_media_call = None
 
     def create(self, body, media_body, fields):
         self.last_create_call = {"body": body, "media_body": media_body, "fields": fields}
+        self.last_request = _FakeFilesCreateRequest(self._response, self._execute_side_effects)
+        return self.last_request
+
+    def list(self, q, fields):
+        self.last_list_call = {"q": q, "fields": fields}
+        self.last_request = _FakeFilesCreateRequest(self._response, self._execute_side_effects)
+        return self.last_request
+
+    def get_media(self, fileId):
+        self.last_get_media_call = {"fileId": fileId}
         self.last_request = _FakeFilesCreateRequest(self._response, self._execute_side_effects)
         return self.last_request
 
@@ -121,7 +133,6 @@ def test_init_builds_credentials_with_correct_oauth_params(monkeypatch):
     assert captured["client_id"] == "my-client-id"
     assert captured["client_secret"] == "my-client-secret"
     assert captured["token_uri"] == "https://oauth2.googleapis.com/token"
-    assert captured["scopes"] == ["https://www.googleapis.com/auth/drive.file"]
 
 
 def test_upload_file_returns_web_view_link(monkeypatch):
@@ -203,3 +214,78 @@ def test_upload_file_raises_after_exhausting_retries(monkeypatch):
 
     assert fake_service.files().last_request.execute_call_count == 3
     assert mock_sleep.call_args_list == [((1,),), ((2,),)]
+
+
+# --- list_files / download_file（2026-08-07，見 docs/specs/robinson/SPEC.md Step 3.2）---
+
+
+def test_init_builds_credentials_with_file_and_readonly_scopes(monkeypatch):
+    _, _, captured = _make_client(monkeypatch)
+
+    assert captured["scopes"] == [
+        "https://www.googleapis.com/auth/drive.file",
+        "https://www.googleapis.com/auth/drive.readonly",
+    ]
+
+
+def test_list_files_returns_files_list(monkeypatch):
+    response = {"files": [{"id": "f1", "name": "toeic_0001_write_1.png", "mimeType": "image/png"}]}
+    gdrive_client, _, _ = _make_client(monkeypatch, response=response)
+
+    files = gdrive_client.list_files(name_contains="toeic")
+
+    assert files == [{"id": "f1", "name": "toeic_0001_write_1.png", "mimeType": "image/png"}]
+
+
+def test_list_files_sends_correct_query_and_fields(monkeypatch):
+    gdrive_client, fake_service, _ = _make_client(monkeypatch, response={"files": []}, folder_id="my-folder-id")
+
+    gdrive_client.list_files(name_contains="toeic")
+
+    call = fake_service.files().last_list_call
+    assert call["q"] == "'my-folder-id' in parents and trashed = false and name contains 'toeic'"
+    assert call["fields"] == "files(id, name, mimeType, webViewLink)"
+
+
+def test_list_files_without_name_filter_omits_name_clause(monkeypatch):
+    gdrive_client, fake_service, _ = _make_client(monkeypatch, response={"files": []}, folder_id="my-folder-id")
+
+    gdrive_client.list_files()
+
+    call = fake_service.files().last_list_call
+    assert call["q"] == "'my-folder-id' in parents and trashed = false"
+
+
+def test_list_files_returns_empty_list_when_no_files_key(monkeypatch):
+    gdrive_client, _, _ = _make_client(monkeypatch, response={})
+
+    assert gdrive_client.list_files() == []
+
+
+def test_download_file_returns_raw_bytes(monkeypatch):
+    gdrive_client, _, _ = _make_client(monkeypatch, response=b"fake-file-bytes")
+
+    content = gdrive_client.download_file("f1")
+
+    assert content == b"fake-file-bytes"
+
+
+def test_download_file_sends_correct_file_id(monkeypatch):
+    gdrive_client, fake_service, _ = _make_client(monkeypatch, response=b"bytes")
+
+    gdrive_client.download_file("target-file-id")
+
+    assert fake_service.files().last_get_media_call == {"fileId": "target-file-id"}
+
+
+def test_list_files_retries_on_5xx_then_succeeds(monkeypatch):
+    mock_sleep = MagicMock()
+    monkeypatch.setattr(retry_client_module.time, "sleep", mock_sleep)
+    gdrive_client, fake_service, _ = _make_client(
+        monkeypatch, response={"files": []}, execute_side_effects=[_http_error(503)]
+    )
+
+    gdrive_client.list_files()
+
+    assert fake_service.files().last_request.execute_call_count == 2
+    mock_sleep.assert_called_once_with(1)

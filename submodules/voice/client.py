@@ -60,3 +60,34 @@ class VoiceClient:
 
         response = call_with_retry(_do_request, is_retryable=_is_retryable_requests_error)
         return response.text.strip()
+
+    def transcribe_with_segments(
+        self, audio_bytes: bytes, filename: str = "audio.mp3", mime_type: str = "audio/mpeg"
+    ) -> list[dict]:
+        """轉錄並回傳逐段時間軸（2026-08-07 新增，見 docs/specs/robinson/SPEC.md Step 3.2：
+        TOEIC 整包聽力 MP3 需要依語句停頓自動切割成單題小檔）。
+
+        用 `response_format=verbose_json` + `timestamp_granularities[]=segment`（Groq 相容
+        OpenAI Whisper API 規格），只回傳呼叫端需要的 `start`／`end`／`text` 三個欄位。
+        """
+        headers = {"Authorization": f"Bearer {self._api_key}"}
+        files = {"file": (filename, audio_bytes, mime_type)}
+        data = {
+            "model": self._model,
+            "response_format": "verbose_json",
+            "timestamp_granularities[]": "segment",
+        }
+
+        def _do_request():
+            response = requests.post(
+                _TRANSCRIPTION_URL, headers=headers, files=files, data=data, timeout=_DEFAULT_TIMEOUT_SECONDS
+            )
+            response.raise_for_status()
+            return response
+
+        response = call_with_retry(_do_request, is_retryable=_is_retryable_requests_error)
+        payload = response.json()
+        return [
+            {"start": segment["start"], "end": segment["end"], "text": segment["text"]}
+            for segment in payload.get("segments", [])
+        ]

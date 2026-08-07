@@ -1,8 +1,15 @@
-"""Google Drive 通用 Client：使用 OAuth 2.0（以真人帳號身分）認證，把檔案上傳到指定資料夾。
+"""Google Drive 通用 Client：使用 OAuth 2.0（以真人帳號身分）認證，操作指定資料夾內的檔案。
 
-命名為 gdrive 而不是 drive，避免與標準函式庫或第三方套件的命名衝突；對外只暴露
-`upload_file()` 一個方法，封裝 OAuth 認證與 Drive API v3 呼叫細節，不涉及本專案的
-商業邏輯（例如檔名規則、要不要寫入資料庫，都是呼叫端的責任）。
+命名為 gdrive 而不是 drive，避免與標準函式庫或第三方套件的命名衝突；對外暴露
+`upload_file()`／`list_files()`／`download_file()`，封裝 OAuth 認證與 Drive API v3 呼叫細節，
+不涉及本專案的商業邏輯（例如檔名規則、要不要寫入資料庫，都是呼叫端的責任）。
+
+2026-08-07（見 docs/specs/robinson/SPEC.md Step 3.2）：新增 `list_files()`／`download_file()`。
+原本刻意只做 `upload_file()`（見 submodules-core SPEC.md Step S.7 註記：「不做下載/列表/刪除，
+避免建置用不到的能力」），但 TOEIC 題庫 Pipeline（FR-25a／25f）需要掃描 Robin 手動上傳到 Drive
+資料夾的題目照片/音檔，`upload_file()` 用的 `drive.file` scope 只能看到「這支程式自己建立的
+檔案」，看不到使用者手動丟進去的檔案，因此 `_SCOPES` 同步擴大為 `drive.file + drive.readonly`
+（`get_refresh_token.py` 同步更新，既有 refresh token 需要重新走一次互動授權才會有新 scope）。
 
 2026-08-02 修正（見 docs/specs/submodules-core/SPEC.md ADR-10，supersede 原本的
 Service Account 認證方式）：Robin 實測上傳語音檔時撞到 Google Drive API 的
@@ -23,7 +30,10 @@ from googleapiclient.http import MediaIoBaseUpload
 
 from submodules.retry.client import call_with_retry
 
-_SCOPES = ["https://www.googleapis.com/auth/drive.file"]
+_SCOPES = [
+    "https://www.googleapis.com/auth/drive.file",
+    "https://www.googleapis.com/auth/drive.readonly",
+]
 _TOKEN_URI = "https://oauth2.googleapis.com/token"
 
 # 2026-08-05：外部 API 重試機制（見 docs/specs/robinson/SPEC.md FR-19i、
@@ -74,3 +84,22 @@ class GDriveClient:
         )
         uploaded = call_with_retry(request.execute, is_retryable=_is_retryable_google_api_error)
         return uploaded["webViewLink"]
+
+    def list_files(self, name_contains: str | None = None) -> list[dict]:
+        """列出建構子指定資料夾內的檔案，只回傳 `id`／`name`／`mimeType` 三個必要欄位。
+
+        `name_contains`：可選的檔名關鍵字過濾（Drive API 查詢語法只支援 `contains`，沒有原生
+        「starts with」），縮小範圍用；呼叫端若需要精確的前綴/樣式比對，仍需自行對回傳結果再過濾一次。
+        """
+        query = f"'{self._folder_id}' in parents and trashed = false"
+        if name_contains:
+            escaped = name_contains.replace("'", "\\'")
+            query += f" and name contains '{escaped}'"
+        request = self._service.files().list(q=query, fields="files(id, name, mimeType, webViewLink)")
+        response = call_with_retry(request.execute, is_retryable=_is_retryable_google_api_error)
+        return response.get("files", [])
+
+    def download_file(self, file_id: str) -> bytes:
+        """下載指定檔案的原始內容（bytes）。"""
+        request = self._service.files().get_media(fileId=file_id)
+        return call_with_retry(request.execute, is_retryable=_is_retryable_google_api_error)

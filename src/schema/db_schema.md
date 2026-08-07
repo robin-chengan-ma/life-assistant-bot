@@ -68,6 +68,7 @@ COMMENT ON COLUMN users.created_at IS '這筆使用者記錄建立的時間（�
 | 2026-08-04 | 新增 `finance_monthly_report_sent_month`（FR-44a 月底記帳月報推播去重用） | Robin 要求「記帳摘要請在每月底自動推一次月報」，設計比照 `budget_alert_50_sent_month`／`budget_alert_80_sent_month` | `0022_add_finance_monthly_report_field_to_users.sql` |
 | 2026-08-04 | 新增 `height_cm`（身高，初始設定、變動才修正） | Step 2.2 體態管理模組 FR-46，設計理由見下方 `body_weight_logs` 表 | `0023_add_height_to_users.sql` |
 | 2026-08-04 | 新增 `birthday`（生日，只比對月/日） | Step 2.3 重要通知模組 FR-53，設計理由見下方 `important_notifications_log` 表 | `0028_add_birthday_to_users.sql`；已知 5 位家人（弟弟／大妹／小妹／爸爸／媽媽）生日資料見 `0030_seed_family_birthdays.sql` |
+| 2026-08-07 | 新增 `toeic_weekly_question_count`（軌道二每週生成題數，預設 21）／`toeic_pipeline_last_run_on`（週排程去重） | Step 3.2 TOEIC 雙軌題庫 Pipeline FR-25e／FR-25f，設計理由見下方 `toeic_questions`／`toeic_vocab_questions` 表 | `0037_add_toeic_weekly_question_count_to_users.sql` |
 
 ---
 
@@ -652,3 +653,66 @@ COMMENT ON COLUMN skill_growth_digests.created_at IS '這筆收集結果建立�
 - `digest_date NOT NULL UNIQUE`：同一天只會有一筆收集結果，`UNIQUE` 約束直接防止 23:00 那個小時內 `/healthz` 被觸發多次時重複收集/重複呼叫 Gemini（不需要額外查詢判斷是否已收集過，`INSERT` 前查一次 `digest_date` 是否存在即可）
 - `summary_text` 允許 `NULL`：代表當天三個來源都沒有內容，此時不呼叫 Gemini（省 Token），隔天推播時看到 `NULL` 就回覆 Robin 指定的固定訊息「未獲得最新技術分享」
 - `pushed_on` 沿用 `todos.daily_pushed_on` 的慣例，記錄「這筆資料是否已經推播過」，避免 08:00 那個小時內重複推播；跟 `digest_date` 分開兩個欄位是因為推播時間點（隔天）跟收集時間點（當天）本來就不同一天
+
+---
+
+### toeic_questions
+
+**建立日期**：2026-08-07
+**用途**：TOEIC 雙軌題庫軌道一，對應 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) FR-25a～FR-25c（Step 3.2）。
+**Migration 檔案**：`src/migrations/0035_create_toeic_questions_table.sql`
+
+```sql
+CREATE TABLE toeic_questions (
+    id BIGSERIAL PRIMARY KEY,
+    test_id TEXT NOT NULL,
+    question_type TEXT NOT NULL CHECK (question_type IN ('write', 'listen')),
+    question_number INT NOT NULL,
+    question_text TEXT NOT NULL,
+    options JSONB NOT NULL,
+    image_gdrive_url TEXT NOT NULL,
+    audio_gdrive_url TEXT,
+    source_image_filename TEXT NOT NULL UNIQUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_toeic_questions_test_id ON toeic_questions (test_id);
+```
+
+**設計理由**：
+- 2026-08-07 經 AskUserQuestion 與 Robin 確認：Robin 手動把題目照片/音檔直接上傳到 Google Drive 指定資料夾（不透過 Telegram），機器人固定每週日 22:00 排程掃描比對，見 `src/bot/toeic.py`
+- `source_image_filename UNIQUE`：取代原規劃「檔名日期是否在過去一週內」的去重方式（Robin 確認的實際檔名格式沒有日期，見 SPEC.md FR-25f 修正記錄），改用「這個檔名是否已經處理過」判斷，更直覺也不會漏檔
+- 依 FR-25c 原文刻意不存正解欄位：題目照片本身未必附答案，避免存入不存在或錯誤的資料
+- `options` 用 `JSONB` 存 Gemini Vision 解析出的選項陣列，欄位數不固定（可能 3～5 個選項）比起拆成 `option_a`/`option_b`... 固定欄位更貼合實際情況
+- `audio_gdrive_url` 允許 `NULL`：`write`（填空/單字題）類型只有圖片，沒有對應音檔
+
+---
+
+### toeic_vocab_questions
+
+**建立日期**：2026-08-07
+**用途**：TOEIC 雙軌題庫軌道二，對應 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) FR-25d～FR-25e（Step 3.2）。
+**Migration 檔案**：`src/migrations/0036_create_toeic_vocab_questions_table.sql`
+
+```sql
+CREATE TABLE toeic_vocab_questions (
+    id BIGSERIAL PRIMARY KEY,
+    target_word TEXT NOT NULL,
+    question_text TEXT NOT NULL,
+    option_a TEXT NOT NULL,
+    option_b TEXT NOT NULL,
+    option_c TEXT NOT NULL,
+    option_d TEXT NOT NULL,
+    correct_option CHAR(1) NOT NULL CHECK (correct_option IN ('A', 'B', 'C', 'D')),
+    example_sentence TEXT NOT NULL,
+    example_sentence_translation TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX idx_toeic_vocab_questions_target_word ON toeic_vocab_questions (LOWER(target_word));
+```
+
+**設計理由**：
+- 這張表的選項固定就是英翻中選擇題的 4 個選項，跟 `toeic_questions`（軌道一，選項數不固定、來源是圖片 OCR）語意不同，用固定的 `option_a`～`option_d` 四欄比 `JSONB` 更直覺、也方便直接用 `correct_option` 對答案
+- `LOWER(target_word)` 唯一索引：避免同一個單字（含大小寫差異，例如 `Abundant` 跟 `abundant`）重複生成，週排程生成前會先查詢既有單字清單，在 Prompt 裡明確告知 Gemini 要避開
+- 每週要生成幾題由 `users.toeic_weekly_question_count` 決定（Robin 自訂，預設 21 題＝一天 3 題 x 7 天），不寫死在這張表

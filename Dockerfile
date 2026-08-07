@@ -8,6 +8,10 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
+# ffmpeg：pydub 依賴，TOEIC 雙軌題庫 Pipeline（Step 3.2）用來切割整包聽力 MP3
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 # 複製並安裝 dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

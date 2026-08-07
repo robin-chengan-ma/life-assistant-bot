@@ -48,11 +48,19 @@ url = client.upload_file(
 )
 ```
 
+## 使用範例（列表／下載，2026-08-07 新增，見 TOEIC 題庫 Pipeline Step 3.2）
+
+```python
+files = client.list_files(name_contains="toeic")
+for f in files:
+    content = client.download_file(f["id"])
+```
+
 ## 設計限制（務必遵守）
 
-1. 只支援上傳（`upload_file`），不做下載/刪除/列表等其他 Drive 操作——目前呼叫端只需要「上傳後拿到分享連結」這個能力，需要更多功能時再依實際需求擴充，不要預先做用不到的介面。
-2. 檔名規則、要不要寫入資料庫、壓縮處理等商業邏輯一律由呼叫端（`src/bot/`）決定，本模組只負責「把 bytes 丟到 Drive」。
-3. OAuth 的權限範圍固定為 `drive.file`（只能操作這個應用程式自己建立的檔案），不要求更寬的權限範圍。
+1. 只支援上傳／列表／下載（`upload_file`／`list_files`／`download_file`），不做刪除——目前呼叫端沒有刪檔需求，需要時再依實際需求擴充，不要預先做用不到的介面。
+2. 檔名規則、要不要寫入資料庫、壓縮處理等商業邏輯一律由呼叫端（`src/bot/`）決定，本模組只負責跟 Drive API 溝通。
+3. OAuth 權限範圍為 `drive.file`（操作本程式自己建立的檔案）＋`drive.readonly`（讀取使用者手動上傳、本程式未建立的檔案，供 TOEIC Pipeline 掃描 Robin 手動上傳的題目照片/音檔），仍刻意不要求完整 `drive` 寫入權限。
 
 ## 對應 Spec
 

@@ -297,6 +297,58 @@ def _check_skill_growth_push() -> None:
         db.close()
 
 
+def _check_toeic_pipeline() -> None:
+    """在 /healthz 被呼叫時順便檢查 TOEIC 雙軌題庫 Pipeline（Step 3.2，見 robinson SPEC.md
+    FR-24、FR-25a～FR-25f）：固定台灣時間週日 22:00，掃描 Google Drive 資料夾比對/解析軌道一
+    題目，並生成軌道二單字題，詳見 src/bot/toeic.py 模組 docstring。這支函式只負責「把題庫
+    建好」，不做推播/作答（留待 Step 3.3）。
+
+    需要 `GDRIVE_*`（Drive 掃描/上傳）、`GEMINI_API_IMAGE_KEY1`／`GEMINI_API_IMAGE_KEY2`
+    （軌道一圖片解析，隨機擇一，見 ADR-12）、`VOICE_API_KEY`（軌道一整包音檔切割）、
+    `GEMINI_API_TEXT_KEY`（軌道二單字題生成）；任一項未設定就直接跳過（本機測試環境或
+    Robin 尚未完成 OAuth 重新授權時常見）。
+    """
+    required_env_vars = (
+        "DATABASE_URL",
+        "GDRIVE_OAUTH_REFRESH_TOKEN",
+        "GDRIVE_OAUTH_CLIENT_ID",
+        "GDRIVE_OAUTH_CLIENT_SECRET",
+        "GDRIVE_FOLDER_ID",
+        "GEMINI_API_IMAGE_KEY1",
+        "GEMINI_API_IMAGE_KEY2",
+        "VOICE_API_KEY",
+        "GEMINI_API_TEXT_KEY",
+    )
+    if not all(os.environ.get(var) for var in required_env_vars):
+        return
+
+    from src.bot import toeic
+    from submodules.cloudsql.client import CloudSQLClient
+    from submodules.gdrive.client import GDriveClient
+    from submodules.llm.client import LLMClient
+    from submodules.voice.client import VoiceClient
+
+    db = CloudSQLClient()
+    try:
+        gdrive_client = GDriveClient(
+            refresh_token=os.environ["GDRIVE_OAUTH_REFRESH_TOKEN"],
+            client_id=os.environ["GDRIVE_OAUTH_CLIENT_ID"],
+            client_secret=os.environ["GDRIVE_OAUTH_CLIENT_SECRET"],
+            folder_id=os.environ["GDRIVE_FOLDER_ID"],
+        )
+        image_llm_clients = [
+            LLMClient(api_key=os.environ["GEMINI_API_IMAGE_KEY1"]),
+            LLMClient(api_key=os.environ["GEMINI_API_IMAGE_KEY2"]),
+        ]
+        voice_client = VoiceClient(api_key=os.environ["VOICE_API_KEY"])
+        text_llm_client = LLMClient(api_key=os.environ["GEMINI_API_TEXT_KEY"])
+        toeic.run_weekly_pipeline(db, gdrive_client, image_llm_clients, voice_client, text_llm_client)
+    except Exception:
+        logger.exception("TOEIC 雙軌題庫 Pipeline 執行失敗，不影響健康檢查端點本身")
+    finally:
+        db.close()
+
+
 def _run_startup_migrations() -> None:
     """開機自動套用尚未執行過的 DB migration（ADR-11）。
 
@@ -358,6 +410,9 @@ def health_check():
     2026-08-07（Step 3.1，見 FR-22、FR-23）：同樣借用這個頻率，順便觸發每日技術摘要的收集
     （固定 23:00，見 `_check_skill_growth_collection()`）與推播（固定隔天 08:00，見
     `_check_skill_growth_push()`）兩個階段檢查。
+
+    2026-08-07（Step 3.2，見 FR-24、FR-25a～FR-25f）：同樣借用這個頻率，順便觸發 TOEIC 雙軌
+    題庫 Pipeline 檢查（固定每週日 22:00），見 `_check_toeic_pipeline()`。
     """
     _check_neon_capacity()
     _check_todo_pushes()
@@ -367,6 +422,7 @@ def health_check():
     _check_body_goal_alerts()
     _check_important_notifications()
     _check_skill_growth_collection()
+    _check_toeic_pipeline()
     _check_skill_growth_push()
     return jsonify({"status": "ok"}), 200
 
