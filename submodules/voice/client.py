@@ -9,9 +9,28 @@ ADR-2），不額外安裝官方 groq SDK，避免為了單一端點多引入一
 """
 import requests
 
+from submodules.retry.client import call_with_retry
+
 _TRANSCRIPTION_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 _DEFAULT_MODEL = "whisper-large-v3"
 _DEFAULT_TIMEOUT_SECONDS = 60
+
+# 2026-08-05：外部 API 重試機制（見 docs/specs/robinson/SPEC.md FR-19i、
+# docs/specs/submodules-core/SPEC.md ADR-13）。判斷邏輯比照 submodules/telegram：
+# 只重試連線失敗、逾時、HTTP 429／5xx，其餘 4xx 直接往外拋。
+_RETRYABLE_HTTP_STATUS_MIN = 500
+_RETRYABLE_RATE_LIMIT_STATUS = 429
+
+
+def _is_retryable_requests_error(exc: Exception) -> bool:
+    if isinstance(exc, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
+        return True
+    if isinstance(exc, requests.exceptions.HTTPError):
+        status_code = exc.response.status_code if exc.response is not None else None
+        if status_code is None:
+            return False
+        return status_code == _RETRYABLE_RATE_LIMIT_STATUS or status_code >= _RETRYABLE_HTTP_STATUS_MIN
+    return False
 
 
 class VoiceClient:
@@ -31,8 +50,13 @@ class VoiceClient:
         headers = {"Authorization": f"Bearer {self._api_key}"}
         files = {"file": (filename, audio_bytes, mime_type)}
         data = {"model": self._model, "response_format": "text"}
-        response = requests.post(
-            _TRANSCRIPTION_URL, headers=headers, files=files, data=data, timeout=_DEFAULT_TIMEOUT_SECONDS
-        )
-        response.raise_for_status()
+
+        def _do_request():
+            response = requests.post(
+                _TRANSCRIPTION_URL, headers=headers, files=files, data=data, timeout=_DEFAULT_TIMEOUT_SECONDS
+            )
+            response.raise_for_status()
+            return response
+
+        response = call_with_retry(_do_request, is_retryable=_is_retryable_requests_error)
         return response.text.strip()

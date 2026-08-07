@@ -3,6 +3,7 @@
 不呼叫真正的 Gmail SMTP，一律 mock `smtplib.SMTP_SSL`。
 """
 import email as email_lib
+import smtplib
 from email.header import decode_header
 from unittest.mock import MagicMock
 
@@ -10,6 +11,7 @@ import pytest
 
 from submodules.email import client as client_module
 from submodules.email.client import EmailClient
+from submodules.retry import client as retry_client_module
 
 
 def test_init_raises_on_empty_username():
@@ -67,3 +69,47 @@ def test_send_text_propagates_smtp_exception(monkeypatch):
     client = EmailClient(username="you@gmail.com", password="wrong-password")
     with pytest.raises(RuntimeError):
         client.send_text(to="robin@gmail.com", subject="主旨", body="內容")
+
+
+# --- 外部 API 重試機制（FR-19i，見 docs/specs/submodules-core/SPEC.md ADR-13）---
+
+
+def test_send_text_retries_on_server_disconnected_then_succeeds(monkeypatch):
+    mock_sleep = MagicMock()
+    monkeypatch.setattr(retry_client_module.time, "sleep", mock_sleep)
+    _, mock_server = _patch_smtp_ssl(monkeypatch)
+    mock_server.login.side_effect = [smtplib.SMTPServerDisconnected("connection lost"), None]
+
+    client = EmailClient(username="you@gmail.com", password="app-password")
+    client.send_text(to="robin@gmail.com", subject="主旨", body="內容")
+
+    assert mock_server.login.call_count == 2
+    mock_sleep.assert_called_once_with(1)
+
+
+def test_send_text_does_not_retry_authentication_error(monkeypatch):
+    mock_sleep = MagicMock()
+    monkeypatch.setattr(retry_client_module.time, "sleep", mock_sleep)
+    _, mock_server = _patch_smtp_ssl(monkeypatch)
+    mock_server.login.side_effect = smtplib.SMTPAuthenticationError(535, b"Authentication failed")
+
+    client = EmailClient(username="you@gmail.com", password="wrong-password")
+    with pytest.raises(smtplib.SMTPAuthenticationError):
+        client.send_text(to="robin@gmail.com", subject="主旨", body="內容")
+
+    assert mock_server.login.call_count == 1
+    mock_sleep.assert_not_called()
+
+
+def test_send_text_raises_after_exhausting_retries(monkeypatch):
+    mock_sleep = MagicMock()
+    monkeypatch.setattr(retry_client_module.time, "sleep", mock_sleep)
+    _, mock_server = _patch_smtp_ssl(monkeypatch)
+    mock_server.login.side_effect = smtplib.SMTPServerDisconnected("still down")
+
+    client = EmailClient(username="you@gmail.com", password="app-password")
+    with pytest.raises(smtplib.SMTPServerDisconnected):
+        client.send_text(to="robin@gmail.com", subject="主旨", body="內容")
+
+    assert mock_server.login.call_count == 3
+    assert mock_sleep.call_args_list == [((1,),), ((2,),)]

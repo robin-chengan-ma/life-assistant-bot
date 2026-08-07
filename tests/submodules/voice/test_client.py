@@ -5,7 +5,9 @@
 from unittest.mock import MagicMock
 
 import pytest
+import requests
 
+from submodules.retry import client as retry_client_module
 from submodules.voice import client as client_module
 from submodules.voice.client import VoiceClient
 
@@ -76,3 +78,71 @@ def test_custom_model_is_used_in_request(monkeypatch):
     client.transcribe(b"fake-audio-bytes")
 
     assert mock_post.call_args.kwargs["data"] == {"model": "whisper-large-v3-turbo", "response_format": "text"}
+
+
+# --- 外部 API 重試機制（FR-19i，見 docs/specs/submodules-core/SPEC.md ADR-13）---
+
+
+def _http_error_response(status_code, text=""):
+    response = MagicMock()
+    response.status_code = status_code
+    response.text = text
+    error = requests.exceptions.HTTPError(response=response)
+    response.raise_for_status.side_effect = error
+    return response
+
+
+def test_transcribe_retries_on_connection_error_then_succeeds(monkeypatch):
+    mock_sleep = MagicMock()
+    monkeypatch.setattr(retry_client_module.time, "sleep", mock_sleep)
+    mock_post = MagicMock(
+        side_effect=[requests.exceptions.ConnectionError("boom"), _fake_response("轉錄成功")]
+    )
+    monkeypatch.setattr(client_module.requests, "post", mock_post)
+
+    client = VoiceClient(api_key="fake-groq-key")
+    result = client.transcribe(b"fake-audio-bytes")
+
+    assert result == "轉錄成功"
+    assert mock_post.call_count == 2
+    mock_sleep.assert_called_once_with(1)
+
+
+def test_transcribe_does_not_retry_on_400(monkeypatch):
+    mock_sleep = MagicMock()
+    monkeypatch.setattr(retry_client_module.time, "sleep", mock_sleep)
+    error_response = _http_error_response(400)
+    mock_post = MagicMock(return_value=error_response)
+    monkeypatch.setattr(client_module.requests, "post", mock_post)
+
+    client = VoiceClient(api_key="fake-groq-key")
+    with pytest.raises(requests.exceptions.HTTPError):
+        client.transcribe(b"fake-audio-bytes")
+
+    assert mock_post.call_count == 1
+    mock_sleep.assert_not_called()
+
+
+def test_is_retryable_requests_error_treats_http_error_without_response_as_non_retryable():
+    error = requests.exceptions.HTTPError()  # 沒有帶 response 物件的邊界情況
+    assert client_module._is_retryable_requests_error(error) is False
+
+
+def test_transcribe_raises_after_exhausting_retries_on_5xx(monkeypatch):
+    mock_sleep = MagicMock()
+    monkeypatch.setattr(retry_client_module.time, "sleep", mock_sleep)
+    mock_post = MagicMock(
+        side_effect=[
+            _http_error_response(503),
+            _http_error_response(503),
+            _http_error_response(503),
+        ]
+    )
+    monkeypatch.setattr(client_module.requests, "post", mock_post)
+
+    client = VoiceClient(api_key="fake-groq-key")
+    with pytest.raises(requests.exceptions.HTTPError):
+        client.transcribe(b"fake-audio-bytes")
+
+    assert mock_post.call_count == 3
+    assert mock_sleep.call_args_list == [((1,),), ((2,),)]

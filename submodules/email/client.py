@@ -18,8 +18,21 @@ Google 的既定機制，不是本模組可以繞過的限制。
 import smtplib
 from email.mime.text import MIMEText
 
+from submodules.retry.client import call_with_retry
+
 _SMTP_HOST = "smtp.gmail.com"
 _SMTP_PORT = 465
+
+# 2026-08-05：外部 API 重試機制（見 docs/specs/robinson/SPEC.md FR-19i、
+# docs/specs/submodules-core/SPEC.md ADR-13）。只重試「暫時性錯誤」：連線中斷、連線失敗等
+# 屬於 OSError／SMTPException 的暫時性狀況；`SMTPAuthenticationError`（帳密錯誤）是永久性
+# 錯誤，重試也沒用，直接往外拋，不浪費重試次數。
+
+
+def _is_retryable_smtp_error(exc: Exception) -> bool:
+    if isinstance(exc, smtplib.SMTPAuthenticationError):
+        return False
+    return isinstance(exc, OSError)
 
 
 class EmailClient:
@@ -40,6 +53,9 @@ class EmailClient:
         message["From"] = self._username
         message["To"] = to
 
-        with smtplib.SMTP_SSL(_SMTP_HOST, _SMTP_PORT) as server:
-            server.login(self._username, self._password)
-            server.sendmail(self._username, [to], message.as_string())
+        def _do_send():
+            with smtplib.SMTP_SSL(_SMTP_HOST, _SMTP_PORT) as server:
+                server.login(self._username, self._password)
+                server.sendmail(self._username, [to], message.as_string())
+
+        call_with_retry(_do_send, is_retryable=_is_retryable_smtp_error)

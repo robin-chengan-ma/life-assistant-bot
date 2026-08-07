@@ -6,10 +6,30 @@ Webhook 接收 / 訊息路由等較複雜的邏輯，交給 backend 層自行決
 """
 import requests
 
+from submodules.retry.client import call_with_retry
+
 _TELEGRAM_API_BASE = "https://api.telegram.org/bot{token}/{method}"
 _TELEGRAM_FILE_BASE = "https://api.telegram.org/file/bot{token}/{file_path}"
 _DEFAULT_TIMEOUT_SECONDS = 10
 _FILE_DOWNLOAD_TIMEOUT_SECONDS = 30
+
+# 2026-08-05：外部 API 重試機制（見 docs/specs/robinson/SPEC.md FR-19i、
+# docs/specs/submodules-core/SPEC.md ADR-13）。只重試「暫時性錯誤」：連線失敗、逾時、
+# HTTP 429（Rate Limit）與 5xx（Telegram 伺服器端問題）；其餘 4xx（例如 400 參數錯誤、
+# 401 Token 失效）重試也沒用，直接往外拋，不浪費重試次數。
+_RETRYABLE_HTTP_STATUS_MIN = 500
+_RETRYABLE_RATE_LIMIT_STATUS = 429
+
+
+def _is_retryable_requests_error(exc: Exception) -> bool:
+    if isinstance(exc, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
+        return True
+    if isinstance(exc, requests.exceptions.HTTPError):
+        status_code = exc.response.status_code if exc.response is not None else None
+        if status_code is None:
+            return False
+        return status_code == _RETRYABLE_RATE_LIMIT_STATUS or status_code >= _RETRYABLE_HTTP_STATUS_MIN
+    return False
 
 
 class TelegramClient:
@@ -26,8 +46,13 @@ class TelegramClient:
         範例：client.call("sendMessage", {"chat_id": 123, "text": "hi"})
         """
         url = _TELEGRAM_API_BASE.format(token=self._token, method=method)
-        response = requests.post(url, json=payload, timeout=_DEFAULT_TIMEOUT_SECONDS)
-        response.raise_for_status()
+
+        def _do_request():
+            response = requests.post(url, json=payload, timeout=_DEFAULT_TIMEOUT_SECONDS)
+            response.raise_for_status()
+            return response
+
+        response = call_with_retry(_do_request, is_retryable=_is_retryable_requests_error)
         return response.json()
 
     def send_text(self, chat_id: int | str, text: str, parse_mode: str | None = None) -> dict:
@@ -63,6 +88,11 @@ class TelegramClient:
         file_info = self.call("getFile", {"file_id": file_id})
         file_path = file_info["result"]["file_path"]
         url = _TELEGRAM_FILE_BASE.format(token=self._token, file_path=file_path)
-        response = requests.get(url, timeout=_FILE_DOWNLOAD_TIMEOUT_SECONDS)
-        response.raise_for_status()
+
+        def _do_download():
+            response = requests.get(url, timeout=_FILE_DOWNLOAD_TIMEOUT_SECONDS)
+            response.raise_for_status()
+            return response
+
+        response = call_with_retry(_do_download, is_retryable=_is_retryable_requests_error)
         return response.content

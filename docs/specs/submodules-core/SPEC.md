@@ -3,7 +3,7 @@ title: Submodules — 共用子模組基礎骨架
 slug: submodules-core
 status: draft
 created: 2026-07-29
-updated: 2026-08-05
+updated: 2026-08-07
 owner: Robin
 ---
 
@@ -47,7 +47,12 @@ submodules/
 │   ├── client.py
 │   ├── requirements.txt
 │   └── README.md
-└── calendar/
+├── calendar/
+│   ├── .env.example
+│   ├── client.py
+│   ├── requirements.txt
+│   └── README.md
+└── retry/
     ├── .env.example
     ├── client.py
     ├── requirements.txt
@@ -70,6 +75,7 @@ submodules/
 - [x] FR-10（2026-08-02 新增，見 robinson SPEC.md Step 1.6／FR-21）：`submodules/cloudsql.client.CloudSQLClient` 新增 `execute_query(query, params=None) -> list[dict]`，跟既有的 `execute()`（DDL 用）成對，差別是這個會回傳資料列，供 `select()` 的 table/columns/where 介面無法表達的系統層級查詢使用（例如 `src/bot/monitoring.py` 查 `pg_database_size(current_database())`）
 - [x] FR-11（2026-08-05 新增，見 robinson SPEC.md FR-19b、ADR-16）：`submodules/email` 提供 `EmailClient.send_text(to, subject, body)`，透過 Gmail SMTP（SSL）寄送純文字信件；只用 Python 標準函式庫 `smtplib`／`email.mime`，不安裝任何第三方套件。用途是 Telegram 本身故障時的獨立備援通知管道，目前唯一呼叫端是 `src/bot/webhook.py` 的 `_notify_robin_of_error()`
 - [x] FR-12（2026-08-05 新增，見 robinson SPEC.md FR-66、ADR-17）：`submodules/calendar` 提供 `CalendarClient`，用 Google Calendar API v3（OAuth 2.0，`calendar.events` scope），封裝建立/更新/刪除行事曆事件的最小介面；用途是把待辦事項、重要通知、體態目標期限單向同步寫入 Robin 的家庭共用行事曆，供家人用手機原生行事曆 App 瀏覽
+- [x] FR-13（2026-08-07 新增，見 robinson SPEC.md FR-19i、ADR-13）：`submodules/retry` 提供 `call_with_retry(func, is_retryable, max_attempts=3, backoff_seconds=(1, 2, 4))`，對外部 API 呼叫套用「最多重試 3 次＋Exponential Backoff（1s/2s/4s）」的共用重試迴圈；其餘 6 個既有子模組（`llm`／`telegram`／`voice`／`gdrive`／`calendar`／`email`）皆已在各自 `client.py` 內套用，各自傳入符合自己 SDK 例外型別的 `is_retryable` 判斷式，只重試「暫時性錯誤」（連線失敗、逾時、HTTP 429／5xx），永久性錯誤（例如認證失敗、資源不存在）直接往外拋，不浪費重試次數
 
 ### 非功能性需求
 
@@ -334,6 +340,35 @@ submodules/
 
 **狀態**：accepted
 
+### ADR-13：新增 `submodules/retry` 共用重試工具，作為 ADR-4「子模組彼此獨立、互不 import」的刻意例外
+
+**背景**：robinson SPEC.md FR-19i 要求所有外部 API 呼叫（Gemini/OpenAI API、Telegram Bot API、104 AJAX API 等）內建「最多重試 3 次＋Exponential Backoff（1s/2s/4s）」的機制。目前有 6 個既有子模組（`llm`／`telegram`／`voice`／`gdrive`／`calendar`／`email`）都各自呼叫外部 API，理論上都需要這段重試邏輯；但 ADR-4 明訂「子模組彼此獨立、互不 import」，且每個子模組限定「四檔案結構、`client.py` 內只含一個 `XxxClient` class」。經 AskUserQuestion 與 Robin 確認三個設計問題：① 程式碼放置方式 ② 判斷「值得重試」的標準 ③ 套用範圍。
+
+**選項**（程式碼放置方式）：
+| 方案 | 優點 | 缺點 |
+|------|------|------|
+| A：每個 `client.py` 各自複製一份重試 helper | 嚴格遵守 ADR-4／NFR-2（子模組完全獨立、可攜） | 6 份幾乎相同的重試迴圈程式碼要各自維護，任何一處要調整（例如改重試次數）都要改 6 個檔案 |
+| B（採用）：新增 `submodules/retry`，提供共用的 `call_with_retry()` | 重試迴圈與 Exponential Backoff 時間控制只維護一份；各子模組只需要各自定義 `is_retryable` 判斷式（因 SDK 例外型別而異，這部分本來就無法共用） | 打破 ADR-4「子模組彼此獨立、互不 import」的原始精神，6 個子模組都會 import `submodules/retry`，任一子模組要單獨搬到其他專案時，必須連帶搬走 `submodules/retry` 資料夾 |
+
+**決策**：採方案 B（2026-08-07，Robin 於 AskUserQuestion 選定「抽成共用 retry 工具」）。`submodules/retry/client.py` 提供單一函式 `call_with_retry(func, is_retryable, max_attempts=3, backoff_seconds=(1, 2, 4))`——只負責「重試迴圈本身＋backoff 時間控制」，完全不內建任何 SDK 專屬的例外判斷邏輯；`is_retryable` 一律由呼叫端傳入，各子模組依自己串接的 SDK/REST API 定義各自的 `_is_retryable_xxx_error()` private 函式（例如 `llm` 檢查 `google.genai.errors.ServerError`／`ClientError(code=429)`，`telegram`／`voice` 檢查 `requests.exceptions` 系列例外與 HTTP 狀態碼，`gdrive`／`calendar` 檢查 `googleapiclient.errors.HttpError.resp.status`，`email` 排除 `smtplib.SMTPAuthenticationError`）。
+
+**這是 `submodules/` 底下唯一不是「包裝外部服務」的子模組，是 ADR-4 的刻意例外**：仍維持四檔案結構（`client.py`／`README.md`／`requirements.txt`／`.env.example`，後兩者內容為空，僅為保持慣例一致）方便辨識，但語意上是「其他子模組共用的基礎設施」，不是「包裝某個外部 API 的 Client」；依賴方向是單向的（`llm`/`telegram`/`voice`/`gdrive`/`calendar`/`email` → `retry`），`retry` 本身不依賴任何其他子模組或本專案商業邏輯，因此仍符合 FR-4「不依賴 backend/或本專案任何商業邏輯」的精神，只是不再是「彼此互不 import」的字面意義。
+
+**重試判斷標準（is_retryable）**：經 AskUserQuestion 確認採「只重試暫時性錯誤」（而非對所有例外一律重試）——連線失敗、逾時、HTTP 429（Rate Limit）、5xx（伺服器端問題）才重試；4xx 當中的其餘狀態碼（400 參數錯誤、401/403 認證失敗、404 資源不存在——見 ADR-8 實際排查過 Gemini 2.5 世代對新專案關閉存取回傳 404 的案例）都是「重試也沒用」的永久性錯誤，直接往外拋、不浪費重試次數與時間。`LLMClient` 既有的本地端節流保護（`LLMQuotaGuardError`，見 ADR-5）刻意設計在 `call_with_retry` 包裹範圍**之外**（`_guard_rate_limit()` 在進入重試迴圈前就先檢查），因為節流門檻是「時間窗口」邏輯，立即重試無法解決，重試也沒有意義。
+
+**套用範圍**：經 AskUserQuestion 確認，這次只套用到 6 個現有子模組；robinson SPEC.md FR-34a 提到的 104 求職爬蟲 API 屬於 Phase 4 才會存在的程式碼，屆時開工時比照辦理。
+
+**替代方案**：方案 A（每個 client.py 各自複製）——已否決，理由見上表。
+
+**後果**：
+- 新增 `submodules/retry/`（`client.py`／`README.md`／`requirements.txt`／`.env.example`），只用 Python 標準函式庫 `time`，`requirements.txt`／`.env.example` 皆為空
+- `llm`／`telegram`／`voice`／`gdrive`／`calendar`／`email` 六個 `client.py` 都新增 `from submodules.retry.client import call_with_retry` 與各自的 `_is_retryable_xxx_error()` private 函式，把原本直接呼叫外部 API 的那一行改為透過 `call_with_retry()` 包裹
+- `call_with_retry()` 重試次數用盡或遇到不可重試的例外時，一律把最後一次的原始例外原封不動往外拋出，不包裝成新的例外型別，呼叫端（例如 `src/bot/webhook.py` 既有的 `except` 邏輯）完全不需要改動
+- 未來若某個子模組真的需要單獨搬到其他專案，需要連帶搬走 `submodules/retry/` 資料夾（很小，只有一個純函式），這是刻意接受的可攜性妥協
+- 例外分級降級（FR-19f／FR-19g，Step 2.6）將建立在這次重試機制之上：3 次重試全部失敗後才正式判定該次 Request 失敗，才進入「一般感冒級」或「重大疾病級」的分級處理
+
+**狀態**：accepted
+
 ## 實作計畫
 
 ### Phase 0（對應 robinson SPEC.md 的 Step 0.1a）：建立子模組骨架
@@ -364,6 +399,8 @@ submodules/
 - [x] `voice.client.VoiceClient`（2026-08-01，ADR-9，6 個測試，覆蓋率 100%）：mock `requests.post`，驗證 `transcribe()` 組出正確的 multipart payload（`headers`／`files`／`data`）、回傳去除頭尾空白的純文字、支援自訂 `model`／`filename`／`mime_type`；空 `api_key` 應拋出 `ValueError`；底層 request 失敗（`raise_for_status()` 拋例外）應往外拋，不吞例外
 - [x] `email.client.EmailClient`（2026-08-05，ADR-11，5 個測試，覆蓋率 100%）：mock `smtplib.SMTP_SSL`，驗證 `send_text()` 以正確的 host/port 建立連線並呼叫 `login()`／`sendmail()`，`sendmail()` 的 envelope（from/to）與信件內容（`Subject`／`From`／`To`／純文字 body，用 `email.message_from_string()` 解析驗證）正確；空 `username`／`password` 應拋出 `ValueError`；底層 SMTP 例外（如登入失敗）應往外拋，不吞例外——由呼叫端（`webhook._send_email_fallback()`）決定要不要吞
 - [x] `calendar.client.CalendarClient`（2026-08-05，見 FR-12、ADR-12，10 個測試，覆蓋率 100%）：mock `google.oauth2.credentials.Credentials`／`googleapiclient.discovery.build`（比照 `gdrive` 測試手法），驗證 `create_event()`／`update_event()`／`delete_event()` 帶正確的 `calendarId`／事件內容（含全天事件 `date`／有時間點事件 `dateTime`+`timeZone` 兩種格式），回傳新增後的 event ID；空 `refresh_token`／`client_id`／`client_secret`／`calendar_id` 應拋出 `ValueError`
+- [x] `retry.client.call_with_retry()`（2026-08-07，見 FR-13、ADR-13，6 個測試，覆蓋率 100%）：mock `time.sleep`，驗證第一次成功不重試／可重試例外重試後成功／Exponential Backoff 秒數依序為 1s/2s/4s／重試次數用盡後往外拋出最後一次的原始例外／`is_retryable` 判定為 `False` 時不重試、立即拋出／`max_attempts`／`backoff_seconds` 可被覆寫
+- [x] 6 個既有子模組套用重試機制後的測試更新（2026-08-07，見 FR-19i、ADR-13）：`llm`（+7 個測試，含 ServerError／ClientError 429／永久性 ClientError 404 不重試／`generate_with_image` 也套用／重試用盡拋出／`ConnectionError`／`LLMQuotaGuardError` 不受重試影響）、`telegram`（+7 個測試，`call()`／`get_file_bytes()` 皆套用，含連線錯誤／5xx／400 不重試／重試用盡／`is_retryable` 邊界情況）、`voice`（+4 個測試）、`gdrive`（+5 個測試，含 `HttpError` 403 不重試／`is_retryable` 邊界情況）、`calendar`（+5 個測試，含 `HttpError` 404 不重試／`is_retryable` 邊界情況）、`email`（+3 個測試，含 `SMTPAuthenticationError` 不重試）；全部經由 monkeypatch `submodules.retry.client.time.sleep`（或共用同一個 `time` 模組物件）驗證不會真的等待，測試維持毫秒等級執行速度；全專案 795 個測試全過，這 7 個子模組（含新增的 `retry`）皆維持 100% 覆蓋率
 
 ### Integration Tests
 - [ ] `cloudsql`：對測試用 Neon 分支資料庫實際下 CRUD，確認連線池可正常取得/歸還連線
@@ -401,3 +438,4 @@ submodules/
 | 2026-08-05 | Robin 驗收 robinson SPEC.md Step 2.4（FR-19b，錯誤 log 雲端連結）時提出「如果壞掉的是 Telegram 本身，不就完全沒辦法通知？」；新增 FR-11、Step S.11、ADR-11：建立 `submodules/email/`（`EmailClient.send_text()`，`smtplib` 直打 Gmail SMTP，不安裝第三方套件），複用既有的 `GMAIL_USER`／`GMAIL_PASSWORD`（原為 Phase 3 FR-23 預留但未使用）；5 個測試（mock `smtplib.SMTP_SSL`），覆蓋率 100%；全專案 720 個測試全過 | Claude（依 Robin 提出的問題新增備援機制） |
 | 2026-08-05 | Robin 討論 Google Calendar 能拿來做什麼後，確認先做「待辦事項／重要通知／體態目標期限」單向同步寫入共用行事曆（不含讀取查空檔）；新增 FR-12、Step S.12（尚未實作）、ADR-12：規劃 `submodules/calendar/`（`CalendarClient`，Google Calendar API v3，OAuth 2.0，獨立一組憑證＋`calendar.events` scope，不與 `gdrive` 共用憑證）；對應 robinson SPEC.md FR-66、Step 2.7、ADR-17；本次僅規格文件，程式尚未動工 | Claude（依 Robin「幫我補三點至規格書」指示） |
 | 2026-08-05 | **Step S.12 完成**：Robin 完成 Google Cloud Console 手動設定（Calendar API、獨立 OAuth 用戶端、共用行事曆）並指示開工；建立 `submodules/calendar/`（`client.py`、`README.md`、`requirements.txt`、`.env.example`、`get_refresh_token.py`）：`CalendarClient` 提供 `create_event()`／`update_event()`／`delete_event()`，事件內容格式（全天 `date` 或有時間點 `dateTime`+`Asia/Taipei` 時區）由呼叫端透過 `all_day` 參數決定；10 個測試（mock `Credentials`／`build`，比照 `gdrive` 手法），覆蓋率 100%；全專案 730 個測試全過。根目錄 `requirements.txt` 已含 `google-api-python-client`／`google-auth`（gdrive 沿用），不需新增 | Claude（依 Robin「Google Calendar 已設定完，可以開工了」指示實作） |
+| 2026-08-07 | **新增 FR-13、ADR-13：`submodules/retry` 共用重試工具（對應 robinson SPEC.md Step 2.5、FR-19i）**。Robin 確認繼續 Phase 2 Step 2.5 後，經 AskUserQuestion 確認三個設計問題：① 程式碼放置方式選「抽成共用 retry 工具」（而非 6 個 client 各自複製），是 ADR-4「子模組彼此獨立、互不 import」的刻意例外 ② 重試判斷標準選「只重試暫時性錯誤」（連線失敗、逾時、HTTP 429／5xx），永久性錯誤（401/403/404 等）直接往外拋 ③ 套用範圍確認這次只套用到 6 個現有子模組，104 求職爬蟲 API 留到 Phase 4 開工時比照。新增 `submodules/retry/`（`call_with_retry()`，只負責重試迴圈與 Exponential Backoff 時間控制，`is_retryable` 判斷式由呼叫端傳入）；`llm`／`telegram`／`voice`／`gdrive`／`calendar`／`email` 六個 `client.py` 都套用，各自定義符合自己 SDK 例外型別的 `_is_retryable_xxx_error()`；`LLMClient` 既有的本地端節流保護（`LLMQuotaGuardError`）刻意留在重試包裹範圍之外，因為節流是時間窗口邏輯，立即重試無意義。TDD 全程 RED→GREEN：先寫 `retry` 的 6 個測試，再逐一為 6 個子模組補上重試情境測試（成功重試、永久性錯誤不重試、重試用盡拋出、`is_retryable` 邊界情況）；全專案 795 個測試全過，7 個子模組（含新增的 `retry`）皆維持 100% 覆蓋率 | Claude（依 Robin 於 AskUserQuestion 確認範圍後實作） |

@@ -10,9 +10,30 @@ import time
 from collections import deque
 
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types
 
+from submodules.retry.client import call_with_retry
+
 _DEFAULT_MODEL = "gemini-3.5-flash-lite"
+
+# 2026-08-05：外部 API 重試機制（見 docs/specs/robinson/SPEC.md FR-19i、
+# docs/specs/submodules-core/SPEC.md ADR-13）。只重試「暫時性錯誤」：
+# - ServerError（Gemini 5xx，伺服器端暫時性問題）
+# - ClientError 且 code == 429（Rate Limit，等一下再送就有機會成功）
+# - 連線/逾時類的底層例外（ConnectionError／TimeoutError）
+# 其餘 ClientError（例如 400 參數錯誤、401/403 金鑰失效、404 模型不存在——見 ADR-8
+# 排查過的實際案例）都是「重試也沒用」的永久性錯誤，直接往外拋，不浪費重試次數。
+_RETRYABLE_CLIENT_ERROR_CODE = 429
+
+
+def _is_retryable_genai_error(exc: Exception) -> bool:
+    if isinstance(exc, genai_errors.ServerError):
+        return True
+    if isinstance(exc, genai_errors.ClientError):
+        return getattr(exc, "code", None) == _RETRYABLE_CLIENT_ERROR_CODE
+    return isinstance(exc, (ConnectionError, TimeoutError))
+
 
 # 2026-07-31：曾在 ADR-7 用 `gemini-2.5-flash` 做 Google Search grounding 的專屬模型，
 # 但 Robin 排查一把新產生的 Gemini API Key 時發現該模型回傳 404
@@ -78,9 +99,12 @@ class LLMClient:
     def generate_text(self, prompt: str) -> str:
         """純文字生成，回傳模型的文字回應。"""
         self._guard_rate_limit()
-        response = self._client.models.generate_content(
-            model=self._model,
-            contents=prompt,
+        response = call_with_retry(
+            lambda: self._client.models.generate_content(
+                model=self._model,
+                contents=prompt,
+            ),
+            is_retryable=_is_retryable_genai_error,
         )
         return response.text
 
@@ -93,9 +117,12 @@ class LLMClient:
         """圖像 + 文字提示的生成呼叫（例如解析證照題目截圖）。"""
         self._guard_rate_limit()
         image_part = types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
-        response = self._client.models.generate_content(
-            model=self._model,
-            contents=[image_part, prompt],
+        response = call_with_retry(
+            lambda: self._client.models.generate_content(
+                model=self._model,
+                contents=[image_part, prompt],
+            ),
+            is_retryable=_is_retryable_genai_error,
         )
         return response.text
 

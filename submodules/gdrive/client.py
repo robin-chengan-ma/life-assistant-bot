@@ -18,10 +18,28 @@ import io
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseUpload
+
+from submodules.retry.client import call_with_retry
 
 _SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 _TOKEN_URI = "https://oauth2.googleapis.com/token"
+
+# 2026-08-05：外部 API 重試機制（見 docs/specs/robinson/SPEC.md FR-19i、
+# docs/specs/submodules-core/SPEC.md ADR-13）。只重試「暫時性錯誤」：HTTP 429／5xx
+# 與連線/逾時類例外；其餘 4xx（例如 401 憑證失效、404 資料夾不存在）重試也沒用，直接往外拋。
+_RETRYABLE_HTTP_STATUS_MIN = 500
+_RETRYABLE_RATE_LIMIT_STATUS = 429
+
+
+def _is_retryable_google_api_error(exc: Exception) -> bool:
+    if isinstance(exc, HttpError):
+        status_code = getattr(exc.resp, "status", None)
+        if status_code is None:
+            return False
+        return status_code == _RETRYABLE_RATE_LIMIT_STATUS or status_code >= _RETRYABLE_HTTP_STATUS_MIN
+    return isinstance(exc, (ConnectionError, TimeoutError))
 
 
 class GDriveClient:
@@ -51,9 +69,8 @@ class GDriveClient:
         """把檔案內容上傳到建構子指定的資料夾，回傳可分享檢視的網址（webViewLink）。"""
         file_metadata = {"name": filename, "parents": [self._folder_id]}
         media = MediaIoBaseUpload(io.BytesIO(content), mimetype=mime_type)
-        uploaded = (
-            self._service.files()
-            .create(body=file_metadata, media_body=media, fields="id, webViewLink")
-            .execute()
+        request = self._service.files().create(
+            body=file_metadata, media_body=media, fields="id, webViewLink"
         )
+        uploaded = call_with_retry(request.execute, is_retryable=_is_retryable_google_api_error)
         return uploaded["webViewLink"]

@@ -1,7 +1,7 @@
 ---
 title: Robinson 產品開發階段紀錄
 spec: docs/specs/robinson/SPEC.md
-updated: 2026-08-05
+updated: 2026-08-07
 ---
 
 # Robinson 產品開發階段紀錄
@@ -15,7 +15,7 @@ updated: 2026-08-05
 
 ## 目前階段
 
-**Phase 1（MVP）全部 Step 完成；Phase 2 Step 2.1（記帳模組）、Step 2.2（體態管理模組）、Step 2.3（重要通知模組）、Step 2.4（錯誤 log 雲端連結，範疇已依 SPEC.md ADR-15 簡化）、Step 2.7（Google Calendar 整合）皆已完成，下一步是 Step 2.5（外部 API 重試機制）**
+**Phase 1（MVP）全部 Step 完成；Phase 2 Step 2.1（記帳模組）、Step 2.2（體態管理模組）、Step 2.3（重要通知模組）、Step 2.4（錯誤 log 雲端連結，範疇已依 SPEC.md ADR-15 簡化）、Step 2.5（外部 API 重試機制）、Step 2.7（Google Calendar 整合）皆已完成，下一步是 Step 2.6（例外分級降級與決策執行狀態閉環回饋）**
 
 ## 目標時程（2026-07-30 更新：改為三週制，因新增多模態影像/語音處理架構；2026-08-04 更新：Phase 5「Notion 後台」取消，Mobile App 併入 Phase 4，見 SPEC.md ADR-14）
 
@@ -48,7 +48,7 @@ updated: 2026-08-05
 | --- | --- | --- | --- | --- |
 | Phase 0 | 專案基礎建設（repo 結構、金鑰串接、Render/Neon/cron-job、DB 初始化） | 🟢 已完成 | 7/29～7/30 | 全部 Step 完成：`submodules/`、`src/schema/`、`src/migrations/`（ADR-11）骨架就緒；`/healthz` 已部署上線並掛上 cron-job.org；第一批 5 張表（`users`／`invite_codes`／`knowledge_base`／`conversation_logs`／`feature_toggles`）已核准並套用成功 |
 | Phase 1（MVP） | 核心平台（通關密碼對話式設定、歡迎訊息、`/rule`／`/function`／`/complaint` 內建指令、功能開關、Gemini 對話+知識庫、影像辨識、語音、個資遮蔽、基礎錯誤處理）＋待辦事項＋心情小記＋客訴收集 | 🟢 已完成 | 7/31～8/2 | Step 1.1～1.9 全數完成（實際 8/2 就全數完成，早於原訂 8/7 目標）；FR-56 全面改版為總覽＋按需深入＋情境範例（FR-56a～FR-56d） |
-| Phase 2 | 記帳＋體態管理＋重要通知＋錯誤 log 雲端連結＋重試機制＋分級降級＋Google Calendar 整合 | 🟡 進行中 | 8/8～8/11 | Step 2.1（記帳，FR-41～FR-44）、Step 2.2（體態管理，FR-45～FR-48）、Step 2.3（重要通知，FR-53）皆已於 8/4 完成，早於原訂時程；Step 2.4 已於 8/5 完成（範疇依 SPEC.md ADR-15 簡化為錯誤 log 雲端連結，取消原「AI 自主診斷＋GitHub PR 自動化」規劃）；Step 2.7（Google Calendar 整合，FR-66，2026-08-05 新增）已於同日完成，早於 Step 2.5／2.6 開工 |
+| Phase 2 | 記帳＋體態管理＋重要通知＋錯誤 log 雲端連結＋重試機制＋分級降級＋Google Calendar 整合 | 🟡 進行中 | 8/8～8/11 | Step 2.1（記帳，FR-41～FR-44）、Step 2.2（體態管理，FR-45～FR-48）、Step 2.3（重要通知，FR-53）皆已於 8/4 完成，早於原訂時程；Step 2.4 已於 8/5 完成（範疇依 SPEC.md ADR-15 簡化為錯誤 log 雲端連結，取消原「AI 自主診斷＋GitHub PR 自動化」規劃）；Step 2.7（Google Calendar 整合，FR-66，2026-08-05 新增）已於同日完成，早於 Step 2.5／2.6 開工；Step 2.5（外部 API 重試機制，FR-19i）已於 8/7 完成，新增共用 `submodules/retry` 工具，6 個既有子模組皆已套用；僅剩 Step 2.6（例外分級降級與決策執行狀態閉環回饋） |
 | Phase 3 | 個人技能成長（TOEIC 雙軌題庫 Pipeline＋YouTube 技術情報模組，僅 Robin）＋好友模式 | ⚪ 未開始 | 8/12～8/14 | 新增 YouTube 模組（FR-57～FR-59，見 ADR-9）；TOEIC 語音處理改用 Groq Whisper（ADR-12） |
 | Phase 4 | 求職模組（104 爬蟲＋評分）＋ Mobile App（BI Dashboard，React Native + Expo） | ⚪ 未開始 | 8/15～8/16 | 爬蟲策略已定案：每週一次、AJAX API、無登入態、禮貌性延遲、ETL 去重（FR-34a～FR-34d）；**2026-08-04 新增**：原獨立拆出的 Phase 5（Notion 後台）已取消，Mobile App 併入本 Phase（Step 4.4／4.5，皆為 Placeholder），見 SPEC.md ADR-14，詳細規劃留待開工時展開 |
 
@@ -127,6 +127,7 @@ updated: 2026-08-05
 | 2026-08-05 | **新增 ADR-16：Telegram 故障時的 email 備援通知**。Robin 驗收 Step 2.4 時提出「如果壞掉的是 Telegram 本身，不就沒辦法通知？」，確認這是原設計沒考慮到的單點故障。新增 `submodules/email`（`EmailClient.send_text()` 用 `smtplib` 直打 Gmail SMTP，複用既有 `GMAIL_USER`／`GMAIL_PASSWORD`，原為 Phase 3 FR-23 預留但尚未使用）；`webhook.py` 的 `_notify_robin_of_error()` 拆成「組裝內容」與「透過 Telegram 送達」兩段，只有 Telegram 送達失敗才觸發新增的 `_send_email_fallback()`，寄出內容含完整 Traceback 的備援信；email 本身也失敗只記 log，不再疊加第三層備援。新增 11 個測試（`submodules/email/client.py` 5 個、`webhook.py` 6 個），全專案 720 個測試全過，`webhook.py`／`submodules/email/client.py` 皆達到 100% 覆蓋率 | Claude（依 Robin 提出的問題新增備援機制） |
 | 2026-08-05 | **新增 Step 2.7、FR-66、ADR-17（規格層級，尚未實作）：Google Calendar 整合**。Robin 詢問 Google Calendar 能拿來做什麼，討論後確認範圍：① 待辦事項、② 重要通知（生日/節日）、③ 體態目標期限，三者單向同步寫入 Robin 家庭共用的 Google 行事曆事件，家人可透過手機原生行事曆 App 直接瀏覽，或照舊詢問 Robinson；暫不做「讀行事曆查空檔」（進階功能，工程量高、先觀察實際需求）。新增 robinson SPEC.md FR-66（＋66a～66d 子項）、ADR-17（設計決策：單一共用行事曆、僅 Robin 本人 OAuth 授權、Step 2.7）；同步新增 submodules-core SPEC.md FR-12、Step S.12、ADR-12（`submodules/calendar` 規劃：`CalendarClient` 用 Google Calendar API v3，OAuth 2.0 但使用獨立一組憑證與 `calendar.events` scope，不與 `gdrive` 共用憑證，符合最小權限原則）。本次僅為規格文件調整，程式尚未動工，待 Robin 完成 Google Cloud Console 手動設定後才會開始實作 | Claude（依 Robin 討論結果補上規格） |
 | 2026-08-05 | **Phase 2 Step 2.7 完成：Google Calendar 整合（FR-66、ADR-17）**。Robin 確認家人共用一律用免費 Google 帳號（唯讀權限），並提出兩個補充設計：家人共用權限固定「查看所有活動詳細資料」避免覆寫衝突（Google Calendar 共用設定本身解決，非程式碼）、待辦事項/體態目標各自新增一輪「要不要同步」反問保護隱私（ADR-17 決策 6／7）。Robin 完成 Google Cloud Console 手動設定後指示「可以開工了」。新增 `submodules/calendar/client.py`（`CalendarClient`，10 個測試，覆蓋率 100%）；`todos`／`body_goals` 依 ADR-10 核准新增 `sync_to_calendar`／`google_calendar_event_id` 欄位（`0031`／`0032` migration）；三處整合：待辦事項新增流程多一輪 `pending_todo_calendar_sync` 反問（單一時間點待辦預設 30 分鐘事件時長，區間待辦用實際起訖時間），標記完成/取消時同步刪除事件；重要通知（節日/生日）判斷通過就自動建立全天事件，不逐筆詢問；體態目標只有講清楚期限才會多問 `pending_goal_calendar_sync`，達成/取消時刪除事件。所有 Calendar 呼叫皆優雅降級（環境變數未設定或 API 例外都不影響原功能），`webhook.py`／`main.py` 新增 `_build_calendar_client()`；全專案 758 個測試全過，`submodules/calendar/client.py`／`src/bot/body.py`／`src/bot/notifications.py` 達到 100% 覆蓋率 | Claude（依 Robin「可以開工了」指示實作） |
+| 2026-08-07 | **Phase 2 Step 2.5 完成：外部 API 重試機制（FR-19i）**。Robin 確認繼續 Step 2.5 後，經 AskUserQuestion 確認三個設計問題：① 程式碼放置方式選「抽成共用 retry 工具」（而非 6 個 client 各自複製，見 submodules-core SPEC.md ADR-13，是 ADR-4「子模組彼此獨立、互不 import」的刻意例外）② 重試判斷標準選「只重試暫時性錯誤」（連線失敗、逾時、HTTP 429／5xx），永久性錯誤（401/403/404 等）直接往外拋不浪費重試次數 ③ 套用範圍確認這次只套用到 6 個現有子模組，104 求職爬蟲 API 留到 Phase 4 開工時比照。新增 `submodules/retry/`（`call_with_retry()`，只負責重試迴圈與 Exponential Backoff 1s/2s/4s 時間控制，`is_retryable` 判斷式由呼叫端傳入）；`llm`／`telegram`／`voice`／`gdrive`／`calendar`／`email` 六個 `client.py` 都套用，各自定義符合自己 SDK 例外型別的判斷邏輯（例如 `llm` 檢查 `ServerError`／`ClientError(429)`，`email` 排除 `SMTPAuthenticationError`）；`LLMClient` 既有的本地端節流保護（`LLMQuotaGuardError`）刻意留在重試包裹範圍之外，因為節流是時間窗口邏輯，立即重試無意義。TDD 全程 RED→GREEN：先寫 `retry` 的 6 個測試，再逐一為 6 個子模組補上重試情境測試；全專案 795 個測試全過，7 個子模組（含新增的 `retry`）皆維持 100% 覆蓋率。本次只完成「重試機制本身」，3 次全部失敗後把最後一次的原始例外原封不動往外拋出，「依錯誤來源進入 FR-19f／FR-19g 分級流程」留待 Step 2.6 在這個基礎上建立 | Claude（依 Robin 於 AskUserQuestion 確認範圍後實作） |
 
 ## 待決事項
 
@@ -145,7 +146,7 @@ Phase 1（MVP）已全數完成，進入 **Phase 2：記帳＋體態管理＋重
 2. ~~**Step 2.2：體態管理模組**（FR-45～FR-48）~~ **已於 2026-08-04 完成**（身高體重/運動/飲食三個子功能皆內建補記/更新/刪除 CRUD、共用一張目標表、三種 FR-45 預警情境，見上方里程碑紀錄；FR-31 待辦事項的跨模組歧義判斷這版尚未回頭補上，留待有實際使用回饋再處理）
 3. ~~**Step 2.3：重要通知模組**（FR-53，生日/節日排程 + 排除對象邏輯）~~ **已於 2026-08-04 完成**（固定節日＋家人生日推播、Owner 專屬「設定家人生日」自助補齊指令，見上方里程碑紀錄；弟媳/大妹婿/小妹婿/阿姨的生日待 Robin 用該指令自行補上）
 4. ~~**Step 2.4：錯誤 log 雲端連結**（FR-19b，**2026-08-05 範疇簡化，見 SPEC.md ADR-15**）~~ **已於 2026-08-05 完成**（複用既有 `GDriveClient` 上傳完整錯誤 log，私訊 Robin 專屬連結；其他使用者行為不變，見上方里程碑紀錄）
-5. **Step 2.5：外部 API 重試機制**（FR-19i）
-6. **Step 2.6：例外分級降級與決策執行狀態閉環回饋**（FR-19f～FR-19h），套用到 Phase 1 已完成的待辦事項/心情小記、本 Phase 的記帳/體態模組
+5. ~~**Step 2.5：外部 API 重試機制**（FR-19i）~~ **已於 2026-08-07 完成**（新增共用 `submodules/retry` 工具，`llm`／`telegram`／`voice`／`gdrive`／`calendar`／`email` 六個既有子模組皆已套用，只重試暫時性錯誤，見上方里程碑紀錄）
+6. **Step 2.6：例外分級降級與決策執行狀態閉環回饋**（FR-19f～FR-19h），套用到 Phase 1 已完成的待辦事項/心情小記、本 Phase 的記帳/體態模組——可直接建立在 Step 2.5 的重試機制之上：3 次重試全部失敗後才正式判定失敗，才進入分級處理
 7. ~~**Step 2.7：Google Calendar 整合**（FR-66，見 ADR-17，2026-08-05 新增）~~ **已於 2026-08-05 完成**（待辦事項/重要通知/體態目標期限單向同步寫入共用行事曆，見上方里程碑紀錄）
 8. 每天對照「建議每日分配」檢查進度

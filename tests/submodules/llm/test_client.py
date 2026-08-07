@@ -6,8 +6,10 @@
 2026-07-31：移除 `generate_with_search()` 相關測試（見 docs/specs/submodules-core/SPEC.md ADR-8）。
 """
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
+from google.genai import errors as genai_errors
 
 from submodules.llm import client as client_module
 from submodules.llm.client import LLMClient, LLMQuotaGuardError
@@ -121,3 +123,130 @@ def test_rate_limit_window_resets_after_time_passes(monkeypatch):
 
     fake_now[0] += 61  # 超過 60 秒視窗，舊紀錄應該過期
     llm_client.generate_text("視窗重置後應該可以再打")  # 不該再拋例外
+
+
+# --- 外部 API 重試機制（FR-19i，見 docs/specs/submodules-core/SPEC.md ADR-13）---
+
+
+class _FlakyModels:
+    """先拋出預先設定的例外若干次，之後才回傳正常 response，用來測試重試邏輯。"""
+
+    def __init__(self, exceptions, response):
+        self._exceptions = list(exceptions)
+        self._response = response
+        self.call_count = 0
+
+    def generate_content(self, **kwargs):
+        self.call_count += 1
+        if self._exceptions:
+            raise self._exceptions.pop(0)
+        return self._response
+
+
+def _make_flaky_client(monkeypatch, exceptions, response, api_key="retry-key"):
+    flaky_models = _FlakyModels(exceptions, response)
+    fake_genai_client = SimpleNamespace(models=flaky_models)
+    monkeypatch.setattr(client_module.genai, "Client", lambda api_key: fake_genai_client)
+    llm_client = LLMClient(api_key=api_key)
+    return llm_client, flaky_models
+
+
+def test_generate_text_retries_on_server_error_then_succeeds(monkeypatch):
+    mock_sleep = MagicMock()
+    monkeypatch.setattr(client_module.time, "sleep", mock_sleep)
+    response = SimpleNamespace(text="哈囉！")
+    server_error = genai_errors.ServerError(503, {"message": "overloaded"}, None)
+    llm_client, flaky_models = _make_flaky_client(monkeypatch, [server_error], response)
+
+    result = llm_client.generate_text("你好")
+
+    assert result == "哈囉！"
+    assert flaky_models.call_count == 2
+    mock_sleep.assert_called_once_with(1)
+
+
+def test_generate_text_retries_on_rate_limit_client_error(monkeypatch):
+    mock_sleep = MagicMock()
+    monkeypatch.setattr(client_module.time, "sleep", mock_sleep)
+    response = SimpleNamespace(text="哈囉！")
+    rate_limit_error = genai_errors.ClientError(429, {"message": "rate limited"}, None)
+    llm_client, flaky_models = _make_flaky_client(monkeypatch, [rate_limit_error], response)
+
+    result = llm_client.generate_text("你好")
+
+    assert result == "哈囉！"
+    assert flaky_models.call_count == 2
+    mock_sleep.assert_called_once_with(1)
+
+
+def test_generate_text_does_not_retry_permanent_client_error(monkeypatch):
+    """比照 ADR-8 實際排查過的情境：模型不存在（404）重試也沒用，應直接拋出、不浪費重試次數。"""
+    mock_sleep = MagicMock()
+    monkeypatch.setattr(client_module.time, "sleep", mock_sleep)
+    response = SimpleNamespace(text="不會被回傳")
+    not_found_error = genai_errors.ClientError(404, {"message": "model not found"}, None)
+    llm_client, flaky_models = _make_flaky_client(monkeypatch, [not_found_error], response)
+
+    with pytest.raises(genai_errors.ClientError):
+        llm_client.generate_text("你好")
+
+    assert flaky_models.call_count == 1
+    mock_sleep.assert_not_called()
+
+
+def test_generate_with_image_retries_on_server_error_then_succeeds(monkeypatch):
+    mock_sleep = MagicMock()
+    monkeypatch.setattr(client_module.time, "sleep", mock_sleep)
+    response = SimpleNamespace(text="這是一張貓的照片")
+    server_error = genai_errors.ServerError(500, {"message": "internal error"}, None)
+    llm_client, flaky_models = _make_flaky_client(monkeypatch, [server_error], response)
+
+    result = llm_client.generate_with_image("這是什麼？", image_bytes=b"fake-bytes")
+
+    assert result == "這是一張貓的照片"
+    assert flaky_models.call_count == 2
+    mock_sleep.assert_called_once_with(1)
+
+
+def test_generate_text_retries_on_connection_error_then_succeeds(monkeypatch):
+    mock_sleep = MagicMock()
+    monkeypatch.setattr(client_module.time, "sleep", mock_sleep)
+    response = SimpleNamespace(text="哈囉！")
+    llm_client, flaky_models = _make_flaky_client(monkeypatch, [ConnectionError("斷線")], response)
+
+    result = llm_client.generate_text("你好")
+
+    assert result == "哈囉！"
+    assert flaky_models.call_count == 2
+    mock_sleep.assert_called_once_with(1)
+
+
+def test_generate_text_raises_after_exhausting_retries(monkeypatch):
+    mock_sleep = MagicMock()
+    monkeypatch.setattr(client_module.time, "sleep", mock_sleep)
+    response = SimpleNamespace(text="不會被回傳")
+    server_errors = [genai_errors.ServerError(503, {"message": "overloaded"}, None) for _ in range(3)]
+    llm_client, flaky_models = _make_flaky_client(monkeypatch, server_errors, response)
+
+    with pytest.raises(genai_errors.ServerError):
+        llm_client.generate_text("你好")
+
+    assert flaky_models.call_count == 3
+    assert mock_sleep.call_args_list == [((1,),), ((2,),)]
+
+
+def test_quota_guard_error_is_not_retried(monkeypatch):
+    """本地端節流保護（LLMQuotaGuardError）發生在真正呼叫 API 之前，不屬於「暫時性外部錯誤」，
+    重試也沒有意義（門檻是時間窗口，不是立即重試就能解決），應直接拋出、不觸發任何 sleep。"""
+    mock_sleep = MagicMock()
+    monkeypatch.setattr(client_module.time, "sleep", mock_sleep)
+    response = SimpleNamespace(text="哈囉！")
+    llm_client, _fake_genai_client = _make_client(
+        monkeypatch, response, api_key="quota-key", max_calls_per_minute=1
+    )
+
+    llm_client.generate_text("第一句")
+    with pytest.raises(LLMQuotaGuardError):
+        llm_client.generate_text("第二句")
+
+    mock_sleep.assert_not_called()

@@ -7,34 +7,52 @@
 2026-08-02：改用 OAuth 2.0（真人帳號身分）認證，取代原本的 Service Account 認證
 （見 docs/specs/submodules-core/SPEC.md ADR-10），mock 對象與建構子參數同步更新。
 """
+from unittest.mock import MagicMock
+
 import pytest
+from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseUpload
 
 from submodules.gdrive import client as client_module
 from submodules.gdrive.client import GDriveClient
+from submodules.retry import client as retry_client_module
 
 
 class _FakeFilesCreateRequest:
-    def __init__(self, response):
+    """execute_side_effects：若提供，依序拋出這些例外（或回傳值），用來測試重試邏輯；
+    全部用完後才回傳 response。"""
+
+    def __init__(self, response, execute_side_effects=None):
         self._response = response
+        self._execute_side_effects = list(execute_side_effects or [])
+        self.execute_call_count = 0
 
     def execute(self):
+        self.execute_call_count += 1
+        if self._execute_side_effects:
+            effect = self._execute_side_effects.pop(0)
+            if isinstance(effect, Exception):
+                raise effect
+            return effect
         return self._response
 
 
 class _FakeFiles:
-    def __init__(self, response):
+    def __init__(self, response, execute_side_effects=None):
         self._response = response
+        self._execute_side_effects = execute_side_effects
         self.last_create_call = None
+        self.last_request = None
 
     def create(self, body, media_body, fields):
         self.last_create_call = {"body": body, "media_body": media_body, "fields": fields}
-        return _FakeFilesCreateRequest(self._response)
+        self.last_request = _FakeFilesCreateRequest(self._response, self._execute_side_effects)
+        return self.last_request
 
 
 class _FakeDriveService:
-    def __init__(self, response):
-        self._files = _FakeFiles(response)
+    def __init__(self, response, execute_side_effects=None):
+        self._files = _FakeFiles(response, execute_side_effects)
 
     def files(self):
         return self._files
@@ -47,9 +65,10 @@ def _make_client(
     client_id="fake-client-id",
     client_secret="fake-client-secret",
     folder_id="fake-folder",
+    execute_side_effects=None,
 ):
     response = response or {"id": "abc123", "webViewLink": "https://drive.google.com/file/d/abc123/view"}
-    fake_service = _FakeDriveService(response)
+    fake_service = _FakeDriveService(response, execute_side_effects)
 
     captured_credentials_kwargs = {}
 
@@ -122,3 +141,65 @@ def test_upload_file_sends_correct_metadata_and_folder(monkeypatch):
     assert call["body"] == {"name": "test.jpg", "parents": ["my-folder-id"]}
     assert call["fields"] == "id, webViewLink"
     assert isinstance(call["media_body"], MediaIoBaseUpload)
+
+
+# --- 外部 API 重試機制（FR-19i，見 docs/specs/submodules-core/SPEC.md ADR-13）---
+
+
+def _http_error(status_code):
+    fake_resp = MagicMock()
+    fake_resp.status = status_code
+    return HttpError(fake_resp, b"error body")
+
+
+def test_upload_file_retries_on_5xx_then_succeeds(monkeypatch):
+    mock_sleep = MagicMock()
+    monkeypatch.setattr(retry_client_module.time, "sleep", mock_sleep)
+    gdrive_client, fake_service, _ = _make_client(
+        monkeypatch, execute_side_effects=[_http_error(503)]
+    )
+
+    url = gdrive_client.upload_file(filename="test.jpg", content=b"fake-bytes", mime_type="image/jpeg")
+
+    assert url == "https://drive.google.com/file/d/abc123/view"
+    assert fake_service.files().last_request.execute_call_count == 2
+    mock_sleep.assert_called_once_with(1)
+
+
+def test_upload_file_does_not_retry_on_403(monkeypatch):
+    mock_sleep = MagicMock()
+    monkeypatch.setattr(retry_client_module.time, "sleep", mock_sleep)
+    gdrive_client, fake_service, _ = _make_client(
+        monkeypatch, execute_side_effects=[_http_error(403)]
+    )
+
+    with pytest.raises(HttpError):
+        gdrive_client.upload_file(filename="test.jpg", content=b"fake-bytes", mime_type="image/jpeg")
+
+    assert fake_service.files().last_request.execute_call_count == 1
+    mock_sleep.assert_not_called()
+
+
+def test_is_retryable_google_api_error_treats_http_error_without_status_as_non_retryable():
+    fake_resp = MagicMock()
+    fake_resp.status = None
+    error = HttpError(fake_resp, b"error body")
+    assert client_module._is_retryable_google_api_error(error) is False
+
+
+def test_is_retryable_google_api_error_retries_connection_error():
+    assert client_module._is_retryable_google_api_error(ConnectionError("斷線")) is True
+
+
+def test_upload_file_raises_after_exhausting_retries(monkeypatch):
+    mock_sleep = MagicMock()
+    monkeypatch.setattr(retry_client_module.time, "sleep", mock_sleep)
+    gdrive_client, fake_service, _ = _make_client(
+        monkeypatch, execute_side_effects=[_http_error(500), _http_error(500), _http_error(500)]
+    )
+
+    with pytest.raises(HttpError):
+        gdrive_client.upload_file(filename="test.jpg", content=b"fake-bytes", mime_type="image/jpeg")
+
+    assert fake_service.files().last_request.execute_call_count == 3
+    assert mock_sleep.call_args_list == [((1,),), ((2,),)]

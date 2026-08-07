@@ -3,7 +3,7 @@ title: Robinson — Robin 與家人們的生活小助手
 slug: robinson
 status: draft
 created: 2026-07-29
-updated: 2026-08-05
+updated: 2026-08-07
 owner: Robin
 ---
 
@@ -136,7 +136,7 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
   - [ ] FR-19f：例外分級降級 —「一般感冒級」：當 Try 流程中 LLM API 本身仍可正常連線與推送訊息，僅其他元件異常（資料庫連線失敗、爬蟲解析錯誤、第三方 API 逾時等，且已用盡 FR-19i 的重試機制）時，由後端捕捉例外後私訊完整錯誤詳情給 Robin，並回覆使用者靜態感冒語句（不額外呼叫 LLM 生成，節省 Token）。範本：「🤒 主任，我好像有點小感冒（系統暫時性異常），不過別擔心！我已經自動紀錄日誌通知 Robin 處理囉，請稍後再試一次！」
   - [ ] FR-19g：例外分級降級 —「重大疾病級」：當 Try 區塊執行到呼叫 LLM API（如 `call_llm_api()`）本身直接拋出例外（Gemini 伺服器 500、API Key 失效、額度用罄、網路斷線等，且已用盡 FR-19i 重試機制），代表 LLM 已完全無法處理任何請求或推送訊息。此時必須完全繞過 LLM，直接由 Telegram Bot 底層讀取寫死在後端的靜態字串範本：① 向 Robin 推播最高等級的 StackTrace 告警 ② 同時向所有已綁定的家人帳號廣播重大疾病通知。範本：「🚨 主人與各位家人非常抱歉，我最近患上了重大的疾病（AI 核心服務暫時無法運作），目前無法回答任何問題。Robin 已收到緊急通知並正在全力搶救中！」
   - [ ] FR-19h：決策執行狀態閉環回饋 — 所有涉及資料異動的操作（寫入 DB、記帳、體態/心情紀錄、新增待辦等），在使用者做出最終「確認」指令後，不論成功或失敗都必須明確回覆結果，嚴禁靜默或無明確狀態反饋：① 成功 — 明確告知操作已成功落實（例：「好的！已成功為您紀錄今日晚餐開銷 $150 元囉！」）② 失敗（一般感冒級）— 依 FR-19f 語句告知未成功並已通知 Robin 處理中 ③ 失敗（重大疾病級）— 依 FR-19g 底層寫死範本回覆
-  - [ ] FR-19i：外部 API 呼叫重試機制 — 所有外部 API 呼叫（Gemini/OpenAI API、Telegram Bot API、104 AJAX API 等）皆須內建自動重試：最多重試 3 次（Max Retries = 3），採 Exponential Backoff 搭配 Time Sleep（第 1 次失敗等 1 秒、第 2 次失敗等 2 秒、第 3 次失敗等 4 秒），避免連續轟炸外部 API 觸發封鎖或 Rate Limit；3 次全部失敗才正式判定該次 Request 失敗，並依錯誤來源進入 FR-19f 或 FR-19g 的分級流程
+  - [x] FR-19i（**2026-08-07 完成，見 docs/specs/submodules-core/SPEC.md FR-13、ADR-13**）：外部 API 呼叫重試機制 — 所有外部 API 呼叫（Gemini/OpenAI API、Telegram Bot API、104 AJAX API 等）皆須內建自動重試：最多重試 3 次（Max Retries = 3），採 Exponential Backoff 搭配 Time Sleep（第 1 次失敗等 1 秒、第 2 次失敗等 2 秒、第 3 次失敗等 4 秒），避免連續轟炸外部 API 觸發封鎖或 Rate Limit；3 次全部失敗才正式判定該次 Request 失敗，並依錯誤來源進入 FR-19f 或 FR-19g 的分級流程。**實作範圍**：新增共用工具 `submodules/retry`（`call_with_retry()`），`llm`／`telegram`／`voice`／`gdrive`／`calendar`／`email` 六個既有子模組皆已套用，只重試「暫時性錯誤」（連線失敗、逾時、HTTP 429／5xx），永久性錯誤（401/403/404 等）直接往外拋不浪費重試次數；104 求職爬蟲 API 屬於 Phase 4 才會存在的程式碼，留待那時比照辦理；本條只完成「重試機制本身」，3 次全部失敗後把最後一次的原始例外原封不動往外拋出，讓呼叫端既有的 `except` 邏輯不需要改動——「依錯誤來源進入 FR-19f 或 FR-19g 的分級流程」這段留待 Step 2.6 在這個基礎上建立
 - [x] FR-20（2026-08-02 完成，Step 1.6）：問題修復後（Robin 手動修復），Robinson 需主動回訊息告知所有使用者「我康復了」；此廣播主要對應 FR-19g（重大疾病級）的全員影響情境，FR-19f（一般感冒級）僅私訊 Robin、未廣播全員，修復後是否額外告知該次受影響的使用者由 Robin 自行決定。**Phase 1 實作範圍**：「有沒有修好」完全由 Robin 自己判斷（**2026-08-05 更新，見 ADR-15**：FR-19b 已改為輕量的雲端 log 連結設計，不再有 AI 自主修復／GitHub PR 機制，本條「Robin 自己判斷」為長期定案，非過渡狀態），新增 Owner 專屬指令 `/recovered`（`commands.handle_recovered()`），手動觸發時廣播固定文案給所有已綁定家人（排除 Robin 自己）
 - [x] FR-21（2026-08-02 完成，Step 1.6，僅 Neon 容量部分）：監控 Neon 容量（達 80% 告警）、Gemini 免費額度用量等異常指標，超過門檻時主動通知 Robin。**Phase 1 實作範圍**：只做 Neon 容量監控（`src/bot/monitoring.py`，`NeonCapacityMonitor`），借用 `/healthz` 既有的 cron-job.org 每 10 分鐘呼叫頻率順便檢查，容量達 80% 私訊 Robin、回落後重置告警狀態避免重複轟炸；Gemini 免費額度用量監控刻意暫緩——官方沒有查詢即時用量的 API，本地端節流計數器（ADR-5）只能粗略估算「每分鐘呼叫次數」，無法真的得知「今天/這個月還剩多少免費額度」，準確度有限，且既有的 429 例外已經會走 FR-19a 私訊機制當作事後告警，留待未來有更好方案或官方 API 支援時再補上主動式監控
 

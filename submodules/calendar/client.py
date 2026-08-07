@@ -20,10 +20,28 @@ docs/specs/submodules-core/SPEC.md ADR-12）。取得 refresh token 的一次性
 """
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+
+from submodules.retry.client import call_with_retry
 
 _SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
 _TOKEN_URI = "https://oauth2.googleapis.com/token"
 _TIME_ZONE = "Asia/Taipei"
+
+# 2026-08-05：外部 API 重試機制（見 docs/specs/robinson/SPEC.md FR-19i、
+# docs/specs/submodules-core/SPEC.md ADR-13）。判斷邏輯比照 submodules/gdrive：
+# 只重試 HTTP 429／5xx 與連線/逾時類例外，其餘 4xx 直接往外拋。
+_RETRYABLE_HTTP_STATUS_MIN = 500
+_RETRYABLE_RATE_LIMIT_STATUS = 429
+
+
+def _is_retryable_google_api_error(exc: Exception) -> bool:
+    if isinstance(exc, HttpError):
+        status_code = getattr(exc.resp, "status", None)
+        if status_code is None:
+            return False
+        return status_code == _RETRYABLE_RATE_LIMIT_STATUS or status_code >= _RETRYABLE_HTTP_STATUS_MIN
+    return isinstance(exc, (ConnectionError, TimeoutError))
 
 
 class CalendarClient:
@@ -58,7 +76,8 @@ class CalendarClient:
         ISO 8601 時間戳記字串（例如 `2026-08-10T08:00:00+08:00`）。
         """
         body = self._build_event_body(summary, start, end, description, all_day)
-        created = self._service.events().insert(calendarId=self._calendar_id, body=body).execute()
+        request = self._service.events().insert(calendarId=self._calendar_id, body=body)
+        created = call_with_retry(request.execute, is_retryable=_is_retryable_google_api_error)
         return created["id"]
 
     def update_event(
@@ -72,13 +91,15 @@ class CalendarClient:
     ) -> None:
         """用完整覆蓋的方式更新既有事件（呼叫端已知完整最新狀態，不做部分欄位 patch）。"""
         body = self._build_event_body(summary, start, end, description, all_day)
-        self._service.events().update(
+        request = self._service.events().update(
             calendarId=self._calendar_id, eventId=event_id, body=body
-        ).execute()
+        )
+        call_with_retry(request.execute, is_retryable=_is_retryable_google_api_error)
 
     def delete_event(self, event_id: str) -> None:
         """刪除既有事件。"""
-        self._service.events().delete(calendarId=self._calendar_id, eventId=event_id).execute()
+        request = self._service.events().delete(calendarId=self._calendar_id, eventId=event_id)
+        call_with_retry(request.execute, is_retryable=_is_retryable_google_api_error)
 
     def _build_event_body(
         self, summary: str, start: str, end: str, description: str, all_day: bool
