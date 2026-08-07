@@ -147,7 +147,7 @@ updated: 2026-08-07
 
 **Phase 3（個人技能成長＋好友模式）進行中：**
 
-1. ~~**Step 3.1：每日重點技術分享**（FR-22、FR-23）~~ **已於 2026-08-07 完成，同日經 Robin 驗收回饋修正為兩階段設計**（固定台灣時間 23:00 收集 TLDR 電子報`dan@tldrnewsletter.com`＋IThome／TechCrunch RSS 當天內容並寫入 `skill_growth_digests`，隔天固定 08:00 推播前一晚收集結果給 Robin；三個來源皆無內容時固定回覆「未獲得最新技術分享」，見上方里程碑紀錄；**待辦：Robin 需在 AI Studio 申請 `GEMINI_API_SKILL_GROWTH_KEY` 並設定到 Render 環境變數，否則這個排程檢查會持續優雅跳過**）
+1. ~~**Step 3.1：每日重點技術分享**（FR-22、FR-23）~~ **已於 2026-08-07 完成，同日經 Robin 驗收回饋修正為兩階段設計**（固定台灣時間 23:00 收集 TLDR 電子報`dan@tldrnewsletter.com`＋IThome／TechCrunch RSS 當天內容並寫入 `skill_growth_digests`，隔天固定 08:00 推播前一晚收集結果給 Robin；三個來源皆無內容時固定回覆「未獲得最新技術分享」，見上方里程碑紀錄；`GEMINI_API_SKILL_GROWTH_KEY` 已由 Robin 申請並設定到 `.env`／Render，待下次 `git push` 部署後即可實際運作）
 2. **Step 3.2：TOEIC 雙軌題庫 Pipeline**（FR-24、FR-25a～FR-25f）—— 軌道一拍照/音檔入庫（Gemini Vision 影像 Key + Groq Whisper 語音轉文字，見 ADR-12）、軌道二 Gemini 文字 Key 單字題即時生成、週排程去重，尚未開始
 3. **Step 3.3：作答紀錄、成效追蹤圖表與正式成績欄位**（FR-26～FR-30），依賴 Step 3.2，尚未開始
 4. **Step 3.4：YouTube 技術情報模組**（FR-57～FR-59，見 ADR-9）—— YouTube Data API 擷取、三層 Top 3 篩選、每週四自動推播、配額監控與 Fallback 降級，尚未開始
