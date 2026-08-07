@@ -9,8 +9,12 @@
 - **軌道一**（`sync_track1_from_drive()`）：掃描 Google Drive 資料夾內 Robin 手動上傳的題目
   照片/音檔，依檔名比對成一題一題，呼叫 Gemini Vision 解析文字與選項，寫入 `toeic_questions`。
   聽力題若只有整包 MP3、還沒切成單題小檔，先用 Groq Whisper 依語句停頓自動切割（見
-  `_split_whole_audio()`：**啟發式邏輯，尚未有真實錄音驗證過，是 Robin 2026-08-07 已知情並
-  選擇這次一起做的風險項**，之後可能需要依實際素材調整切割參數）。
+  `_find_split_plan()`：**啟發式邏輯，是 Robin 2026-08-07 已知情並選擇這次一起做的風險項**。
+  同日用 Robin 提供的真實錄音 `Test01_Part1.mp3` 實測，發現有些音檔開頭會有一段作答說明語音
+  （例如 TOEIC Part 1 開考前的固定口頭指示），若直接照「取最大的幾個停頓」切割，說明語音會被
+  併進第一題、導致第一段長度異常；改為「無說明語音／有說明語音」兩種假設各切一次、比較每段
+  長度變異數，自動選出較合理的一組，說明語音若被判定存在會直接捨棄不計入任何題目。之後可能
+  仍需依更多真實素材微調）。
 - **軌道二**（`generate_track2_vocab_questions()`）：呼叫 Gemini 即時生成多益核心單字英翻中
   選擇題，依 `users.toeic_weekly_question_count`（Robin 自訂，預設 21）產生新題，跳過已存在
   的單字避免重複出題、浪費 Token（FR-25e）。
@@ -225,33 +229,120 @@ def _process_listen_questions_with_existing_audio(
         _insert_question(db, test_id, "listen", qnum, parsed, image_file, audio_url=audio_file.get("webViewLink"))
 
 
-def _find_split_points(segments: list[dict], num_splits: int) -> list[float]:
-    """依 Whisper 逐句 timestamp 之間的停頓長度，抓出 `num_splits` 個最大的停頓中點，當作切割點
-    （TOEIC 聽力題目之間通常會有較長的作答停頓）。**啟發式邏輯**，見模組 docstring 已知風險。
+# 2026-08-07（Robin 實測 Test01_Part1.mp3 後追加）：有些整包音檔開頭會有一段作答說明語音
+# （例如 TOEIC Part 1 開考前的固定口頭指示），有些則沒有——無法事先知道是哪一種，見下方
+# `_find_split_plan()` 用「有無說明語音、說明語音在哪裡結束」多種假設各切一次、比較結果哪個
+# 更合理來自動判斷。
+_INTRO_MAX_CANDIDATE_RATIO = 0.6  # 說明語音只會出現在開頭，只在音檔前 60% 範圍內找它的結尾候選點
+_MIN_GAP_RATIO_OF_MAX = 0.5  # 候選切割點的停頓長度至少要達到全音檔最大停頓的一半，排除句子內部的小停頓雜訊
+
+
+def _segment_length_variance(start_offset: float, split_points: list[float], total_duration: float) -> float:
+    """評估一組切割方案「每段音檔長度是否夠平均」的變異數，數值越小代表切割結果越合理。
+
+    TOEIC 每一題的音檔長度通常彼此相近；若某一段明顯比其他段長很多（例如混進了說明語音或其他
+    非題目內容），變異數會被拉高，藉此讓 `_find_split_plan()` 判斷出「這組切法比較不合理」。
     """
-    if num_splits <= 0 or len(segments) < 2:
-        return []
+    boundaries = [start_offset] + split_points + [total_duration]
+    lengths = [boundaries[i + 1] - boundaries[i] for i in range(len(boundaries) - 1)]
+    if not lengths or any(length <= 0 for length in lengths):
+        return float("inf")
+    mean_length = sum(lengths) / len(lengths)
+    return sum((length - mean_length) ** 2 for length in lengths) / len(lengths)
+
+
+def _split_points_for_target_length(
+    candidates: list[float], num_splits: int, start_offset: float, target_length: float
+) -> list[float]:
+    """依「每題預期長度」（`target_length`）找出最接近理想切割位置的自然停頓點；找不到候選點
+    （或已被前一個切割點用掉）時，直接退回理想位置本身，確保一定會回傳 `num_splits` 個切割點。
+    """
+    used: set[float] = set()
+    points: list[float] = []
+    for k in range(1, num_splits + 1):
+        target = start_offset + k * target_length
+        remaining = [c for c in candidates if c not in used]
+        nearest = min(remaining, key=lambda c: abs(c - target)) if remaining else None
+        if nearest is None:
+            points.append(target)
+        else:
+            used.add(nearest)
+            points.append(nearest)
+    return sorted(points)
+
+
+def _find_split_plan(segments: list[dict], num_questions: int, total_duration: float) -> tuple[float, list[float]]:
+    """決定切割方案，回傳 `(題目起始秒數, 題目之間的切割點列表)`。
+
+    做法：候選切割點先篩選成「停頓長度至少達到全音檔最大停頓一半」的那些（`_MIN_GAP_RATIO_OF_
+    MAX`），排除句子/說明語音內部無意義的小停頓雜訊——題目與題目之間的停頓通常明顯比句子內部的
+    停頓長很多、彼此長度也相近，用比例篩選比單純取「最大的 N 個」更能過濾掉雜訊。接著把「完全
+    沒有說明語音」（題目起始秒數＝0）以及「篩選後音檔前 60% 範圍內的每一個候選停頓都當作一次
+    可能的說明語音結尾」逐一當作假設，各自把剩餘時間平分成 `num_questions` 題並計算
+    `_segment_length_variance()`，最後選變異數最小（也就是每題長度最平均）的那組。
+
+    **2026-08-07 修正**：原本只挑「前 60% 範圍內最大的那個停頓」當說明語音結尾、候選點也只是
+    單純取「最大的 N 個」，但實測 Robin 提供的真實錄音 `Test01_Part1.mp3` 發現兩個問題：
+    ① 說明語音結尾之後的題目間停頓，也有好幾個一樣落在前 60% 範圍內、量級相近，只取「最大」
+    那個容易誤判成別的題目邊界，改為每個候選點都各自試切一次、實際比較結果優劣
+    ② 候選點若只取「最大的 N 個」，當 N 訂得夠大時會混入大量句子內部的小停頓，這些小停頓剛好
+    離某個理想切割位置很近時會被誤選中，讓「沒有說明語音」的假設看起來變異數異常地低（因為到處
+    都找得到差不多近的小停頓去湊數，不代表真的是題目邊界）；改為依「停頓長度佔全音檔最大停頓的
+    比例」篩選，只留下真正夠長、夠可能是題目邊界的候選點。**啟發式邏輯**，見模組 docstring 已知
+    風險，之後可能仍需依更多真實素材調整。
+    """
+    if num_questions <= 1 or len(segments) < 2:
+        return 0.0, []
+
     gaps = []
     for i in range(len(segments) - 1):
         gap_duration = segments[i + 1]["start"] - segments[i]["end"]
         midpoint = (segments[i]["end"] + segments[i + 1]["start"]) / 2
         gaps.append((gap_duration, midpoint))
     gaps.sort(key=lambda g: g[0], reverse=True)
-    chosen = gaps[:num_splits]
-    return sorted(midpoint for _, midpoint in chosen)
+
+    max_gap_duration = gaps[0][0]
+    candidates = [midpoint for duration, midpoint in gaps if duration >= max_gap_duration * _MIN_GAP_RATIO_OF_MAX]
+    # 篩選後的候選點若不夠湊出所需的切割數，代表比例門檻篩太嚴，放寬回取最大的 (num_questions - 1) 個，
+    # 確保至少有足夠候選點可以組出一組切法（見 `_split_points_for_target_length` 的 fallback 保底）。
+    if len(candidates) < num_questions - 1:
+        candidates = [midpoint for _, midpoint in gaps[: num_questions - 1]]
+
+    intro_hypotheses = [0.0] + sorted(c for c in candidates if c <= total_duration * _INTRO_MAX_CANDIDATE_RATIO)
+
+    best_start_offset = 0.0
+    best_points: list[float] = []
+    best_variance = float("inf")
+    for start_offset in intro_hypotheses:
+        remaining_candidates = [c for c in candidates if c > start_offset]
+        target_length = (total_duration - start_offset) / num_questions
+        points = _split_points_for_target_length(remaining_candidates, num_questions - 1, start_offset, target_length)
+        variance = _segment_length_variance(start_offset, points, total_duration)
+        if variance < best_variance:
+            best_variance = variance
+            best_start_offset = start_offset
+            best_points = points
+
+    return best_start_offset, best_points
 
 
 def split_audio_by_question_count(
     audio_bytes: bytes, question_numbers: list[int], transcript_segments: list[dict]
 ) -> dict[int, bytes]:
-    """把整包音檔依猜測的停頓切割點切成 `len(question_numbers)` 段，依序對應到由小到大排序的
-    `question_numbers`。需要系統安裝 `ffmpeg`（`pydub` 依賴，見 Dockerfile）。
+    """把整包音檔依 `_find_split_plan()` 決定的方案切成 `len(question_numbers)` 段，依序對應到
+    由小到大排序的 `question_numbers`；若判斷開頭有說明語音，該段會被捨棄、不計入任何題目。
+    需要系統安裝 `ffmpeg`（`pydub` 依賴，見 Dockerfile）。
     """
     sorted_numbers = sorted(question_numbers)
-    split_points_sec = _find_split_points(transcript_segments, len(sorted_numbers) - 1)
     audio = AudioSegment.from_file(io.BytesIO(audio_bytes))
+    total_duration = len(audio) / 1000
+
+    start_offset, split_points_sec = _find_split_plan(transcript_segments, len(sorted_numbers), total_duration)
+
     total_ms = len(audio)
-    boundaries_ms = [0] + [int(point * 1000) for point in split_points_sec] + [total_ms]
+    boundaries_ms = (
+        [int(start_offset * 1000)] + [int(point * 1000) for point in split_points_sec] + [total_ms]
+    )
 
     result: dict[int, bytes] = {}
     for qnum, start_ms, end_ms in zip(sorted_numbers, boundaries_ms[:-1], boundaries_ms[1:]):

@@ -272,25 +272,86 @@ def test_sync_skips_split_batch_when_whisper_fails(fake_db):
     image_llm_clients[0].generate_with_image.assert_not_called()
 
 
-# --- _find_split_points / split_audio_by_question_count ---
+# --- _segment_length_variance / _split_points_for_target_length ---
 
 
-def test_find_split_points_picks_largest_gaps():
+def test_segment_length_variance_is_zero_for_perfectly_even_segments():
+    variance = toeic._segment_length_variance(0.0, [10.0, 20.0], 30.0)
+    assert variance == 0.0
+
+
+def test_segment_length_variance_is_higher_for_uneven_segments():
+    even = toeic._segment_length_variance(0.0, [10.0, 20.0], 30.0)
+    uneven = toeic._segment_length_variance(0.0, [2.0, 4.0], 30.0)
+    assert uneven > even
+
+
+def test_segment_length_variance_returns_infinity_for_non_positive_length():
+    assert toeic._segment_length_variance(0.0, [5.0, 5.0], 5.0) == float("inf")
+
+
+def test_split_points_for_target_length_picks_nearest_candidates():
+    points = toeic._split_points_for_target_length([13.2, 29.5], 2, 0.0, 15.0)
+    assert points == [13.2, 29.5]
+
+
+def test_split_points_for_target_length_falls_back_to_ideal_position_when_no_candidates():
+    points = toeic._split_points_for_target_length([], 2, 0.0, 10.0)
+    assert points == [10.0, 20.0]
+
+
+def test_split_points_for_target_length_does_not_reuse_same_candidate():
+    points = toeic._split_points_for_target_length([15.0], 2, 0.0, 10.0)
+    assert points[0] == 15.0
+    assert points[1] != 15.0  # 第二個切割點的候選點已被用掉，應該退回理想位置
+
+
+# --- _find_split_plan ---
+
+
+def test_find_split_plan_evenly_divides_when_no_intro_detected():
+    # 3 題，題目之間有明顯大停頓（6s），題目內部只有小停頓（0.3s）雜訊，且不像有說明語音
     segments = [
-        {"start": 0.0, "end": 1.0, "text": "a"},
-        {"start": 1.2, "end": 2.0, "text": "b"},  # 小停頓 0.2s
-        {"start": 10.0, "end": 11.0, "text": "c"},  # 大停頓 8.0s
+        {"start": 0.0, "end": 5.0, "text": "q1a"},
+        {"start": 5.3, "end": 10.0, "text": "q1b"},
+        {"start": 16.0, "end": 21.0, "text": "q2a"},
+        {"start": 21.3, "end": 26.0, "text": "q2b"},
+        {"start": 32.0, "end": 37.0, "text": "q3a"},
+        {"start": 37.3, "end": 42.0, "text": "q3b"},
     ]
 
-    split_points = toeic._find_split_points(segments, 1)
+    start_offset, points = toeic._find_split_plan(segments, 3, 42.0)
 
-    assert split_points == [6.0]  # (2.0 + 10.0) / 2
+    assert start_offset == 0.0
+    assert points == [13.0, 29.0]
 
 
-def test_find_split_points_returns_empty_when_no_splits_needed():
+def test_find_split_plan_detects_leading_instructions_and_excludes_them():
+    # 模擬「開頭有一段作答說明語音」的情境：說明語音本身內部只有小停頓（不該被誤判成題目邊界），
+    # 說明語音結尾與 3 題題目之間的停頓（6s）明顯比說明語音內部的停頓（0.3s）長很多
+    segments = [
+        {"start": 0.0, "end": 5.0, "text": "intro-a"},
+        {"start": 5.3, "end": 10.0, "text": "intro-b"},
+        {"start": 10.3, "end": 15.0, "text": "intro-c"},  # 說明語音結束於 15.0
+        {"start": 21.0, "end": 26.0, "text": "q1"},  # 說明語音 -> 第一題，停頓 6s
+        {"start": 32.0, "end": 37.0, "text": "q2"},  # 第一題 -> 第二題，停頓 6s
+        {"start": 43.0, "end": 48.0, "text": "q3"},  # 第二題 -> 第三題，停頓 6s
+    ]
+    total_duration = 53.0
+
+    start_offset, points = toeic._find_split_plan(segments, 3, total_duration)
+
+    assert start_offset == 18.0  # (15.0 + 21.0) / 2，說明語音結尾與第一題之間的停頓中點
+    assert points == [29.0, 40.0]
+
+
+def test_find_split_plan_returns_empty_when_only_one_question():
     segments = [{"start": 0.0, "end": 1.0, "text": "a"}, {"start": 2.0, "end": 3.0, "text": "b"}]
 
-    assert toeic._find_split_points(segments, 0) == []
+    start_offset, points = toeic._find_split_plan(segments, 1, 3.0)
+
+    assert start_offset == 0.0
+    assert points == []
 
 
 def test_split_audio_by_question_count_returns_correct_number_of_segments():
@@ -309,6 +370,45 @@ def test_split_audio_by_question_count_returns_correct_number_of_segments():
         # 確保每段都是可以被還原解析的合法音檔
         decoded = AudioSegment.from_file(io.BytesIO(segment_bytes))
         assert len(decoded) > 0
+
+
+def test_split_audio_by_question_count_excludes_leading_instructions_regression():
+    """迴歸測試：2026-08-07 用 Robin 提供的真實錄音 Test01_Part1.mp3 實測時發現，音檔開頭若有
+    一段作答說明語音，早期版本的切割邏輯會把整段說明語音併入第一題（導致第一段長度是其他題目
+    的 5 倍以上）；這裡用合成音檔重現同樣的「開頭有一段明顯比題目間停頓更長的說明語音」結構，
+    確保修正後的邏輯會正確排除說明語音、6 段長度彼此相近。
+    """
+    intro_ms = 15000
+    gap_ms = 3000
+    question_ms = 5000
+    segments_meta = []
+    # 說明語音本身在時間軸上不需要精確模擬語句，只要整體時長跟後面題目的停頓比起來夠長即可
+    audio = Sine(220).to_audio_segment(duration=intro_ms).apply_gain(-20)
+    cursor = intro_ms
+
+    for _ in range(6):
+        audio += AudioSegment.silent(duration=gap_ms)
+        question_start = cursor + gap_ms
+        audio += Sine(440).to_audio_segment(duration=question_ms).apply_gain(-20)
+        segments_meta.append((question_start / 1000, (question_start + question_ms) / 1000))
+        cursor = question_start + question_ms
+
+    buffer = io.BytesIO()
+    audio.export(buffer, format="mp3")
+    audio_bytes = buffer.getvalue()
+
+    # 模擬 Whisper 回傳的逐句 timestamp：說明語音當一個大區塊，後面 6 題各自獨立一段
+    transcript_segments = [{"start": 0.0, "end": intro_ms / 1000, "text": "intro"}]
+    transcript_segments += [{"start": s, "end": e, "text": "q"} for s, e in segments_meta]
+
+    result = toeic.split_audio_by_question_count(audio_bytes, [1, 2, 3, 4, 5, 6], transcript_segments)
+
+    assert set(result.keys()) == {1, 2, 3, 4, 5, 6}
+    lengths_ms = [len(AudioSegment.from_file(io.BytesIO(result[q]))) for q in range(1, 7)]
+    # 說明語音（15 秒）應該被排除，不應該有任何一段長度接近或超過說明語音本身
+    assert max(lengths_ms) < intro_ms
+    # 6 段長度應該彼此相近（允許誤差），不應該出現某一段特別長/特別短的離群值
+    assert max(lengths_ms) - min(lengths_ms) < question_ms
 
 
 # --- generate_track2_vocab_questions ---
