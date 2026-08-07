@@ -3,7 +3,7 @@ docs/specs/feature-toggles/SPEC.md FR-1～FR-2、docs/specs/chat-core/SPEC.md AD
 docs/specs/robinson/SPEC.md FR-20、FR-31、FR-31a、FR-32、FR-41～FR-44、FR-41a、FR-42a、FR-45～FR-48、
 FR-49、FR-50、FR-60～FR-63）。"""
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from src.bot import auth, body, finance, knowledge, mood, notifications, privacy, templates, toggles
@@ -666,6 +666,20 @@ _TODO_REMINDER_CONFIRM_PROMPT = (
     "(2) 不需要提醒 → CANCEL"
 )
 
+# 2026-08-05（見 robinson SPEC.md FR-66a、ADR-17）：待辦事項新增流程最後追加一輪反問，每次都
+# 明確詢問、不預設，避免使用者忘記講而讓私密待辦意外曝光在家庭共用行事曆上（ADR-17 決策 7）。
+_TODO_CALENDAR_SYNC_PROMPT = (
+    "Robinson 剛詢問使用者「要不要同步到 Google 家庭行事曆呢？」，這是使用者這一則的回覆："
+    "「{text}」。\n"
+    "請判斷使用者的意思，整則回覆只能輸出以下其中一個固定字，不要輸出其他任何文字：\n"
+    "(1) 要同步 → CONFIRM\n"
+    "(2) 不要同步 → CANCEL"
+)
+
+# FR-66a：預設事件時長（分鐘），單一時間點待辦（沒有 start_at）在行事曆上顯示成一個時間區塊，
+# 而不是零長度事件；區間待辦則直接用 start_at～due_at 當作事件的起訖時間，不套用這個預設值。
+_TODO_CALENDAR_DEFAULT_DURATION = timedelta(minutes=30)
+
 _TODO_ACTION_CLASSIFY_PROMPT = (
     "使用者剛被 Robinson 反問要把待辦事項「{content}」標記為完成還是取消，這是使用者這一則的回覆："
     "「{text}」。\n"
@@ -845,20 +859,90 @@ def handle_todo_reminder_step(
     telegram_user_id: int,
     text: str,
 ) -> str:
-    """處理 `pending_todo_reminder` 狀態下使用者對「需要在前 30 分鐘時提醒你嗎？」的回覆，
-    確定後才真正寫入 todos（FR-31、FR-31b、FR-32）。
+    """處理 `pending_todo_reminder` 狀態下使用者對「需要在前 30 分鐘時提醒你嗎？」的回覆
+    （FR-31、FR-31b、FR-32）。
+
+    2026-08-05 起（見 FR-66a、ADR-17）不在這一步就寫入 `todos`，改為再多問一輪「要不要同步到
+    Google 家庭行事曆」（`pending_todo_calendar_sync`），確定後才真正呼叫 `create_todo()`。
     """
     state = state_store.get(telegram_user_id)
     target_user_id = state["target_user_id"]
     content = state["content"]
     due_at = state["due_at"]
     start_at = state.get("start_at")
-    state_store.clear(telegram_user_id)
 
     decision = llm_client.generate_text(_TODO_REMINDER_CONFIRM_PROMPT.format(text=text)).strip()
     remind_before_30min = decision == "CONFIRM"
 
-    todo_module.create_todo(db, target_user_id, content, due_at, remind_before_30min, start_at=start_at)
+    state_store.set(
+        telegram_user_id,
+        {
+            "flow": "pending_todo_calendar_sync",
+            "target_user_id": target_user_id,
+            "content": content,
+            "due_at": due_at,
+            "start_at": start_at,
+            "remind_before_30min": remind_before_30min,
+        },
+    )
+    return "好的！最後想問一下，這筆待辦事項要不要同步到 Google 家庭行事曆呢？（家人會在自己手機上看到）"
+
+
+def _todo_calendar_window(due_at: datetime, start_at: datetime | None) -> tuple[str, str]:
+    """把待辦事項的時間換算成 Calendar 事件的起訖 ISO 8601 字串（FR-66a）。
+
+    區間待辦（`start_at` 非 None）直接用 `start_at`～`due_at` 當起訖；單一時間點待辦沒有天然的
+    區間概念，套用 `_TODO_CALENDAR_DEFAULT_DURATION`（30 分鐘）當作事件時長，避免建立零長度事件。
+    """
+    if start_at is not None:
+        return start_at.isoformat(), due_at.isoformat()
+    return due_at.isoformat(), (due_at + _TODO_CALENDAR_DEFAULT_DURATION).isoformat()
+
+
+def handle_todo_calendar_sync_step(
+    db: CloudSQLClient,
+    llm_client,
+    state_store: ConversationStateStore,
+    telegram_user_id: int,
+    text: str,
+    calendar_client=None,
+) -> str:
+    """處理 `pending_todo_calendar_sync` 狀態下使用者對「要不要同步到 Google 家庭行事曆」的回覆，
+    這一步才真正寫入 `todos`（FR-66a、ADR-17）。
+
+    同步到 Calendar 是額外的加值功能，任何失敗（`calendar_client` 為 `None`，代表環境變數未設定；
+    或底層 API 呼叫拋例外）都優雅降級為「待辦事項已成功記錄，但沒有出現在 Calendar 上」，不影響
+    待辦事項本身寫入成功、也不把技術細節暴露給使用者，只記警告 log（比照 `webhook._upload_error_log()`
+    的降級哲學）。
+    """
+    state = state_store.get(telegram_user_id)
+    target_user_id = state["target_user_id"]
+    content = state["content"]
+    due_at = state["due_at"]
+    start_at = state.get("start_at")
+    remind_before_30min = state["remind_before_30min"]
+    state_store.clear(telegram_user_id)
+
+    decision = llm_client.generate_text(_TODO_CALENDAR_SYNC_PROMPT.format(text=text)).strip()
+    sync_to_calendar = decision == "CONFIRM"
+
+    todo_id = todo_module.create_todo(
+        db, target_user_id, content, due_at, remind_before_30min, start_at=start_at,
+        sync_to_calendar=sync_to_calendar,
+    )
+
+    if sync_to_calendar and calendar_client is not None:
+        try:
+            start_iso, end_iso = _todo_calendar_window(due_at, start_at)
+            event_id = calendar_client.create_event(
+                summary=content, start=start_iso, end=end_iso, description="來自 Robinson 待辦事項",
+            )
+            todo_module.set_calendar_event_id(db, todo_id, event_id)
+        except Exception:
+            _logger.exception(
+                "待辦事項（id=%s）同步到 Google Calendar 失敗，待辦本身已成功記錄不受影響", todo_id
+            )
+
     return "好的，已經幫你記錄好了！"
 
 
@@ -906,6 +990,7 @@ def handle_todo_list_action_step(
             "target_user_id": state["target_user_id"],
             "todo_id": todo_id,
             "content": row["content"],
+            "google_calendar_event_id": row.get("google_calendar_event_id"),
         },
     )
     return f"要把「{row['content']}」標記為完成還是取消呢？"
@@ -917,11 +1002,19 @@ def handle_todo_action_confirm_step(
     state_store: ConversationStateStore,
     telegram_user_id: int,
     text: str,
+    calendar_client=None,
 ) -> str:
-    """處理 `pending_todo_action_confirm` 狀態下使用者對完成/取消的回覆（FR-31a）。"""
+    """處理 `pending_todo_action_confirm` 狀態下使用者對完成/取消的回覆（FR-31a）。
+
+    2026-08-05 起（見 FR-66a、ADR-17）：這筆待辦事項如果當初有同步到 Calendar
+    （`google_calendar_event_id` 非空），標記完成/取消時一併刪除對應事件——不管是完成還是取消，
+    這筆待辦都不再需要出現在家庭共用行事曆上。刪除失敗（`calendar_client` 為 `None`或 API 例外）
+    優雅降級，不影響待辦事項本身的狀態更新。
+    """
     state = state_store.get(telegram_user_id)
     todo_id = state["todo_id"]
     content = state["content"]
+    google_calendar_event_id = state.get("google_calendar_event_id")
     state_store.clear(telegram_user_id)
 
     decision = llm_client.generate_text(_TODO_ACTION_CLASSIFY_PROMPT.format(content=content, text=text)).strip()
@@ -930,6 +1023,16 @@ def handle_todo_action_confirm_step(
 
     new_status = "completed" if decision == "COMPLETE" else "cancelled"
     todo_module.mark_status(db, todo_id, new_status)
+
+    if google_calendar_event_id and calendar_client is not None:
+        try:
+            calendar_client.delete_event(event_id=google_calendar_event_id)
+        except Exception:
+            _logger.exception(
+                "刪除待辦事項（id=%s）對應的 Google Calendar 事件失敗，待辦狀態已成功更新不受影響",
+                todo_id,
+            )
+
     label = "完成" if new_status == "completed" else "取消"
     return f"好的，已經把「{content}」標記為{label}囉！"
 
@@ -2041,11 +2144,16 @@ def handle_weight_backfill_date_step(llm_client, state_store: ConversationStateS
     return "好的，請告訴我那天的體重（公斤）："
 
 
-def handle_weight_value_step(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
+def handle_weight_value_step(
+    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, text: str, calendar_client=None
+) -> str:
     """處理 `pending_weight_value` 狀態下使用者提供的體重數值；不合理範圍原地反問，不清除狀態。
 
     寫入成功後附上 BMI 說明（已設定身高才有）、體重目標達成判斷（FR-45），兩者都是「有才附加」，
     缺少身高或沒有進行中的體重目標都不影響體重紀錄本身成功寫入。
+
+    `calendar_client`（2026-08-05，見 FR-66c、ADR-17）：透傳給 `body.check_weight_goal_achieved()`，
+    達成時順便刪除對應的 Calendar 事件。
     """
     state = state_store.get(telegram_user_id)
     weight = _parse_positive_float(text)
@@ -2068,7 +2176,7 @@ def handle_weight_value_step(db: CloudSQLClient, state_store: ConversationStateS
     height = body.get_height(db, target_user_id)
     if height is not None:
         reply += "\n" + body.format_bmi_note(weight, height)
-    goal_message = body.check_weight_goal_achieved(db, target_user_id, weight)
+    goal_message = body.check_weight_goal_achieved(db, target_user_id, weight, calendar_client=calendar_client)
     if goal_message:
         reply += "\n\n" + goal_message
     return reply
@@ -2580,7 +2688,12 @@ def handle_goal_diet_description_step(state_store: ConversationStateStore, teleg
 
 def handle_goal_deadline_step(db: CloudSQLClient, llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
     """處理 `pending_goal_deadline` 狀態下使用者對「有預計完成時間嗎？」的回覆，講清楚（或明確表示
-    不需要）後正式寫入目標。"""
+    不需要）後正式寫入目標。
+
+    2026-08-05 起（見 FR-66c、ADR-17）：只有講清楚期限的目標才有意義同步到 Calendar（沒有日期就
+    沒有事件可以建），所以只有 `target_date` 不是 `None` 時才多問一輪「要不要同步」
+    （`pending_goal_calendar_sync`）；沒有期限的目標維持原本行為，這一步就直接寫入。
+    """
     state = state_store.get(telegram_user_id)
 
     parsed = _parse_key_value_block(
@@ -2601,12 +2714,75 @@ def handle_goal_deadline_step(db: CloudSQLClient, llm_client, state_store: Conve
     target_description = state["target_description"]
     target_value = state["target_value"]
     baseline_value = state["baseline_value"]
+
+    if target_date is not None:
+        state_store.set(
+            telegram_user_id,
+            {
+                "flow": "pending_goal_calendar_sync",
+                "target_user_id": target_user_id,
+                "goal_type": goal_type,
+                "target_description": target_description,
+                "target_value": target_value,
+                "baseline_value": baseline_value,
+                "target_date": target_date,
+            },
+        )
+        return "好的！最後想問一下，這個目標要不要同步到 Google 家庭行事曆呢？（家人會在自己手機上看到）"
+
+    state_store.clear(telegram_user_id)
+    body.create_goal(db, target_user_id, goal_type, target_description, target_value, baseline_value, target_date)
+    return f"好的，已經幫你記錄目標「{target_description}」了，加油！"
+
+
+def handle_goal_calendar_sync_step(
+    db: CloudSQLClient,
+    llm_client,
+    state_store: ConversationStateStore,
+    telegram_user_id: int,
+    text: str,
+    calendar_client=None,
+) -> str:
+    """處理 `pending_goal_calendar_sync` 狀態下使用者對「要不要同步到 Google 家庭行事曆」的回覆，
+    這一步才真正寫入 `body_goals`（FR-66c、ADR-17），只有有期限的目標才會走到這一步。
+
+    同步失敗（`calendar_client` 為 `None` 或 API 例外）優雅降級，理由與
+    `commands.handle_todo_calendar_sync_step()` 一致：目標本身已成功記錄，只是不會出現在
+    Calendar 上，不把技術細節暴露給使用者，只記警告 log。
+    """
+    state = state_store.get(telegram_user_id)
+    target_user_id = state["target_user_id"]
+    goal_type = state["goal_type"]
+    target_description = state["target_description"]
+    target_value = state["target_value"]
+    baseline_value = state["baseline_value"]
+    target_date = state["target_date"]
     state_store.clear(telegram_user_id)
 
-    body.create_goal(db, target_user_id, goal_type, target_description, target_value, baseline_value, target_date)
+    decision = llm_client.generate_text(_TODO_CALENDAR_SYNC_PROMPT.format(text=text)).strip()
+    sync_to_calendar = decision == "CONFIRM"
 
-    deadline_part = f"，期限是 {target_date:%Y/%m/%d}" if target_date else ""
-    return f"好的，已經幫你記錄目標「{target_description}」了{deadline_part}，加油！"
+    goal_id = body.create_goal(
+        db, target_user_id, goal_type, target_description, target_value, baseline_value, target_date,
+        sync_to_calendar=sync_to_calendar,
+    )
+
+    if sync_to_calendar and calendar_client is not None:
+        try:
+            event_id = calendar_client.create_event(
+                summary=target_description,
+                start=target_date.isoformat(),
+                end=(target_date + timedelta(days=1)).isoformat(),
+                description="來自 Robinson 體態目標",
+                all_day=True,
+            )
+            body.set_calendar_event_id(db, goal_id, event_id)
+        except Exception:
+            _logger.exception(
+                "體態目標（id=%s）同步到 Google Calendar 失敗，目標本身已成功記錄不受影響", goal_id
+            )
+
+    return f"好的，已經幫你記錄目標「{target_description}」了，期限是 {target_date:%Y/%m/%d}，加油！"
 
 
 def start_body_goal_list(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
@@ -2624,8 +2800,14 @@ def start_body_goal_list(db: CloudSQLClient, state_store: ConversationStateStore
     return f"{listing}\n\n如果要取消某個目標，請輸入編號；不需要的話輸入「結束」。"
 
 
-def handle_goal_list_action_step(state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
-    """處理 `pending_goal_list_action` 狀態下使用者輸入的編號，選定要取消的那個目標。"""
+def handle_goal_list_action_step(
+    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, text: str
+) -> str:
+    """處理 `pending_goal_list_action` 狀態下使用者輸入的編號，選定要取消的那個目標。
+
+    2026-08-05 起（見 FR-66c、ADR-17）：`db` 改為必要參數，多查一次該筆目標的
+    `google_calendar_event_id`，供下一步取消時判斷要不要刪除對應 Calendar 事件。
+    """
     state = state_store.get(telegram_user_id)
     if text in _EXIT_PHRASES:
         state_store.clear(telegram_user_id)
@@ -2635,21 +2817,44 @@ def handle_goal_list_action_step(state_store: ConversationStateStore, telegram_u
     if not text.isdigit() or not (1 <= int(text) <= len(ids)):
         return f"請輸入 1～{len(ids)} 之間的編號，或輸入「結束」離開喔！"
 
-    state_store.set(telegram_user_id, {"flow": "pending_goal_cancel_confirm", "goal_id": ids[int(text) - 1]})
+    goal_id = ids[int(text) - 1]
+    row = db.select("body_goals", where="id = %s", params=(goal_id,), fetch_one=True)
+    state_store.set(
+        telegram_user_id,
+        {
+            "flow": "pending_goal_cancel_confirm",
+            "goal_id": goal_id,
+            "google_calendar_event_id": row.get("google_calendar_event_id") if row else None,
+        },
+    )
     return "確定要取消這個體態目標嗎？"
 
 
-def handle_goal_cancel_confirm_step(db: CloudSQLClient, llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
-    """處理 `pending_goal_cancel_confirm` 狀態下使用者對取消確認的回覆（簡單一輪 CONFIRM/CANCEL）。"""
+def handle_goal_cancel_confirm_step(
+    db: CloudSQLClient,
+    llm_client,
+    state_store: ConversationStateStore,
+    telegram_user_id: int,
+    text: str,
+    calendar_client=None,
+) -> str:
+    """處理 `pending_goal_cancel_confirm` 狀態下使用者對取消確認的回覆（簡單一輪 CONFIRM/CANCEL）。
+
+    2026-08-05 起（見 FR-66c、ADR-17）：如果這個目標當初有同步到 Calendar，取消時一併刪除對應
+    事件，見 `body.cancel_goal()`。
+    """
     state = state_store.get(telegram_user_id)
     goal_id = state["goal_id"]
+    google_calendar_event_id = state.get("google_calendar_event_id")
     state_store.clear(telegram_user_id)
 
     decision = llm_client.generate_text(_GOAL_CANCEL_CONFIRM_PROMPT.format(text=text)).strip()
     if decision != "CONFIRM":
         return "好的，這個體態目標保留，沒有取消！"
 
-    body.cancel_goal(db, goal_id)
+    body.cancel_goal(
+        db, goal_id, calendar_client=calendar_client, google_calendar_event_id=google_calendar_event_id
+    )
     return "好的，已經取消這個體態目標了！"
 
 

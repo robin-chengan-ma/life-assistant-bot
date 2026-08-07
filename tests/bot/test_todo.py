@@ -253,6 +253,36 @@ def test_check_and_push_reminders_range_todo_ignores_due_at_within_window(fake_d
     telegram_client.send_text.assert_not_called()
 
 
+# --- Google Calendar 同步（FR-66a，2026-08-05，見 ADR-17） ---
+
+
+def test_create_todo_defaults_sync_to_calendar_false(fake_db):
+    todo_id = todo.create_todo(fake_db, 1, "買菜", _utc(2026, 8, 2, 7, 0), False)
+
+    row = fake_db.select("todos", where="id = %s", params=(todo_id,), fetch_one=True)
+    assert row["sync_to_calendar"] is False
+
+
+def test_create_todo_with_sync_to_calendar_true(fake_db):
+    todo_id = todo.create_todo(
+        fake_db, 1, "買菜", _utc(2026, 8, 2, 7, 0), False, sync_to_calendar=True
+    )
+
+    row = fake_db.select("todos", where="id = %s", params=(todo_id,), fetch_one=True)
+    assert row["sync_to_calendar"] is True
+
+
+def test_set_calendar_event_id_updates_row(fake_db):
+    todo_id = todo.create_todo(
+        fake_db, 1, "買菜", _utc(2026, 8, 2, 7, 0), False, sync_to_calendar=True
+    )
+
+    todo.set_calendar_event_id(fake_db, todo_id, "event-abc123")
+
+    row = fake_db.select("todos", where="id = %s", params=(todo_id,), fetch_one=True)
+    assert row["google_calendar_event_id"] == "event-abc123"
+
+
 def test_check_and_push_daily_digest_range_todo_appears_on_start_day(fake_db):
     fake_db.insert("users", {"telegram_user_id": 555, "role": "Robin", "is_owner": True})
     now = _utc(2026, 8, 2, 0, 5)  # 台灣 08:05，8/2

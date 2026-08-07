@@ -170,12 +170,37 @@ def _check_body_goal_alerts() -> None:
     db = CloudSQLClient()
     try:
         telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
-        body.check_and_push_exercise_goal_achievements(db, telegram_client)
+        body.check_and_push_exercise_goal_achievements(
+            db, telegram_client, calendar_client=_build_calendar_client()
+        )
         body.check_and_push_goal_deadline_reminders(db, telegram_client)
     except Exception:
         logger.exception("體態目標預警檢查失敗，不影響健康檢查端點本身")
     finally:
         db.close()
+
+
+def _build_calendar_client():
+    """建立 Google Calendar 同步用的 CalendarClient（見 robinson SPEC.md FR-66、ADR-17）。
+
+    跟 `src/bot/webhook.py` 的同名 helper 是同一個設計，各自獨立實作一份（比照 `_now()` 等
+    小工具函式在多個模組各自定義一份的既有慣例，避免模組間互相依賴對方的私有成員）：
+    `GOOGLE_CALENDAR_*` 四個環境變數還沒設定完整時回傳 `None`，
+    `notifications.check_and_push_important_notifications()` 會優雅降級成只推播 Telegram、
+    不建立 Calendar 事件。
+    """
+    refresh_token = os.environ.get("GOOGLE_CALENDAR_OAUTH_REFRESH_TOKEN")
+    client_id = os.environ.get("GOOGLE_CALENDAR_OAUTH_CLIENT_ID")
+    client_secret = os.environ.get("GOOGLE_CALENDAR_OAUTH_CLIENT_SECRET")
+    calendar_id = os.environ.get("GOOGLE_CALENDAR_ID")
+    if not (refresh_token and client_id and client_secret and calendar_id):
+        return None
+
+    from submodules.calendar.client import CalendarClient
+
+    return CalendarClient(
+        refresh_token=refresh_token, client_id=client_id, client_secret=client_secret, calendar_id=calendar_id,
+    )
 
 
 def _check_important_notifications() -> None:
@@ -185,6 +210,9 @@ def _check_important_notifications() -> None:
 
     跟 `_check_body_goal_alerts()` 一樣包一層 try/except 且不需要 `ROBIN_TELEGRAM_TOKEN`
     （推播對象是所有已綁定的使用者，不是固定通知 Robin 一人）。
+
+    2026-08-05（見 FR-66b、ADR-17）：額外注入 `calendar_client`，通過判斷的節日/生日同時建立
+    Google Calendar 全天事件，`_build_calendar_client()` 回傳 `None` 時優雅降級。
     """
     if not (os.environ.get("DATABASE_URL") and os.environ.get("TELEGRAM_BOT_TOKEN")):
         return
@@ -197,7 +225,9 @@ def _check_important_notifications() -> None:
     db = CloudSQLClient()
     try:
         telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
-        notifications.check_and_push_important_notifications(db, telegram_client)
+        notifications.check_and_push_important_notifications(
+            db, telegram_client, calendar_client=_build_calendar_client()
+        )
     except Exception:
         logger.exception("重要通知檢查失敗，不影響健康檢查端點本身")
     finally:

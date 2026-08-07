@@ -3,7 +3,7 @@ title: Robinson — Robin 與家人們的生活小助手
 slug: robinson
 status: draft
 created: 2026-07-29
-updated: 2026-08-04
+updated: 2026-08-05
 owner: Robin
 ---
 
@@ -37,10 +37,10 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 | AI 層 | Groq API（Whisper） | 語音轉文字（含多益錄音檔切割），對應 `VOICE_API_KEY`（見 ADR-12，取代先前「語音一律用 Gemini」的舊決策） |
 | 資料層 | Neon PostgreSQL | 結構化資料（使用者、知識庫、待辦、記帳…） |
 | 資料層 | Google Drive | 使用者上傳的圖片/語音檔案原始檔（含證照題目截圖），URL 統一記錄於 Neon（見 ADR-13） |
+| 前台（唯讀） | Google Calendar（2026-08-05，見 FR-66、ADR-17） | 家庭共用行事曆：待辦事項、重要通知（節日/生日）、體態目標期限單向同步寫入，供家人用手機原生行事曆 App 瀏覽；單一共用行事曆，僅 Robin 帳號 OAuth 授權，家人訂閱即可看到，不需各自授權 |
 | 前台（唯讀） | Mobile App（React Native + Expo，Phase 4，見 ADR-14） | BI Dashboard：圖表視覺化（消費圓餅圖、體重折線圖等）與動態數據篩選；後端計算好圖表 JSON 結構後回傳，App 端只負責渲染，不提供任何寫入/CRUD 入口（**取代原規劃的 Notion 後台**） |
 | 排程 | cron-job.org | 每 10 分鐘打一次 keep-alive API，避免 Render 睡眠 |
 | 部署 | Render（免費方案，750 hr/月） | 應用程式 Host |
-| 治理 | GitHub API | Robinson 自主診斷後開立修復分支與 PR，供 Robin 人工審核 merge（見 FR-19e、ADR-7） |
 | 資訊來源 | YouTube Data API v3 | 每週擷取技術情報影片候選清單，僅取中繼資料，不下載影音（見 FR-57～FR-59、ADR-9） |
 
 ## 重要資產（不可刪除）
@@ -100,7 +100,7 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 - [x] FR-60：`/complaint` 路由 — 使用者在對話框輸入「我要客訴你」（或直接輸入 `/complaint`）時，直接觸發 `/complaint` 路由，Robinson 固定回覆「請問你覺得哪個地方需要改進呢？」（不經過 LLM 生成），並進入等待客訴內容狀態；任何身分（Robin 或家人）皆可觸發（**2026-08-02 Step 1.9 實作**）
 - [x] FR-61：客訴記錄 — 使用者在 FR-60 觸發後回覆的下一則訊息，視為客訴內容，寫入 Neon DB 客訴紀錄表（含使用者 ID、時間戳記、原始文字）（**2026-08-02 實作**：內容套用 FR-13 個資遮蔽，跟一般聊天/圖片/語音/心情小記四個既有入口一致）
 - [x] FR-62：客訴分析 — FR-61 寫入完成後，立即呼叫 Gemini 分析客訴內容，產出「可能問題點」與「修正/優化建議」，私訊給 Robin；**此為刻意的隱私例外**：一般情況下 Robin 看不到其他使用者的對話紀錄（FR-11），但客訴內容的本質就是「使用者主動想讓 Robin 知道」，因此不受 FR-10/FR-11 資料隔離規則限制（**2026-08-02 實作**：分析與私訊失敗不影響客訴內容已成功記錄，只記錄 log；找不到 Robin 的 users 記錄時同樣優雅跳過）
-- [x] FR-63：人工決策與後續討論 — Robin 收到 FR-62 的分析報告後自行決定如何處理（是否採納、如何調整），不強制自動執行任何變更；Robin 可與 Robinson 對話討論後續調整方向，比照 FR-19e 的 Human-in-the-Loop 精神，但客訴處理屬於產品/內容/流程層級的決策，不涉及程式碼變更，因此不套用 GitHub PR 機制（純人工流程，不需要額外程式碼實作）
+- [x] FR-63：人工決策與後續討論 — Robin 收到 FR-62 的分析報告後自行決定如何處理（是否採納、如何調整），不強制自動執行任何變更；Robin 可與 Robinson 對話討論後續調整方向，比照 NFR-8 的 Human-in-the-Loop 精神，但客訴處理屬於產品/內容/流程層級的決策，不涉及程式碼變更（純人工流程，不需要額外程式碼實作）
 
 ### 功能性需求 — 知識庫架構
 
@@ -129,23 +129,15 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 
 ### 功能性需求 — 服務健康與治理
 
-- [ ] FR-19：服務發生例外或錯誤時，對所有使用者僅回覆「生病了」等安全用語、不揭露技術細節；同時 Robinson 需依序走過以下「自主診斷 → 人工核准」流程，不得跳步，也不得在未經 Robin 同意前擅自變更系統。**2026-07-31 補充**：Step 1.3a 上線後實測撞到 Gemini 429 額度超限，發現 `webhook.py` 未攔截例外會讓 Telegram 重試風暴加速燒額度，已提前補上最小安全網（見 [platform-auth SPEC.md](../platform-auth/SPEC.md) FR-7）；這只解決「重試風暴」這個具體風險，不是本條 FR-19 的完整實作，FR-19a～FR-19i 仍待 Step 1.6／Step 2.4～2.6：
-  - [x] FR-19a（2026-08-02 完成，Step 1.6）：捕獲異常與 Log — 完整記錄系統錯誤 Traceback 與發生情境（觸發功能、使用者輸入摘要、時間戳記等），寫入集中式 log。實作：`main.py` 的 `logging.basicConfig` 加上 `asctime`；`webhook.py` 的 `_logger.exception()` 記錄「觸發功能」（photo/voice/text）與 `telegram_user_id`；額外新增 `_notify_robin_of_error()`，把完整 Traceback＋發生情境（含使用者輸入摘要，過長自動截斷）私訊給 Robin（簡化版通知，Phase 1 不含 FR-19b～FR-19e 的 AI 自主診斷／GitHub PR，留待 Step 2.4）
+- [ ] FR-19：服務發生例外或錯誤時，對所有使用者僅回覆「生病了」等安全用語、不揭露技術細節；同時 Robinson 需完整記錄錯誤情境並提供 Robin 專屬的完整診斷資訊管道，不得在未經 Robin 同意前擅自變更系統。**2026-07-31 補充**：Step 1.3a 上線後實測撞到 Gemini 429 額度超限，發現 `webhook.py` 未攔截例外會讓 Telegram 重試風暴加速燒額度，已提前補上最小安全網（見 [platform-auth SPEC.md](../platform-auth/SPEC.md) FR-7）；這只解決「重試風暴」這個具體風險，不是本條 FR-19 的完整實作。**2026-08-05 更新（見 ADR-15，supersede ADR-7）**：原規劃的 FR-19b～FR-19e「AI 自主診斷＋衝擊評估＋GitHub PR 自動化」整套 Human-in-the-Loop 機制已取消，FR-19b 改寫為更輕量的「完整錯誤 log 上傳雲端＋私訊 Robin 專屬連結」設計，FR-19c／FR-19d／FR-19e 三條需求編號直接移除（內容併入新版 FR-19b）；FR-19f～FR-19i（分級降級／執行回饋／重試機制）不受影響，仍待 Step 2.5～2.6：
+  - [x] FR-19a（2026-08-02 完成，Step 1.6）：捕獲異常與 Log — 完整記錄系統錯誤 Traceback 與發生情境（觸發功能、使用者輸入摘要、時間戳記等），寫入集中式 log。實作：`main.py` 的 `logging.basicConfig` 加上 `asctime`；`webhook.py` 的 `_logger.exception()` 記錄「觸發功能」（photo/voice/text）與 `telegram_user_id`；額外新增 `_notify_robin_of_error()`，把完整 Traceback＋發生情境（含使用者輸入摘要，過長自動截斷）私訊給 Robin（簡化版通知，Phase 1 不含 FR-19b 的雲端 log 連結，留待 Step 2.4）
     - **2026-08-02 追加修正（Robin 回報「打字給 Robinson 完全不理我」）**：原本 `webhook.py` 只在「有拋例外」時才確保回覆非空（安全用語），但沒拋例外、`handle_message()` 剛好回傳空字串時（例如 Gemini 那次生成剛好回傳空內容），`if reply:` 判斷為 False，完全不會呼叫 `send_text()`——使用者只會看到已讀不回，連安全用語都收不到，等於違反 FR-19h「嚴禁靜默或無明確狀態反饋」的精神。修正：`webhook.py` 在 `if reply:` 之前加一層獨立防呆（`not reply or not reply.strip()`），空/純空白回覆一律換成新增的 `_EMPTY_REPLY_FALLBACK`（措辭跟例外安全語區分，讓使用者知道是「這句沒接上」而非「系統掛了」），並記警告 log 方便事後排查（沒有 Traceback 可私訊 Robin，這種情況不觸發 FR-19a 的錯誤通知）。
-  - [ ] FR-19b：自主診斷與搜尋 — AI 需自動根據 Error Traceback 與情境上網查詢可能原因（如套件 API 變更、連線 Timeout、SQL 語法錯誤等）；此為系統自我除錯用途，與 FR-12「不主動 Web Search 回答使用者問題」是不同情境，僅限診斷錯誤原因時使用
-  - [ ] FR-19c：衝擊評估（Impact Assessment）— 評估修正此問題對現有系統的最小影響方案，以最小變動、最低風險為原則，避免破壞性重構
-  - [ ] FR-19d：發送建議報告給 Robin（Human-in-the-Loop）— 私訊 Robin，內容包含：📍錯誤摘要（發生地點與簡短現象）、🔍可能原因分析（結合搜尋結果）、🛠️建議修復方案（改動步驟與影響程度評估，**且必須包含程式碼異動紀錄**：修改了哪幾個檔案、哪幾行）
-  - [ ] FR-19e：核准後執行修復（Render 線上自主運維機制）— 此為部署在 Render 線上服務內部（In-App）的自主運維模組，非本機 Claude Code CLI 操作：
-    - [ ] FR-19e-1：線上捕獲 Exception 時觸發後台 Error Handler
-    - [ ] FR-19e-2：Robinson 於線上直接呼叫 LLM API 進行錯誤解析與搜尋，並透過 GitHub API 自動開立修復分支（`fix/<bug-id>`）與 Pull Request；**開分支與開 PR 本身視為「建議方案」的一部分，不觸及 `main` branch，不算違反「未經核准不可執行」的原則**
-    - [ ] FR-19e-3：私訊 Robin：錯誤原因、最小衝擊方案（含 FR-19d 的程式碼異動紀錄）與 GitHub PR 連結
-    - [ ] FR-19e-4：Robin 於 GitHub 上審核並 Merge PR 後，才觸發 Render 既有 CI/CD 自動部署完成線上修復；**Merge 這個動作本身就是「同意／執行」的核准，不需要另外在 Telegram 回覆確認字樣**
-    - [ ] FR-19e-5：核心原則 — 正式環境程式碼（`main` branch）永遠經過 Git 版控與人工審核；Robinson 僅具備「開立 PR」的權限，絕對不具備直接推送或部署到 `main` 的權限，任何情況下都不可繞過此限制
+  - [x] FR-19b（**2026-08-05 改寫並完成，見 ADR-15**）：完整錯誤 log 上傳雲端＋Robin 專屬連結 — 例外發生時，把完整 Traceback（含發生的 py 檔案／行號／函式呼叫堆疊，Python 內建即有）、觸發功能、使用者輸入摘要、時間戳記組成一份 log 檔案，透過既有 `submodules/gdrive/client.py` 的 `GDriveClient.upload_file()` 上傳至 Google Drive，取得可分享連結。**對其他所有使用者（含觸發當下的一般使用者與其他家人）一律只回覆既有的「生病了」安全用語，絕不揭露技術細節或連結**；只有私訊 Robin 的 `_notify_robin_of_error()` 訊息會額外附上這個 Google Drive log 連結，讓 Robin 自己點開查看完整內容（甚至可另外交給 Claude Code 協助排查修復），不再需要看被截斷的 Traceback 片段。上傳失敗（例如 Google Drive API 暫時性錯誤）不得影響「生病了」安全用語與私訊 Robin 這兩件事本身正常送出，優雅降級為訊息中略過連結欄位並記警告 log。實作：`webhook.py` 新增 `_upload_error_log()`（封裝 `GDriveClient` 呼叫與例外優雅降級）與 `_ERROR_LOG_FILE_TEMPLATE`（未截斷的完整 log 檔案內容），`_notify_robin_of_error()` 延伸為同時上傳 log 並在私訊訊息附加連結；`_ROBIN_ERROR_NOTIFY_TEMPLATE` 新增 `{log_link_line}` 欄位（無連結時為空字串）；全專案 709 個測試全過，`webhook.py` 達到 100% 覆蓋率。**2026-08-05 追加（見 ADR-16）**：Robin 提出「如果壞掉的是 Telegram 本身，不就沒辦法通知？」——Telegram 是唯一對外管道，`_notify_robin_of_error()` 本身送達失敗時完全沒有備援，只會記一行 log。新增 `submodules/email`（`EmailClient`，`smtplib` 直打 Gmail SMTP，複用既有 `GMAIL_USER`／`GMAIL_PASSWORD`）當獨立備援管道：`webhook.py` 新增 `_send_email_fallback()`，`_notify_robin_of_error()` 拆成「組裝內容」與「透過 Telegram 送達」兩段 try/except，只有後者失敗才觸發 email 備援（內容含完整 Traceback，跟 Telegram 訊息同等資訊量）；email 本身也失敗只記 log，不再有下一層備援，這是刻意的設計邊界；全專案 720 個測試全過，`webhook.py`／`submodules/email/client.py` 皆達到 100% 覆蓋率
   - [ ] FR-19f：例外分級降級 —「一般感冒級」：當 Try 流程中 LLM API 本身仍可正常連線與推送訊息，僅其他元件異常（資料庫連線失敗、爬蟲解析錯誤、第三方 API 逾時等，且已用盡 FR-19i 的重試機制）時，由後端捕捉例外後私訊完整錯誤詳情給 Robin，並回覆使用者靜態感冒語句（不額外呼叫 LLM 生成，節省 Token）。範本：「🤒 主任，我好像有點小感冒（系統暫時性異常），不過別擔心！我已經自動紀錄日誌通知 Robin 處理囉，請稍後再試一次！」
   - [ ] FR-19g：例外分級降級 —「重大疾病級」：當 Try 區塊執行到呼叫 LLM API（如 `call_llm_api()`）本身直接拋出例外（Gemini 伺服器 500、API Key 失效、額度用罄、網路斷線等，且已用盡 FR-19i 重試機制），代表 LLM 已完全無法處理任何請求或推送訊息。此時必須完全繞過 LLM，直接由 Telegram Bot 底層讀取寫死在後端的靜態字串範本：① 向 Robin 推播最高等級的 StackTrace 告警 ② 同時向所有已綁定的家人帳號廣播重大疾病通知。範本：「🚨 主人與各位家人非常抱歉，我最近患上了重大的疾病（AI 核心服務暫時無法運作），目前無法回答任何問題。Robin 已收到緊急通知並正在全力搶救中！」
   - [ ] FR-19h：決策執行狀態閉環回饋 — 所有涉及資料異動的操作（寫入 DB、記帳、體態/心情紀錄、新增待辦等），在使用者做出最終「確認」指令後，不論成功或失敗都必須明確回覆結果，嚴禁靜默或無明確狀態反饋：① 成功 — 明確告知操作已成功落實（例：「好的！已成功為您紀錄今日晚餐開銷 $150 元囉！」）② 失敗（一般感冒級）— 依 FR-19f 語句告知未成功並已通知 Robin 處理中 ③ 失敗（重大疾病級）— 依 FR-19g 底層寫死範本回覆
-  - [ ] FR-19i：外部 API 呼叫重試機制 — 所有外部 API 呼叫（Gemini/OpenAI API、Telegram Bot API、104 AJAX API、GitHub API 等）皆須內建自動重試：最多重試 3 次（Max Retries = 3），採 Exponential Backoff 搭配 Time Sleep（第 1 次失敗等 1 秒、第 2 次失敗等 2 秒、第 3 次失敗等 4 秒），避免連續轟炸外部 API 觸發封鎖或 Rate Limit；3 次全部失敗才正式判定該次 Request 失敗，並依錯誤來源進入 FR-19f 或 FR-19g 的分級流程
-- [x] FR-20（2026-08-02 完成，Step 1.6）：問題修復後（無論是 Robin 手動修復，或依 FR-19e 流程由 Robin 在 GitHub 上 Merge PR 後觸發自動部署），Robinson 需主動回訊息告知所有使用者「我康復了」；此廣播主要對應 FR-19g（重大疾病級）的全員影響情境，FR-19f（一般感冒級）僅私訊 Robin、未廣播全員，修復後是否額外告知該次受影響的使用者由 Robin 自行決定。**Phase 1 實作範圍**：Step 2.4 的 AI 自主修復／GitHub PR 機制還沒做，「有沒有修好」完全由 Robin 自己判斷，新增 Owner 專屬指令 `/recovered`（`commands.handle_recovered()`），手動觸發時廣播固定文案給所有已綁定家人（排除 Robin 自己）
+  - [ ] FR-19i：外部 API 呼叫重試機制 — 所有外部 API 呼叫（Gemini/OpenAI API、Telegram Bot API、104 AJAX API 等）皆須內建自動重試：最多重試 3 次（Max Retries = 3），採 Exponential Backoff 搭配 Time Sleep（第 1 次失敗等 1 秒、第 2 次失敗等 2 秒、第 3 次失敗等 4 秒），避免連續轟炸外部 API 觸發封鎖或 Rate Limit；3 次全部失敗才正式判定該次 Request 失敗，並依錯誤來源進入 FR-19f 或 FR-19g 的分級流程
+- [x] FR-20（2026-08-02 完成，Step 1.6）：問題修復後（Robin 手動修復），Robinson 需主動回訊息告知所有使用者「我康復了」；此廣播主要對應 FR-19g（重大疾病級）的全員影響情境，FR-19f（一般感冒級）僅私訊 Robin、未廣播全員，修復後是否額外告知該次受影響的使用者由 Robin 自行決定。**Phase 1 實作範圍**：「有沒有修好」完全由 Robin 自己判斷（**2026-08-05 更新，見 ADR-15**：FR-19b 已改為輕量的雲端 log 連結設計，不再有 AI 自主修復／GitHub PR 機制，本條「Robin 自己判斷」為長期定案，非過渡狀態），新增 Owner 專屬指令 `/recovered`（`commands.handle_recovered()`），手動觸發時廣播固定文案給所有已綁定家人（排除 Robin 自己）
 - [x] FR-21（2026-08-02 完成，Step 1.6，僅 Neon 容量部分）：監控 Neon 容量（達 80% 告警）、Gemini 免費額度用量等異常指標，超過門檻時主動通知 Robin。**Phase 1 實作範圍**：只做 Neon 容量監控（`src/bot/monitoring.py`，`NeonCapacityMonitor`），借用 `/healthz` 既有的 cron-job.org 每 10 分鐘呼叫頻率順便檢查，容量達 80% 私訊 Robin、回落後重置告警狀態避免重複轟炸；Gemini 免費額度用量監控刻意暫緩——官方沒有查詢即時用量的 API，本地端節流計數器（ADR-5）只能粗略估算「每分鐘呼叫次數」，無法真的得知「今天/這個月還剩多少免費額度」，準確度有限，且既有的 429 例外已經會走 FR-19a 私訊機制當作事後告警，留待未來有更好方案或官方 API 支援時再補上主動式監控
 
 ### 功能性需求 — 個人技能成長（僅 Robin 可用）
@@ -231,6 +223,16 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 
 - [x] FR-53：特殊節日/生日自動發送提醒給相關成員（例如父親節不發給父親本人）（**2026-08-04 Step 2.3 實作**：分成「超級重要通知（主角不能收到）」與「重要通知（大家都收到）」兩類，固定台灣時間 08:00 推播，借用 `/healthz` 既有的 10 分鐘 cron 頻率（比照 `body.check_and_push_goal_deadline_reminders()` 等既有慣例），不需要獨立排程系統，詳見 `src/bot/notifications.py` 模組 docstring。固定節日清單：1/1 元旦（大家都收到）、除夕/初一（大家都收到，提醒包紅包）、3/1 固定提醒選一天掃墓（大家都收到）、中秋節（大家都收到，提醒烤肉/月餅）、端午節（大家都收到，提醒粽子）、父親節（西曆固定 8/8，排除 `users.role = "爸爸"` 本人）、母親節（西曆 5 月第二個星期日，排除 `users.role = "媽媽"` 本人）；農曆節日（除夕/初一/中秋/端午）改用 `lunarcalendar` 套件即時計算西曆日期（純 Python、不需要網路），不維護每年日期對照表。家人生日則用新增的 `users.birthday`（`0028_add_birthday_to_users.sql`，只比對月/日不比對年份）比對，當天排除生日當事人自己、其餘所有已綁定使用者（含 Robin）都算「大家」；已知的 5 位家人生日已由 Robin 提供並寫入 `0030_seed_family_birthdays.sql`，其餘家人（弟媳/大妹婿/小妹婿/阿姨）的生日透過新增的 Owner 專屬指令「設定家人生日」／`/set_family_birthday` 自行補上（先列出所有已綁定使用者選編號，再輸入生日，格式接受「YYYY-MM-DD」或不確定年份時的「M/D」）。年度推播去重靠新增的 `important_notifications_log` 表（`0029_create_important_notifications_log_table.sql`，`UNIQUE(notification_key, year)`），固定節日用節日代碼、生日用 `birthday_<user_id>` 各自獨立去重。詳見 `src/bot/notifications.py`、`src/bot/commands.py`、`src/bot/router.py`、`src/schema/db_schema.md`）
 
+### 功能性需求 — Google Calendar 整合（2026-08-05 新增，見 ADR-17）
+
+> Robin 詢問「家人沒有 Google 帳號怎麼辦」「Calendar API 要不要錢」後確認方向：單一共用行事曆（僅 Robin 帳號 OAuth 授權），家人各自訂閱即可在手機原生行事曆 App 看到全貌，不需要每人各自授權；API 本身免費（見 ADR-17）。範圍限定「Robinson 單向寫入」，讀取行事曆做空檔查詢（例如「這週三下午有沒有空」）明確排除在本次範圍，留待未來視實際使用回饋再評估。
+
+- [x] FR-66：Google Calendar 整合總則 — 建立一個獨立的「Robinson 家庭行事曆」（Robin 的 Google 帳號底下的次要日曆，非主行事曆），透過既有 OAuth 模式（比照 `gdrive`，見 ADR-17）授權寫入；家人以訂閱方式在自己手機的原生行事曆 App（iOS/Android 皆原生支援）瀏覽，不需要各自跑 OAuth 流程
+  - [x] FR-66a：待辦事項同步 — 建立待辦事項的多輪反問流程新增一題「要不要同步到 Google 行事曆？」（**2026-08-05 新增，見 ADR-17 補充決策**：每次新增都明確詢問，不預設同步也不預設不同步，避免使用者忘記講而讓私密待辦意外曝光在家庭共用行事曆上）；選擇同步的待辦事項，後續更新時間/標記完成/取消或刪除時，同步更新/刪除對應的 Google Calendar 事件；選擇不同步的待辦事項只存在資料庫，不建立任何 Calendar 事件，且 MVP 不支援事後補同步（要同步就取消重建一筆，避免額外設計「補同步」流程）；不額外拆分「待辦事項」與「行程」兩種概念，跟 FR-31 是同一份資料，Calendar 只是多一個瀏覽入口，不是另一份真相來源
+  - [x] FR-66b：重要通知同步 — FR-53 的固定節日（元旦/除夕/初一/掃墓提醒/中秋/端午/父親節/母親節）與家人生日，除了既有台灣時間 08:00 當天 Telegram 推播外，額外在對應日期建立 Calendar 全天事件，讓家人提前在行事曆上看到即將到來的節日/生日，不用等到當天才知道；固定節日/生日本質上就是要讓家人知道的資訊，不涉及個人隱私疑慮，不需要 FR-66a 那種逐筆詢問，一律自動同步；複用既有 `important_notifications_log` 的 `UNIQUE(notification_key, year)` 去重判斷，同一次判斷順便建立事件，不需要額外追蹤更新/刪除（節日/生日建立後幾乎不會變動，是刻意的簡化）
+  - [x] FR-66c：體態管理目標期限同步 — 設定 FR-46～FR-48 的 `body_goals` 目標時，比照 FR-66a 同樣新增一題「要不要同步到 Google 行事曆？」（**2026-08-05 新增，見 ADR-17 補充決策**：體重/運動/飲食目標對某些人來說也是不想公開的隱私，跟待辦事項同等對待，每次明確詢問；沒有期限的目標不會問這一題，因為沒有日期可以建事件）；選擇同步的目標，後續更新期限/達成/使用者手動取消時，同步更新/刪除對應事件；選擇不同步則只存資料庫，MVP 同樣不支援事後補同步
+  - [ ] FR-66d（明確排除，非本次範圍）：讀取行事曆做空檔查詢（例如「我這週三下午有沒有空」「全家人這週末誰有空」）——這需要 Calendar 讀取權限與跨使用者行事曆比對，複雜度與隱私考量都高出一個量級，待前三項基礎功能上線、有實際使用回饋後再評估是否要做
+
 ### 功能性需求 — Mobile App（BI Dashboard，Phase 4，2026-08-04 取代原 Notion 後台，見 ADR-14）
 
 > 本節僅先定調架構、技術棧與資料模型方向；登入流程與 App 各頁面的詳細互動邏輯留待 Phase 4 對應 Step 開工時展開獨立 spec（`docs/specs/mobile-app/SPEC.md`，屆時建立），此處視為 **Placeholder**。
@@ -266,10 +268,10 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 - [ ] NFR-2：可用性 — Render 免費方案 15 分鐘無請求會休眠，需 cron-job 每 10 分鐘打 keep-alive API 維持喚醒
 - [ ] NFR-3：容量 — Neon 免費額度僅 0.5GB，圖片一律存 Google Drive，不進資料庫；容量達 80% 需主動告警
 - [ ] NFR-4：安全 — 通關密碼一次性使用、使用者資料互相隔離（FR-10、FR-11）、個資偵測與刪除機制（FR-13）
-- [ ] NFR-5：安全 — 敏感金鑰（Telegram Token、Gemini API Key ×4：`GEMINI_API_BOT_KEY`／`GEMINI_API_IMAGE_KEY1`／`GEMINI_API_IMAGE_KEY2`／`GEMINI_API_TEXT_KEY`、Groq API Key `VOICE_API_KEY`、Neon 連線字串、Google Service Account JSON、Gmail 密碼、GitHub Personal Access Token、YouTube Data API Key）一律透過 `.env` 管理，不進版控；`users.app_access_token`（Mobile App 登入用，見 FR-65）為逐使用者資料庫欄位而非全域金鑰，不適用本條「.env 管理」規則，但仍需注意不可在 log 或錯誤訊息中明碼印出
+- [ ] NFR-5：安全 — 敏感金鑰（Telegram Token、Gemini API Key ×4：`GEMINI_API_BOT_KEY`／`GEMINI_API_IMAGE_KEY1`／`GEMINI_API_IMAGE_KEY2`／`GEMINI_API_TEXT_KEY`、Groq API Key `VOICE_API_KEY`、Neon 連線字串、Google Service Account JSON、Gmail 密碼、GitHub Personal Access Token、YouTube Data API Key）一律透過 `.env` 管理，不進版控；`users.app_access_token`（Mobile App 登入用，見 FR-65）為逐使用者資料庫欄位而非全域金鑰，不適用本條「.env 管理」規則，但仍需注意不可在 log 或錯誤訊息中明碼印出。**2026-08-05 更新（見 ADR-15）**：GitHub Personal Access Token 的用途已限縮——原為 FR-19e GitHub PR 機制新增，該機制已取消，但這把權杖仍由 ADR-11 的 `src/migrations/` git push 機制使用（跟 FR-19e 是巧合共用同一把權杖，非依賴關係），故繼續保留於 `.env` 管理範圍；`GITHUB_REPO`（原本只給 FR-19e 的 GitHub REST API 指定目標 repo 用）已無用途，從 `.env.example` 移除。**2026-08-05 追加（見 ADR-16）**：Gmail 密碼（`GMAIL_PASSWORD`，需為應用程式密碼）從「Phase 3 FR-23 預留但尚未使用」變成「Step 2.4 起就會用到」——`submodules/email` 複用這組帳密透過 SMTP 寄送 Telegram 故障時的備援通知。**2026-08-05 追加（見 FR-66、ADR-17）**：新增 `GOOGLE_CALENDAR_OAUTH_CLIENT_ID`／`GOOGLE_CALENDAR_OAUTH_CLIENT_SECRET`／`GOOGLE_CALENDAR_OAUTH_REFRESH_TOKEN` 三把敏感金鑰，比照 `gdrive` 的 OAuth 2.0 模式，但獨立一組憑證（scope 僅 `calendar.events`，最小權限，不申請完整 `calendar` scope），與 `gdrive` 的憑證互不共用，符合子模組彼此獨立、互不依賴的慣例（見 submodules-core SPEC.md FR-4）；`GOOGLE_CALENDAR_ID`（行事曆 ID，非機密但仍建議透過 `.env` 管理，統一金鑰治理方式）
 - [ ] NFR-6：可維護性 — 錯誤訊息對使用者一律去技術化（FR-19），技術 log 僅回報 Robin
 - [ ] NFR-7：Token 節流 — 不支援會議/長演講錄音轉譯，語音上限 10 分鐘，避免大量消耗 Gemini 免費額度
-- [ ] NFR-8：安全 — 修復動作一律採 Human-in-the-Loop：AI 只能診斷與建議並開立 PR，絕不直接推送或部署到 `main` branch，正式部署一律由 Robin 在 GitHub Merge PR 觸發（FR-19e）
+- [ ] NFR-8（**2026-08-05 改寫，見 ADR-15**）：安全 — Robinson 對正式環境程式碼**不具備任何自動修改或部署能力**：發生例外時只做「記錄＋上傳雲端 log＋私訊 Robin 連結」，所有修復動作一律由 Robin 本人（或 Robin 自行請 Claude Code 協助）手動進行，系統本身沒有寫入 Git、開分支、開 PR 或部署到 `main` 的任何權限或程式碼路徑
 - [ ] NFR-9：韌性 — 所有外部 API 呼叫具備重試（Max 3 次）與 Exponential Backoff 機制，重試耗盡才進入例外分級降級流程，避免單一元件失敗直接癱瘓服務（FR-19f～FR-19i）
 - [ ] NFR-10：一致性 — 所有寫入類操作必須提供明確的成功/失敗執行結果回饋，不允許靜默失敗（FR-19h）
 - [ ] NFR-11：資料品質 — 任何透過「排程」自動收集外部資料的功能，都必須落實 ETL（Extract-Transform-Load）流程並具備去重機制，避免重複寫入資料庫；目前適用範圍：每日技術新聞摘要（FR-23）、TOEIC 雙軌題庫（FR-25f）、104 職缺爬蟲（FR-34d）、YouTube 技術情報（FR-58c）；未來新增任何排程類功能都必須比照辦理
@@ -404,7 +406,7 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 - 需新增 `GITHUB_TOKEN`（需要 repo 權限，用於建立分支與開 PR）作為新的敏感金鑰，已同步更新 NFR-5 與 `.env.example`。
 - 若 Robin 長時間未處理某個 PR，目前不特別處理（PR 會持續開著），未來若需要「PR 逾時提醒」可再另開需求，非本次必要範圍。
 
-**狀態**：accepted
+**狀態**：superseded by ADR-15（2026-08-05，Step 2.4 開工前 Robin 重新評估後認為 AI 自主診斷＋GitHub PR 自動化風險與工程量不成比例，且 FR-19b 的上網查詢前提已因 submodules-core ADR-8 而不可行，改為「完整 log 上傳雲端＋Robin 專屬連結」的輕量方案）
 
 ### ADR-8：通關密碼設定改用對話式狀態機，不做後台表單
 
@@ -574,6 +576,95 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 
 **狀態**：accepted
 
+### ADR-15：Step 2.4 取消 AI 自主診斷＋GitHub PR 自動化，改為「完整 log 上傳雲端＋Robin 專屬連結」（supersede ADR-7）
+
+**背景**：Step 2.4 開工前重新評估 ADR-7 訂下的方案，發現兩個實際落地時的關鍵問題：① FR-19b 要求「上網查詢可能原因」，但 [submodules-core SPEC.md](../submodules-core/SPEC.md) ADR-8 已記錄 Gemini 的 Google Search grounding 功能因新 Key 對 Gemini 2.5 世代 404「no longer available to new users」而被整個移除，Robin 明確表示不考慮開通計費帳戶，代表 FR-19b 字面要求的「即時上網查詢」技術上已經做不到，只能退化為「LLM 純推理」，可靠度打折且對「套件/API 版本又出怪招」這類問題容易誤判（這正是專案自己在 ADR-6～ADR-8 那幾輪 Gemini 模型下架風波中親身遇過的情境）② FR-19e 要求 AI 自動生成程式碼修改並透過 GitHub API 提交進分支——這需要新建 `submodules/github/client.py`、串接 GitHub API、讓 LLM 讀取相關檔案內容生成 diff，工程量與風險都相當高（LLM 在缺乏完整 codebase 上下文下自動修改正式專案程式碼，即使不直接 Merge，審查負擔也可能比人工從頭修復更高），且這個 sandbox 環境連不到 `api.github.com`（ADR-10 已記錄過此限制），無法在此直接驗證整合。Robin 評估後認為這套機制難度與風險不成比例，希望簡化為一個更務實的替代方案：Robinson 只需要在捕獲例外時，把完整診斷資訊（Traceback、觸發功能、使用者輸入摘要）存成 log 檔案上傳到 Google Drive（複用 Step 1.3b 既有的 `GDriveClient`），私訊 Robin 一個專屬連結，讓 Robin 自己點開查看、或視情況另外請 Claude Code 協助排查修復；其他使用者仍然只收到既有「生病了」安全用語，不會有任何差異。
+
+**決策**：
+1. FR-19b～FR-19e 整套「AI 自主診斷→衝擊評估→建議報告→GitHub PR 自動化→人工 Merge 核准」機制取消。FR-19c／FR-19d／FR-19e（含 FR-19e-1～FR-19e-5）三條需求編號直接移除，FR-19b 改寫為新內容：「完整錯誤 log 上傳雲端＋私訊 Robin 專屬連結」。
+2. 新版 FR-19b 具體設計：延伸既有 `webhook._notify_robin_of_error()`，例外發生時把完整 Traceback（Python 內建即含檔案/行號/呼叫堆疊）＋觸發功能＋使用者輸入摘要＋時間戳記組成 log 檔案內容，呼叫既有 `submodules/gdrive/client.py` 的 `GDriveClient.upload_file()` 上傳，取得 `webViewLink` 後附加在私訊 Robin 的訊息裡；上傳失敗需優雅降級（訊息略過連結欄位、記警告 log），不得影響「生病了」安全用語與私訊 Robin 這兩件事本身正常運作。
+3. **對其他使用者（含觸發當下的一般使用者與所有其他家人）的行為完全不變**：一律只收到既有的「生病了」等安全用語，絕不揭露技術細節、Traceback 或任何連結；Google Drive log 連結只出現在私訊 Robin 的專屬訊息裡，這是本次修改唯一新增的資訊管道，且僅限 Robin 可見。
+4. FR-19f～FR-19i（例外分級降級、決策執行狀態閉環回饋、外部 API 重試機制）不受影響，維持原規劃，留待 Step 2.5～2.6 實作。
+5. `GITHUB_REPO` 環境變數移除——這個變數當初是為了讓 GitHub REST API 知道要對哪個 repo 開分支/PR，現在不再需要。**但 `GITHUB_TOKEN` 必須保留**：ADR-11 記錄過這把權杖還有另一個完全獨立的用途——`src/migrations/` 機制的「Claude 提出 SQL → Robin 核准 → commit + push 到 GitHub main」流程，`git push` 是透過 `GITHUB_TOKEN` + git credential helper 驗證的，跟本次取消的 GitHub REST API PR 自動化是兩件不相關的事，只是恰好共用同一把權杖；NFR-5 同步註記這把金鑰現在的用途已限縮為「git push 驗證」，不再用於任何 GitHub REST API 呼叫。新方案本身複用既有的 `GDRIVE_OAUTH_REFRESH_TOKEN`／`GDRIVE_FOLDER_ID`，不需要新增任何金鑰。
+
+**理由**：
+- FR-19b 原本設計的「上網查詢」前提（Gemini Search grounding）已經在 ADR-8 被證實不可行，繼續照抄舊設計等於在一個已知做不到的前提上蓋東西。
+- Traceback 本身就完整包含「哪支 py 檔案、哪一行、呼叫堆疊」這些資訊，不需要額外的 AI 診斷或程式碼異動生成邏輯就能滿足 Robin 真正的需求（**看到問題出在哪，方便自己或請 Claude Code 修**），改用雲端連結只是解除 Telegram 4096 字元訊息上限造成的截斷問題，複雜度與原方案不成比例。
+- 完全複用 Step 1.3b/1.4 已經上線驗證過的 `GDriveClient`，不需要新的 submodule、新的外部服務串接、新的敏感金鑰，開發與測試都能在既有基礎設施與這個 sandbox 環境內完成，不受 `api.github.com` 網路限制影響。
+- 風險大幅降低：拿掉「LLM 自動生成並提交程式碼變更」這個最高風險環節，正式環境程式碼的修改權限完全保留在 Robin 手上，NFR-8 的 Human-in-the-Loop 精神不但沒有減弱，反而更徹底（連「開 PR」這個較低風險的自動化都不做了）。
+
+**替代方案**：
+- 方案 A：維持 ADR-7 原方案，FR-19b 改用其他免費/低成本搜尋 API（如 Brave Search）取代已失效的 Gemini grounding——技術上可行，但仍要額外申請 Key、整合成本高，且沒有解決 FR-19e GitHub PR 自動化本身的工程量與審查風險問題，Robin 選擇不採用
+- 方案 B：開通 Gemini 計費帳戶恢復 Google Search grounding，其餘維持 ADR-7 原設計——涉及 Robin 個人帳務決定，且與 submodules-core ADR-8 的既有決策矛盾，已否決
+- 方案 C（採用）：完全取消 AI 自主診斷＋GitHub PR 自動化，改用「雲端 log 連結」的輕量方案
+
+**後果**：
+- `docs/specs/robinson/PROGRESS.md` 的 Step 2.4 說明與時程估計需同步更新，反映範疇大幅簡化。
+- 系統架構總覽表移除「治理 | GitHub API」這一列；`GITHUB_REPO` 從 `.env.example` 移除，`GITHUB_TOKEN` 保留（ADR-11 的 migration git push 機制仍依賴它），NFR-5 註記其用途已限縮為 git push 驗證。
+- 風險表移除「AI 自主診斷誤判」「GitHub PR 逾時未處理」等隨此機制取消而消失的風險項目，新增「Drive log 檔案無生命週期管理」的低風險項目。
+- 未來若診斷需求成長到現有方案不敷使用（例如真的需要更聰明的自動化排查），可以在有更多真實錯誤樣本、且 Gemini grounding 或其他搜尋方案重新可行之後，另開新的 ADR 重新評估，不受本次決策綁死。
+
+**狀態**：accepted
+
+### ADR-16：Telegram 本身故障時的備援通知管道，新增 `submodules/email`
+
+**背景**：Robin 驗收 Step 2.4（FR-19b，錯誤 log 雲端連結）時提出一個關鍵問題：Telegram 是 Robinson 唯一的對外管道，`_notify_robin_of_error()` 私訊 Robin 的機制完全建立在「Telegram 自己是正常運作的」這個假設上——如果今天壞掉的剛好是 Telegram API 本身（或 `TELEGRAM_BOT_TOKEN` 失效），連這個錯誤通知本身都送不出去，Robin 會完全收不到任何主動通知，只能自己去 Render Dashboard 翻應用程式 log。這是 FR-19b 設計時沒考慮到的單點故障，需要補上一條獨立備援管道。
+
+**決策**：
+1. 新增 `submodules/email`（見 submodules-core SPEC.md FR-11、ADR-11），提供 `EmailClient.send_text(to, subject, body)`，用 Python 標準函式庫 `smtplib` 直打 Gmail SMTP（SSL），不安裝任何第三方套件。
+2. 複用既有的 `GMAIL_USER`／`GMAIL_PASSWORD` 環境變數（原為 Phase 3 FR-23 讀取 Gmail 電子報預留，至今尚未有程式碼使用），不新增另一組寄信專用憑證。
+3. `webhook.py` 的 `_notify_robin_of_error()` 拆成兩段 try/except：第一段組裝通知內容（Traceback、log 上傳），失敗就直接放棄；第二段專門負責「透過 Telegram 送達」，只有這段失敗才呼叫新增的 `_send_email_fallback()`，寄一封內容跟 Telegram 訊息同等資訊量（含完整 Traceback）的備援信給 Robin 自己的 Gmail 帳號。
+4. Email 備援只有這一層：`GMAIL_USER`／`GMAIL_PASSWORD` 未設定或寄信本身也失敗，一律只記 log、不再有下一層備援，這是刻意的設計邊界（Email 跟 Telegram 是兩個完全獨立的基礎設施，同時故障的機率已經足夠低，不需要無限疊加備援層級）。
+
+**理由**：
+- Email 跟 Telegram 是不同公司、不同協定的獨立基礎設施，同時掛掉的機率遠低於單一管道，適合當作最後一道防線。
+- 複用既有的 `GMAIL_USER`／`GMAIL_PASSWORD` 而非新增一組憑證，減少要保管的金鑰數量，且這兩個變數本來就是 Robin 自己的帳號。
+- 拆成兩段 try/except 才能準確分辨「連通知內容都組不出來」（email 備援也無用武之地）跟「內容組好了但 Telegram 送不出去」（email 備援才有意義）這兩種不同的失敗情境，避免不分青紅皂白地觸發備援。
+
+**替代方案**：
+- 方案 A：改用第三方 Email API（SendGrid／Mailgun）——優點是送達率可能更好；缺點是要多申請帳號/Key，對「極少觸發」的備援用途不划算，已否決
+- 方案 B：改用 Discord/Slack Webhook 當第二管道——優點一樣即時；缺點是同屬「即時通訊 API」風險類別，若是網路層級的問題可能兩者一起失效，風險相關性比 Email 更高，已否決
+- 方案 C（採用）：`smtplib` 直打 Gmail SMTP，複用既有 `GMAIL_USER`／`GMAIL_PASSWORD`
+
+**後果**：
+- 新增 `submodules/email/`，詳見 submodules-core SPEC.md FR-11、ADR-11、Step S.11。
+- `webhook.py` 新增 `_send_email_fallback()`，`_notify_robin_of_error()` 拆成兩段 try/except；`GMAIL_USER`／`GMAIL_PASSWORD` 從「預留未用」變成「Step 2.4 起實際使用」，NFR-5 同步註記。
+- 這個備援機制的涵蓋範圍僅限「私訊 Robin 的錯誤通知」（`_notify_robin_of_error()`），不涵蓋一般使用者收到的「生病了」安全用語——一般使用者本來就沒有登記 email，這件事本質上無法用同樣的機制解決，屬於 Telegram-only 架構的既有限制，不在本次範圍內。
+
+**狀態**：accepted
+
+### ADR-17：新增 Google Calendar 整合，單一共用行事曆（Robin 帳號 OAuth），不做per-user 授權
+
+**背景**：Robin 想幫 Robinson 加一個 Google Calendar 工具，討論後聚焦出三個有價值的方向：待辦事項、重要通知（節日/生日）、體態目標期限單向同步寫入 Calendar，讓家人不用開口問就能在手機原生行事曆 App 看到全貌。過程中確認兩個關鍵前提：① 家人不一定有 Google 帳號——查證後 Google Calendar 支援不需要帳號的「私密 iCal 網址訂閱」，但同步延遲可能長達 24 小時，不適合即時提醒用途；② Calendar API 本身免費（額度每分鐘 10,000 次請求，家庭規模用量遠用不到）。
+
+**決策**：
+1. 建一個獨立的「Robinson 家庭行事曆」（Robin Google 帳號底下的次要日曆），Robinson 只透過 Robin 一人的 OAuth 授權寫入，家人用「訂閱」的方式在自己手機看，不需要各自授權（比照 `gdrive` 現有模式）。
+2. 家人若沒有 Google 帳號，建議直接申請一個免費帳號取得即時雙向同步體驗（Android 手機通常本來就有）；若真的不想辦，退而求其次用「私密 iCal 網址訂閱」，但明確定位為「非即時、隨手瀏覽大局」用途，不取代 Telegram 既有的即時推播機制——兩個管道分工明確，不是二選一。
+3. MVP 範圍只做「Robinson 單向寫入」，不做「讀取行事曆查空檔」（原規劃第 4 點）——後者需要 Calendar 讀取權限、跨使用者行事曆比對，複雜度與隱私考量都高出一個量級，留待前三項基礎功能有實際使用回饋後再評估。
+4. 待辦事項同步（FR-66a）不額外拆分「待辦事項」與「行程」兩種概念，MVP 先同步所有 `todos`，避免過度設計；Calendar 是既有 `todos` 資料的額外瀏覽入口，不是另一份真相來源。
+5. 新增獨立的 `submodules/calendar`（比照 `gdrive` 的 OAuth 2.0 模式），但用**獨立一組憑證**，scope 只申請 `calendar.events`（最小權限，不要完整 `calendar` scope），跟 `gdrive` 的憑證互不共用——即使兩者可能來自同一個 Google Cloud 專案，也刻意讓每個子模組的金鑰各自獨立管理，符合 submodules-core SPEC.md FR-4「子模組彼此獨立、互不依賴」的既有原則，任一組憑證外洩時的影響範圍互相隔離。
+6.（**2026-08-05 補充**）家人的共用權限固定設為「查看所有活動詳細資料」（唯讀），不給「進行變更」權限——這是 Google Calendar 共用設定本身的權限分級，不需要 Robinson 額外寫程式限制。理由：Robinson 只寫不讀（見決策 3），如果家人能直接編輯，Robinson 完全不知道被改了什麼；一旦之後 Robinson 因為待辦事項/目標更新而覆寫同一筆事件，家人的手動修改會被無聲蓋掉，比「Robinson 不知道」更麻煩（資料被默默覆蓋而不自知）。設定唯讀權限從根本上避免這個衝突，不用在應用層額外處理。
+7.（**2026-08-05 補充**）Robin 提出部分待辦事項/體態目標可能是使用者不想讓其他家人看到的隱私（例如幫某人準備的驚喜、正在偷偷減肥）；確認方向：FR-66a（待辦事項）與 FR-66c（體態目標）的建立流程各自新增一題「要不要同步到 Google 行事曆？」，**每次都明確詢問，不設預設值**（多一輪反問換取不會因為忘記講而外洩隱私），選擇不同步的項目只留在資料庫、不建立任何 Calendar 事件；FR-66b（重要通知，節日/生日）本質上就是要讓全家人知道的資訊，不涉及個人隱私，維持全部自動同步，不用逐筆詢問。
+
+**理由**：
+- 單一共用行事曆＋Robin 一人授權，是複雜度最低、又能滿足「家人能在手機上看到全貌」這個核心需求的做法；per-user 授權要每個家人各自跑一次 OAuth 同意流程，複雜度直接跳到 Mobile App（Phase 4）等級，不成比例。
+- Telegram 跟 Calendar 分工明確（即時推播 vs 隨手瀏覽），不會因為 iCal 訂閱的延遲問題而讓家人誤以為 Calendar 是即時提醒管道，避免錯誤預期。
+- 不拆分「行程」概念是刻意的最小可行版本：如果之後發現「待辦事項」跟「行程」混在一起造成困擾（例如很多待辦事項是純自我提醒，不適合出現在家庭共用行事曆上），再回頭評估要不要拆分,現在沒有實際使用回饋支撐這個複雜度。
+
+**替代方案**：
+- 方案 A：每個家人各自 OAuth 授權自己的 Google 帳號——體驗最完整（雙向、各自隱私），但複雜度跳級，且家人不一定有 Google 帳號，已否決
+- 方案 B：只用私密 iCal 網址訂閱、不管家人有沒有 Google 帳號——省去帳號申請的溝通成本，但同步延遲問題無解，且訂閱網址本身是敏感憑證，處理不慎有外洩風險，已否決（但保留當「家人不想辦帳號」時的備案）
+- 方案 C（採用）：單一共用行事曆＋Robin 帳號 OAuth 授權，家人建議辦免費帳號取得即時體驗，不想辦的用 iCal 訂閱當退而求其次的方案
+
+**後果**：
+- 新增 `submodules/calendar/`（`client.py`／`README.md`／`requirements.txt`／`.env.example`），對應 submodules-core SPEC.md 新增 FR-12、ADR-12、Step S.12；`get_refresh_token.py` 已先行建立（2026-08-05，不影響 production，只是一次性本機授權腳本）。
+- 需要新的資料庫欄位：`todos.google_calendar_event_id`、`todos.sync_to_calendar`（`BOOLEAN`）、`body_goals.google_calendar_event_id`、`body_goals.sync_to_calendar`（`BOOLEAN`），依 ADR-10「先審核後執行」流程，實際建表 SQL 待 Step 開工時提出並經 Robin 核准；`sync_to_calendar` 由建立當下的反問結果決定，MVP 不支援事後修改（見決策 7）。
+- Robin 需要完成幾項一次性的手動設定（Google Cloud Console 開通 Calendar API、建立次要日曆、以「查看所有活動詳細資料」唯讀權限分享給家人、跑一次互動式授權腳本取得 refresh token）才能讓這個功能真正動起來，這些是操作面的準備工作，不是程式碼可以自動化的部分。
+- NFR-5 新增三把 Google Calendar 專屬敏感金鑰，系統架構總覽表新增一列。
+- FR-66a／FR-66c 的多輪反問流程各多一輪「要不要同步」的詢問，使用者建立待辦事項/體態目標時的互動步驟數 +1。
+
+**狀態**：accepted
+
 ## 實作計畫
 
 > 分期原則見 ADR-4；每個 Phase 完成後才進入下一個 Phase 的詳細 spec 與 TDD 循環。本 spec 僅列到模組層級，各模組進入實作前應個別建立 `docs/specs/<feature-slug>/SPEC.md` 展開 API 設計與資料表結構。
@@ -608,9 +699,10 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 - [x] Step 2.1：記帳模組（FR-41～FR-44，**2026-08-04 完成**）
 - [x] Step 2.2：體態管理模組（FR-45～FR-48，可複用記帳的告警/圖表邏輯，**2026-08-04 完成**）
 - [x] Step 2.3：重要通知模組（FR-53，生日/節日排程 + 排除對象邏輯，**2026-08-04 完成**）—— 固定節日（元旦/除夕/初一/掃墓提醒/中秋/端午/父親節/母親節）與家人生日提醒，固定台灣時間 08:00 推播，借用 `/healthz` 既有 10 分鐘 cron 頻率；新增 `users.birthday`、`important_notifications_log` migrations，新增 `src/bot/notifications.py`（純邏輯，農曆計算用 `lunarcalendar` 套件）、`commands.py`／`router.py` 的 Owner 專屬「設定家人生日」流程、`main.py` 的 `_check_important_notifications()`；全專案 703 個測試全過，`notifications.py` 覆蓋率 100%
-- [ ] Step 2.4：異常自主診斷與 GitHub PR 自動化（FR-19b、FR-19c、FR-19d、FR-19e，見 ADR-7）—— Robin 錯誤發生時自動上網查可能原因、產生衝擊評估、透過 GitHub API 開分支與 PR（含程式碼異動紀錄）、私訊結構化建議報告與 PR 連結；Robin 於 GitHub Merge PR 後觸發 Render 自動部署
+- [x] Step 2.4：錯誤 log 雲端連結（FR-19b，**2026-08-05 改寫並完成，見 ADR-15，supersede 原「異常自主診斷與 GitHub PR 自動化」規劃**）—— 例外發生時，把完整 Traceback＋觸發功能＋使用者輸入摘要組成 log 檔案，複用既有 `GDriveClient` 上傳至 Google Drive，私訊 Robin 專屬連結；其他使用者維持既有「生病了」安全用語不變，不揭露任何技術細節或連結。**同日追加（見 ADR-16）**：新增 `submodules/email` 當 Telegram 本身故障時的獨立備援通知管道
 - [ ] Step 2.5：外部 API 重試機制（FR-19i，Max 3 次 + Exponential Backoff），做為所有外部 API 呼叫的共用底層邏輯
 - [ ] Step 2.6：例外分級降級（FR-19f 一般感冒級、FR-19g 重大疾病級）與決策執行狀態閉環回饋（FR-19h），套用到 Phase 1 已完成的待辦事項/心情小記與本 Phase 的記帳/體態模組
+- [x] Step 2.7（2026-08-05 新增並完成，見 FR-66、ADR-17）：Google Calendar 整合——新增 `submodules/calendar`，待辦事項（FR-66a）、重要通知（FR-66b）、體態目標期限（FR-66c）單向同步寫入家庭共用行事曆；`todos`／`body_goals` 新增 `sync_to_calendar`／`google_calendar_event_id` 欄位（`0031`／`0032` migration，Robin 依 ADR-10 核准）；待辦事項與體態目標建立流程各自新增一輪「要不要同步」反問（不預設），節日/生日全自動同步；家人共用權限固定「查看所有活動詳細資料」（唯讀），非程式碼限制
 
 ### Phase 3：個人技能成長（Robin only，含 YouTube 技術情報）+ 好友模式
 
@@ -662,8 +754,8 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 > Phase 2 補充（Step 2.4～2.6）：
 - [ ] 服務模擬「一般感冒級」錯誤 → 使用者收到感冒靜態語句、Robin 收到完整錯誤詳情，**未呼叫額外 LLM 生成回覆**（FR-19f）
 - [ ] 服務模擬「重大疾病級」錯誤（如 LLM API Key 失效）→ 完全繞過 LLM、使用者與所有家人收到寫死的重大疾病廣播、Robin 收到最高等級告警（FR-19g）
-- [ ] 服務模擬錯誤 → AI 自動查詢可能原因 → 產生衝擊評估 → GitHub 上出現對應的修復分支與 PR（含程式碼異動紀錄）→ Robin 收到結構化建議報告與 PR 連結，且系統**未**自動 Merge 或部署（FR-19b～FR-19e）
-- [ ] Robin 未在 GitHub Merge PR → 正式環境（`main`）不應有任何變更（FR-19e-5 反例測試）
+- [ ] 服務模擬錯誤 → 使用者（含觸發者本人與所有其他家人）僅收到「生病了」安全用語，訊息中**不含**任何連結或技術細節 → Robin 額外收到 Google Drive log 連結 → 點開連結內容包含完整 Traceback／觸發功能／使用者輸入摘要（FR-19b）
+- [ ] 模擬 Google Drive 上傳失敗（例如 API 逾時）→ 使用者仍正常收到「生病了」訊息、Robin 仍正常收到私訊（僅缺連結欄位），不因上傳失敗導致整個錯誤通知流程中斷（FR-19b 優雅降級）
 - [ ] 使用者新增一筆記帳紀錄並確認 → 成功時收到明確成功訊息；模擬 DB 寫入逾時 → 收到感冒語句且該筆紀錄確實未寫入（FR-19h）
 
 > Phase 3 補充（Step 3.4）：
@@ -687,13 +779,12 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 | YouTube 推薦品質不佳（如關鍵字設定太寬泛、推到不相關影片） | 低 | 中 | Rule-based Weight 排序可事後調整（ADR-9 後果），不涉及重新訓練模型 |
 | YouTube Data API 服務中斷或回應異常 | 低 | 低 | 依 FR-59c 走 FR-19i 重試機制與 FR-19f 分級降級，不影響其他模組運作 |
 | 全功能一次開發導致 MVP 難產 | 高 | 中 | 採 ADR-4 分期策略，Phase 1 聚焦最小可用範圍 |
-| AI 自主診斷的搜尋結果誤判或給出錯誤修復建議 | 中 | 中 | 一律只產生「建議」+ 開 PR，不自動 Merge；Robin 在 GitHub 審核後才決定是否 Merge（FR-19e、NFR-8） |
-| AI 誤觸發自動修復、繞過人工審核直接改正式環境 | 高 | 低 | Robinson 僅具備開 PR 權限，技術上完全不具備推送/部署到 `main` 的權限，不是靠比對回覆文字把關，而是 Git 權限層級本身就擋住（FR-19e-5） |
-| 診斷用 Web Search 額外消耗 Gemini 免費額度 | 中 | 中 | 僅在真的發生例外時觸發，不常態執行；與對話用途共用額度監控（FR-21） |
+| AI 誤觸發自動修復、繞過人工審核直接改正式環境 | 高 | 低 | **2026-08-05 更新（見 ADR-15）**：此風險已隨 FR-19e（GitHub PR 自動化）整套取消而消除，Robinson 現在對正式環境程式碼完全不具備任何自動修改/部署能力，連「開 PR」這個較低風險的權限都沒有（NFR-8） |
+| error log 上傳 Google Drive 沒有生命週期管理，長期可能累積大量檔案佔用 Robin 個人 Drive 容量 | 低 | 低 | 目前不特別處理，之後容量吃緊再視需要加清理機制或改用同一資料夾人工定期清除（見 ADR-15） |
+| Telegram 與 Email（Gmail）備援管道剛好同時故障，Robin 完全收不到任何主動錯誤通知 | 低 | 低 | 兩者是不同公司、不同協定的獨立基礎設施，同時故障機率極低；已是最後一道防線，不再疊加第三層備援（見 ADR-16），殘餘風險接受，Robin 可定期查看 Render Dashboard 的應用程式 log 作為手動保底 |
 | Owner 設定對話流被家人誤觸或惡意觸發 | 中 | 低 | 嚴格比對 `telegram_user_id` 是否為 Robin，非 Robin 觸發一律無效且不透露此指令存在（FR-6a） |
 | TOEIC 軌道一檔名比對失敗或音檔/圖檔沒對齊，導致題目資料錯誤 | 中 | 中 | 比對失敗時不寫入資料庫，改私訊 Robin 請人工確認檔名，避免髒資料進知識庫 |
 | 外部 API 重試機制參數設定不當，重試風暴反而加劇對方伺服器負擔 | 中 | 低 | 固定 Max 3 次 + Exponential Backoff（1/2/4 秒），不做無限重試（FR-19i） |
-| GitHub PR 開了但 Robin 長時間未處理，錯誤持續存在 | 低 | 中 | 本次不特別處理，PR 會持續開著；未來可視需要再加「PR 逾時提醒」（見 ADR-7 後果） |
 | 建表 SQL 未經 Robin 審核就被執行，或執行後忘記記錄到 `db_schema.md` | 中 | 低 | 依 ADR-10 流程，執行前必須先呈現 SQL 與理由並取得同意，執行後立即同步文件；此為硬性流程規範，不因趕時程而跳過 |
 | 客訴功能被惡意灌水（大量無意義訊息）或當成一般聊天誤觸發 | 低 | 低 | 觸發詞需明確比對「我要客訴你」或 `/complaint`，避免一般對話誤判；灌水內容仍會如實記錄+分析，由 Robin 自行判斷是否為有效回饋 |
 
@@ -707,7 +798,7 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 - [x] 104 爬蟲的合規性？→ 不使用瀏覽器自動化、直接呼叫 AJAX/JSON API、每週僅一次、標準 UA/Referer、分頁間 2～4 秒隨機延遲、禁併發（見 FR-34a～FR-34c）
 - [x] Notion 後台排程順序？→ 獨立拆成 **Phase 5**，排在全專案最終階段；Phase 0～4 期間僅需維持資料層 API 抽象化彈性（見 FR-54、實作計畫 Phase 5）。原訂 8/4 之後開始，因 2026-07-30 時程改為兩週制順延至 8/11 之後，同日再因新增 YouTube 模組追加 1 天緩衝，目前為 **8/12 之後**（見 PROGRESS.md）（**2026-08-04 更新**：此決策已由 ADR-14 取代——Notion 改為 Mobile App，Phase 5 取消、併入 Phase 4，詳見 ADR-14 與實作計畫）
 - [x] 個資偵測規則的具體格式？→ Regex 硬規則 + LLM 語意辨識雙層防線，覆蓋 8 類台灣個資格式，排除生日與 LINE ID（見 FR-13a～FR-13d）
-- [x] FR-19e「核准後執行修復」的執行機制範圍？→ Render 線上自主運維模組：AI 診斷後透過 GitHub API 開分支與 PR，Robin 在 GitHub 審核 Merge 後才觸發部署，Robinson 不具備直接推送 `main` 的權限（見 FR-19e-1～FR-19e-5、ADR-7）
+- [x] FR-19e「核准後執行修復」的執行機制範圍？→ Render 線上自主運維模組：AI 診斷後透過 GitHub API 開分支與 PR，Robin 在 GitHub 審核 Merge 後才觸發部署，Robinson 不具備直接推送 `main` 的權限（見 FR-19e-1～FR-19e-5、ADR-7）（**2026-08-05 更新**：此決策已由 ADR-15 取代——Step 2.4 開工前 Robin 重新評估後認為 AI 自主診斷＋GitHub PR 自動化太複雜、風險過高，且系統當時已無法使用 Gemini Search grounding（見 submodules-core SPEC.md ADR-8）導致 FR-19b「上網查詢」根本做不到，改為更輕量的「完整 log 上傳 Google Drive＋私訊 Robin 專屬連結」設計，詳見 ADR-15）
 
 ## 補充注意事項（2026-07-29 Robin 新增，非提問，直接採納為需求）
 
@@ -808,3 +899,9 @@ FR-56 的 `/function` 路由目前只定義了「回傳範圍」（所有功能�
 | 2026-08-04 | **Phase 2 Step 2.2 完成：體態管理模組（FR-45～FR-48）**。經 AskUserQuestion 確認四項設計：① 運動消耗卡路里改用 LLM 估算（而非 MET 公式），沿用 `GEMINI_API_BOT_KEY` ② 飲食三大營養素拆算同樣沿用 `GEMINI_API_BOT_KEY`（沒有食物資料庫，只能靠 LLM 語意判斷）③ FR-45 預警情境定案為目標達成通知（體重目標即時檢查、運動目標借用 `/healthz` 頻率排程加總累積分鐘數）＋目標期限前 7 天提醒＋BMI 異常提醒 ④ 三個子功能的目標設定共用一張 `body_goals` 表，用 `goal_type` 區分；運動目標單位由公里數改為累積運動分鐘數（Robin 指出「不是只有跑步」）。新建 `body_weight_logs`／`exercise_logs`／`diet_logs`／`body_goals` 四張表、`users` 新增 `height_cm`（`0023`～`0027` migration，Robin 依 ADR-10 核准）；新增 `src/bot/body.py`；身高體重/運動/飲食三個子功能從一開始就內建完整 CRUD；飲食目標因太主觀不做自動達成判斷，只能手動取消，是刻意的已知簡化；`commands.py`／`router.py`／`main.py` 完成整合；`src/bot/body.py` 達到 100% 覆蓋率，全專案 661 個測試全過 | Claude（經 AskUserQuestion 確認範圍與 SQL 後實作） |
 | 2026-08-04 | **移除 Notion 後台，改採 Mobile App（React Native + Expo）**，新增 ADR-14（supersede ADR-1 的後台選型部分）。Robin 指示系統架構確立為「Telegram Bot（LUI）+ Mobile App（Rich GUI，唯讀 BI Dashboard）」；移除原 FR-54（Notion 相關描述），新增 FR-64（唯讀視覺化）、FR-65／FR-65a～FR-65c（多用戶登入機制：一般使用者 `user_name`／稱謂／`APP Access Token`，Robin 僅需 `user_name`／`APP Access Token`）；補充技術細節：`/api/app/*` API 設計原則（後端算好圖表 JSON 結構回傳，App 端只負責渲染）、React Native + Expo（Expo Router）基礎路由結構、資料模型補充（`users.app_access_token`）；登入與 App 詳細功能邏輯留待 Phase 4 對應 Step 開工時再深入展開，本次僅為 Placeholder。原獨立拆出的 Phase 5（Notion）取消，Mobile App 相關 Step 4.4／4.5（Placeholder）併入 Phase 4（與求職模組並列）；同步更新概要、系統架構總覽表、名詞定義（新增 APP Access Token）、NFR-1／NFR-5、ADR-4 理由 4、待確認事項 Notion 項次註記；本次僅為規格層級調整，未建立任何程式碼或資料表 | Claude（依 Robin 詳細指示調整規格） |
 | 2026-08-04 | **Phase 2 Step 2.3 完成：重要通知模組（FR-53）**。Robin 提供完整需求：「超級重要通知（主角不能收到）」涵蓋家人生日與父親節/母親節，「重要通知（大家都收到）」涵蓋元旦、除夕/初一、固定 3/1 掃墓提醒、中秋、端午，各自附上固定文案；後續經 Robin 回覆補齊家人 `role`→生日對照（弟弟/大妹/小妹/爸爸/媽媽 5 位有明確生日，弟媳/大妹婿/小妹婿/阿姨 4 位生日不詳），經 AskUserQuestion 確認缺漏生日先跳過、改為新增自助指令補齊；經 AskUserQuestion 確認三項設計：① 農曆節日（除夕/初一/中秋/端午）改用 `lunarcalendar` 套件即時計算（純 Python、不需要網路），父親節固定西曆 8/8、母親節固定 5 月第二個星期日，皆不維護每年對照表 ② 固定台灣時間 08:00 推播，借用 `/healthz` 既有 10 分鐘 cron 頻率 ③ 父親節/母親節排除邏輯用 `users.role` 字串比對「爸爸」／「媽媽」，家人生日排除邏輯用 `user_id` 排除當事人自己。新增 `users.birthday`（`0028_add_birthday_to_users.sql`）、`important_notifications_log` 表（`0029_create_important_notifications_log_table.sql`，`UNIQUE(notification_key, year)` 年度去重）、`0030_seed_family_birthdays.sql`（寫入已知 5 位家人生日，Robin 已核准三份 SQL）；新增 `src/bot/notifications.py`（純邏輯：固定節日西曆日期計算、`FIXED_NOTIFICATIONS` 清單、收件人排除邏輯、生日比對、去重推播、`parse_birthday_input()` 生日格式解析）；新增 Owner 專屬「設定家人生日」／`/set_family_birthday` 指令（`commands.py`／`router.py`，流程比照既有 `/set_toggle`：先列出所有已綁定使用者選編號，再輸入生日）；`main.py` 新增 `_check_important_notifications()` 借用 `/healthz` 頻率；`src/bot/notifications.py` 達到 100% 覆蓋率，全專案 703 個測試全過 | Claude（依 Robin 提供的需求與 AskUserQuestion 確認範圍後實作） |
+| 2026-08-05 | **Step 2.4 範疇簡化：取消 AI 自主診斷＋GitHub PR 自動化，新增 ADR-15（supersede ADR-7）**。開工前先盤點技術現況，發現 FR-19b「上網查詢」的前提（Gemini Search grounding）已因 submodules-core SPEC.md ADR-8 被整個移除、無法復原（Robin 不考慮開通計費帳戶），且 FR-19e 的 GitHub API 自動開分支/PR＋LLM 自動生成程式碼異動工程量與風險都偏高；跟 Robin 討論後，確認改用更輕量的方案：Robinson 只做「捕獲例外→完整 log（含 Traceback／觸發功能／使用者輸入摘要）上傳 Google Drive（複用既有 `GDriveClient`）→私訊 Robin 專屬連結」，其他使用者行為完全不變（僅收到既有「生病了」安全用語，不含任何連結或技術細節）；FR-19c／FR-19d／FR-19e 三條需求編號移除，FR-19b 改寫為新內容，FR-19f～FR-19i 不受影響；同步更新系統架構總覽表（移除「治理｜GitHub API」列）、NFR-5（`GITHUB_REPO` 移除，`GitHub Personal Access Token` 保留但註記用途限縮為 ADR-11 的 git push 驗證，非本次取消的 GitHub REST API 用途）、NFR-8（改寫為「完全不具備自動修改/部署能力」）、風險表（移除 AI 誤判/PR 逾時相關風險、新增 Drive log 生命週期風險）、測試策略 Phase 2 補充、實作計畫 Step 2.4 說明、待確認事項 FR-19e 項次註記；ADR-7 狀態改為 superseded；本次僅為規格層級調整，尚未動任何程式碼，實作待 Robin 確認 SPEC 內容後再進行 | Claude（依 Robin 提出的簡化方向調整規格，待確認後實作） |
+| 2026-08-05 | **Phase 2 Step 2.4 完成：錯誤 log 雲端連結（FR-19b）**。Robin 確認 SPEC.md ADR-15 內容後指示「開始開發吧」。`webhook.py` 新增 `_upload_error_log()`（封裝 `GDriveClient.upload_file()` 呼叫，任何失敗——含 `GDRIVE_OAUTH_REFRESH_TOKEN`／`GDRIVE_OAUTH_CLIENT_ID`／`GDRIVE_OAUTH_CLIENT_SECRET`／`GDRIVE_FOLDER_ID` 環境變數未設定或 Drive API 暫時性錯誤——皆優雅降級回傳 `None`）與 `_ERROR_LOG_FILE_TEMPLATE`（完整、不截斷的 log 檔案內容，跟 Telegram 訊息本身的 3200 字元截斷版分開）；`_notify_robin_of_error()` 延伸為捕獲例外時額外組出 log 檔案內容並上傳，檔名格式 `error_log_{時間戳記}_{觸發功能}.log`，上傳成功則在私訊 Robin 的訊息末尾附加「📄 完整 log」連結行（`_ROBIN_ERROR_NOTIFY_TEMPLATE` 新增 `{log_link_line}` 欄位，無連結時為空字串）；其他使用者收到的 `_UNEXPECTED_ERROR_REPLY` 安全用語完全不受影響（兩條訊息路徑本來就完全獨立）。新增 6 個測試（`_upload_error_log()` 的成功/環境變數缺失/例外三種情境、`_notify_robin_of_error()` 的連結附加成功/Drive 上傳失敗優雅降級/環境變數缺失優雅降級），既有測試不需修改即全數通過；全專案 709 個測試全過，`webhook.py` 達到 100% 覆蓋率 | Claude（依 Robin「開始開發吧」指示實作） |
+| 2026-08-05 | **新增 ADR-16：Telegram 故障時的 email 備援通知**。Robin 驗收 Step 2.4 時提出「如果壞掉的是 Telegram 本身，不就沒辦法通知？」，確認這是 FR-19b 設計時沒考慮到的單點故障。新增 `submodules/email`（見 submodules-core SPEC.md FR-11、ADR-11）：`EmailClient.send_text()` 用 `smtplib` 直打 Gmail SMTP（SSL），複用既有 `GMAIL_USER`／`GMAIL_PASSWORD`（原為 Phase 3 FR-23 預留但尚未使用）；`webhook.py` 新增 `_send_email_fallback()`，`_notify_robin_of_error()` 拆成「組裝內容」與「透過 Telegram 送達」兩段 try/except，只有後者失敗才觸發 email 備援，內容含完整 Traceback；email 本身也失敗只記 log，不再疊加第三層備援，這是刻意的設計邊界；同步更新 NFR-5（Gmail 密碼用途從預留變成實際使用）與風險表（新增「兩個備援管道同時故障」的低風險殘餘項目）；新增 11 個測試（`submodules/email/client.py` 5 個、`webhook.py` 6 個），全專案 720 個測試全過，`webhook.py`／`submodules/email/client.py` 皆達到 100% 覆蓋率 | Claude（依 Robin 提出的問題新增備援機制） |
+| 2026-08-05 | **新增 Step 2.7、FR-66、ADR-17：Google Calendar 整合（規格層級，尚未實作）**。Robin 提出想加 Google Calendar 工具但不確定用途，討論後聚焦三個方向：待辦事項（FR-66a）、重要通知節日/生日（FR-66b）、體態目標期限（FR-66c）單向同步寫入行事曆；查證確認家人沒有 Google 帳號時可用私密 iCal 網址訂閱但延遲可能達 24 小時（不適合即時提醒，需與 Telegram 分工）、Calendar API 額度免費（10,000 次/分鐘，家庭規模用不到）；亦討論過「讀取行事曆做空檔查詢」（FR-66d）但因複雜度與隱私考量高出一個量級，明確排除本次範圍。確認設計：單一共用行事曆＋僅 Robin 帳號 OAuth 授權（比照 `gdrive` 模式，家人訂閱即可看，不需各自授權）；不拆分「待辦事項」與「行程」概念，MVP 先同步所有 `todos`；新增獨立 `submodules/calendar`，用專屬一組 OAuth 憑證（`calendar.events` 最小權限 scope），不與 `gdrive` 共用金鑰；同步更新系統架構總覽表、NFR-5（新增 3 把 Calendar 專屬金鑰）。本次僅為規格層級調整，尚未建立任何程式碼、子模組或資料表，實作待 Robin 完成 Google Cloud Console 設定與一次性授權後再進行 | Claude（依 Robin 討論方向撰寫規格） |
+| 2026-08-05 | **Google Calendar 手動設定進行中：確認家人共用方式為免費 Google 帳號、補上隱私設計（ADR-17 決策 6／7）**。Robin 確認家人共用行事曆一律用免費 Google 帳號（非 iCal 訂閱備案）；新增 `submodules/calendar/get_refresh_token.py`（比照 `gdrive` 的一次性互動授權腳本，scope 固定 `calendar.events`，語法檢查通過，尚未串接 `client.py`）供 Robin 完成手動授權設定。Robin 提出兩個未涵蓋的設計缺口：① 家人若直接在 Google Calendar 編輯事件，Robinson 只寫不讀會完全不知道，且日後覆寫同一筆事件時會無聲蓋掉家人的手動修改；決議家人共用權限固定設為「查看所有活動詳細資料」（唯讀），純屬 Google Calendar 共用設定，不需要應用層程式碼 ② 部分待辦事項/體態目標可能是使用者不想讓其他家人看到的隱私；經 AskUserQuestion 確認 FR-66a／FR-66c 的建立流程各自新增一題「要不要同步到 Google 行事曆？」，每次明確詢問、不預設，體態目標比照待辦事項處理；FR-66b（節日/生日）維持全部自動同步，不涉及個人隱私。同步更新 ADR-17 決策 6／7、後果（新增 `todos.sync_to_calendar`／`body_goals.sync_to_calendar` 布林欄位規劃）；本次仍為規格層級調整＋一次性授權腳本，`CalendarClient` 本體與 DB migration 尚未動工 | Claude（依 Robin 提出的隱私與共用權限疑慮，AskUserQuestion 確認範圍後補上規格） |
+| 2026-08-05 | **Phase 2 Step 2.7 完成：Google Calendar 整合（FR-66、ADR-17）**。Robin 完成 Google Cloud Console 手動設定（Calendar API、獨立 OAuth 用戶端、共用行事曆、家人以「查看所有活動詳細資料」唯讀權限共用）後指示開工。新增 `submodules/calendar/client.py`：`CalendarClient` 提供 `create_event()`／`update_event()`／`delete_event()`，全天事件用 `date`、有時間點事件用 `dateTime`+`Asia/Taipei` 時區；10 個測試，覆蓋率 100%。DB 依 ADR-10 核准 `0031_add_calendar_sync_to_todos.sql`／`0032_add_calendar_sync_to_body_goals.sql`：`todos`／`body_goals` 各自新增 `sync_to_calendar`（`BOOLEAN`）、`google_calendar_event_id`（`TEXT`）。整合三處：① `src/bot/commands.py` 待辦事項新增流程在 `pending_todo_reminder` 之後新增 `pending_todo_calendar_sync` 一輪反問，確認後才寫入並視情況建立事件（單一時間點待辦預設 30 分鐘時長，區間待辦用 `start_at`～`due_at`）；標記完成/取消時（`handle_todo_action_confirm_step`）如果有同步則刪除對應事件 ② `src/bot/notifications.py` 的 `check_and_push_important_notifications()` 新增 `calendar_client` 參數，固定節日/生日判斷通過時自動建立全天事件，不逐筆詢問（FR-66b） ③ `src/bot/body.py`／`commands.py` 體態目標設定流程比照待辦事項，只有講清楚期限的目標才會多問 `pending_goal_calendar_sync` 這一題，達成/取消時刪除對應事件。所有同步/刪除呼叫皆包 try/except 優雅降級（`calendar_client` 為 `None` 或 API 例外都不影響原本功能本身成功執行），`webhook.py`／`main.py` 新增 `_build_calendar_client()`，四個 `GOOGLE_CALENDAR_*` 環境變數未設定齊全時回傳 `None`。全專案 758 個測試全過，`submodules/calendar/client.py`／`src/bot/body.py`／`src/bot/notifications.py` 達到 100% 覆蓋率 | Claude（依 Robin「Google Calendar 已設定完，可以開工了」指示實作） |

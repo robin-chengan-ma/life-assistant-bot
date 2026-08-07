@@ -22,6 +22,7 @@
 ⑤ 運動目標的 `target_value` 語意是「累積運動分鐘數」（Robin 指出不是只有跑步，用公里數當單位
    對其他運動類型不通用，分鐘數才是各種運動都適用的共同單位）。
 """
+import logging
 import re
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -29,6 +30,7 @@ from zoneinfo import ZoneInfo
 from submodules.cloudsql.client import CloudSQLClient
 
 _TAIWAN_TZ = ZoneInfo("Asia/Taipei")
+_logger = logging.getLogger(__name__)
 
 # FR-46 合理範圍檢查：成人身高約 140～220 公分、體重約 40 公斤以上。
 _MIN_HEIGHT_CM = 140.0
@@ -405,9 +407,17 @@ def create_goal(
     target_value: float | None = None,
     baseline_value: float | None = None,
     target_date: date | None = None,
+    sync_to_calendar: bool = False,
 ) -> int:
     """新增一筆體態目標（FR-46～FR-48），回傳新建列的 id。`baseline_value` 只有 `goal_type ==
-    "weight"` 時才需要傳（設定當下的體重，用來判斷要瘦還是要增，決策④）。"""
+    "weight"` 時才需要傳（設定當下的體重，用來判斷要瘦還是要增，決策④）。
+
+    `sync_to_calendar`（2026-08-05，見 robinson SPEC.md FR-66c、ADR-17）：使用者在設定流程中
+    明確選擇要不要同步到 Google 家庭共用行事曆，MVP 不支援事後修改；實際建立 Calendar 事件、
+    寫回 `google_calendar_event_id` 是呼叫端（`src/bot/commands.py`）的責任，本函式只負責記下
+    這個布林選擇。沒有 `target_date` 的目標即使選了同步也沒有意義（沒有日期可以建事件），由
+    呼叫端在反問流程裡自行決定要不要問這一題。
+    """
     return db.insert(
         "body_goals",
         {
@@ -420,8 +430,14 @@ def create_goal(
             "status": "active",
             "achieved_notified": False,
             "deadline_reminder_sent": False,
+            "sync_to_calendar": sync_to_calendar,
         },
     )
+
+
+def set_calendar_event_id(db: CloudSQLClient, goal_id: int, event_id: str) -> None:
+    """記錄這筆體態目標對應的 Google Calendar 事件 ID（FR-66c），供之後達成/取消時刪除對應事件。"""
+    db.update("body_goals", {"google_calendar_event_id": event_id}, where="id = %s", params=(goal_id,))
 
 
 def list_active_goals(db: CloudSQLClient, user_id: int) -> list[dict]:
@@ -442,21 +458,43 @@ def format_goal_list(goals: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def cancel_goal(db: CloudSQLClient, goal_id: int) -> None:
-    """取消一筆體態目標（使用者明確確認後才會呼叫）。"""
+def cancel_goal(db: CloudSQLClient, goal_id: int, calendar_client=None, google_calendar_event_id=None) -> None:
+    """取消一筆體態目標（使用者明確確認後才會呼叫）。`google_calendar_event_id`（2026-08-05，
+    見 FR-66c、ADR-17）由呼叫端傳入（`commands.py` 在列出清單時已經查過），這裡不重複查詢。"""
     db.update("body_goals", {"status": "cancelled"}, where="id = %s", params=(goal_id,))
+    _delete_calendar_event_if_synced(calendar_client, google_calendar_event_id, goal_id)
 
 
-def _mark_goal_achieved(db: CloudSQLClient, goal_id: int) -> None:
+def _delete_calendar_event_if_synced(calendar_client, google_calendar_event_id, goal_id: int) -> None:
+    """FR-66c：目標達成或取消時，如果當初有同步到 Calendar，一併刪除對應事件。刪除失敗
+    （`calendar_client` 為 `None` 或 API 例外）優雅降級，不影響目標狀態本身的更新。"""
+    if not google_calendar_event_id or calendar_client is None:
+        return
+    try:
+        calendar_client.delete_event(event_id=google_calendar_event_id)
+    except Exception:
+        _logger.exception(
+            "刪除體態目標（id=%s）對應的 Google Calendar 事件失敗，目標狀態已成功更新不受影響", goal_id
+        )
+
+
+def _mark_goal_achieved(db: CloudSQLClient, goal_id: int, calendar_client=None, google_calendar_event_id=None) -> None:
     db.update("body_goals", {"status": "achieved", "achieved_notified": True}, where="id = %s", params=(goal_id,))
+    _delete_calendar_event_if_synced(calendar_client, google_calendar_event_id, goal_id)
 
 
-def check_weight_goal_achieved(db: CloudSQLClient, user_id: int, latest_weight_kg: float) -> str | None:
+def check_weight_goal_achieved(
+    db: CloudSQLClient, user_id: int, latest_weight_kg: float, calendar_client=None
+) -> str | None:
     """FR-45 目標達成通知：體重目標在每次記體重時即時檢查（決策③）。方向由 `baseline_value`
     跟 `target_value` 的大小關係判斷：`target_value < baseline_value` 代表要瘦，達成條件是
     `latest_weight_kg <= target_value`；反之代表要增重，達成條件是 `latest_weight_kg >=
     target_value`。達成時立刻標記為 `achieved` 並回傳一句恭喜文字供呼叫端附加在回覆後面；
-    沒有達成中的體重目標，或條件未達成，回傳 None。"""
+    沒有達成中的體重目標，或條件未達成，回傳 None。
+
+    `calendar_client`（2026-08-05，見 FR-66c、ADR-17）：達成時如果這個目標當初有同步到
+    Calendar，一併刪除對應事件（見 `_delete_calendar_event_if_synced()`）。
+    """
     goals = db.select(
         "body_goals", where="user_id = %s AND goal_type = %s AND status = %s", params=(user_id, "weight", "active")
     )
@@ -469,15 +507,22 @@ def check_weight_goal_achieved(db: CloudSQLClient, user_id: int, latest_weight_k
         losing_weight = target_value < baseline_value
         achieved = latest_weight_kg <= target_value if losing_weight else latest_weight_kg >= target_value
         if achieved:
-            _mark_goal_achieved(db, goal["id"])
+            _mark_goal_achieved(
+                db, goal["id"], calendar_client=calendar_client,
+                google_calendar_event_id=goal.get("google_calendar_event_id"),
+            )
             return f"🎉 恭喜你達成體重目標「{goal['target_description']}」了！"
     return None
 
 
-def check_and_push_exercise_goal_achievements(db: CloudSQLClient, telegram_client, now: datetime | None = None) -> None:
+def check_and_push_exercise_goal_achievements(
+    db: CloudSQLClient, telegram_client, now: datetime | None = None, calendar_client=None
+) -> None:
     """FR-45 目標達成通知：運動目標是「累積分鐘數」（決策⑤），需要跨多筆紀錄加總，改成借用
     `/healthz` 頻率的排程檢查（不像體重目標能在單次記錄當下就地判斷）：加總該目標建立之後的所有
     `exercise_logs.duration_minutes`，達到或超過 `target_value` 就推播恭喜並標記 `achieved`。
+
+    `calendar_client`（2026-08-05，見 FR-66c、ADR-17）：同步刪除已達成目標對應的 Calendar 事件。
     """
     now = now or datetime.now(timezone.utc)
     goals = db.select("body_goals", where="goal_type = %s AND status = %s", params=("exercise", "active"))
@@ -497,7 +542,10 @@ def check_and_push_exercise_goal_achievements(db: CloudSQLClient, telegram_clien
         )
         total_minutes = sum(row["duration_minutes"] for row in logs)
         if total_minutes >= float(target_value):
-            _mark_goal_achieved(db, goal["id"])
+            _mark_goal_achieved(
+                db, goal["id"], calendar_client=calendar_client,
+                google_calendar_event_id=goal.get("google_calendar_event_id"),
+            )
             telegram_client.send_text(
                 chat_id=user["telegram_user_id"],
                 text=f"🎉 恭喜你達成運動目標「{goal['target_description']}」了，累積運動了 {total_minutes} 分鐘！",

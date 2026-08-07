@@ -44,11 +44,17 @@ def create_todo(
     due_at: datetime,
     remind_before_30min: bool,
     start_at: datetime | None = None,
+    sync_to_calendar: bool = False,
 ) -> int:
     """新增一筆待辦事項，回傳新建列的 id。
 
     `start_at`（FR-31b）為 None 時是單一時間點待辦（沿用原本語意，`due_at` 就是預定執行時間）；
     非 None 時是區間待辦，`due_at` 代表區間的結束/截止時間。
+
+    `sync_to_calendar`（2026-08-05，見 robinson SPEC.md FR-66a、ADR-17）：使用者在建立流程中
+    明確選擇要不要同步到 Google 家庭共用行事曆，MVP 不支援事後修改（要同步就取消重建一筆）；
+    實際建立 Calendar 事件、寫回 `google_calendar_event_id` 是呼叫端（`src/bot/commands.py`）
+    的責任，本函式只負責記下這個布林選擇。
     """
     return db.insert(
         "todos",
@@ -59,8 +65,14 @@ def create_todo(
             "remind_before_30min": remind_before_30min,
             "status": "pending",
             "start_at": start_at,
+            "sync_to_calendar": sync_to_calendar,
         },
     )
+
+
+def set_calendar_event_id(db: CloudSQLClient, todo_id: int, event_id: str) -> None:
+    """記錄這筆待辦事項對應的 Google Calendar 事件 ID（FR-66a），供之後標記完成/取消時刪除對應事件。"""
+    db.update("todos", {"google_calendar_event_id": event_id}, where="id = %s", params=(todo_id,))
 
 
 def list_pending_todos(db: CloudSQLClient, user_id: int) -> list[dict]:

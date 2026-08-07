@@ -614,13 +614,21 @@ def test_todo_full_flow_from_natural_language_to_creation(fake_db, monkeypatch):
 
     llm_client.response_text = "CONFIRM"
     reply4 = router.handle_message(fake_db, store, FAMILY_ID, "好", llm_client=llm_client)
-    assert reply4 == "好的，已經幫你記錄好了！"
+    assert "同步到 Google 家庭行事曆" in reply4
+    assert store.get(FAMILY_ID)["flow"] == "pending_todo_calendar_sync"
+
+    # 2026-08-05（FR-66a、ADR-17）：多一輪同步詢問，這裡選擇不同步（calendar_client 沒有注入時
+    # 也要能正常運作，模擬環境變數未設定的優雅降級情境）。
+    llm_client.response_text = "CANCEL"
+    reply5 = router.handle_message(fake_db, store, FAMILY_ID, "不用", llm_client=llm_client)
+    assert reply5 == "好的，已經幫你記錄好了！"
     assert store.get(FAMILY_ID) is None
 
     rows = fake_db.select("todos", where="user_id = %s AND status = %s", params=(user_id, "pending"))
     assert len(rows) == 1
     assert rows[0]["content"] == "買菜"
     assert rows[0]["remind_before_30min"] is True
+    assert rows[0]["sync_to_calendar"] is False
 
 
 def test_my_todos_trigger_lists_and_marks_completed_via_index_selection(fake_db, monkeypatch):

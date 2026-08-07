@@ -83,54 +83,65 @@ def get_tomb_sweeping_reminder(year: int) -> date:
 
 # FR-53「重要通知（大家都收到）」與「超級重要通知（主角不能收到）」的固定節日清單。
 # `exclude_role`：None 代表大家都收到；否則排除 `users.role` 等於這個字串的人（決策③）。
+#   `calendar_summary`（2026-08-05，見 robinson SPEC.md FR-66b、ADR-17）：Google Calendar 全天
+#   事件的標題，刻意跟 `message`（Telegram 推播用，含表情符號與口語化語氣）分開，事件標題保持
+#   簡短中性。
 FIXED_NOTIFICATIONS: list[dict] = [
     {
         "key": "new_year",
         "compute_date": get_new_year,
         "message": "🎉 新年快樂！祝大家新的一年順利！",
         "exclude_role": None,
+        "calendar_summary": "元旦",
     },
     {
         "key": "lunar_new_year_eve",
         "compute_date": get_lunar_new_year_eve,
         "message": "🧧 除夕快樂！祝大家新年快樂，要包紅包了喔！",
         "exclude_role": None,
+        "calendar_summary": "除夕",
     },
     {
         "key": "lunar_new_year_day1",
         "compute_date": get_lunar_new_year_day1,
         "message": "🧧 新年快樂！恭喜發財，記得包紅包喔！",
         "exclude_role": None,
+        "calendar_summary": "初一",
     },
     {
         "key": "tomb_sweeping",
         "compute_date": get_tomb_sweeping_reminder,
         "message": "⛰️ 提醒大家，記得找一天回去掃墓喔！",
         "exclude_role": None,
+        "calendar_summary": "清明掃墓提醒",
     },
     {
         "key": "mid_autumn",
         "compute_date": get_mid_autumn,
         "message": "🌕 中秋節快樂！記得關心家人中秋有沒有要一起烤肉/吃月餅喔！",
         "exclude_role": None,
+        "calendar_summary": "中秋節",
     },
     {
         "key": "dragon_boat",
         "compute_date": get_dragon_boat,
         "message": "🐉 端午節快樂！記得關心家裡有沒有包粽子/吃粽子喔！",
         "exclude_role": None,
+        "calendar_summary": "端午節",
     },
     {
         "key": "fathers_day",
         "compute_date": get_fathers_day,
         "message": "👨 今天是父親節，記得跟爸爸表達感謝喔！",
         "exclude_role": "爸爸",
+        "calendar_summary": "父親節",
     },
     {
         "key": "mothers_day",
         "compute_date": get_mothers_day,
         "message": "👩 今天是母親節，記得跟媽媽表達感謝喔！",
         "exclude_role": "媽媽",
+        "calendar_summary": "母親節",
     },
 ]
 
@@ -169,13 +180,36 @@ def _broadcast(telegram_client, recipients: list[dict], message: str) -> None:
             _logger.exception("重要通知推播給 telegram_user_id=%s 失敗", user.get("telegram_user_id"))
 
 
-def check_and_push_important_notifications(db: CloudSQLClient, telegram_client, now: datetime | None = None) -> None:
+def _create_all_day_calendar_event(calendar_client, summary: str, on_date: date) -> None:
+    """FR-66b：在指定日期建立 Google Calendar 全天事件；失敗優雅降級只記警告 log，不影響 Telegram
+    推播本身（推播才是這個功能的主要目的，Calendar 只是額外的加值曝光）。
+    """
+    try:
+        calendar_client.create_event(
+            summary=summary,
+            start=on_date.isoformat(),
+            end=(on_date + timedelta(days=1)).isoformat(),
+            all_day=True,
+        )
+    except Exception:
+        _logger.exception("建立 Google Calendar 全天事件失敗（summary=%s，date=%s）", summary, on_date)
+
+
+def check_and_push_important_notifications(
+    db: CloudSQLClient, telegram_client, now: datetime | None = None, calendar_client=None
+) -> None:
     """FR-53：檢查今天是否為固定節日或有人生日，是的話推播對應通知（決策②：只在台灣時間 08:00
     這個小時內執行，靠 `important_notifications_log` 的 `UNIQUE(notification_key, year)` 避免
     同一天內（cron 每 10 分鐘觸發）重複推播）。
 
     比照 `finance.check_and_push_finance_reminders()`／`body.check_and_push_goal_deadline_reminders()`
     的做法，借用 `/healthz` 既有的 10 分鐘 cron 頻率，不需要獨立的排程系統。
+
+    `calendar_client`（2026-08-05，見 FR-66b、ADR-17）：選配，`None` 時（環境變數未設定）只推播
+    Telegram、不建立 Calendar 事件。固定節日/生日本質上是要讓全家人知道的資訊，不像待辦事項／
+    體態目標需要逐筆詢問是否同步（見 FR-66a），這裡判斷通過就直接建立，複用同一次
+    `important_notifications_log` 去重判斷，不需要額外追蹤更新/刪除（節日/生日建立後幾乎不會
+    變動，是刻意的簡化，見 ADR-17）。
     """
     now = now or datetime.now(timezone.utc)
     now_local = now.astimezone(_TAIWAN_TZ)
@@ -200,6 +234,8 @@ def check_and_push_important_notifications(db: CloudSQLClient, telegram_client, 
 
         _broadcast(telegram_client, recipients, entry["message"])
         _mark_sent(db, entry["key"], year)
+        if calendar_client is not None:
+            _create_all_day_calendar_event(calendar_client, entry["calendar_summary"], target_date)
 
     for birthday_user in _get_users_with_birthday_today(db, today):
         notification_key = f"birthday_{birthday_user['id']}"
@@ -210,6 +246,8 @@ def check_and_push_important_notifications(db: CloudSQLClient, telegram_client, 
         message = f"🎂 今天是 {birthday_user['role']} 的生日，記得跟他/她說聲生日快樂喔！"
         _broadcast(telegram_client, recipients, message)
         _mark_sent(db, notification_key, year)
+        if calendar_client is not None:
+            _create_all_day_calendar_event(calendar_client, f"{birthday_user['role']} 生日", today)
 
 
 # ---------------------------------------------------------------------------

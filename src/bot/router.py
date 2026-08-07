@@ -96,6 +96,7 @@ def handle_message(
     via_voice: bool = False,
     privacy_llm_client=None,
     telegram_client=None,
+    calendar_client=None,
 ) -> str:
     """處理一則來自 Telegram 的文字訊息，回傳要回覆的文字。
 
@@ -118,6 +119,10 @@ def handle_message(
     `telegram_client`（2026-08-02，Step 1.6，見 robinson SPEC.md FR-20）：`/recovered`（廣播
     「我康復了」給所有已綁定家人）與 `pending_complaint_content`（Step 1.9，FR-62，私訊 Robin
     客訴分析報告）這兩個分支會用到，其餘分支不需要。
+
+    `calendar_client`（2026-08-05，見 robinson SPEC.md FR-66a、ADR-17）：`pending_todo_calendar_sync`
+    （建立事件）與 `pending_todo_action_confirm`（標記完成/取消時刪除對應事件）這兩個分支會用到；
+    `None` 時優雅降級成「待辦事項照常記錄，但不會出現在 Google Calendar 上」，不影響其餘分支。
     """
     text = (text or "").strip()
     is_owner = auth.is_owner(telegram_user_id)
@@ -128,6 +133,7 @@ def handle_message(
             return _dispatch_active_flow(
                 db, state_store, telegram_user_id, text, state,
                 llm_client, text_llm_client, image_llm_clients, via_voice, privacy_llm_client, telegram_client,
+                calendar_client,
             )
 
         if text in _SET_INVITE_CODES_TRIGGERS:
@@ -159,6 +165,7 @@ def handle_message(
             return _dispatch_active_flow(
                 db, state_store, telegram_user_id, text, state,
                 llm_client, text_llm_client, image_llm_clients, via_voice, privacy_llm_client, telegram_client,
+                calendar_client,
             )
 
         user_id = user["id"]
@@ -308,6 +315,7 @@ def handle_voice_message(
     mime_type: str = "audio/ogg",
     voice_lockout_store: ConversationStateStore | None = None,
     privacy_llm_client=None,
+    calendar_client=None,
 ) -> str:
     """處理使用者傳來的語音/音檔訊息（對應 robinson SPEC.md FR-14、FR-15、FR-17、ADR-12、ADR-13）。
 
@@ -373,7 +381,7 @@ def handle_voice_message(
     reply = handle_message(
         db, state_store, telegram_user_id, transcribed_text,
         llm_client=llm_client, text_llm_client=text_llm_client, via_voice=True,
-        privacy_llm_client=privacy_llm_client,
+        privacy_llm_client=privacy_llm_client, calendar_client=calendar_client,
     )
     # 2026-08-02：主動附註 FR-15 修正窗口提醒，見上方 _VOICE_TRANSCRIBED_REMINDER 說明。
     return reply + _VOICE_TRANSCRIBED_REMINDER
@@ -391,6 +399,7 @@ def _dispatch_active_flow(
     via_voice: bool = False,
     privacy_llm_client=None,
     telegram_client=None,
+    calendar_client=None,
 ) -> str:
     """依進行中對話流程的 `flow` 標記分派到對應處理函式（見各 flow 對應 spec 的 ADR）。"""
     flow = state.get("flow")
@@ -443,10 +452,17 @@ def _dispatch_active_flow(
         return commands.handle_todo_time_step(db, llm_client, state_store, telegram_user_id, text)
     if flow == "pending_todo_reminder":
         return commands.handle_todo_reminder_step(db, llm_client, state_store, telegram_user_id, text)
+    if flow == "pending_todo_calendar_sync":
+        # 2026-08-05（FR-66a、ADR-17）：新增待辦事項流程的最後一輪，確定後才真正寫入 todos。
+        return commands.handle_todo_calendar_sync_step(
+            db, llm_client, state_store, telegram_user_id, text, calendar_client=calendar_client
+        )
     if flow == "pending_todo_list_action":
         return commands.handle_todo_list_action_step(db, state_store, telegram_user_id, text)
     if flow == "pending_todo_action_confirm":
-        return commands.handle_todo_action_confirm_step(db, llm_client, state_store, telegram_user_id, text)
+        return commands.handle_todo_action_confirm_step(
+            db, llm_client, state_store, telegram_user_id, text, calendar_client=calendar_client
+        )
     # 2026-08-02（Step 1.8，見 robinson SPEC.md FR-49、FR-50）：心情小記三輪反問流程，全程不需要
     # LLM（固定分類選單＋自由文字直接記錄），只有內容/成就這兩輪需要 privacy_llm_client 做個資遮蔽。
     if flow == "pending_mood_backfill_date":
@@ -507,7 +523,9 @@ def _dispatch_active_flow(
     if flow == "pending_weight_backfill_date":
         return commands.handle_weight_backfill_date_step(llm_client, state_store, telegram_user_id, text)
     if flow == "pending_weight_value":
-        return commands.handle_weight_value_step(db, state_store, telegram_user_id, text)
+        return commands.handle_weight_value_step(
+            db, state_store, telegram_user_id, text, calendar_client=calendar_client
+        )
     if flow == "pending_weight_list_action":
         return commands.handle_weight_list_action_step(state_store, telegram_user_id, text)
     if flow == "pending_weight_action_choice":
@@ -556,10 +574,17 @@ def _dispatch_active_flow(
         )
     if flow == "pending_goal_deadline":
         return commands.handle_goal_deadline_step(db, llm_client, state_store, telegram_user_id, text)
+    if flow == "pending_goal_calendar_sync":
+        # 2026-08-05（FR-66c、ADR-17）：只有講清楚期限的目標才會走到這一題，見 handle_goal_deadline_step。
+        return commands.handle_goal_calendar_sync_step(
+            db, llm_client, state_store, telegram_user_id, text, calendar_client=calendar_client
+        )
     if flow == "pending_goal_list_action":
-        return commands.handle_goal_list_action_step(state_store, telegram_user_id, text)
+        return commands.handle_goal_list_action_step(db, state_store, telegram_user_id, text)
     if flow == "pending_goal_cancel_confirm":
-        return commands.handle_goal_cancel_confirm_step(db, llm_client, state_store, telegram_user_id, text)
+        return commands.handle_goal_cancel_confirm_step(
+            db, llm_client, state_store, telegram_user_id, text, calendar_client=calendar_client
+        )
     # 2026-08-04（Step 2.3，見 robinson SPEC.md FR-53）：設定家人生日，結構比照 /set_toggle。
     if flow == "pending_family_birthday_select":
         return commands.handle_family_birthday_select_step(db, state_store, telegram_user_id, text)

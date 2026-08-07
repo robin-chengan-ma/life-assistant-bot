@@ -122,7 +122,7 @@ def test_check_body_goal_alerts_calls_body_module_when_env_vars_set(monkeypatch)
 
     main._check_body_goal_alerts()
 
-    fake_check_exercise.assert_called_once_with(fake_db, fake_telegram)
+    fake_check_exercise.assert_called_once_with(fake_db, fake_telegram, calendar_client=None)
     fake_check_deadline.assert_called_once_with(fake_db, fake_telegram)
     fake_db.close.assert_called_once()
 
@@ -165,8 +165,40 @@ def test_check_important_notifications_calls_notifications_module_when_env_vars_
 
     main._check_important_notifications()
 
-    fake_check_notifications.assert_called_once_with(fake_db, fake_telegram)
+    fake_check_notifications.assert_called_once_with(fake_db, fake_telegram, calendar_client=None)
     fake_db.close.assert_called_once()
+
+
+def test_check_important_notifications_passes_calendar_client_when_env_vars_set(monkeypatch):
+    # 2026-08-05（FR-66b、ADR-17）：GOOGLE_CALENDAR_* 四個環境變數都設定時，要建立 CalendarClient
+    # 並傳給 notifications 模組。
+    monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("GOOGLE_CALENDAR_OAUTH_REFRESH_TOKEN", "fake-refresh")
+    monkeypatch.setenv("GOOGLE_CALENDAR_OAUTH_CLIENT_ID", "fake-client-id")
+    monkeypatch.setenv("GOOGLE_CALENDAR_OAUTH_CLIENT_SECRET", "fake-client-secret")
+    monkeypatch.setenv("GOOGLE_CALENDAR_ID", "fake-calendar-id")
+
+    fake_db = MagicMock()
+    monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", MagicMock(return_value=fake_db))
+    fake_telegram = MagicMock()
+    monkeypatch.setattr("submodules.telegram.client.TelegramClient", MagicMock(return_value=fake_telegram))
+    fake_calendar = MagicMock()
+    fake_calendar_client_cls = MagicMock(return_value=fake_calendar)
+    monkeypatch.setattr("submodules.calendar.client.CalendarClient", fake_calendar_client_cls)
+
+    fake_check_notifications = MagicMock()
+    monkeypatch.setattr(
+        "src.bot.notifications.check_and_push_important_notifications", fake_check_notifications
+    )
+
+    main._check_important_notifications()
+
+    fake_calendar_client_cls.assert_called_once_with(
+        refresh_token="fake-refresh", client_id="fake-client-id",
+        client_secret="fake-client-secret", calendar_id="fake-calendar-id",
+    )
+    fake_check_notifications.assert_called_once_with(fake_db, fake_telegram, calendar_client=fake_calendar)
 
 
 def test_check_important_notifications_swallows_exception(monkeypatch):

@@ -4,6 +4,7 @@
 commands.py 的對話狀態機串接是否正確（狀態轉移、反問文案、最終寫入結果）。
 """
 from datetime import date
+from unittest.mock import MagicMock
 
 from src.bot import commands
 from src.bot.state import ConversationStateStore
@@ -212,6 +213,14 @@ def test_set_weight_goal_full_flow_with_deadline(fake_db):
     llm_client = _FakeLLMClient(response_text="STATUS: HAS_DEADLINE\nDATE: 2026-11-04")
     reply = commands.handle_goal_deadline_step(fake_db, llm_client, store, telegram_user_id=1, text="三個月內")
 
+    # 2026-08-05 起（FR-66c、ADR-17）：有期限的目標會多問一輪是否同步，還不會直接寫入。
+    assert "同步到 Google 家庭行事曆" in reply
+    assert store.get(1)["flow"] == "pending_goal_calendar_sync"
+    assert len(fake_db.select("body_goals", where="user_id = %s", params=(user_id,))) == 0
+
+    llm_client.response_text = "CANCEL"
+    reply = commands.handle_goal_calendar_sync_step(fake_db, llm_client, store, telegram_user_id=1, text="不用")
+
     assert "2026/11/04" in reply
     assert store.get(1) is None
     goal = fake_db.select("body_goals", where="user_id = %s", params=(user_id,))[0]
@@ -219,6 +228,7 @@ def test_set_weight_goal_full_flow_with_deadline(fake_db):
     assert goal["target_value"] == 70
     assert goal["baseline_value"] == 80.0
     assert goal["target_date"] == date(2026, 11, 4)
+    assert goal["sync_to_calendar"] is False
 
 
 def test_set_exercise_goal_no_deadline(fake_db):
@@ -260,9 +270,11 @@ def test_body_goal_list_and_cancel_flow(fake_db):
     reply = commands.start_body_goal_list(fake_db, store, telegram_user_id=1, user_id=42)
     assert "控制在每天 1800 大卡以內" in reply
 
-    reply = commands.handle_goal_list_action_step(store, telegram_user_id=1, text="1")
+    reply = commands.handle_goal_list_action_step(fake_db, store, telegram_user_id=1, text="1")
     assert "確定要取消" in reply
-    assert store.get(1) == {"flow": "pending_goal_cancel_confirm", "goal_id": goal_id}
+    assert store.get(1) == {
+        "flow": "pending_goal_cancel_confirm", "goal_id": goal_id, "google_calendar_event_id": None,
+    }
 
     llm_client = _FakeLLMClient(response_text="CONFIRM")
     reply = commands.handle_goal_cancel_confirm_step(fake_db, llm_client, store, telegram_user_id=1, text="對，取消")
@@ -270,3 +282,111 @@ def test_body_goal_list_and_cancel_flow(fake_db):
     assert "已經取消" in reply
     goal = fake_db.select("body_goals", where="id = %s", params=(goal_id,), fetch_one=True)
     assert goal["status"] == "cancelled"
+
+
+# --- Google Calendar 同步（FR-66c，2026-08-05，見 ADR-17） ---
+
+
+def test_handle_goal_calendar_sync_step_creates_event_when_confirmed(fake_db):
+    store = ConversationStateStore()
+    store.set(
+        1,
+        {
+            "flow": "pending_goal_calendar_sync",
+            "target_user_id": 42,
+            "goal_type": "weight",
+            "target_description": "目標體重 70.0 公斤",
+            "target_value": 70.0,
+            "baseline_value": 80.0,
+            "target_date": date(2026, 11, 4),
+        },
+    )
+    llm_client = _FakeLLMClient(response_text="CONFIRM")
+    calendar_client = MagicMock()
+    calendar_client.create_event.return_value = "event-abc123"
+
+    reply = commands.handle_goal_calendar_sync_step(
+        fake_db, llm_client, store, telegram_user_id=1, text="要", calendar_client=calendar_client
+    )
+
+    assert "2026/11/04" in reply
+    assert store.get(1) is None
+    goal = fake_db.select("body_goals", where="user_id = %s", params=(42,))[0]
+    assert goal["sync_to_calendar"] is True
+    assert goal["google_calendar_event_id"] == "event-abc123"
+    calendar_client.create_event.assert_called_once_with(
+        summary="目標體重 70.0 公斤", start="2026-11-04", end="2026-11-05",
+        description="來自 Robinson 體態目標", all_day=True,
+    )
+
+
+def test_handle_goal_calendar_sync_step_skips_event_creation_when_client_is_none(fake_db):
+    store = ConversationStateStore()
+    store.set(
+        1,
+        {
+            "flow": "pending_goal_calendar_sync",
+            "target_user_id": 42,
+            "goal_type": "weight",
+            "target_description": "目標體重 70.0 公斤",
+            "target_value": 70.0,
+            "baseline_value": 80.0,
+            "target_date": date(2026, 11, 4),
+        },
+    )
+    llm_client = _FakeLLMClient(response_text="CONFIRM")
+
+    reply = commands.handle_goal_calendar_sync_step(
+        fake_db, llm_client, store, telegram_user_id=1, text="要", calendar_client=None
+    )
+
+    assert "2026/11/04" in reply
+    goal = fake_db.select("body_goals", where="user_id = %s", params=(42,))[0]
+    assert goal["sync_to_calendar"] is True
+    assert goal.get("google_calendar_event_id") is None
+
+
+def test_handle_goal_calendar_sync_step_swallows_calendar_exception(fake_db):
+    store = ConversationStateStore()
+    store.set(
+        1,
+        {
+            "flow": "pending_goal_calendar_sync",
+            "target_user_id": 42,
+            "goal_type": "weight",
+            "target_description": "目標體重 70.0 公斤",
+            "target_value": 70.0,
+            "baseline_value": 80.0,
+            "target_date": date(2026, 11, 4),
+        },
+    )
+    llm_client = _FakeLLMClient(response_text="CONFIRM")
+    calendar_client = MagicMock()
+    calendar_client.create_event.side_effect = RuntimeError("boom")
+
+    reply = commands.handle_goal_calendar_sync_step(
+        fake_db, llm_client, store, telegram_user_id=1, text="要", calendar_client=calendar_client
+    )
+
+    assert "2026/11/04" in reply
+    goal = fake_db.select("body_goals", where="user_id = %s", params=(42,))[0]
+    assert goal["sync_to_calendar"] is True
+    assert goal.get("google_calendar_event_id") is None
+
+
+def test_handle_goal_cancel_confirm_step_deletes_calendar_event_when_synced(fake_db):
+    goal_id = commands.body.create_goal(fake_db, 42, "weight", "瘦到 60kg", target_value=60, baseline_value=75)
+    commands.body.set_calendar_event_id(fake_db, goal_id, "event-abc123")
+    store = ConversationStateStore()
+    store.set(
+        1,
+        {"flow": "pending_goal_cancel_confirm", "goal_id": goal_id, "google_calendar_event_id": "event-abc123"},
+    )
+    llm_client = _FakeLLMClient(response_text="CONFIRM")
+    calendar_client = MagicMock()
+
+    commands.handle_goal_cancel_confirm_step(
+        fake_db, llm_client, store, telegram_user_id=1, text="對，取消", calendar_client=calendar_client
+    )
+
+    calendar_client.delete_event.assert_called_once_with(event_id="event-abc123")

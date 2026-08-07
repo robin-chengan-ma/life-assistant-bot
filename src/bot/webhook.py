@@ -9,7 +9,9 @@ from flask import Blueprint, jsonify, request
 
 from src.bot.router import handle_message, handle_photo_message, handle_voice_message
 from src.bot.state import ConversationStateStore
+from submodules.calendar.client import CalendarClient
 from submodules.cloudsql.client import CloudSQLClient
+from submodules.email.client import EmailClient
 from submodules.gdrive.client import GDriveClient
 from submodules.llm.client import LLMClient
 from submodules.telegram.client import TelegramClient
@@ -54,8 +56,21 @@ _processed_update_ids: "OrderedDict[int, None]" = OrderedDict()
 
 # 2026-08-02（Step 1.6，見 robinson SPEC.md FR-19a）：簡化版通知，Phase 1 不含 AI 自主診斷
 # （那是 Step 2.4 的事），只把完整 Traceback 加上發生情境私訊給 Robin，讓他自己判斷原因。
+# 2026-08-05（Step 2.4，見 FR-19b、ADR-15）：額外附上完整錯誤 log 的 Google Drive 連結
+# （`{log_link_line}`，上傳失敗時這行會是空字串，優雅降級不影響訊息本身送出）。
 _ROBIN_ERROR_NOTIFY_TEMPLATE = (
     "🐛 系統發生未預期例外\n"
+    "時間：{timestamp}\n"
+    "觸發功能：{feature}\n"
+    "使用者 Telegram ID：{telegram_user_id}\n"
+    "輸入摘要：{input_summary}\n\n"
+    "Traceback：\n{traceback_text}"
+    "{log_link_line}"
+)
+
+# FR-19b：上傳到 Google Drive 的完整錯誤 log 檔案內容範本，跟 Telegram 訊息分開排版
+# （這份不受 Telegram 4096 字元上限限制，Traceback 一律完整、不截斷）。
+_ERROR_LOG_FILE_TEMPLATE = (
     "時間：{timestamp}\n"
     "觸發功能：{feature}\n"
     "使用者 Telegram ID：{telegram_user_id}\n"
@@ -76,31 +91,111 @@ def _summarize_user_input(text: str | None, max_len: int = 300) -> str:
     return text
 
 
-def _notify_robin_of_error(feature: str, telegram_user_id: int, input_summary: str) -> None:
-    """FR-19a 簡化版通知：例外發生時，除了 log（見呼叫端的 `_logger.exception`），額外私訊
-    Robin 完整原始 Traceback，讓他自己判斷原因並決定要不要修復；修復後可用 `/recovered`
-    （FR-20）廣播給所有人。
+def _upload_error_log(filename: str, content: bytes) -> str | None:
+    """FR-19b：把完整錯誤 log 上傳 Google Drive（複用 Step 1.3b 既有的 `GDriveClient`），
+    回傳可分享的 `webViewLink`。
 
-    整段包在 try/except 裡：私訊失敗（例如 Telegram API 本身也在鬧脾氣、或
-    `ROBIN_TELEGRAM_TOKEN`／`TELEGRAM_BOT_TOKEN` 沒設定）絕對不能反過來讓這個「錯誤通知」
-    本身變成另一個未被捕捉的例外，那樣就本末倒置了；沒設定必要環境變數時直接跳過，不視為錯誤。
+    任何失敗都回傳 `None`（環境變數未設定、Google Drive API 暫時性錯誤等），由呼叫端優雅降級成
+    訊息中略過連結欄位——上傳失敗絕對不能影響「生病了」安全用語與私訊 Robin 這兩件事本身正常
+    運作，這是 FR-19b 明確要求的優雅降級行為。
+    """
+    try:
+        gdrive_client = GDriveClient(
+            refresh_token=os.environ["GDRIVE_OAUTH_REFRESH_TOKEN"],
+            client_id=os.environ["GDRIVE_OAUTH_CLIENT_ID"],
+            client_secret=os.environ["GDRIVE_OAUTH_CLIENT_SECRET"],
+            folder_id=os.environ["GDRIVE_FOLDER_ID"],
+        )
+        return gdrive_client.upload_file(filename, content, mime_type="text/plain")
+    except Exception:
+        _logger.exception("上傳錯誤 log 至 Google Drive 失敗，私訊 Robin 的訊息將略過連結")
+        return None
+
+
+def _send_email_fallback(subject: str, body: str) -> None:
+    """FR-19b 追加：Telegram 本身故障時的備援通知管道（見 robinson SPEC.md ADR-16）。
+
+    Telegram 是 Robinson 唯一的對外管道，一旦 Telegram API 本身掛掉或 `TELEGRAM_BOT_TOKEN`
+    失效，私訊 Robin 這件事本身就送不出去，連錯誤通知都收不到。這裡用完全獨立的 Gmail SMTP
+    （`submodules/email/client.py`）當最後一道防線，只在 Telegram 送達失敗時才觸發。
+
+    `GMAIL_USER`／`GMAIL_PASSWORD` 沒設定，或寄信本身也失敗（Gmail 也在鬧脾氣、App Password
+    失效等），一律只記警告/例外 log、不往外拋——這是最後一道備援，沒有再下一層可以退了，失敗
+    也不能讓呼叫端整個處理流程崩潰。
+    """
+    gmail_user = os.environ.get("GMAIL_USER")
+    gmail_password = os.environ.get("GMAIL_PASSWORD")
+    if not gmail_user or not gmail_password:
+        _logger.warning("Telegram 私訊 Robin 失敗，且未設定 GMAIL_USER/GMAIL_PASSWORD，無法寄送備援 email 通知")
+        return
+    try:
+        EmailClient(username=gmail_user, password=gmail_password).send_text(
+            to=gmail_user, subject=subject, body=body
+        )
+    except Exception:
+        _logger.exception("備援 email 通知寄送失敗，Robin 這次完全沒有收到任何主動通知")
+
+
+def _notify_robin_of_error(feature: str, telegram_user_id: int, input_summary: str) -> None:
+    """FR-19a／FR-19b：例外發生時，除了 log（見呼叫端的 `_logger.exception`），額外私訊 Robin
+    完整原始 Traceback，並把完整錯誤 log 上傳 Google Drive、附上專屬連結（見 ADR-15，
+    supersede 原本 Step 2.4 規劃的 AI 自主診斷／GitHub PR 機制），讓 Robin 自己判斷原因、決定
+    要不要修復（甚至可另外請 Claude Code 協助排查）；修復後可用 `/recovered`（FR-20）廣播給
+    所有人。Telegram 本身送達失敗時，改寄 email 備援通知（見 ADR-16，`_send_email_fallback()`）。
+
+    **這個函式只會私訊 Robin 一人**（`ROBIN_TELEGRAM_TOKEN`），觸發當下的一般使用者與其他家人
+    完全不會看到這裡的任何內容——他們收到的是 `webhook.py` 主流程另外送出的 `_UNEXPECTED_ERROR_REPLY`
+    安全用語，兩者是完全獨立的兩條訊息路徑，任何情況下都不能混在一起。
+
+    分兩段 try/except：第一段組裝通知內容（Traceback、log 上傳），失敗就直接放棄（沒有內容可
+    寄，email 備援也無用武之地）；第二段專門負責「透過 Telegram 送達」，只有這段失敗才觸發
+    email 備援——這樣才能準確分辨「是 Telegram 本身送不出去」還是「連內容都組不出來」兩種
+    不同的失敗情境。整段任何失敗都絕對不能反過來讓這個「錯誤通知」本身變成另一個未被捕捉的
+    例外，那樣就本末倒置了；沒設定必要環境變數時直接跳過，不視為錯誤。
     """
     owner_chat_id = os.environ.get("ROBIN_TELEGRAM_TOKEN")
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
     if not owner_chat_id or not bot_token:
         return
+
     try:
-        message = _ROBIN_ERROR_NOTIFY_TEMPLATE.format(
-            timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+        now = datetime.now(timezone.utc)
+        timestamp = now.strftime("%Y-%m-%d %H:%M:%S UTC")
+        traceback_text = traceback.format_exc()
+
+        log_content = _ERROR_LOG_FILE_TEMPLATE.format(
+            timestamp=timestamp,
             feature=feature,
             telegram_user_id=telegram_user_id,
             input_summary=input_summary,
-            # Telegram 訊息長度上限 4096 字元，扣掉模板其餘欄位後留給 Traceback 的緩衝空間。
-            traceback_text=traceback.format_exc()[-3200:],
+            traceback_text=traceback_text,
+        ).encode("utf-8")
+        log_filename = f"error_log_{now.strftime('%Y%m%d_%H%M%S')}_{feature}.log"
+        log_link = _upload_error_log(log_filename, log_content)
+        log_link_line = f"\n\n📄 完整 log（含未截斷 Traceback）：{log_link}" if log_link else ""
+
+        message = _ROBIN_ERROR_NOTIFY_TEMPLATE.format(
+            timestamp=timestamp,
+            feature=feature,
+            telegram_user_id=telegram_user_id,
+            input_summary=input_summary,
+            # Telegram 訊息長度上限 4096 字元，扣掉模板其餘欄位後留給 Traceback 的緩衝空間；
+            # 完整、不截斷的版本在上面已經上傳到 Google Drive，透過 log_link_line 提供連結。
+            traceback_text=traceback_text[-3200:],
+            log_link_line=log_link_line,
         )
+    except Exception:
+        _logger.exception("組裝 Robin 錯誤通知內容失敗，無法送出任何通知（含 email 備援）")
+        return
+
+    try:
         TelegramClient(bot_token).send_text(chat_id=owner_chat_id, text=message)
     except Exception:
-        _logger.exception("私訊 Robin 錯誤通知失敗")
+        _logger.exception("私訊 Robin 錯誤通知失敗（Telegram 本身可能故障），改嘗試 email 備援通知")
+        _send_email_fallback(
+            subject=f"🐛 Robinson 系統例外通知（Telegram 無法送達，觸發功能：{feature}）",
+            body=message,
+        )
 
 
 def _build_privacy_llm_client() -> LLMClient | None:
@@ -114,6 +209,25 @@ def _build_privacy_llm_client() -> LLMClient | None:
     if not api_key:
         return None
     return LLMClient(api_key=api_key)
+
+
+def _build_calendar_client() -> CalendarClient | None:
+    """建立 Google Calendar 同步用的 CalendarClient（見 robinson SPEC.md FR-66、ADR-17）。
+
+    跟 `_build_privacy_llm_client()` 一樣是選配的：`GOOGLE_CALENDAR_*` 四個環境變數還沒設定
+    完整時回傳 `None`，`commands.py` 的待辦事項/體態目標同步流程會優雅降級成「照常記錄，但
+    不會出現在 Calendar 上」，不會讓整個訊息處理流程失敗（這組憑證跟 `gdrive` 各自獨立，
+    見 docs/specs/submodules-core/SPEC.md ADR-12）。
+    """
+    refresh_token = os.environ.get("GOOGLE_CALENDAR_OAUTH_REFRESH_TOKEN")
+    client_id = os.environ.get("GOOGLE_CALENDAR_OAUTH_CLIENT_ID")
+    client_secret = os.environ.get("GOOGLE_CALENDAR_OAUTH_CLIENT_SECRET")
+    calendar_id = os.environ.get("GOOGLE_CALENDAR_ID")
+    if not (refresh_token and client_id and client_secret and calendar_id):
+        return None
+    return CalendarClient(
+        refresh_token=refresh_token, client_id=client_id, client_secret=client_secret, calendar_id=calendar_id,
+    )
 
 
 def _is_duplicate_update(update_id: int) -> bool:
@@ -311,6 +425,7 @@ def telegram_webhook():
                 mime_type=mime_type,
                 voice_lockout_store=_voice_lockout_store,
                 privacy_llm_client=_build_privacy_llm_client(),
+                calendar_client=_build_calendar_client(),
             )
         else:
             _, text = text_extracted
@@ -321,6 +436,7 @@ def telegram_webhook():
             reply = handle_message(
                 db, _state_store, telegram_user_id, text, llm_client=llm_client, text_llm_client=text_llm_client,
                 privacy_llm_client=_build_privacy_llm_client(), telegram_client=telegram_client,
+                calendar_client=_build_calendar_client(),
             )
     except Exception:
         # 安全網（見 FR-19f/FR-19g，Phase 2 才會做完整的分級降級）：任何未預期例外（例如 Gemini

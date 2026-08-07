@@ -215,6 +215,7 @@ def test_webhook_routes_valid_message_and_sends_reply(client, monkeypatch):
         text_llm_client=mock_text_llm_instance,
         privacy_llm_client=None,
         telegram_client=mock_telegram_instance,
+        calendar_client=None,
     )
     mock_db_instance.close.assert_called_once()
     mock_telegram_instance.send_text.assert_called_once_with(chat_id=123, text="哈囉！")
@@ -363,6 +364,204 @@ def test_notify_robin_of_error_swallows_send_failure(monkeypatch):
     monkeypatch.setattr(webhook, "TelegramClient", MagicMock(side_effect=RuntimeError("Telegram 掛了")))
 
     webhook._notify_robin_of_error("text", 123, "摘要")  # 不應該往外拋
+
+
+# --- FR-19b（Step 2.4，見 ADR-15）：錯誤 log 上傳 Google Drive + Robin 專屬連結 ---
+
+
+def _set_gdrive_env(monkeypatch):
+    monkeypatch.setenv("GDRIVE_OAUTH_REFRESH_TOKEN", "fake-refresh-token")
+    monkeypatch.setenv("GDRIVE_OAUTH_CLIENT_ID", "fake-client-id")
+    monkeypatch.setenv("GDRIVE_OAUTH_CLIENT_SECRET", "fake-client-secret")
+    monkeypatch.setenv("GDRIVE_FOLDER_ID", "fake-folder-id")
+
+
+def test_upload_error_log_returns_link_on_success(monkeypatch):
+    _set_gdrive_env(monkeypatch)
+    mock_gdrive_instance = MagicMock()
+    mock_gdrive_instance.upload_file.return_value = "https://drive.google.com/file/d/fake123/view"
+    monkeypatch.setattr(webhook, "GDriveClient", MagicMock(return_value=mock_gdrive_instance))
+
+    link = webhook._upload_error_log("error_log_test.log", b"log content")
+
+    assert link == "https://drive.google.com/file/d/fake123/view"
+    mock_gdrive_instance.upload_file.assert_called_once_with(
+        "error_log_test.log", b"log content", mime_type="text/plain"
+    )
+
+
+def test_upload_error_log_returns_none_when_env_vars_missing(monkeypatch):
+    for key in (
+        "GDRIVE_OAUTH_REFRESH_TOKEN", "GDRIVE_OAUTH_CLIENT_ID", "GDRIVE_OAUTH_CLIENT_SECRET", "GDRIVE_FOLDER_ID",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    assert webhook._upload_error_log("error_log_test.log", b"log content") is None
+
+
+def test_upload_error_log_returns_none_on_upload_exception(monkeypatch):
+    _set_gdrive_env(monkeypatch)
+    monkeypatch.setattr(webhook, "GDriveClient", MagicMock(side_effect=RuntimeError("Drive 暫時性錯誤")))
+
+    assert webhook._upload_error_log("error_log_test.log", b"log content") is None
+
+
+def test_notify_robin_of_error_uploads_log_and_appends_link(monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", "999")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+    _set_gdrive_env(monkeypatch)
+
+    mock_gdrive_instance = MagicMock()
+    mock_gdrive_instance.upload_file.return_value = "https://drive.google.com/file/d/fake123/view"
+    mock_gdrive_cls = MagicMock(return_value=mock_gdrive_instance)
+    monkeypatch.setattr(webhook, "GDriveClient", mock_gdrive_cls)
+
+    mock_telegram_instance = MagicMock()
+    monkeypatch.setattr(webhook, "TelegramClient", MagicMock(return_value=mock_telegram_instance))
+
+    try:
+        raise ValueError("模擬錯誤")
+    except ValueError:
+        webhook._notify_robin_of_error("finance", 123, "摘要")
+
+    mock_gdrive_cls.assert_called_once_with(
+        refresh_token="fake-refresh-token",
+        client_id="fake-client-id",
+        client_secret="fake-client-secret",
+        folder_id="fake-folder-id",
+    )
+    upload_call = mock_gdrive_instance.upload_file.call_args
+    filename, content = upload_call.args
+    assert filename.startswith("error_log_") and filename.endswith("_finance.log")
+    assert upload_call.kwargs["mime_type"] == "text/plain"
+    # 上傳內容裡的 Traceback 完整、不截斷（不受 Telegram 4096 字元上限影響）
+    assert b"ValueError" in content
+    assert b"\xe6\xa8\xa1\xe6\x93\xac\xe9\x8c\xaf\xe8\xaa\xa4" in content  # "模擬錯誤" UTF-8
+
+    sent_text = mock_telegram_instance.send_text.call_args.kwargs["text"]
+    assert "https://drive.google.com/file/d/fake123/view" in sent_text
+    assert "完整 log" in sent_text
+
+
+def test_notify_robin_of_error_omits_link_when_gdrive_upload_fails(monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", "999")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+    _set_gdrive_env(monkeypatch)
+    monkeypatch.setattr(webhook, "GDriveClient", MagicMock(side_effect=RuntimeError("Drive 掛了")))
+
+    mock_telegram_instance = MagicMock()
+    monkeypatch.setattr(webhook, "TelegramClient", MagicMock(return_value=mock_telegram_instance))
+
+    webhook._notify_robin_of_error("text", 123, "摘要")  # 不應該往外拋，也不應該影響訊息送出
+
+    mock_telegram_instance.send_text.assert_called_once()
+    sent_text = mock_telegram_instance.send_text.call_args.kwargs["text"]
+    assert "完整 log" not in sent_text
+    assert "http" not in sent_text
+
+
+def test_notify_robin_of_error_omits_link_when_gdrive_env_vars_missing(monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", "999")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+    for key in (
+        "GDRIVE_OAUTH_REFRESH_TOKEN", "GDRIVE_OAUTH_CLIENT_ID", "GDRIVE_OAUTH_CLIENT_SECRET", "GDRIVE_FOLDER_ID",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    mock_telegram_instance = MagicMock()
+    monkeypatch.setattr(webhook, "TelegramClient", MagicMock(return_value=mock_telegram_instance))
+
+    webhook._notify_robin_of_error("text", 123, "摘要")
+
+    sent_text = mock_telegram_instance.send_text.call_args.kwargs["text"]
+    assert "完整 log" not in sent_text
+
+
+# --- ADR-16：Telegram 送達失敗時的 email 備援通知 ---
+
+
+def _set_gmail_env(monkeypatch):
+    monkeypatch.setenv("GMAIL_USER", "you@gmail.com")
+    monkeypatch.setenv("GMAIL_PASSWORD", "fake-app-password")
+
+
+def test_send_email_fallback_sends_via_email_client(monkeypatch):
+    _set_gmail_env(monkeypatch)
+    mock_email_instance = MagicMock()
+    mock_email_cls = MagicMock(return_value=mock_email_instance)
+    monkeypatch.setattr(webhook, "EmailClient", mock_email_cls)
+
+    webhook._send_email_fallback(subject="主旨", body="內容")
+
+    mock_email_cls.assert_called_once_with(username="you@gmail.com", password="fake-app-password")
+    mock_email_instance.send_text.assert_called_once_with(to="you@gmail.com", subject="主旨", body="內容")
+
+
+def test_send_email_fallback_skips_when_env_vars_missing(monkeypatch):
+    monkeypatch.delenv("GMAIL_USER", raising=False)
+    monkeypatch.delenv("GMAIL_PASSWORD", raising=False)
+    mock_email_cls = MagicMock()
+    monkeypatch.setattr(webhook, "EmailClient", mock_email_cls)
+
+    webhook._send_email_fallback(subject="主旨", body="內容")
+
+    mock_email_cls.assert_not_called()
+
+
+def test_send_email_fallback_swallows_send_exception(monkeypatch):
+    _set_gmail_env(monkeypatch)
+    monkeypatch.setattr(webhook, "EmailClient", MagicMock(side_effect=RuntimeError("Gmail 也掛了")))
+
+    webhook._send_email_fallback(subject="主旨", body="內容")  # 不應該往外拋
+
+
+def test_notify_robin_of_error_falls_back_to_email_when_telegram_fails(monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", "999")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+    _set_gmail_env(monkeypatch)
+    monkeypatch.setattr(webhook, "TelegramClient", MagicMock(side_effect=RuntimeError("Telegram API 掛了")))
+
+    mock_email_instance = MagicMock()
+    monkeypatch.setattr(webhook, "EmailClient", MagicMock(return_value=mock_email_instance))
+
+    try:
+        raise ValueError("模擬錯誤")
+    except ValueError:
+        webhook._notify_robin_of_error("finance", 123, "摘要")
+
+    mock_email_instance.send_text.assert_called_once()
+    email_call = mock_email_instance.send_text.call_args.kwargs
+    assert email_call["to"] == "you@gmail.com"
+    assert "finance" in email_call["subject"]
+    assert "ValueError" in email_call["body"]
+    assert "模擬錯誤" in email_call["body"]
+
+
+def test_notify_robin_of_error_returns_early_when_content_assembly_fails(monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", "999")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+    monkeypatch.setattr(webhook, "_upload_error_log", MagicMock(side_effect=RuntimeError("組裝內容時掛了")))
+
+    mock_telegram_cls = MagicMock()
+    monkeypatch.setattr(webhook, "TelegramClient", mock_telegram_cls)
+
+    webhook._notify_robin_of_error("text", 123, "摘要")  # 不應該往外拋
+
+    mock_telegram_cls.assert_not_called()
+
+
+def test_notify_robin_of_error_does_not_use_email_when_telegram_succeeds(monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", "999")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+    _set_gmail_env(monkeypatch)
+    monkeypatch.setattr(webhook, "TelegramClient", MagicMock(return_value=MagicMock()))
+
+    mock_email_cls = MagicMock()
+    monkeypatch.setattr(webhook, "EmailClient", mock_email_cls)
+
+    webhook._notify_robin_of_error("text", 123, "摘要")
+
+    mock_email_cls.assert_not_called()
 
 
 # --- update_id 去重（FR-7a）---

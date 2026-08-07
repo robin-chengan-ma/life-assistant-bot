@@ -1,7 +1,7 @@
 ---
 title: Robinson 產品開發階段紀錄
 spec: docs/specs/robinson/SPEC.md
-updated: 2026-08-04
+updated: 2026-08-05
 ---
 
 # Robinson 產品開發階段紀錄
@@ -15,7 +15,7 @@ updated: 2026-08-04
 
 ## 目前階段
 
-**Phase 1（MVP）全部 Step 完成；Phase 2 Step 2.1（記帳模組）、Step 2.2（體態管理模組）、Step 2.3（重要通知模組）完成，下一步是 Step 2.4（異常自主診斷與 GitHub PR 自動化）**
+**Phase 1（MVP）全部 Step 完成；Phase 2 Step 2.1（記帳模組）、Step 2.2（體態管理模組）、Step 2.3（重要通知模組）、Step 2.4（錯誤 log 雲端連結，範疇已依 SPEC.md ADR-15 簡化）、Step 2.7（Google Calendar 整合）皆已完成，下一步是 Step 2.5（外部 API 重試機制）**
 
 ## 目標時程（2026-07-30 更新：改為三週制，因新增多模態影像/語音處理架構；2026-08-04 更新：Phase 5「Notion 後台」取消，Mobile App 併入 Phase 4，見 SPEC.md ADR-14）
 
@@ -37,7 +37,7 @@ updated: 2026-08-04
 | 8/6 | Step 1.6（基礎錯誤處理層）＋ Step 1.7（待辦事項模組） |
 | 8/7 | Step 1.8（心情小記）＋ Step 1.9（客訴收集），若進度落後可將 Step 1.9 挪到 Phase 2 之後 |
 | 8/8～8/9 | Phase 2：記帳、體態管理（含飲食誤差聲明 FR-17c）、重要通知 |
-| 8/10～8/11 | Phase 2：Step 2.4～2.6（GitHub PR 自主診斷、重試機制、分級降級），技術複雜度最高，獨立預留兩天 |
+| 8/10～8/11 | Phase 2：Step 2.4（**2026-08-05 範疇簡化，見 SPEC.md ADR-15**：錯誤 log 雲端連結，難度大幅下降，複用既有 `GDriveClient`）～2.6（重試機制、分級降級）|
 | 8/12～8/14 | Phase 3：技能成長（TOEIC 雙軌 Pipeline，語音改用 Groq Whisper）＋ YouTube 技術情報模組 ＋ 好友模式 |
 | 8/15～8/16 | Phase 4：104 求職爬蟲＋整合測試＋ Mobile App（Step 4.4／4.5 Placeholder，詳細規劃留待開工時展開） |
 | 8/17～8/18 | 全 Phase 整合測試／緩衝日 |
@@ -48,7 +48,7 @@ updated: 2026-08-04
 | --- | --- | --- | --- | --- |
 | Phase 0 | 專案基礎建設（repo 結構、金鑰串接、Render/Neon/cron-job、DB 初始化） | 🟢 已完成 | 7/29～7/30 | 全部 Step 完成：`submodules/`、`src/schema/`、`src/migrations/`（ADR-11）骨架就緒；`/healthz` 已部署上線並掛上 cron-job.org；第一批 5 張表（`users`／`invite_codes`／`knowledge_base`／`conversation_logs`／`feature_toggles`）已核准並套用成功 |
 | Phase 1（MVP） | 核心平台（通關密碼對話式設定、歡迎訊息、`/rule`／`/function`／`/complaint` 內建指令、功能開關、Gemini 對話+知識庫、影像辨識、語音、個資遮蔽、基礎錯誤處理）＋待辦事項＋心情小記＋客訴收集 | 🟢 已完成 | 7/31～8/2 | Step 1.1～1.9 全數完成（實際 8/2 就全數完成，早於原訂 8/7 目標）；FR-56 全面改版為總覽＋按需深入＋情境範例（FR-56a～FR-56d） |
-| Phase 2 | 記帳＋體態管理＋重要通知＋異常自主診斷與 GitHub PR 治理＋重試機制＋分級降級 | 🟡 進行中 | 8/8～8/11 | Step 2.1（記帳，FR-41～FR-44）、Step 2.2（體態管理，FR-45～FR-48）、Step 2.3（重要通知，FR-53）皆已於 8/4 完成，早於原訂時程；Step 2.4～2.6 為新增範圍，技術複雜度最高，已獨立預留兩天 |
+| Phase 2 | 記帳＋體態管理＋重要通知＋錯誤 log 雲端連結＋重試機制＋分級降級＋Google Calendar 整合 | 🟡 進行中 | 8/8～8/11 | Step 2.1（記帳，FR-41～FR-44）、Step 2.2（體態管理，FR-45～FR-48）、Step 2.3（重要通知，FR-53）皆已於 8/4 完成，早於原訂時程；Step 2.4 已於 8/5 完成（範疇依 SPEC.md ADR-15 簡化為錯誤 log 雲端連結，取消原「AI 自主診斷＋GitHub PR 自動化」規劃）；Step 2.7（Google Calendar 整合，FR-66，2026-08-05 新增）已於同日完成，早於 Step 2.5／2.6 開工 |
 | Phase 3 | 個人技能成長（TOEIC 雙軌題庫 Pipeline＋YouTube 技術情報模組，僅 Robin）＋好友模式 | ⚪ 未開始 | 8/12～8/14 | 新增 YouTube 模組（FR-57～FR-59，見 ADR-9）；TOEIC 語音處理改用 Groq Whisper（ADR-12） |
 | Phase 4 | 求職模組（104 爬蟲＋評分）＋ Mobile App（BI Dashboard，React Native + Expo） | ⚪ 未開始 | 8/15～8/16 | 爬蟲策略已定案：每週一次、AJAX API、無登入態、禮貌性延遲、ETL 去重（FR-34a～FR-34d）；**2026-08-04 新增**：原獨立拆出的 Phase 5（Notion 後台）已取消，Mobile App 併入本 Phase（Step 4.4／4.5，皆為 Placeholder），見 SPEC.md ADR-14，詳細規劃留待開工時展開 |
 
@@ -122,6 +122,11 @@ updated: 2026-08-04
 | 2026-08-04 | **Phase 2 Step 2.2 完成：體態管理模組（FR-45～FR-48）**。Robin 確認「下個階段就是 Phase 2.2 了」後指示開發，經 AskUserQuestion 確認四項設計：① 運動消耗卡路里改用 LLM 估算（而非 MET 公式），沿用 `GEMINI_API_BOT_KEY`，符合 FR-56g 情境3「自然口吻回覆＋估算免責聲明」示範 ② 飲食三大營養素拆算同樣沿用 `GEMINI_API_BOT_KEY`（沒有食物資料庫，只能靠 LLM 語意判斷）③ FR-45 預警情境定案為目標達成通知（體重目標即時檢查、運動目標借用 `/healthz` 頻率排程加總累積分鐘數）＋目標期限前 7 天提醒＋BMI 異常提醒（記錄體重當下就地附加）④ 身高體重/運動/飲食三個子功能的目標設定共用一張 `body_goals` 表，用 `goal_type` 區分（比照 `budget_overrides` 精神）；運動目標的 `target_value` 單位原提案用公里數，Robin 指出「不是只有跑步」，改用累積運動分鐘數（各種運動都適用的共同單位）。新建 `body_weight_logs`／`exercise_logs`／`diet_logs`／`body_goals` 四張表、`users` 新增 `height_cm`（Robin 依 ADR-10 核准 `0023`～`0027` migration）；新增 `src/bot/body.py`（BMI 計算與分級、LLM 卡路里/營養估算、目標達成判斷、FR-45 排程檢查函式）；身高體重/運動/飲食三個子功能從一開始就內建完整 CRUD（新增/補記/查詢/更新/刪除），比照記帳模組；飲食目標因太主觀（例如「飲食完美控制」）不做自動達成判斷，只能手動取消，是刻意的已知簡化；`commands.py` 新增 12 個觸發詞與對應多輪反問流程、`router.py` 完成觸發詞與 flow 分派、`main.py` 新增 `_check_body_goal_alerts()` 借用 `/healthz` 頻率；`src/bot/body.py` 達到 100% 覆蓋率，全專案 661 個測試全過 |
 | 2026-08-04 | **移除 Notion 後台，改採 Mobile App（React Native + Expo）**，SPEC.md 新增 ADR-14（supersede ADR-1 的後台選型部分）。Robin 指示系統架構確立為「Telegram Bot（LUI）負責所有自然語言輸入與 CRUD 控制＋Mobile App（Rich GUI）專注唯讀 BI 圖表展示」；移除原 FR-54（Notion 相關描述），新增 FR-64（唯讀視覺化）、FR-65／FR-65a～FR-65c（多用戶登入機制：一般使用者 `user_name`／稱謂／`APP Access Token`，Robin 僅需 `user_name`／`APP Access Token`）；補充技術細節供 Phase 4 展開時參考：`/api/app/*` API 設計原則（後端算好圖表 JSON 結構回傳，App 端只負責渲染）、React Native + Expo（Expo Router）基礎路由結構、資料模型補充（`users.app_access_token`）；登入與 App 詳細功能邏輯明確標記為 Placeholder，留待 Phase 4 對應 Step 開工時再深入展開。原獨立拆出的 Phase 5（Notion）取消，相關工作併入 Phase 4（與求職模組並列，新增 Step 4.4／4.5）；本次純屬規格層級調整，未建立任何程式碼、目錄或資料表 | Claude（依 Robin 詳細指示調整規格） |
 | 2026-08-04 | **Phase 2 Step 2.3 完成：重要通知模組（FR-53）**。Robin 提供完整需求，分「超級重要通知（主角不能收到，家人生日／父親節／母親節）」與「重要通知（大家都收到，元旦／除夕初一／固定 3/1 掃墓提醒／中秋／端午）」兩類，各附固定文案；經來回確認補齊已知的家人 `role`→生日對照（5 位有明確生日，弟媳/大妹婿/小妹婿/阿姨 4 位生日不詳），經 AskUserQuestion 確認缺漏生日先跳過、改為新增 Owner 自助指令補齊；經 AskUserQuestion 確認三項設計：① 農曆節日改用 `lunarcalendar` 套件即時計算西曆日期（純 Python、不需要網路，驗證過完全離線可用），不維護每年對照表 ② 固定台灣時間 08:00 推播，借用 `/healthz` 既有 10 分鐘 cron 頻率 ③ 父親節/母親節用 `users.role` 字串比對排除、家人生日用 `user_id` 排除當事人自己。新增 `users.birthday`、`important_notifications_log`（`UNIQUE(notification_key, year)` 年度去重）兩張表與已知 5 位生日的種子資料（Robin 依 ADR-10 核准三份 SQL）；新增 `src/bot/notifications.py`（純邏輯）與 Owner 專屬「設定家人生日」／`/set_family_birthday` 指令（比照既有 `/set_toggle` 流程：列出所有已綁定使用者選編號→輸入生日）；`main.py` 新增 `_check_important_notifications()` 借用 `/healthz` 頻率；`src/bot/notifications.py` 達到 100% 覆蓋率，全專案 703 個測試全過 | Claude（依 Robin 提供的需求與 AskUserQuestion 確認範圍後實作） |
+| 2026-08-05 | **Step 2.4 開工前範疇簡化，SPEC.md 新增 ADR-15（supersede ADR-7）**：盤點技術現況後發現原規劃的 FR-19b「上網查詢」前提（Gemini Search grounding）已因 submodules-core SPEC.md ADR-8 被整個移除且無法復原（Robin 不考慮開通計費帳戶），FR-19e 的 GitHub API 自動開分支/PR＋LLM 自動生成程式碼異動工程量與風險都偏高；Robin 提議改為更輕量的方案：例外發生時把完整 log（Traceback／觸發功能／使用者輸入摘要）上傳 Google Drive（複用 Step 1.3b 既有的 `GDriveClient`），私訊 Robin 專屬連結，其他使用者行為完全不變（僅收到既有「生病了」安全用語，不含任何連結或技術細節，Robin 特別確認這一點）；FR-19c／FR-19d／FR-19e 三條需求編號移除，FR-19b 改寫為新內容，FR-19f～FR-19i 不受影響；同步更新 SPEC.md 系統架構總覽表、NFR-5、NFR-8、風險表、測試策略、實作計畫 Step 2.4 說明、待確認事項註記，ADR-7 狀態改為 superseded；本次僅為規格層級調整，尚未動任何程式碼，待 Robin 確認 SPEC 內容後才會開始實作 | Claude（依 Robin 提出的簡化方向調整規格，待確認後實作） |
+| 2026-08-05 | **Phase 2 Step 2.4 完成：錯誤 log 雲端連結（FR-19b）**。Robin 確認 SPEC.md 調整內容後指示「開始開發吧」。`webhook.py` 新增 `_upload_error_log()`（封裝既有 `GDriveClient.upload_file()`，環境變數缺失或 Drive API 例外皆優雅降級回傳 `None`，不影響訊息送出）與 `_ERROR_LOG_FILE_TEMPLATE`（完整、不截斷的 log 內容）；`_notify_robin_of_error()` 延伸為捕獲例外時額外上傳 log 檔案（檔名 `error_log_{時間戳記}_{觸發功能}.log`），成功則在私訊 Robin 的訊息末尾附加連結；其他使用者收到的安全用語完全不受影響。新增 6 個測試涵蓋上傳成功/失敗/環境變數缺失等情境，既有測試不需修改即全數通過；全專案 709 個測試全過，`webhook.py` 達到 100% 覆蓋率 | Claude（依 Robin「開始開發吧」指示實作） |
+| 2026-08-05 | **新增 ADR-16：Telegram 故障時的 email 備援通知**。Robin 驗收 Step 2.4 時提出「如果壞掉的是 Telegram 本身，不就沒辦法通知？」，確認這是原設計沒考慮到的單點故障。新增 `submodules/email`（`EmailClient.send_text()` 用 `smtplib` 直打 Gmail SMTP，複用既有 `GMAIL_USER`／`GMAIL_PASSWORD`，原為 Phase 3 FR-23 預留但尚未使用）；`webhook.py` 的 `_notify_robin_of_error()` 拆成「組裝內容」與「透過 Telegram 送達」兩段，只有 Telegram 送達失敗才觸發新增的 `_send_email_fallback()`，寄出內容含完整 Traceback 的備援信；email 本身也失敗只記 log，不再疊加第三層備援。新增 11 個測試（`submodules/email/client.py` 5 個、`webhook.py` 6 個），全專案 720 個測試全過，`webhook.py`／`submodules/email/client.py` 皆達到 100% 覆蓋率 | Claude（依 Robin 提出的問題新增備援機制） |
+| 2026-08-05 | **新增 Step 2.7、FR-66、ADR-17（規格層級，尚未實作）：Google Calendar 整合**。Robin 詢問 Google Calendar 能拿來做什麼，討論後確認範圍：① 待辦事項、② 重要通知（生日/節日）、③ 體態目標期限，三者單向同步寫入 Robin 家庭共用的 Google 行事曆事件，家人可透過手機原生行事曆 App 直接瀏覽，或照舊詢問 Robinson；暫不做「讀行事曆查空檔」（進階功能，工程量高、先觀察實際需求）。新增 robinson SPEC.md FR-66（＋66a～66d 子項）、ADR-17（設計決策：單一共用行事曆、僅 Robin 本人 OAuth 授權、Step 2.7）；同步新增 submodules-core SPEC.md FR-12、Step S.12、ADR-12（`submodules/calendar` 規劃：`CalendarClient` 用 Google Calendar API v3，OAuth 2.0 但使用獨立一組憑證與 `calendar.events` scope，不與 `gdrive` 共用憑證，符合最小權限原則）。本次僅為規格文件調整，程式尚未動工，待 Robin 完成 Google Cloud Console 手動設定後才會開始實作 | Claude（依 Robin 討論結果補上規格） |
+| 2026-08-05 | **Phase 2 Step 2.7 完成：Google Calendar 整合（FR-66、ADR-17）**。Robin 確認家人共用一律用免費 Google 帳號（唯讀權限），並提出兩個補充設計：家人共用權限固定「查看所有活動詳細資料」避免覆寫衝突（Google Calendar 共用設定本身解決，非程式碼）、待辦事項/體態目標各自新增一輪「要不要同步」反問保護隱私（ADR-17 決策 6／7）。Robin 完成 Google Cloud Console 手動設定後指示「可以開工了」。新增 `submodules/calendar/client.py`（`CalendarClient`，10 個測試，覆蓋率 100%）；`todos`／`body_goals` 依 ADR-10 核准新增 `sync_to_calendar`／`google_calendar_event_id` 欄位（`0031`／`0032` migration）；三處整合：待辦事項新增流程多一輪 `pending_todo_calendar_sync` 反問（單一時間點待辦預設 30 分鐘事件時長，區間待辦用實際起訖時間），標記完成/取消時同步刪除事件；重要通知（節日/生日）判斷通過就自動建立全天事件，不逐筆詢問；體態目標只有講清楚期限才會多問 `pending_goal_calendar_sync`，達成/取消時刪除事件。所有 Calendar 呼叫皆優雅降級（環境變數未設定或 API 例外都不影響原功能），`webhook.py`／`main.py` 新增 `_build_calendar_client()`；全專案 758 個測試全過，`submodules/calendar/client.py`／`src/bot/body.py`／`src/bot/notifications.py` 達到 100% 覆蓋率 | Claude（依 Robin「可以開工了」指示實作） |
 
 ## 待決事項
 
@@ -139,7 +144,8 @@ Phase 1（MVP）已全數完成，進入 **Phase 2：記帳＋體態管理＋重
 1. ~~**Step 2.1：記帳模組**（FR-41～FR-44）~~ **已於 2026-08-04 完成**（設定預算、記帳/補記/更新/刪除、門檻預警、文字摘要，見上方里程碑紀錄）
 2. ~~**Step 2.2：體態管理模組**（FR-45～FR-48）~~ **已於 2026-08-04 完成**（身高體重/運動/飲食三個子功能皆內建補記/更新/刪除 CRUD、共用一張目標表、三種 FR-45 預警情境，見上方里程碑紀錄；FR-31 待辦事項的跨模組歧義判斷這版尚未回頭補上，留待有實際使用回饋再處理）
 3. ~~**Step 2.3：重要通知模組**（FR-53，生日/節日排程 + 排除對象邏輯）~~ **已於 2026-08-04 完成**（固定節日＋家人生日推播、Owner 專屬「設定家人生日」自助補齊指令，見上方里程碑紀錄；弟媳/大妹婿/小妹婿/阿姨的生日待 Robin 用該指令自行補上）
-4. **Step 2.4：異常自主診斷與 GitHub PR 自動化**（FR-19b～FR-19e）—— 技術複雜度最高，獨立預留較多時間
+4. ~~**Step 2.4：錯誤 log 雲端連結**（FR-19b，**2026-08-05 範疇簡化，見 SPEC.md ADR-15**）~~ **已於 2026-08-05 完成**（複用既有 `GDriveClient` 上傳完整錯誤 log，私訊 Robin 專屬連結；其他使用者行為不變，見上方里程碑紀錄）
 5. **Step 2.5：外部 API 重試機制**（FR-19i）
 6. **Step 2.6：例外分級降級與決策執行狀態閉環回饋**（FR-19f～FR-19h），套用到 Phase 1 已完成的待辦事項/心情小記、本 Phase 的記帳/體態模組
-7. 每天對照「建議每日分配」檢查進度
+7. ~~**Step 2.7：Google Calendar 整合**（FR-66，見 ADR-17，2026-08-05 新增）~~ **已於 2026-08-05 完成**（待辦事項/重要通知/體態目標期限單向同步寫入共用行事曆，見上方里程碑紀錄）
+8. 每天對照「建議每日分配」檢查進度

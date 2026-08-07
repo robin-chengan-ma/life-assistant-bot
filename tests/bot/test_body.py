@@ -264,6 +264,54 @@ def test_format_goal_list_empty():
     assert "還沒有設定中的體態目標" in body.format_goal_list([])
 
 
+# --- Google Calendar 同步（FR-66c，2026-08-05，見 ADR-17） ---
+
+
+def test_create_goal_defaults_sync_to_calendar_false(fake_db):
+    goal_id = body.create_goal(fake_db, 1, "weight", "瘦到 60kg", target_value=60, baseline_value=75)
+    goal = fake_db.select("body_goals", where="id = %s", params=(goal_id,), fetch_one=True)
+    assert goal["sync_to_calendar"] is False
+
+
+def test_set_calendar_event_id_updates_row(fake_db):
+    goal_id = body.create_goal(fake_db, 1, "weight", "瘦到 60kg", target_value=60, baseline_value=75)
+
+    body.set_calendar_event_id(fake_db, goal_id, "event-abc123")
+
+    goal = fake_db.select("body_goals", where="id = %s", params=(goal_id,), fetch_one=True)
+    assert goal["google_calendar_event_id"] == "event-abc123"
+
+
+def test_cancel_goal_deletes_calendar_event_when_synced(fake_db):
+    goal_id = body.create_goal(fake_db, 1, "weight", "瘦到 60kg", target_value=60, baseline_value=75)
+    body.set_calendar_event_id(fake_db, goal_id, "event-abc123")
+    calendar_client = Mock()
+
+    body.cancel_goal(fake_db, goal_id, calendar_client=calendar_client, google_calendar_event_id="event-abc123")
+
+    calendar_client.delete_event.assert_called_once_with(event_id="event-abc123")
+
+
+def test_cancel_goal_skips_calendar_delete_when_not_synced(fake_db):
+    goal_id = body.create_goal(fake_db, 1, "weight", "瘦到 60kg", target_value=60, baseline_value=75)
+    calendar_client = Mock()
+
+    body.cancel_goal(fake_db, goal_id, calendar_client=calendar_client, google_calendar_event_id=None)
+
+    calendar_client.delete_event.assert_not_called()
+
+
+def test_cancel_goal_swallows_calendar_delete_exception(fake_db):
+    goal_id = body.create_goal(fake_db, 1, "weight", "瘦到 60kg", target_value=60, baseline_value=75)
+    calendar_client = Mock()
+    calendar_client.delete_event.side_effect = RuntimeError("boom")
+
+    body.cancel_goal(fake_db, goal_id, calendar_client=calendar_client, google_calendar_event_id="event-abc123")
+
+    goal = fake_db.select("body_goals", where="id = %s", params=(goal_id,), fetch_one=True)
+    assert goal["status"] == "cancelled"
+
+
 def test_check_weight_goal_achieved_losing_weight(fake_db):
     body.create_goal(fake_db, 1, "weight", "瘦到 60kg", target_value=60, baseline_value=75)
 
@@ -274,6 +322,17 @@ def test_check_weight_goal_achieved_losing_weight(fake_db):
 
     goal = fake_db.select("body_goals", where="user_id = %s", params=(1,))[0]
     assert goal["status"] == "achieved"
+
+
+def test_check_weight_goal_achieved_deletes_calendar_event_when_synced(fake_db):
+    # 2026-08-05（FR-66c、ADR-17）：達成時如果有同步，要刪除對應的 Calendar 事件。
+    goal_id = body.create_goal(fake_db, 1, "weight", "瘦到 60kg", target_value=60, baseline_value=75)
+    body.set_calendar_event_id(fake_db, goal_id, "event-abc123")
+    calendar_client = Mock()
+
+    body.check_weight_goal_achieved(fake_db, 1, 59.0, calendar_client=calendar_client)
+
+    calendar_client.delete_event.assert_called_once_with(event_id="event-abc123")
 
 
 def test_check_weight_goal_achieved_gaining_weight(fake_db):
@@ -344,6 +403,21 @@ def test_check_and_push_exercise_goal_achievements(fake_db):
 
     goal = fake_db.select("body_goals", where="id = %s", params=(goal_id,), fetch_one=True)
     assert goal["status"] == "achieved"
+
+
+def test_check_and_push_exercise_goal_achievements_deletes_calendar_event_when_synced(fake_db):
+    user_id = fake_db.insert("users", {"telegram_user_id": 111, "role": "測試家人", "is_owner": False})
+    now = datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc)
+    goal_id = body.create_goal(fake_db, user_id, "exercise", "這個月運動滿 60 分鐘", target_value=60)
+    fake_db.update("body_goals", {"created_at": now}, where="id = %s", params=(goal_id,))
+    body.set_calendar_event_id(fake_db, goal_id, "event-xyz")
+
+    body.create_exercise_log(fake_db, user_id, "跑步", 60, None, None, date(2026, 8, 4))
+    telegram_client = Mock()
+    calendar_client = Mock()
+    body.check_and_push_exercise_goal_achievements(fake_db, telegram_client, now=now, calendar_client=calendar_client)
+
+    calendar_client.delete_event.assert_called_once_with(event_id="event-xyz")
 
 
 def test_check_and_push_goal_deadline_reminders(fake_db):

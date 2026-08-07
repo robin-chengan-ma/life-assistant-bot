@@ -55,6 +55,12 @@ def test_fathers_day_and_mothers_day_exclude_roles():
     assert by_key["new_year"]["exclude_role"] is None
 
 
+def test_fixed_notifications_all_have_calendar_summary():
+    # 2026-08-05（FR-66b、ADR-17）：每個固定節日都要有獨立的 Calendar 事件標題。
+    for entry in notifications.FIXED_NOTIFICATIONS:
+        assert entry["calendar_summary"]
+
+
 # --- 生日解析 ---
 
 
@@ -209,6 +215,69 @@ def test_check_and_push_broadcast_swallows_individual_failures(fake_db):
     notifications.check_and_push_important_notifications(fake_db, telegram_client, now=now)
 
     assert telegram_client.send_text.call_count == 2
+    log_row = fake_db.select(
+        "important_notifications_log", where="notification_key = %s AND year = %s", params=("new_year", 2026)
+    )
+    assert len(log_row) == 1
+
+
+# --- Google Calendar 同步（FR-66b，2026-08-05，見 ADR-17） ---
+
+
+def test_check_and_push_creates_calendar_event_for_fixed_notification(fake_db):
+    _bind_user(fake_db, 1, "Robin", is_owner=True)
+    now = datetime(2026, 1, 1, 0, 5, tzinfo=timezone.utc)
+    telegram_client = Mock()
+    calendar_client = Mock()
+
+    notifications.check_and_push_important_notifications(
+        fake_db, telegram_client, now=now, calendar_client=calendar_client
+    )
+
+    calendar_client.create_event.assert_called_once_with(
+        summary="元旦", start="2026-01-01", end="2026-01-02", all_day=True,
+    )
+
+
+def test_check_and_push_creates_calendar_event_for_birthday(fake_db):
+    _bind_user(fake_db, 1, "Robin", is_owner=True)
+    _bind_user(fake_db, 2, "弟弟", birthday=date(1999, 4, 22))
+    now = datetime(2026, 4, 22, 0, 5, tzinfo=timezone.utc)
+    telegram_client = Mock()
+    calendar_client = Mock()
+
+    notifications.check_and_push_important_notifications(
+        fake_db, telegram_client, now=now, calendar_client=calendar_client
+    )
+
+    calendar_client.create_event.assert_called_once_with(
+        summary="弟弟 生日", start="2026-04-22", end="2026-04-23", all_day=True,
+    )
+
+
+def test_check_and_push_skips_calendar_when_client_is_none(fake_db):
+    _bind_user(fake_db, 1, "Robin", is_owner=True)
+    now = datetime(2026, 1, 1, 0, 5, tzinfo=timezone.utc)
+    telegram_client = Mock()
+
+    # calendar_client 預設 None，不應拋例外，Telegram 推播照常運作。
+    notifications.check_and_push_important_notifications(fake_db, telegram_client, now=now)
+
+    assert telegram_client.send_text.call_count == 1
+
+
+def test_check_and_push_swallows_calendar_event_creation_failure(fake_db):
+    _bind_user(fake_db, 1, "Robin", is_owner=True)
+    now = datetime(2026, 1, 1, 0, 5, tzinfo=timezone.utc)
+    telegram_client = Mock()
+    calendar_client = Mock()
+    calendar_client.create_event.side_effect = RuntimeError("boom")
+
+    notifications.check_and_push_important_notifications(
+        fake_db, telegram_client, now=now, calendar_client=calendar_client
+    )
+
+    assert telegram_client.send_text.call_count == 1
     log_row = fake_db.select(
         "important_notifications_log", where="notification_key = %s AND year = %s", params=("new_year", 2026)
     )

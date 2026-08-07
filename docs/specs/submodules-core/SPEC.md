@@ -3,7 +3,7 @@ title: Submodules — 共用子模組基礎骨架
 slug: submodules-core
 status: draft
 created: 2026-07-29
-updated: 2026-08-01
+updated: 2026-08-05
 owner: Robin
 ---
 
@@ -37,7 +37,17 @@ submodules/
 │   ├── client.py
 │   ├── requirements.txt
 │   └── README.md
-└── voice/
+├── voice/
+│   ├── .env.example
+│   ├── client.py
+│   ├── requirements.txt
+│   └── README.md
+├── email/
+│   ├── .env.example
+│   ├── client.py
+│   ├── requirements.txt
+│   └── README.md
+└── calendar/
     ├── .env.example
     ├── client.py
     ├── requirements.txt
@@ -58,6 +68,8 @@ submodules/
 - [x] FR-8（2026-08-01 新增，見 ADR-9）：`submodules/voice` 提供語音轉文字 Client（`VoiceClient.transcribe()`）；目前實際串接 Groq Whisper API，用 `requests` 直接呼叫其 OpenAI 相容 REST 端點，不安裝官方 `groq` SDK
 - [x] FR-9（2026-08-02 新增，見 ADR-10）：`submodules/gdrive` 改用 OAuth 2.0（以真人 Google 帳號身分）認證，不再使用 Service Account；`GDriveClient` 建構子改為 `refresh_token`／`client_id`／`client_secret`／`folder_id` 四個必要參數
 - [x] FR-10（2026-08-02 新增，見 robinson SPEC.md Step 1.6／FR-21）：`submodules/cloudsql.client.CloudSQLClient` 新增 `execute_query(query, params=None) -> list[dict]`，跟既有的 `execute()`（DDL 用）成對，差別是這個會回傳資料列，供 `select()` 的 table/columns/where 介面無法表達的系統層級查詢使用（例如 `src/bot/monitoring.py` 查 `pg_database_size(current_database())`）
+- [x] FR-11（2026-08-05 新增，見 robinson SPEC.md FR-19b、ADR-16）：`submodules/email` 提供 `EmailClient.send_text(to, subject, body)`，透過 Gmail SMTP（SSL）寄送純文字信件；只用 Python 標準函式庫 `smtplib`／`email.mime`，不安裝任何第三方套件。用途是 Telegram 本身故障時的獨立備援通知管道，目前唯一呼叫端是 `src/bot/webhook.py` 的 `_notify_robin_of_error()`
+- [x] FR-12（2026-08-05 新增，見 robinson SPEC.md FR-66、ADR-17）：`submodules/calendar` 提供 `CalendarClient`，用 Google Calendar API v3（OAuth 2.0，`calendar.events` scope），封裝建立/更新/刪除行事曆事件的最小介面；用途是把待辦事項、重要通知、體態目標期限單向同步寫入 Robin 的家庭共用行事曆，供家人用手機原生行事曆 App 瀏覽
 
 ### 非功能性需求
 
@@ -270,6 +282,58 @@ submodules/
 
 **狀態**：accepted
 
+### ADR-11：新增 `submodules/email`，用 `smtplib` 直打 Gmail SMTP 當 Telegram 故障時的備援通知管道
+
+**背景**：Robin 在 robinson SPEC.md Step 2.4（FR-19b，錯誤 log 雲端連結）驗收時提出一個關鍵問題：Robinson 是單一 Telegram Bot 架構，如果壞掉的剛好是 Telegram API 本身（或 `TELEGRAM_BOT_TOKEN` 失效），`_notify_robin_of_error()` 連私訊 Robin 這件事本身都送不出去，之前完全沒設計任何備援管道，Robin 會完全收不到任何主動通知，只能自己去 Render Dashboard 翻 log。經確認需要新增一條完全獨立於 Telegram 的備援管道。
+
+**決策**：
+1. 新增 `submodules/email`，提供 `EmailClient.send_text(to, subject, body)`，透過 Gmail SMTP（`smtp.gmail.com:465`，SSL）寄送純文字信件。
+2. 刻意只用 Python 標準函式庫 `smtplib`／`email.mime.text.MIMEText`，不安裝任何第三方套件（比照 `telegram`／`voice` 子模組「輕量優先」的慣例，見 ADR-2、ADR-9）。
+3. 複用既有的 `GMAIL_USER`／`GMAIL_PASSWORD` 環境變數（`.env.example` 早在 2026-07-30 就已預留給 Phase 3 FR-23「讀取 Gmail TLDR 電子報」使用，但當時尚未有任何程式碼真的讀取這兩個變數）；`GMAIL_PASSWORD` 必須是 Google 帳號的應用程式密碼（App Password），這是 Google 官方對已開啟兩步驟驗證帳號的既定要求。
+4. 呼叫端（`src/bot/webhook.py`）只在 Telegram 私訊 Robin 失敗時才觸發這個備援，平常完全不會用到，避免這條備援路徑本身增加不必要的額外呼叫或成本。
+
+**理由**：
+- `smtplib` 是 Python 標準函式庫，寄一封純文字信這種單純需求不需要引入任何第三方 email SDK 或第三方寄信服務（SendGrid、Mailgun 等），符合 NFR-1「一律使用免費方案」與本專案「輕量優先」的一貫慣例。
+- 複用既有的 `GMAIL_USER`／`GMAIL_PASSWORD` 而不是新增另一組寄信專用憑證，減少要保管的金鑰數量；反正這兩個變數本來就是 Robin 自己的 Gmail 帳號，寄信跟讀信（未來 FR-23）用同一組登入資訊完全合理。
+- Email 跟 Telegram 是兩個完全獨立的基礎設施（不同公司、不同協定），同時掛掉的機率遠低於單一管道，適合當作「最後一道防線」而非主要通知手段。
+
+**替代方案**：
+- 方案 A：改用第三方 Email API 服務（SendGrid／Mailgun 等）——優點是不需要處理 SMTP 連線細節、送達率通常更好；缺點是需要額外申請帳號與 API Key、免費額度通常有每日/每月上限，對於「極少觸發」的備援用途而言，多引入一個外部服務依賴不划算，已否決
+- 方案 B：改用其他即時通訊服務當第二管道（例如 Discord Webhook、Slack）——優點是一樣即時；缺點是又要多申請一個帳號/服務，且本質上跟 Telegram 是同一類「即時通訊 API」風險，如果是「這類服務的網路連線本身出問題」（而非 Telegram 這家公司自己的問題）則兩者可能一起失效，風險相關性比 Email 更高，已否決
+- 方案 C（採用）：`smtplib` 直打 Gmail SMTP，複用既有 `GMAIL_USER`／`GMAIL_PASSWORD`
+
+**後果**：
+- 新增 `submodules/email/`（`client.py`／`README.md`／`requirements.txt`／`.env.example`），`requirements.txt` 內容為空（僅一行註解說明不需要額外依賴）。
+- `src/bot/webhook.py` 新增 `_send_email_fallback()`，`_notify_robin_of_error()` 的 Telegram 送達失敗分支改為呼叫這個函式，而不是單純記 log 就結束。
+- `GMAIL_USER`／`GMAIL_PASSWORD` 從「Phase 3 預留但未使用」變成「Step 2.4 起就會用到」，NFR-5（robinson SPEC.md）同步註記這個狀態變化。
+- 這是備援機制，沒有對應的「備援也失敗了怎麼辦」的再下一層——Email 寄送失敗只會記 log，這是刻意的設計邊界，不無限疊加備援層級。
+
+**狀態**：accepted
+
+### ADR-12：新增 `submodules/calendar`，用獨立一組 OAuth 憑證（不與 `gdrive` 共用），scope 限定 `calendar.events`
+
+**背景**：robinson SPEC.md 新增 FR-66（Google Calendar 整合，見 ADR-17），需要一個能建立/更新/刪除 Google Calendar 事件的子模組。
+
+**決策**：
+1. 新增 `submodules/calendar`，提供 `CalendarClient`，方法涵蓋 `create_event()`／`update_event()`／`delete_event()`，用官方 `google-api-python-client`（跟 `gdrive` 同一套 SDK 家族，介面風格一致）。
+2. 認證方式沿用 `gdrive` 的 OAuth 2.0（真人帳號身分，見 ADR-10），但**使用獨立一組憑證**（`GOOGLE_CALENDAR_OAUTH_CLIENT_ID`／`GOOGLE_CALENDAR_OAUTH_CLIENT_SECRET`／`GOOGLE_CALENDAR_OAUTH_REFRESH_TOKEN`），不與 `gdrive` 的憑證共用，即使兩者實務上可能來自同一個 Google Cloud 專案。
+3. OAuth scope 只申請 `https://www.googleapis.com/auth/calendar.events`（僅限事件讀寫），不申請完整的 `https://www.googleapis.com/auth/calendar`（會額外拿到修改行事曆本身設定、刪除整個行事曆等更高權限），符合最小權限原則。
+
+**理由**：
+- 獨立憑證是刻意的設計：`gdrive` 跟 `calendar` 雖然都是 Google 服務，但功能語意完全不同（檔案儲存 vs 行事曆事件），任一組憑證外洩時，影響範圍應該互相隔離，不應該因為共用同一組 token 而讓攻擊者一次拿到兩種能力；這也符合 FR-4「子模組彼此獨立、互不依賴」的既有原則,延伸到「連金鑰都不共用」。
+- `calendar.events` 而非 `calendar`：Robinson 只需要建立/更新/刪除事件，不需要修改行事曆本身的設定或刪除整個行事曆，用最小必要的 scope 降低憑證外洩時的潛在破壞範圍。
+
+**替代方案**：
+- 方案 A：直接複用 `gdrive` 現有的 OAuth 憑證，只是多要一個 scope——省去重新跑一次互動授權腳本的操作成本，但兩個子模組的憑證耦合在一起，任一模組出事會互相拖累，已否決
+- 方案 B（採用）：獨立一組憑證，scope 最小化
+
+**後果**：
+- 新增 `submodules/calendar/`（`client.py`／`README.md`／`requirements.txt`／`.env.example`），比照 `gdrive` 新增一支一次性互動授權腳本（`get_refresh_token.py`）取得 `GOOGLE_CALENDAR_OAUTH_REFRESH_TOKEN`。
+- `requirements.txt` 新增 `google-api-python-client`／`google-auth`（跟 `gdrive` 相同套件，各自子模組各自宣告一份，符合 ADR-4 的四檔案獨立慣例）。
+- Robin 需要在 Google Cloud Console 額外開通 Calendar API（跟 Drive API 是不同的 API，需要分別啟用）。
+
+**狀態**：accepted
+
 ## 實作計畫
 
 ### Phase 0（對應 robinson SPEC.md 的 Step 0.1a）：建立子模組骨架
@@ -284,6 +348,8 @@ submodules/
 - [x] Step S.8（2026-08-01，見 ADR-9）：建立 `submodules/voice/`（`client.py`、`README.md`、`requirements.txt`、`.env.example`），Step 1.4 語音轉文字需要——`VoiceClient.transcribe()`，用 `requests` 直打 Groq Whisper 的 OpenAI 相容 REST API，不安裝官方 `groq` SDK
 - [x] Step S.9（2026-08-02，見 ADR-10）：`submodules/gdrive` 從 Service Account 認證改為 OAuth 2.0（真人帳號身分），修正 Service Account 無 Drive 儲存額度導致的 `storageQuotaExceeded`；新增 `get_refresh_token.py` 一次性互動授權腳本
 - [x] Step S.10（2026-08-02，見 FR-10）：`submodules/cloudsql` 新增 `execute_query()`，Phase 1 Step 1.6（FR-21 Neon 容量監控）需要
+- [x] Step S.11（2026-08-05，見 FR-11、ADR-11）：建立 `submodules/email/`（`client.py`、`README.md`、`requirements.txt`、`.env.example`），robinson SPEC.md Step 2.4（FR-19b）需要——`EmailClient.send_text()` 用 `smtplib` 直打 Gmail SMTP（SSL），不安裝第三方套件，複用既有 `GMAIL_USER`／`GMAIL_PASSWORD`
+- [x] Step S.12（2026-08-05，見 FR-12、ADR-12）：建立 `submodules/calendar/`（`client.py`、`README.md`、`requirements.txt`、`.env.example`），robinson SPEC.md Step 2.7（FR-66）需要——`CalendarClient` 提供 `create_event()`／`update_event()`／`delete_event()`，用 `google-api-python-client` 直打 Google Calendar API v3，OAuth 2.0 認證比照 `gdrive`（見 ADR-10）但使用獨立一組憑證與 `calendar.events` scope；新增一次性互動授權腳本 `get_refresh_token.py`（比照 `gdrive` 的 Step S.9）；10 個測試，覆蓋率 100%
 
 ## 測試策略
 
@@ -296,6 +362,8 @@ submodules/
 - [x] `llm.client.LLMClient` 本地端節流保護（ADR-5，2026-07-31，4 個測試）：超過門檻拋 `LLMQuotaGuardError` 且不呼叫底層 SDK／同一 `api_key` 跨 instance 共用計數／不同 `api_key` 互不影響／時間視窗過期後計數重置
 - [x] `gdrive.client.GDriveClient`：mock `google.oauth2.credentials.Credentials`／`googleapiclient.discovery.build`，驗證 `upload_file()` 帶正確 `filename`/`parents`/`mimetype`，回傳 `webViewLink`；空 `refresh_token`／`client_id`／`client_secret`／`folder_id` 應拋出 `ValueError`；`Credentials()` 收到正確的 OAuth 參數（2026-07-31，4 個測試，覆蓋率 100%；**2026-08-02 更新**：依 ADR-10 改為 OAuth 2.0 認證，建構子從 2 參數改為 4 參數，共 7 個測試，覆蓋率維持 100%）
 - [x] `voice.client.VoiceClient`（2026-08-01，ADR-9，6 個測試，覆蓋率 100%）：mock `requests.post`，驗證 `transcribe()` 組出正確的 multipart payload（`headers`／`files`／`data`）、回傳去除頭尾空白的純文字、支援自訂 `model`／`filename`／`mime_type`；空 `api_key` 應拋出 `ValueError`；底層 request 失敗（`raise_for_status()` 拋例外）應往外拋，不吞例外
+- [x] `email.client.EmailClient`（2026-08-05，ADR-11，5 個測試，覆蓋率 100%）：mock `smtplib.SMTP_SSL`，驗證 `send_text()` 以正確的 host/port 建立連線並呼叫 `login()`／`sendmail()`，`sendmail()` 的 envelope（from/to）與信件內容（`Subject`／`From`／`To`／純文字 body，用 `email.message_from_string()` 解析驗證）正確；空 `username`／`password` 應拋出 `ValueError`；底層 SMTP 例外（如登入失敗）應往外拋，不吞例外——由呼叫端（`webhook._send_email_fallback()`）決定要不要吞
+- [x] `calendar.client.CalendarClient`（2026-08-05，見 FR-12、ADR-12，10 個測試，覆蓋率 100%）：mock `google.oauth2.credentials.Credentials`／`googleapiclient.discovery.build`（比照 `gdrive` 測試手法），驗證 `create_event()`／`update_event()`／`delete_event()` 帶正確的 `calendarId`／事件內容（含全天事件 `date`／有時間點事件 `dateTime`+`timeZone` 兩種格式），回傳新增後的 event ID；空 `refresh_token`／`client_id`／`client_secret`／`calendar_id` 應拋出 `ValueError`
 
 ### Integration Tests
 - [ ] `cloudsql`：對測試用 Neon 分支資料庫實際下 CRUD，確認連線池可正常取得/歸還連線
@@ -330,3 +398,6 @@ submodules/
 | 2026-08-02 | Robin 實測回報「我要看所有功能」觸發 Telegram `400 Bad Request`；排查後確認 `send_text()` 預設 `parse_mode="Markdown"`，但回覆文字是 LLM 自然語言生成，格式不保證符合 Telegram 舊版 Markdown 語法，一旦不符會整則被拒收，所有 LLM 生成的回覆都有此風險；Robin 選擇直接關閉 Markdown，改為預設純文字傳送（見上方 ADR-2 補充決策），呼叫端仍可視需要明確傳入 `parse_mode`；新增 1 個測試，全專案 285 個測試全過、覆蓋率 100% | Claude（依 Robin 選定方向實作） |
 | 2026-08-02 | Robin 實測語音上傳撞到 Google Drive API `403 storageQuotaExceeded`，查證確認 Service Account 完全沒有 Drive 儲存額度，跟資料夾空間無關；新增 FR-9、Step S.9、ADR-10：`submodules/gdrive` 改用 OAuth 2.0（真人帳號身分），`GDriveClient` 建構子改為 `refresh_token`／`client_id`／`client_secret`／`folder_id`，新增一次性本機互動授權腳本 `get_refresh_token.py`（`requirements.txt` 新增 `google-auth-oauthlib`）；`gdrive.client.GDriveClient` 測試改為 mock `google.oauth2.credentials.Credentials`，共 7 個測試；全專案 329 個測試全過、覆蓋率 100% | Claude（依 Robin 於 AskUserQuestion 選定方向實作） |
 | 2026-08-02 | robinson SPEC.md Step 1.6（FR-21 Neon 容量監控）需要：新增 FR-10、Step S.10：`cloudsql.client.CloudSQLClient` 新增 `execute_query()`，跟既有 `execute()`（DDL 用）成對、差別是會回傳資料列，補上 3 個測試（先前 Step S.6 一直標記「待對應功能實際串接時補上」，這次先補新增的部分，其餘既有方法仍延續原本的延後決定）；全專案 352 個測試全過、覆蓋率 100% | Claude（依 Robin「請繼續開發吧」指示） |
+| 2026-08-05 | Robin 驗收 robinson SPEC.md Step 2.4（FR-19b，錯誤 log 雲端連結）時提出「如果壞掉的是 Telegram 本身，不就完全沒辦法通知？」；新增 FR-11、Step S.11、ADR-11：建立 `submodules/email/`（`EmailClient.send_text()`，`smtplib` 直打 Gmail SMTP，不安裝第三方套件），複用既有的 `GMAIL_USER`／`GMAIL_PASSWORD`（原為 Phase 3 FR-23 預留但未使用）；5 個測試（mock `smtplib.SMTP_SSL`），覆蓋率 100%；全專案 720 個測試全過 | Claude（依 Robin 提出的問題新增備援機制） |
+| 2026-08-05 | Robin 討論 Google Calendar 能拿來做什麼後，確認先做「待辦事項／重要通知／體態目標期限」單向同步寫入共用行事曆（不含讀取查空檔）；新增 FR-12、Step S.12（尚未實作）、ADR-12：規劃 `submodules/calendar/`（`CalendarClient`，Google Calendar API v3，OAuth 2.0，獨立一組憑證＋`calendar.events` scope，不與 `gdrive` 共用憑證）；對應 robinson SPEC.md FR-66、Step 2.7、ADR-17；本次僅規格文件，程式尚未動工 | Claude（依 Robin「幫我補三點至規格書」指示） |
+| 2026-08-05 | **Step S.12 完成**：Robin 完成 Google Cloud Console 手動設定（Calendar API、獨立 OAuth 用戶端、共用行事曆）並指示開工；建立 `submodules/calendar/`（`client.py`、`README.md`、`requirements.txt`、`.env.example`、`get_refresh_token.py`）：`CalendarClient` 提供 `create_event()`／`update_event()`／`delete_event()`，事件內容格式（全天 `date` 或有時間點 `dateTime`+`Asia/Taipei` 時區）由呼叫端透過 `all_day` 參數決定；10 個測試（mock `Credentials`／`build`，比照 `gdrive` 手法），覆蓋率 100%；全專案 730 個測試全過。根目錄 `requirements.txt` 已含 `google-api-python-client`／`google-auth`（gdrive 沿用），不需新增 | Claude（依 Robin「Google Calendar 已設定完，可以開工了」指示實作） |
