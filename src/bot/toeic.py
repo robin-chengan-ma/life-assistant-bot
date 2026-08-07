@@ -37,6 +37,16 @@
 已存在資料庫判斷是否處理過，更直覺也不會漏掉任何檔案）。軌道一天然是冪等的（重複掃到已處理過
 的檔案會直接跳過），軌道二額外靠 `users.toeic_pipeline_last_run_on` 擋下同一個週日 22:00 那個
 小時內 `/healthz` 多次觸發造成的重複生成（否則會超出預期的每週題數）。
+
+**2026-08-07（Step 3.3，見 SPEC.md FR-27、ADR-19 決策 2）追加**：Robin 改為把購買的測驗書正確
+解答／詳解也一併拍照上傳，檔名多一個 `_ans` 後綴：`{exam_type}_{test_id}_write/listen_{題號}
+_ans.{ext}`。`sync_track1_from_drive()` 因此分兩階段處理——先跑原本的三個 `_process_*` 建立
+題目，最後才呼叫 `_process_answer_keys()` 比對 `(exam_type, test_id, question_type,
+question_number)` 找到既有題目後 `UPDATE` 補上 `correct_answer`／`explanation`，不新建題目列；
+這個順序讓同一批次內「題目照片與答案照片一起上傳」也能正確處理。找不到對應題目的答案照片（例如
+題目照片還沒上傳）會被略過並記警告 log，不會報錯；去重同樣採用「檔名是否已存在資料庫」
+（`certificate_questions.answer_source_filename`）。因為正解來自真實資料而非 AI 推論，批改時
+不需要額外的不確定性提醒；沒有 `correct_answer` 的題目不會出現在每日推播候選池（見 FR-26）。
 """
 import io
 import json
@@ -61,10 +71,11 @@ _FEATURE_KEY = "certificate"
 _AUDIO_EXTENSIONS = {"mp3", "m4a", "wav", "ogg"}
 
 # exam_type 開放任意小寫英數字/連字號組合（例如 toeic、gcp、aws-saa），不寫死清單；
-# test_id 沿用原本的英數字場次代號規則。
+# test_id 沿用原本的英數字場次代號規則。2026-08-07（Step 3.3）新增選填的 `_ans` 後綴群組，
+# 辨識「答案照片」（跟一般題目照片共用同一套 exam_type/test_id/type/qnum 規則，差在多一段後綴）。
 _FILENAME_PATTERN = re.compile(
     r"^(?P<exam_type>[0-9a-z][0-9a-z-]*)_(?P<test_id>[0-9A-Za-z]+)_(?P<type>write|listen)"
-    r"(?:_(?P<qnum>\d+))?\.(?P<ext>[A-Za-z0-9]+)$"
+    r"(?:_(?P<qnum>\d+))?(?P<ans>_ans)?\.(?P<ext>[A-Za-z0-9]+)$"
 )
 
 _VISION_PARSE_PROMPT = (
@@ -74,6 +85,16 @@ _VISION_PARSE_PROMPT = (
     "OPTIONS: <選項，用「|」分隔，例如 A. xxx|B. xxx|C. xxx|D. xxx>\n"
     "若圖片中同時有多題，只解析看起來最完整、最主要的一題；若圖片模糊到完全無法辨識文字，"
     "QUESTION 欄位請填「無法辨識」。"
+)
+
+# 2026-08-07（Step 3.3，見 SPEC.md FR-27、ADR-19 決策 2）：解析 Robin 拍攝的測驗書正確解答／
+# 詳解照片，正解來自真實資料而非 AI 推論。
+_ANSWER_VISION_PARSE_PROMPT = (
+    "你是 Robinson，請解析這張「{exam_type}」證照考試的正確解答／詳解照片，用以下固定格式輸出，"
+    "不要輸出其他任何文字：\n"
+    "CORRECT_ANSWER: <正確答案，例如選項代號或完整正確選項內容>\n"
+    "EXPLANATION: <詳解文字，說明為什麼這是正確答案>\n"
+    "若圖片模糊到完全無法辨識文字，CORRECT_ANSWER 欄位請填「無法辨識」。"
 )
 
 _VOCAB_GENERATE_PROMPT = (
@@ -96,8 +117,11 @@ _VOCAB_GENERATE_PROMPT = (
 
 
 def parse_filename(filename: str) -> dict | None:
-    """解析證照素材檔名，回傳 `exam_type`／`test_id`／`type`／`question_number`／`extension`；
-    不符合規則（非本 Pipeline 使用的素材）回傳 `None`。
+    """解析證照素材檔名，回傳 `exam_type`／`test_id`／`type`／`question_number`／`extension`／
+    `is_answer_key`；不符合規則（非本 Pipeline 使用的素材）回傳 `None`。
+
+    `is_answer_key`（2026-08-07 追加，見 FR-27）：檔名是否帶 `_ans` 後綴，代表這是 Robin 拍攝
+    的正確解答／詳解照片，而非題目本身。
     """
     match = _FILENAME_PATTERN.match(filename)
     if match is None:
@@ -109,22 +133,27 @@ def parse_filename(filename: str) -> dict | None:
         "type": groups["type"],
         "question_number": int(groups["qnum"]) if groups["qnum"] else None,
         "extension": groups["ext"],
+        "is_answer_key": groups["ans"] is not None,
     }
 
 
 def classify_drive_files(files: list[dict]) -> dict:
-    """把 Drive 檔案清單依檔名規則分成四類，供後續比對/切割使用；不符合命名規則的檔案忽略。
+    """把 Drive 檔案清單依檔名規則分成五類，供後續比對/切割使用；不符合命名規則的檔案忽略。
 
     key 一律包含 `exam_type`，避免不同證照類型剛好用了相同 `test_id` 造成互相覆蓋。回傳結構：
     - `write_images`：`{(exam_type, test_id, qnum): file}`，填空/單字題（或任何無聽力考題）圖片
     - `listen_images`：`{(exam_type, test_id, qnum): file}`，聽力題圖片
     - `listen_audio_segments`：`{(exam_type, test_id, qnum): file}`，已切好的單題聽力音檔
     - `listen_whole_audio`：`{(exam_type, test_id): file}`，尚未切割的整包聽力音檔
+    - `answer_keys`：`{(exam_type, test_id, type, qnum): file}`，Robin 拍攝的正確解答／詳解照片
+      （**2026-08-07 追加，見 FR-27**）；key 多帶 `type`（write/listen）避免同一題號在兩種題型
+      各自出現時互相覆蓋
     """
     write_images: dict = {}
     listen_images: dict = {}
     listen_audio_segments: dict = {}
     listen_whole_audio: dict = {}
+    answer_keys: dict = {}
 
     for file in files:
         parsed = parse_filename(file["name"])
@@ -134,9 +163,15 @@ def classify_drive_files(files: list[dict]) -> dict:
         is_audio = parsed["extension"].lower() in _AUDIO_EXTENSIONS
         exam_type = parsed["exam_type"]
         test_id = parsed["test_id"]
+        qtype = parsed["type"]
         qnum = parsed["question_number"]
 
-        if parsed["type"] == "write":
+        if parsed["is_answer_key"]:
+            if qnum is not None:
+                answer_keys[(exam_type, test_id, qtype, qnum)] = file
+            continue
+
+        if qtype == "write":
             if qnum is not None and not is_audio:
                 write_images[(exam_type, test_id, qnum)] = file
         else:  # listen
@@ -152,6 +187,7 @@ def classify_drive_files(files: list[dict]) -> dict:
         "listen_images": listen_images,
         "listen_audio_segments": listen_audio_segments,
         "listen_whole_audio": listen_whole_audio,
+        "answer_keys": answer_keys,
     }
 
 
@@ -435,8 +471,99 @@ def _process_listen_questions_needing_split(
             _insert_question(db, exam_type, test_id, "listen", qnum, parsed, image_file, audio_url=audio_url)
 
 
+def _parse_answer_vision_output(raw: str) -> dict | None:
+    answer_match = re.search(r"CORRECT_ANSWER:\s*(.+)", raw)
+    explanation_match = re.search(r"EXPLANATION:\s*(.+)", raw)
+    if not answer_match or not explanation_match:
+        return None
+    correct_answer = answer_match.group(1).strip()
+    explanation = explanation_match.group(1).strip()
+    if not correct_answer or correct_answer == "無法辨識":
+        return None
+    return {"correct_answer": correct_answer, "explanation": explanation}
+
+
+def _parse_answer_image(image_bytes: bytes, image_llm_clients: list, exam_type: str) -> dict | None:
+    """呼叫 Gemini Vision 解析答案照片中的正解與詳解；解析失敗或格式不符回傳 `None`（呼叫端記
+    log 跳過，不覆蓋既有資料）。跟 `_parse_question_image` 是分開的 Prompt，因為讀取的版面內容
+    不同（答案頁 vs. 題目頁）。
+    """
+    llm_client = random.choice(image_llm_clients)
+    prompt = _ANSWER_VISION_PARSE_PROMPT.format(exam_type=exam_type)
+    try:
+        raw = llm_client.generate_with_image(prompt, image_bytes, mime_type="image/jpeg")
+    except Exception:
+        _logger.exception("Gemini Vision 解析證照答案照片失敗（exam_type=%s）", exam_type)
+        return None
+
+    parsed = _parse_answer_vision_output(raw)
+    if parsed is None:
+        _logger.warning("Gemini Vision 答案照片回覆格式不符預期，略過：%r", raw)
+    return parsed
+
+
+def _is_answer_already_processed(db: CloudSQLClient, answer_source_filename: str) -> bool:
+    return (
+        db.select(
+            "certificate_questions",
+            where="answer_source_filename = %s",
+            params=(answer_source_filename,),
+            fetch_one=True,
+        )
+        is not None
+    )
+
+
+def _find_matching_question(
+    db: CloudSQLClient, exam_type: str, test_id: str, question_type: str, qnum: int
+) -> dict | None:
+    return db.select(
+        "certificate_questions",
+        where="exam_type = %s AND test_id = %s AND question_type = %s AND question_number = %s",
+        params=(exam_type, test_id, question_type, qnum),
+        fetch_one=True,
+    )
+
+
+def _process_answer_keys(db: CloudSQLClient, gdrive_client, image_llm_clients: list, classified: dict) -> None:
+    """FR-27（見 ADR-19 決策 2）：比對 `_ans` 答案照片到既有題目，`UPDATE` 補上正解與詳解。
+
+    必須在其他三個 `_process_*`（建立題目）之後呼叫，確保同一批次內「題目照片與答案照片一起
+    上傳」也能正確比對到；找不到對應題目（例如題目照片還沒上傳、或還沒被本次批次處理到）的答案
+    照片會被略過並記警告 log，不會報錯，下次排程重新掃描時會再次嘗試比對。
+    """
+    for (exam_type, test_id, qtype, qnum), answer_file in classified["answer_keys"].items():
+        if _is_answer_already_processed(db, answer_file["name"]):
+            continue
+
+        question = _find_matching_question(db, exam_type, test_id, qtype, qnum)
+        if question is None:
+            _logger.warning(
+                "找不到對應題目，略過這張答案照片（exam_type=%s, test_id=%s, type=%s, qnum=%s）",
+                exam_type, test_id, qtype, qnum,
+            )
+            continue
+
+        image_bytes = gdrive_client.download_file(answer_file["id"])
+        parsed = _parse_answer_image(image_bytes, image_llm_clients, exam_type)
+        if parsed is None:
+            continue
+
+        db.update(
+            "certificate_questions",
+            {
+                "correct_answer": parsed["correct_answer"],
+                "explanation": parsed["explanation"],
+                "answer_source_filename": answer_file["name"],
+            },
+            where="id = %s",
+            params=(question["id"],),
+        )
+
+
 def sync_track1_from_drive(db: CloudSQLClient, gdrive_client, image_llm_clients: list, voice_client) -> None:
-    """FR-25a～FR-25c：掃描 Drive 資料夾，比對新的 write/listen 題目並解析寫入 DB。
+    """FR-25a～FR-25c、FR-27：掃描 Drive 資料夾，比對新的 write/listen 題目並解析寫入 DB，
+    再比對答案照片補上正解／詳解。
 
     支援任意證照類型（`exam_type` 從檔名第一段解析而來，不寫死清單）。**2026-08-07 追加**：
     不再用檔名關鍵字（原本是 `name_contains="toeic"`）過濾 Drive 檔案列表，改成列出整個資料夾
@@ -444,8 +571,11 @@ def sync_track1_from_drive(db: CloudSQLClient, gdrive_client, image_llm_clients:
     沒有單一關鍵字可以用來過濾，Robin 確認這個資料夾其他用途的檔案量不大，直接全列出換取實作
     簡單（見 Robin AskUserQuestion 選定）。
 
-    掃到 0 個檔案（例如 Robin 還沒上傳任何素材）時三個 `_process_*` 函式都會直接跑完、不做
+    掃到 0 個檔案（例如 Robin 還沒上傳任何素材）時所有 `_process_*` 函式都會直接跑完、不做
     任何事，不會報錯，符合「還沒有素材也能安全部署」的要求。
+
+    **2026-08-07（Step 3.3）追加**：`_process_answer_keys()` 必須排在最後執行——先把這批次能
+    建的題目都建完，答案照片才有機會比對到「剛好同一批次一起上傳」的題目（見 ADR-19 決策 2）。
     """
     files = gdrive_client.list_files()
     classified = classify_drive_files(files)
@@ -453,6 +583,7 @@ def sync_track1_from_drive(db: CloudSQLClient, gdrive_client, image_llm_clients:
     _process_write_questions(db, gdrive_client, image_llm_clients, classified)
     _process_listen_questions_with_existing_audio(db, gdrive_client, image_llm_clients, classified)
     _process_listen_questions_needing_split(db, gdrive_client, image_llm_clients, voice_client, classified)
+    _process_answer_keys(db, gdrive_client, image_llm_clients, classified)
 
 
 # --- 軌道二：Gemini 即時生成單字題 ---

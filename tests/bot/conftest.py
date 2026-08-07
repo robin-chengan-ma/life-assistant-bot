@@ -31,6 +31,9 @@ class FakeCloudSQLClient:
             "skill_growth_digests": [],
             "certificate_questions": [],
             "toeic_vocab_questions": [],
+            "answer_logs": [],
+            "certificate_goals": [],
+            "exam_official_scores": [],
         }
         self._id_counter = itertools.count(1)
 
@@ -188,6 +191,16 @@ class FakeCloudSQLClient:
         # 2026-08-07（Step 3.2，見 robinson SPEC.md FR-25a~FR-25f）：TOEIC 題庫 Pipeline 去重查詢。
         if where == "source_image_filename = %s":
             return row.get("source_image_filename") == params[0]
+        # 2026-08-07（Step 3.3，見 robinson SPEC.md FR-27、ADR-19）：答案照片比對與去重查詢。
+        if where == "answer_source_filename = %s":
+            return row.get("answer_source_filename") == params[0]
+        if where == "exam_type = %s AND test_id = %s AND question_type = %s AND question_number = %s":
+            return (
+                row.get("exam_type") == params[0]
+                and row.get("test_id") == params[1]
+                and row.get("question_type") == params[2]
+                and row.get("question_number") == params[3]
+            )
 
         raise NotImplementedError(f"FakeCloudSQLClient 尚未支援這個 where 條件：{where}")
 

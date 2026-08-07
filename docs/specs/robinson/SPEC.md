@@ -144,19 +144,19 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 
 - [x] FR-22（**2026-08-07 完成並修正，見 Step 3.1**）：每日固定時間自動推播技能成長摘要——經 Robin 回饋修正為「收集」與「推播」兩個獨立排程時間點：固定台灣時間 23:00 收集當天的技術情報（`src/bot/skill_growth.collect_and_store_daily_digest()`），固定隔天台灣時間 08:00 推播前一晚收集到的摘要（`check_and_push_daily_digest()`），兩者都借用 `/healthz` 既有的 10 分鐘 cron 頻率、各自只在對應的小時內執行；去重靠新增的 `skill_growth_digests` 表（`digest_date` UNIQUE 約束收集去重、`pushed_on` 欄位比照 `todos.daily_pushed_on` 慣例做推播去重）
 - [x] FR-23（**2026-08-07 完成並修正，見 Step 3.1、submodules-core SPEC.md ADR-11 追記／ADR-14**）：每日重點技術分享（開關）：固定台灣時間 23:00 擷取 Gmail「當天」TLDR 電子報 + IThome / TechCrunch「當天」新聞，經 Gemini 產出中文重點摘要與總結分享，隔天 08:00 推播（依 NFR-11，以來源日期避免重複摘要已處理過的電子報/新聞）。實作細節：①TLDR 電子報寄件者固定為 `dan@tldrnewsletter.com`，用 `submodules/email` 新增的 `fetch_emails_from_domain_on_date(sender_domain, target_date)`（IMAP，寄件者網域比對 `tldrnewsletter.com`，經 AskUserQuestion 確認；呼叫端指定日期，不假設「今天」或「昨天」）②IThome／TechCrunch 用新增的 `submodules/newsfeed`（RSS Feed，`requests`＋標準函式庫 `xml.etree.ElementTree`，同樣以指定日期查詢）③三個來源任一失敗只記 log、視為當天無內容，不影響其他來源與整體收集④三個來源都沒內容時，收集階段不呼叫 Gemini（`summary_text` 寫入 `NULL`），推播階段一律回覆 Robin 指定的固定訊息「未獲得最新技術分享」，不靜默跳過（NFR-10）；找不到前一晚的收集結果（例如收集當下服務整小時都不可用）同樣回覆這則固定訊息⑤去重用「來源日期」（每天固定只收集「當天」）＋`skill_growth_digests.digest_date`（收集去重，UNIQUE 約束）／`pushed_on`（推播去重）機制，不需要額外的內容雜湊表⑥`tech_intel` 功能開關（`owner_only=True`；**2026-08-07 同日再修正**：原規劃的 `skill_growth` 拆成 `tech_intel`／`certificate`／`language` 三個獨立開關，見 feature-toggles SPEC.md FR-3 追記，本功能只用其中的 `tech_intel`，因為 Robin 認為證照準備〔TOEIC〕跟技術情報訂閱性質不同、不該共用同一把開關）關閉時，收集與推播兩階段都會跳過，不消耗 Gemini API 額度⑦Gemini 呼叫用獨立的 `GEMINI_API_SKILL_GROWTH_KEY`（Robin 已於 2026-08-07 申請並設定到 `.env`／Render 部署環境）
-- [ ] FR-24：證照題庫（`certificate` 開關，2026-08-07 起獨立於技術情報 `tech_intel` 之外，見 feature-toggles SPEC.md FR-3 追記）：使用者設定目標（時間、目標分數），Robinson 可在使用者不知如何準備時提供方向建議。**2026-08-07（Step 3.2）確認範圍**：這條「目標設定＋方向建議」的對話式功能與 FR-26（自訂每日題數/彈性排程）性質相近，一併留到 Step 3.3 展開；Step 3.2 只完成 FR-25a～FR-25f 的題庫建立 Pipeline
+- [ ] FR-24：證照題庫（`certificate` 開關，2026-08-07 起獨立於技術情報 `tech_intel` 之外，見 feature-toggles SPEC.md FR-3 追記）：使用者設定目標（時間、目標分數），Robinson 可在使用者不知如何準備時提供方向建議。**2026-08-07（Step 3.2）確認範圍**：這條「目標設定＋方向建議」的對話式功能與 FR-26（自訂每日題數/彈性排程）性質相近，一併留到 Step 3.3 展開；Step 3.2 只完成 FR-25a～FR-25f 的題庫建立 Pipeline。**2026-08-07（Step 3.3 設計定案，見 ADR-19）**：目標（考試時間、目標分數）依 `exam_type` 各自設定一筆，重新設定即覆蓋舊值；方向建議由 Robinson 依使用者近期 FR-29 統計出的成效（對錯趨勢、常出錯的 `question_type`）與距離目標時間長短，用 LLM 生成客製化建議文字，不走固定範本
 - [x] FR-25：TOEIC 為第一個題庫，每次出題預設 1 題聽力 + 2 題填空 + 3 題單字英翻中，採「雙軌混合架構」產生題目；未來可套用同模板擴充 AWS / GCP 等其他證照（**2026-08-07 完成，見 Step 3.2**）：
   - [x] FR-25a：軌道一（高準確度題庫）來源 — Robin 將題目照片（圖檔）與聽力音檔（MP3）上傳至 Google Drive 指定資料夾。**2026-08-07 確認實際檔名規則**：`toeic_{測驗場次代號}_write_{題號}.{ext}`（填空/單字題，僅圖片）、`toeic_{測驗場次代號}_listen_{題號}.{ext}`（聽力題，Robin 已切好的單題圖片/音檔）、`toeic_{測驗場次代號}_listen.mp3`（聽力題整包音檔，尚未切割）。**2026-08-07 同日追記（見 ADR-18 決策 4）**：檔名格式泛用化為 `{exam_type}_{測驗場次代號}_write/listen_{題號}.{ext}`，`exam_type` 開放任意字串（不限 toeic），供 GCP／AWS 等未來證照類型直接沿用同一套 Pipeline
   - [x] FR-25b：軌道一檔名比對規則 — 若為已分拆的音檔，系統直接比對圖檔與音檔的檔名規則（見 FR-25a 實際格式，檔名含 `toeic` 字樣供辨識歸類，見 ADR-13），比對成功即整合為一筆完整題目；若為整包大型 MP3，Robinson 呼叫 Groq Whisper API（`VOICE_API_KEY`，`transcribe_with_segments()`）取得逐句時間軸，依語句停頓自動切割為獨立小音檔（**2026-07-30 更新**：語音轉文字改採 Groq Whisper，取代先前「一律用 Gemini」的規劃，見 ADR-12；**2026-08-07 新增 ADR-18**：切割邏輯是尚未經真實錄音驗證的啟發式判斷，Robin 已知情並選擇這次一起做；**同日再追記**：檔名比對改用 FR-25a 泛用化後的 `exam_type` 前綴而非固定 `toeic` 關鍵字，Google Drive 掃描也改成列出整個資料夾所有檔案，不再用關鍵字過濾）
-  - [x] FR-25c：軌道一圖文解析與入庫 — 使用 Gemini Vision 解析題目圖檔中的文字與選項，寫入 Neon DB `toeic_questions` 表（題目文字、選項、對應圖檔 URL、對應音檔 URL）；**依原文刻意不存正解**（題目照片本身未必附答案）。**2026-08-07 同日追記**：資料表重新命名為 `certificate_questions` 並新增 `exam_type` 欄位，Vision 解析 Prompt 也改為依 `exam_type` 動態組字（例如「這張『GCP』證照考試的題目照片」），詳見 ADR-18 決策 4、`src/schema/db_schema.md`
+  - [x] FR-25c：軌道一圖文解析與入庫 — 使用 Gemini Vision 解析題目圖檔中的文字與選項，寫入 Neon DB `toeic_questions` 表（題目文字、選項、對應圖檔 URL、對應音檔 URL）；**依原文刻意不存正解**（題目照片本身未必附答案）。**2026-08-07 同日追記**：資料表重新命名為 `certificate_questions` 並新增 `exam_type` 欄位，Vision 解析 Prompt 也改為依 `exam_type` 動態組字（例如「這張『GCP』證照考試的題目照片」），詳見 ADR-18 決策 4、`src/schema/db_schema.md`。**2026-08-07（Step 3.3，見 ADR-19）追記**：「刻意不存正解」的決策部分推翻——Robin 改為把購買的測驗書正確解答／詳解也一併拍照上傳（檔名 `{exam_type}_{test_id}_write/listen_{題號}_ans.png`），Robinson 不再需要用 AI 推論正解，正解一律來自真實資料。比對與入庫機制見 FR-27
   - [x] FR-25d：軌道二（單字刷題庫）題目規格 — Gemini 即時生成多益最新核心單字英翻中選擇題，每題須包含：單字（Target Word）、題目（英翻中選答）、4 個繁體中文選項（1 個正確答案＋3 個具干擾性的錯誤選項）、英文實用例句（Example Sentence）、例句繁體中文翻譯
   - [x] FR-25e：軌道二儲存機制 — 生成後同步寫入 DB（`toeic_vocab_questions`）供後續測驗重複抽考，避免重複呼叫 API 造成 Token 浪費；每週生成題數由 `users.toeic_weekly_question_count` 決定（Robin 自訂，預設 21 題＝一天 3 題）
   - [x] FR-25f：排程與去重規則 — 兩軌道的檔案掃描/生成排程統一為每週日台灣時間 22:00（Robin 2026-08-07 指定，取代原「排程頻率未定案」狀態）。**2026-08-07 修正去重規則**：原規劃「檔名中的日期是否落在過去一週內」與 Robin 實際確認的檔名格式（無日期）對不上，改用 `toeic_questions.source_image_filename` 是否已存在資料庫判斷是否處理過（符合 NFR-11 ETL 去重原則，效果等價，更貼合實際檔名設計）；軌道二額外靠 `users.toeic_pipeline_last_run_on`（今天是否已執行過）避免 `/healthz` 同一小時內多次觸發重複生成
-- [ ] FR-26：使用者可自訂每日題數、各證照類型比例、或將當日題目挪到其他天（彈性排程）
-- [ ] FR-27：每題作答後提供正解與詳解，並記錄該題對錯，錯題可排入後續複習
+- [ ] FR-26：使用者可自訂每日題數、各證照類型比例、或將當日題目挪到其他天（彈性排程）。**2026-08-07（Step 3.3 設計定案，見 ADR-19）**：每日固定台灣時間 08:00 推播（比照 `skill_growth_digests` 排程模式，借用 `/healthz` 頻率）；推播候選池只從「已補齊正解（`correct_answer` 非 NULL）」的題目抽選（見 FR-27），沒有正解的題目不會出現在每日推播，避免使用者作答完卻無法批改
+- [ ] FR-27：每題作答後提供正解與詳解，並記錄該題對錯，錯題可排入後續複習。**2026-08-07（Step 3.3 設計定案，見 ADR-19）**：正解不再由 AI 推論——Robin 拍攝購買的測驗書正確解答／詳解，檔名 `{exam_type}_{test_id}_write/listen_{題號}_ans.png` 上傳至 Google Drive 同一資料夾；每週日 22:00 排程掃描時先處理一般題目檔案建立題目列，再處理 `_ans` 檔案，用 `(exam_type, test_id, question_type, question_number)` 比對到既有題目後 `UPDATE` 補上 `correct_answer`／`explanation`，不新建題目列；因此正解與詳解在建題庫階段就已備妥，作答當下不必即時呼叫 Gemini。作答結果（對/錯、作答時間、對應題目、`exam_type`）寫入新增的作答紀錄表，供 FR-29 統計與錯題複習使用
 - [ ] FR-28：當日題目未完成，20:00 提醒是否要作答，23:00 前仍未做則視為跳過；使用者要求延期時 Robinson 需記住新的排程
-- [ ] FR-29：使用者可要求以圖表方式呈現一段時間內的答對/答錯成效趨勢
-- [ ] FR-30：保留欄位記錄實際應考日期與正式成績
+- [ ] FR-29：使用者可用自然語言詢問一段時間內的答對/答錯成效。**2026-08-07（Step 3.3 設計定案，見 ADR-19，取代原「圖表方式呈現」的規劃）**：查證後確認 Phase 2 記帳／體態管理模組從一開始就是文字摘要、沒有任何畫圖表模組；圖表視覺化統一交給 Phase 4 Mobile App（FR-64）。本條在 Telegram 端一律用文字簡述回覆，範例：「上週總共測驗 N1 題，答對 N2 題，平均每天答對 N3 題，你最常出錯的地方是……，最常答對的地方是……」；沒有作答的日子要列出來並從平均計算中排除；使用者沒說清楚 `exam_type` 或「正式測驗 vs 日常小考」時 Robinson 需反問，不可自行猜測；需支援跨時間區間比較（如「上週和上上週比較」），彈性解析使用者描述的日期範圍；錯題統計維度沿用既有的 `question_type`（write/listen）與 `exam_type`，不新增更細的主題標籤欄位
+- [ ] FR-30：保留欄位記錄實際應考日期與正式成績。**2026-08-07（Step 3.3 設計定案，見 ADR-19）**：正式成績與「每日小考作答紀錄」是不同概念——同一 `exam_type` 可能多次應考，各自有獨立的應考日期與分數，另建資料表記錄，不與每日小考的作答紀錄混用
 
 ### 功能性需求 — YouTube 技術情報模組（個人技能成長子功能，僅 Robin 可用；**2026-08-07 修正**：與每日技術分享〔FR-22／FR-23〕共用 `tech_intel` 開關，因為兩者同屬「技術情報訂閱」性質，見 feature-toggles SPEC.md FR-3 追記；獨立於「證照準備」`certificate`、「語言學習」`language` 兩個開關之外）
 
@@ -694,6 +694,41 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 
 **狀態**：accepted
 
+### ADR-19：Step 3.3（作答紀錄、成效追蹤與正式成績）設計決策
+
+**背景**：Step 3.3 開工前經多輪對話與 AskUserQuestion 與 Robin 確認範圍與關鍵設計問題，記錄於此供未來參考。
+
+**決策**：
+1. **每日推播固定 08:00**：比照 `skill_growth_digests`（Step 3.1）的排程模式，借用 `/healthz` 既有 10 分鐘 cron 頻率、只在對應小時內執行，不另建獨立排程系統。
+2. **正解改用真實拍照，不用 AI 推論**：Robin 手上有購買的測驗書正確解答／詳解，選擇拍照上傳而非讓 Gemini 推論答案。檔名規則 `{exam_type}_{test_id}_write/listen_{題號}_ans.png`，延伸 Step 3.2 的檔名解析（`parse_filename()`）辨識 `_ans` 後綴；週排程掃描分兩階段：先處理一般題目檔案（建立題目列），再處理 `_ans` 檔案（用 `exam_type`／`test_id`／`question_type`／`question_number` 比對既有題目後 `UPDATE` 補上正解＋詳解，不新建題目列）。因為是真實資料，批改訊息不需要加註「AI 推論僅供參考」之類的免責聲明。
+3. **缺正解的題目排除於每日推播候選池**：若 Robin 忘記拍或漏傳某題的答案照，該題不會出現在每日推播選題，直到正解補齊為止；不使用「沒答案時才由 AI 推論備援」的方案，避免批改內容混雜不確定的 AI 猜測。
+4. **成效查詢改為彈性文字問答，不做圖表**：查證 Phase 2 記帳／體態管理模組程式碼後確認一開始就是文字摘要呈現、沒有任何圖表產生模組可以沿用或移除；圖表視覺化統一交給 Phase 4 Mobile App 的 FR-64 BI Dashboard。FR-29 在 Telegram 端一律用自然語言文字摘要回覆，需要能：① 排除未作答的日子並從平均計算中扣除 ② `exam_type` 或「正式測驗 vs 日常小考」不明確時主動反問 ③ 支援跨時間區間比較。
+5. **錯題統計維度沿用既有欄位，不新增主題標籤**：`certificate_questions` 目前只有 `question_type`（write/listen）與 `exam_type`，沒有更細的文法/字彙/Part 1-7 分類。權衡「新增 `category` 欄位可統計更細但增加 Vision 解析不確定性與複雜度」與「用現有欄位足夠回答『最常出錯的地方』」後，選擇不新增欄位，用現有維度統計即可。
+6. **作答紀錄用一張統一表串連軌道一／軌道二**：軌道一（`certificate_questions`，拍照建題庫）與軌道二（`toeic_vocab_questions`，Gemini 生成單字題）是兩張分開的題庫表。新增的作答紀錄表用兩個可為 NULL 的外鍵（分別指向兩張題庫表的 `id`）＋ `CHECK` 限制兩者只能有一個非 NULL，取代「分開建兩張作答紀錄表、查詢時 UNION」的方案，讓 FR-29 查詢「一段時間成效」不用跨表 UNION。
+7. **正式成績獨立建表**：FR-30「保留欄位記錄實際應考日期與正式成績」跟「每日小考作答紀錄」是不同概念——同一 `exam_type` 可能多次應考、各自有獨立的應考日期與分數，因此獨立建表而非在 `users` 或 `certificate_questions` 加欄位。
+
+**理由**：
+- 決策 1：延續既有排程慣例，降低維護成本，不需要新的排程機制。
+- 決策 2、3：Robin 有現成的正確解答來源，比讓 AI 推論更準確、也不需要額外的信賴聲明；缺正解題目直接排除是最簡單、不會誤導使用者的處理方式。
+- 決策 4：避免重工——現有模組已經是文字摘要路線，維持一致的產品體驗（Telegram 純文字、App 才看圖表），也符合 Robin 對 Phase 4 App 的整體規劃。
+- 決策 5：避免 Step 3.3 範圍蔓延到「重新設計 Vision 解析 Prompt 與題目主題分類系統」，延續 Step 3.2 決策 3「先求穩」的慣例；日後真的需要更細的統計維度可以再加欄位，不影響現有資料。
+- 決策 6：查詢效能與程式碼複雜度考量，一張表可以直接用單一 SQL 查出一段時間所有作答紀錄，不需要在應用層合併兩個查詢結果。
+- 決策 7：正式成績跟每日小考在語意上是兩件事（一次考試的最終結果 vs. 每天練習的逐題紀錄），混在同一張表會讓兩種查詢邏輯互相干擾。
+
+**替代方案**：
+- 決策 2 替代方案：沿用原規劃讓 Gemini Vision 推論正解——已否決，Robin 有更準確的真實資料來源。
+- 決策 3 替代方案：沒有正解時照樣推播、事後標記待確認，或沒有正解時才用 AI 推論備援——皆已否決，Robin 選擇最簡單、不混入不確定資料的方案。
+- 決策 5 替代方案：新增 `category` 欄位讓 Vision 解析時順便標注更細主題——已否決，避免增加解析不確定性與 scope creep。
+- 決策 6 替代方案：軌道一／軌道二分開建兩張作答紀錄表——已否決，查詢會需要 UNION 兩張表，增加程式複雜度。
+
+**後果**：
+- `certificate_questions` 新增 `correct_answer`／`explanation`／`answer_source_filename` 欄位，Step 3.2 既有的「正解為 NULL」資料在補拍 `_ans` 照片前，會持續被排除於每日推播候選池之外。
+- Step 3.2 的週排程掃描邏輯（`sync_track1_from_drive()`）需要改為兩階段處理，處理順序變得重要（先題目後正解），需要對應測試覆蓋處理順序錯亂的情境（例如同一批次內 `_ans` 檔案先於題目檔案被列出）。
+- 新增作答紀錄表因為用兩個可為 NULL 的外鍵＋ CHECK 限制，寫入時呼叫端需要明確知道是軌道一還是軌道二的題目 ID，多一層呼叫端判斷邏輯。
+- FR-29 的自然語言解析（`exam_type`／正式-小考／日期區間）複雜度較高，需要比照 FR-31（待辦事項自然語言解析）的既有模式處理歧義反問。
+
+**狀態**：accepted
+
 ## 實作計畫
 
 > 分期原則見 ADR-4；每個 Phase 完成後才進入下一個 Phase 的詳細 spec 與 TDD 循環。本 spec 僅列到模組層級，各模組進入實作前應個別建立 `docs/specs/<feature-slug>/SPEC.md` 展開 API 設計與資料表結構。
@@ -737,7 +772,7 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 
 - [x] Step 3.1（**2026-08-07 完成**）：每日重點技術分享（FR-22、FR-23）
 - [x] Step 3.2（**2026-08-07 完成，見 FR-25a～FR-25f、ADR-18**）：TOEIC 雙軌題庫 Pipeline —— 軌道一拍照/音檔入庫（Gemini Vision 影像 Key + Groq Whisper 語音轉文字切割，見 ADR-12）、軌道二 Gemini 文字 Key 單字題即時生成、固定每週日 22:00 排程去重。經 AskUserQuestion 與 Robin 確認範圍：這次只建題庫，不含推播/作答/批改（FR-26～FR-30 留給 Step 3.3）。新增 `submodules/gdrive` 的 `list_files()`／`download_file()`（OAuth scope 擴大為 `drive.file + drive.readonly`，Robin 需重新走一次 `get_refresh_token.py`）、`submodules/voice` 的 `transcribe_with_segments()`；新增 `src/bot/toeic.py`（檔名解析/分類、Vision 解析、Whisper 切割、單字題生成、週排程進入點）；新增 `toeic_questions`／`toeic_vocab_questions` 表與 `users.toeic_weekly_question_count`／`toeic_pipeline_last_run_on` 欄位（`0035`～`0037` migration，Robin 核准）；`main.py` 新增 `_check_toeic_pipeline()`；Dockerfile 新增 `ffmpeg`（`pydub` 依賴，用於整包 MP3 切割）；33 個新測試全過（含用 `pydub` 產生真實靜音音檔驗證切割邏輯可正確解碼）
-- [ ] Step 3.3：作答紀錄、成效追蹤圖表與正式成績欄位（FR-26～FR-30）
+- [ ] Step 3.3（**2026-08-07 規格定案，見 FR-24、FR-26～FR-30、ADR-19**）：每日推播出題與批改（08:00 推播、20:00/23:00 提醒與跳過）、正解改用 Robin 拍照上傳的 `_ans` 答案照（延伸 Step 3.2 檔名比對機制，不用 AI 推論）、作答紀錄表串連軌道一/軌道二、FR-29 成效改為彈性自然語言文字問答（不做圖表，圖表統一交給 Phase 4 App FR-64）、FR-30 正式成績獨立建表、FR-24 目標設定與方向建議
 - [ ] Step 3.4：YouTube 技術情報模組（FR-57～FR-59，見 ADR-9）—— YouTube Data API 擷取、三層 Top 3 篩選、每週四自動推播、配額監控與 Fallback 降級
 - [ ] Step 3.5：好友模式（FR-51、FR-52）
 

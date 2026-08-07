@@ -55,6 +55,7 @@ def test_parse_filename_write_question():
         "type": "write",
         "question_number": 1,
         "extension": "png",
+        "is_answer_key": False,
     }
 
 
@@ -66,6 +67,7 @@ def test_parse_filename_listen_split_audio():
         "type": "listen",
         "question_number": 3,
         "extension": "mp3",
+        "is_answer_key": False,
     }
 
 
@@ -77,6 +79,7 @@ def test_parse_filename_listen_whole_audio_has_no_question_number():
         "type": "listen",
         "question_number": None,
         "extension": "mp3",
+        "is_answer_key": False,
     }
 
 
@@ -89,6 +92,7 @@ def test_parse_filename_supports_other_exam_types():
         "type": "write",
         "question_number": 1,
         "extension": "png",
+        "is_answer_key": False,
     }
 
 
@@ -98,6 +102,31 @@ def test_parse_filename_returns_none_for_non_toeic_file():
 
 def test_parse_filename_returns_none_for_invalid_type():
     assert toeic.parse_filename("toeic_0001_speaking_1.png") is None
+
+
+def test_parse_filename_answer_key_write():
+    # 2026-08-07（Step 3.3，見 FR-27）：Robin 拍攝的測驗書解答/詳解照片，檔名多一段 `_ans` 後綴。
+    parsed = toeic.parse_filename("toeic_0001_write_1_ans.png")
+    assert parsed == {
+        "exam_type": "toeic",
+        "test_id": "0001",
+        "type": "write",
+        "question_number": 1,
+        "extension": "png",
+        "is_answer_key": True,
+    }
+
+
+def test_parse_filename_answer_key_listen():
+    parsed = toeic.parse_filename("toeic_0001_listen_3_ans.png")
+    assert parsed == {
+        "exam_type": "toeic",
+        "test_id": "0001",
+        "type": "listen",
+        "question_number": 3,
+        "extension": "png",
+        "is_answer_key": True,
+    }
 
 
 # --- classify_drive_files ---
@@ -118,6 +147,24 @@ def test_classify_drive_files_buckets_correctly():
     assert classified["listen_images"] == {("toeic", "0001", 1): files[1]}
     assert classified["listen_audio_segments"] == {("toeic", "0001", 1): files[2]}
     assert classified["listen_whole_audio"] == {("toeic", "0002"): files[3]}
+    assert classified["answer_keys"] == {}
+
+
+def test_classify_drive_files_buckets_answer_keys():
+    # 2026-08-07（Step 3.3，見 FR-27）：`_ans` 檔名進 answer_keys，不會混進 write_images/listen_images。
+    files = [
+        {"id": "f1", "name": "toeic_0001_write_1_ans.png", "mimeType": "image/png"},
+        {"id": "f2", "name": "toeic_0001_listen_2_ans.png", "mimeType": "image/png"},
+    ]
+
+    classified = toeic.classify_drive_files(files)
+
+    assert classified["answer_keys"] == {
+        ("toeic", "0001", "write", 1): files[0],
+        ("toeic", "0001", "listen", 2): files[1],
+    }
+    assert classified["write_images"] == {}
+    assert classified["listen_images"] == {}
 
 
 def test_classify_drive_files_ignores_unmatched_files():
@@ -130,6 +177,7 @@ def test_classify_drive_files_ignores_unmatched_files():
         "listen_images": {},
         "listen_audio_segments": {},
         "listen_whole_audio": {},
+        "answer_keys": {},
     }
 
 
@@ -321,6 +369,134 @@ def test_sync_processes_non_toeic_exam_type_and_scans_whole_folder(fake_db):
     assert rows[0]["exam_type"] == "gcp"
     assert rows[0]["test_id"] == "0002"
     assert rows[0]["question_text"] == "GCP 考題"
+
+
+# --- sync_track1_from_drive：答案照片比對（Step 3.3，見 FR-27、ADR-19 決策 2） ---
+
+
+def _answer_vision_reply(correct_answer="B", explanation="因為 xxx 所以答案是 B"):
+    return f"CORRECT_ANSWER: {correct_answer}\nEXPLANATION: {explanation}"
+
+
+def _seed_question(fake_db, **overrides):
+    row = {
+        "exam_type": "toeic",
+        "test_id": "0001",
+        "question_type": "write",
+        "question_number": 1,
+        "question_text": "題目",
+        "options": "[]",
+        "image_gdrive_url": "image-url",
+        "audio_gdrive_url": None,
+        "source_image_filename": "toeic_0001_write_1.png",
+        "correct_answer": None,
+        "explanation": None,
+        "answer_source_filename": None,
+    }
+    row.update(overrides)
+    return fake_db.insert("certificate_questions", row)
+
+
+def test_sync_updates_existing_question_with_answer_key(fake_db):
+    question_id = _seed_question(fake_db)
+    files = [{"id": "a1", "name": "toeic_0001_write_1_ans.png", "mimeType": "image/png"}]
+    gdrive_client = _make_gdrive_client(files, {"a1": b"answer-image-bytes"})
+    image_llm_clients = [MagicMock()]
+    image_llm_clients[0].generate_with_image.return_value = _answer_vision_reply()
+    voice_client = MagicMock()
+
+    toeic.sync_track1_from_drive(fake_db, gdrive_client, image_llm_clients, voice_client)
+
+    row = fake_db.select("certificate_questions", where="id = %s", params=(question_id,), fetch_one=True)
+    assert row["correct_answer"] == "B"
+    assert row["explanation"] == "因為 xxx 所以答案是 B"
+    assert row["answer_source_filename"] == "toeic_0001_write_1_ans.png"
+
+
+def test_sync_processes_question_and_its_answer_key_in_same_batch(fake_db):
+    # 題目照片跟答案照片同一批次一起上傳：sync_track1_from_drive 內部順序要確保答案能比對到。
+    files = [
+        {"id": "f1", "name": "toeic_0001_write_1.png", "mimeType": "image/png", "webViewLink": "url1"},
+        {"id": "a1", "name": "toeic_0001_write_1_ans.png", "mimeType": "image/png"},
+    ]
+    gdrive_client = _make_gdrive_client(files, {"f1": b"image-bytes", "a1": b"answer-image-bytes"})
+    image_llm_clients = [MagicMock()]
+    image_llm_clients[0].generate_with_image.side_effect = [_vision_reply(), _answer_vision_reply()]
+    voice_client = MagicMock()
+
+    toeic.sync_track1_from_drive(fake_db, gdrive_client, image_llm_clients, voice_client)
+
+    rows = fake_db.select("certificate_questions")
+    assert len(rows) == 1
+    assert rows[0]["correct_answer"] == "B"
+    assert rows[0]["answer_source_filename"] == "toeic_0001_write_1_ans.png"
+
+
+def test_sync_skips_answer_key_when_no_matching_question(fake_db):
+    files = [{"id": "a1", "name": "toeic_9999_write_1_ans.png", "mimeType": "image/png"}]
+    gdrive_client = _make_gdrive_client(files, {"a1": b"answer-image-bytes"})
+    image_llm_clients = [MagicMock()]
+    voice_client = MagicMock()
+
+    toeic.sync_track1_from_drive(fake_db, gdrive_client, image_llm_clients, voice_client)
+
+    gdrive_client.download_file.assert_not_called()
+    image_llm_clients[0].generate_with_image.assert_not_called()
+
+
+def test_sync_skips_already_processed_answer_key(fake_db):
+    _seed_question(fake_db, correct_answer="A", explanation="舊詳解", answer_source_filename="toeic_0001_write_1_ans.png")
+    files = [{"id": "a1", "name": "toeic_0001_write_1_ans.png", "mimeType": "image/png"}]
+    gdrive_client = _make_gdrive_client(files, {"a1": b"answer-image-bytes"})
+    image_llm_clients = [MagicMock()]
+    voice_client = MagicMock()
+
+    toeic.sync_track1_from_drive(fake_db, gdrive_client, image_llm_clients, voice_client)
+
+    gdrive_client.download_file.assert_not_called()
+    image_llm_clients[0].generate_with_image.assert_not_called()
+
+
+def test_sync_skips_answer_key_when_vision_parse_fails(fake_db):
+    question_id = _seed_question(fake_db)
+    files = [{"id": "a1", "name": "toeic_0001_write_1_ans.png", "mimeType": "image/png"}]
+    gdrive_client = _make_gdrive_client(files, {"a1": b"answer-image-bytes"})
+    image_llm_clients = [MagicMock()]
+    image_llm_clients[0].generate_with_image.return_value = "格式完全不對的回覆"
+    voice_client = MagicMock()
+
+    toeic.sync_track1_from_drive(fake_db, gdrive_client, image_llm_clients, voice_client)
+
+    row = fake_db.select("certificate_questions", where="id = %s", params=(question_id,), fetch_one=True)
+    assert row["correct_answer"] is None
+
+
+def test_sync_skips_answer_key_when_vision_llm_raises(fake_db):
+    question_id = _seed_question(fake_db)
+    files = [{"id": "a1", "name": "toeic_0001_write_1_ans.png", "mimeType": "image/png"}]
+    gdrive_client = _make_gdrive_client(files, {"a1": b"answer-image-bytes"})
+    image_llm_clients = [MagicMock()]
+    image_llm_clients[0].generate_with_image.side_effect = RuntimeError("Gemini 掛了")
+    voice_client = MagicMock()
+
+    toeic.sync_track1_from_drive(fake_db, gdrive_client, image_llm_clients, voice_client)
+
+    row = fake_db.select("certificate_questions", where="id = %s", params=(question_id,), fetch_one=True)
+    assert row["correct_answer"] is None
+
+
+def test_sync_treats_unrecognized_answer_as_unresolved(fake_db):
+    question_id = _seed_question(fake_db)
+    files = [{"id": "a1", "name": "toeic_0001_write_1_ans.png", "mimeType": "image/png"}]
+    gdrive_client = _make_gdrive_client(files, {"a1": b"answer-image-bytes"})
+    image_llm_clients = [MagicMock()]
+    image_llm_clients[0].generate_with_image.return_value = _answer_vision_reply(correct_answer="無法辨識")
+    voice_client = MagicMock()
+
+    toeic.sync_track1_from_drive(fake_db, gdrive_client, image_llm_clients, voice_client)
+
+    row = fake_db.select("certificate_questions", where="id = %s", params=(question_id,), fetch_one=True)
+    assert row["correct_answer"] is None
 
 
 # --- _segment_length_variance / _split_points_for_target_length ---

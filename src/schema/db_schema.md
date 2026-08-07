@@ -692,6 +692,11 @@ CREATE INDEX idx_toeic_questions_test_id ON toeic_questions (test_id);
   - 新增 `exam_type TEXT NOT NULL` 欄位（從檔名第一段解析，例如 `toeic`／`gcp`／`aws`），**刻意不加 CHECK 限制清單**——Robin 明確要求「exam_type 不能直接鎖死這三類，因為會有多種可能」，未來新增證照類型只需要換檔名前綴，不必改程式碼或再開 migration
   - 新增 `idx_certificate_questions_exam_type` 索引，供未來依證照類型篩題
   - 對應程式碼：`src/bot/toeic.py` 的 `parse_filename()`／`classify_drive_files()`／`_insert_question()` 皆已改用 `exam_type`；`sync_track1_from_drive()` 掃描 Drive 資料夾時也從「檔名含 toeic 關鍵字」改成「列出整個資料夾所有檔案」（Robin 確認選擇），避免用關鍵字過濾漏掉其他證照類型的檔案
+- 2026-08-07（Step 3.3，見 SPEC.md ADR-19 決策 2）：「依 FR-25c 原文刻意不存正解」的決策部分推翻——Robin 改為把購買的測驗書正確解答/詳解一併拍照上傳（檔名 `{exam_type}_{test_id}_write/listen_{題號}_ans.png`），經 Robin 核准 `0039_add_answer_fields_to_certificate_questions.sql`：
+  - 新增 `correct_answer TEXT`／`explanation TEXT`：來自 Vision 解析答案照片的結果，非 AI 推論；皆允許 `NULL`（尚未補拍答案照時）
+  - 新增 `answer_source_filename TEXT UNIQUE`：對應的答案照片檔名，去重設計比照 `source_image_filename`
+  - 缺 `correct_answer` 的題目不會出現在每日推播候選池（見 SPEC.md FR-26、ADR-19 決策 3）
+  - 對應程式碼：`src/bot/toeic.py` 的 `parse_filename()` 新增 `is_answer_key` 判斷、`sync_track1_from_drive()` 掃描順序改為兩階段（先建題目、再處理 `_ans` 檔案比對補正解）
 
 ---
 
@@ -724,3 +729,89 @@ CREATE UNIQUE INDEX idx_toeic_vocab_questions_target_word ON toeic_vocab_questio
 - `LOWER(target_word)` 唯一索引：避免同一個單字（含大小寫差異，例如 `Abundant` 跟 `abundant`）重複生成，週排程生成前會先查詢既有單字清單，在 Prompt 裡明確告知 Gemini 要避開
 - 每週要生成幾題由 `users.toeic_weekly_question_count` 決定（Robin 自訂，預設 21 題＝一天 3 題 x 7 天），不寫死在這張表
 - 2026-08-07 追記：軌道一（`certificate_questions`）已泛用化為任意證照類型，但這張表（軌道二，Gemini 生成單字題）刻意維持 TOEIC 專用，未跟著改名——單字題的生成邏輯（英文單字→中文選擇題）是 TOEIC 特有的語言學習玩法，跟 GCP／AWS 這類技術證照的「考古題」性質不同，沒有泛用化的必要
+
+---
+
+### answer_logs
+
+**建立日期**：2026-08-07
+**用途**：Step 3.3 作答紀錄，對應 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) FR-27、FR-29、ADR-19 決策 6。
+**Migration 檔案**：`src/migrations/0040_create_answer_logs_table.sql`
+
+```sql
+CREATE TABLE answer_logs (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id),
+    certificate_question_id BIGINT REFERENCES certificate_questions(id),
+    vocab_question_id BIGINT REFERENCES toeic_vocab_questions(id),
+    exam_type TEXT NOT NULL,
+    question_type TEXT NOT NULL,
+    is_correct BOOLEAN NOT NULL,
+    answered_on DATE NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT answer_logs_exactly_one_question CHECK (
+        (certificate_question_id IS NOT NULL AND vocab_question_id IS NULL)
+        OR (certificate_question_id IS NULL AND vocab_question_id IS NOT NULL)
+    )
+);
+
+CREATE INDEX idx_answer_logs_user_answered_on ON answer_logs (user_id, answered_on);
+CREATE INDEX idx_answer_logs_user_exam_type ON answer_logs (user_id, exam_type);
+```
+
+**設計理由**：
+- 2026-08-07 經 AskUserQuestion 與 Robin 確認：軌道一（`certificate_questions`）跟軌道二（`toeic_vocab_questions`）是兩張分開的題庫表，用兩個可為 NULL 的外鍵 + `CHECK` 限制只能填一個串連，取代「分兩張作答紀錄表、查詢時 UNION」的方案，讓 FR-29 統計一段時間成效可以用單一 SQL 查完
+- `exam_type`／`question_type` 皆為寫入當下複製自對應題目的冗餘欄位，避免統計查詢時要多一層 JOIN 回題庫表才能篩選/分組；`question_type` 的值為 `write`／`listen`（軌道一）或 `vocab`（軌道二固定值），供 FR-29「最常出錯的地方」統計使用
+- `answered_on` 用 `DATE` 而非 `TIMESTAMPTZ`：FR-29 需要用「日期」為單位判斷某天有沒有作答、計算平均時要排除未作答日，不需要到秒等級的時間精度
+
+---
+
+### certificate_goals
+
+**建立日期**：2026-08-07
+**用途**：Step 3.3 證照準備目標設定，對應 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) FR-24、ADR-19。
+**Migration 檔案**：`src/migrations/0041_create_certificate_goals_table.sql`
+
+```sql
+CREATE TABLE certificate_goals (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id),
+    exam_type TEXT NOT NULL,
+    target_date DATE,
+    target_score TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (user_id, exam_type)
+);
+```
+
+**設計理由**：
+- `UNIQUE (user_id, exam_type)`：同一使用者對同一 `exam_type` 只保留一筆最新目標，重新設定即覆蓋（UPSERT），比照 `budget_overrides` 類似設計的「不逐次累加、只存目前生效值」概念
+- `target_date`／`target_score` 皆允許 `NULL`：使用者可能只想設定分數目標、不確定確切考試日期，反之亦然
+- `target_score` 用 `TEXT`：`exam_type` 開放任意字串，有些是量化分數（TOEIC 850）、有些是通過/未通過（GCP／AWS 這類技術證照沒有量化分數），比照 `exam_official_scores.score` 的設計
+
+---
+
+### exam_official_scores
+
+**建立日期**：2026-08-07
+**用途**：Step 3.3 正式應考成績，對應 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) FR-30、ADR-19 決策 7。
+**Migration 檔案**：`src/migrations/0042_create_exam_official_scores_table.sql`
+
+```sql
+CREATE TABLE exam_official_scores (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id),
+    exam_type TEXT NOT NULL,
+    exam_date DATE NOT NULL,
+    score TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_exam_official_scores_user_exam_type ON exam_official_scores (user_id, exam_type);
+```
+
+**設計理由**：
+- 跟 `answer_logs`（每日小考作答紀錄）刻意分開建表：正式成績是「一次考試的最終結果」，每日小考是「每天練習的逐題紀錄」，語意與查詢邏輯都不同，混在一起會互相干擾
+- 不加 `UNIQUE` 限制：同一 `exam_type` 可能多次應考（例如多益考了兩次），每次都是獨立一筆
+- `score` 用 `TEXT`：理由同 `certificate_goals.target_score`
