@@ -68,6 +68,7 @@ COMMENT ON COLUMN users.created_at IS '這筆使用者記錄建立的時間（�
 | 2026-08-04 | 新增 `finance_monthly_report_sent_month`（FR-44a 月底記帳月報推播去重用） | Robin 要求「記帳摘要請在每月底自動推一次月報」，設計比照 `budget_alert_50_sent_month`／`budget_alert_80_sent_month` | `0022_add_finance_monthly_report_field_to_users.sql` |
 | 2026-08-04 | 新增 `height_cm`（身高，初始設定、變動才修正） | Step 2.2 體態管理模組 FR-46，設計理由見下方 `body_weight_logs` 表 | `0023_add_height_to_users.sql` |
 | 2026-08-04 | 新增 `birthday`（生日，只比對月/日） | Step 2.3 重要通知模組 FR-53，設計理由見下方 `important_notifications_log` 表 | `0028_add_birthday_to_users.sql`；已知 5 位家人（弟弟／大妹／小妹／爸爸／媽媽）生日資料見 `0030_seed_family_birthdays.sql` |
+| 2026-08-07 | 新增 `skill_growth_pushed_on`（每日技術摘要推播去重用） | Step 3.1 個人技能成長模組 FR-22，設計比照 `todos.daily_pushed_on` | `0033_add_skill_growth_pushed_on_to_users.sql` |
 
 ---
 

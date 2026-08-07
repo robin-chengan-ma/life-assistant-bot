@@ -176,6 +176,9 @@ class FakeCloudSQLClient:
             return row.get("birthday") is not None
         if where == "notification_key = %s AND year = %s":
             return row.get("notification_key") == params[0] and row.get("year") == params[1]
+        # 2026-08-07（Step 3.1，見 robinson SPEC.md FR-22）：每日技術摘要查 Robin 的 users 記錄。
+        if where == "is_owner = %s AND telegram_user_id IS NOT NULL":
+            return row.get("is_owner") == params[0] and row.get("telegram_user_id") is not None
 
         raise NotImplementedError(f"FakeCloudSQLClient 尚未支援這個 where 條件：{where}")
 

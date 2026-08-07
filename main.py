@@ -234,6 +234,46 @@ def _check_important_notifications() -> None:
         db.close()
 
 
+def _check_skill_growth_digest() -> None:
+    """在 /healthz 被呼叫時順便檢查每日技術摘要推播（Step 3.1，見 robinson SPEC.md FR-22、
+    FR-23）：固定台灣時間 08:00，讀取 Robin 訂閱的 TLDR 電子報＋IThome／TechCrunch 昨日新聞，
+    經 Gemini 產出中文重點摘要推播給 Robin，詳見 src/bot/skill_growth.py 模組 docstring。
+
+    跟 `_check_neon_capacity()` 一樣需要 `ROBIN_TELEGRAM_TOKEN`？不需要——收件人是查
+    `users.is_owner = TRUE` 動態決定，不是固定用環境變數；但額外需要 `GMAIL_USER`／
+    `GMAIL_PASSWORD`（讀信用）與 `GEMINI_API_SKILL_GROWTH_KEY`（獨立一把 Key，避免佔用
+    聊天/長記憶/圖片辨識既有 Key 的配額，比照 `GEMINI_API_PRIVACY_KEY` 的既有慣例），
+    任一項未設定就直接跳過（本機測試環境或 Robin 尚未申請新 Key 時常見）。
+    """
+    if not (
+        os.environ.get("DATABASE_URL")
+        and os.environ.get("TELEGRAM_BOT_TOKEN")
+        and os.environ.get("GMAIL_USER")
+        and os.environ.get("GMAIL_PASSWORD")
+        and os.environ.get("GEMINI_API_SKILL_GROWTH_KEY")
+    ):
+        return
+
+    from src.bot import skill_growth
+    from submodules.cloudsql.client import CloudSQLClient
+    from submodules.email.client import EmailClient
+    from submodules.llm.client import LLMClient
+    from submodules.newsfeed.client import NewsFeedClient
+    from submodules.telegram.client import TelegramClient
+
+    db = CloudSQLClient()
+    try:
+        telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
+        email_client = EmailClient(username=os.environ["GMAIL_USER"], password=os.environ["GMAIL_PASSWORD"])
+        newsfeed_client = NewsFeedClient()
+        llm_client = LLMClient(api_key=os.environ["GEMINI_API_SKILL_GROWTH_KEY"])
+        skill_growth.check_and_push_daily_digest(db, telegram_client, email_client, newsfeed_client, llm_client)
+    except Exception:
+        logger.exception("每日技術摘要推播檢查失敗，不影響健康檢查端點本身")
+    finally:
+        db.close()
+
+
 def _run_startup_migrations() -> None:
     """開機自動套用尚未執行過的 DB migration（ADR-11）。
 
@@ -291,6 +331,9 @@ def health_check():
 
     2026-08-04（Step 2.3，見 FR-53）：同樣借用這個頻率，順便觸發重要通知（固定節日/家人生日）
     檢查，見 `_check_important_notifications()`。
+
+    2026-08-07（Step 3.1，見 FR-22、FR-23）：同樣借用這個頻率，順便觸發每日技術摘要推播檢查，
+    見 `_check_skill_growth_digest()`。
     """
     _check_neon_capacity()
     _check_todo_pushes()
@@ -299,6 +342,7 @@ def health_check():
     _check_finance_monthly_report()
     _check_body_goal_alerts()
     _check_important_notifications()
+    _check_skill_growth_digest()
     return jsonify({"status": "ok"}), 200
 
 

@@ -52,7 +52,12 @@ submodules/
 │   ├── client.py
 │   ├── requirements.txt
 │   └── README.md
-└── retry/
+├── retry/
+│   ├── .env.example
+│   ├── client.py
+│   ├── requirements.txt
+│   └── README.md
+└── newsfeed/
     ├── .env.example
     ├── client.py
     ├── requirements.txt
@@ -73,9 +78,10 @@ submodules/
 - [x] FR-8（2026-08-01 新增，見 ADR-9）：`submodules/voice` 提供語音轉文字 Client（`VoiceClient.transcribe()`）；目前實際串接 Groq Whisper API，用 `requests` 直接呼叫其 OpenAI 相容 REST 端點，不安裝官方 `groq` SDK
 - [x] FR-9（2026-08-02 新增，見 ADR-10）：`submodules/gdrive` 改用 OAuth 2.0（以真人 Google 帳號身分）認證，不再使用 Service Account；`GDriveClient` 建構子改為 `refresh_token`／`client_id`／`client_secret`／`folder_id` 四個必要參數
 - [x] FR-10（2026-08-02 新增，見 robinson SPEC.md Step 1.6／FR-21）：`submodules/cloudsql.client.CloudSQLClient` 新增 `execute_query(query, params=None) -> list[dict]`，跟既有的 `execute()`（DDL 用）成對，差別是這個會回傳資料列，供 `select()` 的 table/columns/where 介面無法表達的系統層級查詢使用（例如 `src/bot/monitoring.py` 查 `pg_database_size(current_database())`）
-- [x] FR-11（2026-08-05 新增，見 robinson SPEC.md FR-19b、ADR-16）：`submodules/email` 提供 `EmailClient.send_text(to, subject, body)`，透過 Gmail SMTP（SSL）寄送純文字信件；只用 Python 標準函式庫 `smtplib`／`email.mime`，不安裝任何第三方套件。用途是 Telegram 本身故障時的獨立備援通知管道，目前唯一呼叫端是 `src/bot/webhook.py` 的 `_notify_robin_of_error()`
+- [x] FR-11（2026-08-05 新增，見 robinson SPEC.md FR-19b、ADR-16；**2026-08-07 擴充**，見 ADR-11 追記）：`submodules/email` 提供 `EmailClient.send_text(to, subject, body)`，透過 Gmail SMTP（SSL）寄送純文字信件；只用 Python 標準函式庫 `smtplib`／`email.mime`，不安裝任何第三方套件。用途是 Telegram 本身故障時的獨立備援通知管道，目前唯一呼叫端是 `src/bot/webhook.py` 的 `_notify_robin_of_error()`。2026-08-07 新增 `fetch_yesterday_emails_from_domain(sender_domain, now=None)`，用標準函式庫 `imaplib` 透過 Gmail IMAP（SSL）讀取指定寄件者網域、寄送日期為「台灣時間昨天」的信件純文字內容，供 robinson SPEC.md FR-23（Step 3.1）讀取 TLDR 電子報使用
 - [x] FR-12（2026-08-05 新增，見 robinson SPEC.md FR-66、ADR-17）：`submodules/calendar` 提供 `CalendarClient`，用 Google Calendar API v3（OAuth 2.0，`calendar.events` scope），封裝建立/更新/刪除行事曆事件的最小介面；用途是把待辦事項、重要通知、體態目標期限單向同步寫入 Robin 的家庭共用行事曆，供家人用手機原生行事曆 App 瀏覽
 - [x] FR-13（2026-08-07 新增，見 robinson SPEC.md FR-19i、ADR-13）：`submodules/retry` 提供 `call_with_retry(func, is_retryable, max_attempts=3, backoff_seconds=(1, 2, 4))`，對外部 API 呼叫套用「最多重試 3 次＋Exponential Backoff（1s/2s/4s）」的共用重試迴圈；其餘 6 個既有子模組（`llm`／`telegram`／`voice`／`gdrive`／`calendar`／`email`）皆已在各自 `client.py` 內套用，各自傳入符合自己 SDK 例外型別的 `is_retryable` 判斷式，只重試「暫時性錯誤」（連線失敗、逾時、HTTP 429／5xx），永久性錯誤（例如認證失敗、資源不存在）直接往外拋，不浪費重試次數
+- [x] FR-14（2026-08-07 新增，見 robinson SPEC.md FR-23、ADR-14）：`submodules/newsfeed` 提供 `NewsFeedClient.fetch_yesterday_articles(feed_url, now=None)`，用 `requests` 直接 GET RSS Feed、用標準函式庫 `xml.etree.ElementTree` 解析 XML（不安裝 `feedparser` 等第三方 RSS 套件），回傳發布日期為「台灣時間昨天」的文章清單（`{"title": str, "link": str}`）；用途是每日技術摘要讀取 IThome／TechCrunch 昨日新聞
 
 ### 非功能性需求
 
@@ -316,6 +322,8 @@ submodules/
 
 **狀態**：accepted
 
+**2026-08-07 追記（robinson SPEC.md Step 3.1，FR-23）**：ADR-11 原始決策第 3 點就已預告「寄信跟讀信（未來 FR-23）用同一組登入資訊完全合理」，這次正式實作：`EmailClient` 新增 `fetch_yesterday_emails_from_domain(sender_domain, now=None)`，同樣只用標準函式庫 `imaplib`，透過 Gmail IMAP（`imap.gmail.com:993`，SSL）讀取收件匣。設計要點：①用「寄件者網域比對」而非主旨關鍵字辨識 TLDR 電子報（經 AskUserQuestion 與 Robin 確認，電子報版本多、主旨格式不保證固定，網域 `tldrnewsletter.com` 較穩定）②IMAP `SEARCH SINCE/BEFORE` 只用來粗略縮小範圍（以日曆日為單位、不保證時區精確），實際「是否為台灣時間昨天」改用信件 `Date` header 換算時區後精確比對，避免抓到時區誤差多出來的信件③沿用 ADR-13 的重試機制，`imaplib.IMAP4.error`（帳密/指令錯誤）視為永久性錯誤不重試，`OSError`／`imaplib.IMAP4.abort` 視為暫時性錯誤才重試。
+
 ### ADR-12：新增 `submodules/calendar`，用獨立一組 OAuth 憑證（不與 `gdrive` 共用），scope 限定 `calendar.events`
 
 **背景**：robinson SPEC.md 新增 FR-66（Google Calendar 整合，見 ADR-17），需要一個能建立/更新/刪除 Google Calendar 事件的子模組。
@@ -369,6 +377,34 @@ submodules/
 
 **狀態**：accepted
 
+### ADR-14：新增 `submodules/newsfeed`，用 `requests` + 標準函式庫 `xml.etree.ElementTree` 抓取 RSS Feed，不安裝 `feedparser`
+
+**背景**：robinson SPEC.md FR-23（Step 3.1，每日重點技術分享）需要抓取 IThome／TechCrunch 昨日新聞。經 AskUserQuestion 與 Robin 確認，兩者都有公開 RSS Feed（IThome：`ithome.com.tw/rss`；TechCrunch：`techcrunch.com/feed`），採用 RSS 而非另外寫網頁爬蟲。
+
+**決策**：
+1. 新增 `submodules/newsfeed`，提供 `NewsFeedClient.fetch_yesterday_articles(feed_url, now=None)`（及底層 `fetch_articles_published_on(feed_url, target_date)`），回傳 `{"title": str, "link": str}` 清單。
+2. 用 `requests.get()` 直接下載 RSS Feed（本質是 XML），用 Python 標準函式庫 `xml.etree.ElementTree` 解析，不安裝 `feedparser` 等第三方 RSS 套件。
+3. RSS `<item><pubDate>` 是 RFC 822 格式，跟 Email `Date` header 同格式，複用標準函式庫 `email.utils.parsedate_to_datetime` 解析＋換算台灣時區判斷「是否為昨天」，跟 `submodules/email` 的 `_sent_on_date()` 手法一致。
+4. `<item>` 缺少 `<title>`／`<link>`／`<pubDate>` 任一欄位一律跳過，寧可漏抓也不要因為單筆格式異常而整批解析失敗。
+5. 套用 ADR-13 的重試機制，`is_retryable` 判斷比照 `telegram`／`voice`：連線失敗／逾時／HTTP 429／5xx 才重試，其餘 4xx 或 XML 解析失敗（`xml.etree.ElementTree.ParseError`，非網路問題，重試也沒用）直接往外拋。
+
+**理由**：
+- RSS 本質就是標準 XML 格式，`xml.etree.ElementTree` 是 Python 標準函式庫內建工具，足以應付「取出 `title`/`link`/`pubDate`」這種單純需求，不需要引入 `feedparser` 這種功能更完整（也更重）的第三方套件，符合本專案「輕量優先、能用標準函式庫就不多裝依賴」的一貫慣例（見 ADR-2、ADR-9、ADR-11）。
+- 用 RSS Feed 而非爬蟲：兩家媒體都有官方公開 RSS，穩定性與合規性都優於直接解析網頁 HTML（版面隨時可能改版），也不需要處理反爬蟲機制。
+- 複用 `email.utils.parsedate_to_datetime` 解析 `pubDate`：RSS 2.0 規格明訂 `pubDate` 為 RFC 822 格式，跟 Email `Date` header 是同一套格式，直接複用標準函式庫既有工具，不需要自己寫日期解析邏輯或引入額外套件。
+
+**替代方案**：
+- 方案 A：安裝 `feedparser` 套件——優點是對各種不規範 RSS/Atom Feed 的相容性更好；缺點是多一個第三方依賴，而目標的兩個 Feed（IThome／TechCrunch）格式標準，`xml.etree.ElementTree` 足以應付，已否決
+- 方案 B：直接爬取網頁 HTML（不用 RSS）——優點是不受限於 RSS Feed 是否提供完整內容；缺點是網頁版面隨時可能改版導致解析邏輯失效、且更容易觸發反爬蟲機制，已否決
+- 方案 C（採用）：`requests` + `xml.etree.ElementTree` 解析官方 RSS Feed
+
+**後果**：
+- 新增 `submodules/newsfeed/`（`client.py`／`README.md`／`requirements.txt`／`.env.example`），`requirements.txt` 內容為 `requests`（比照 `telegram`／`voice`）；`.env.example` 為空（Feed URL 由呼叫端傳入，不需要環境變數）。
+- `NewsFeedClient` 只回傳「標題＋連結」，不解析全文內容——Step 3.1 的中文摘要交給 Gemini 依標題／連結產出，不需要在這個子模組層級就把全文擷取出來，保持子模組單純。
+- 若 IThome／TechCrunch 未來改版 RSS 結構或 Feed 網址失效，需要重新確認網址並調整（風險見下方風險表）。
+
+**狀態**：accepted
+
 ## 實作計畫
 
 ### Phase 0（對應 robinson SPEC.md 的 Step 0.1a）：建立子模組骨架
@@ -385,6 +421,7 @@ submodules/
 - [x] Step S.10（2026-08-02，見 FR-10）：`submodules/cloudsql` 新增 `execute_query()`，Phase 1 Step 1.6（FR-21 Neon 容量監控）需要
 - [x] Step S.11（2026-08-05，見 FR-11、ADR-11）：建立 `submodules/email/`（`client.py`、`README.md`、`requirements.txt`、`.env.example`），robinson SPEC.md Step 2.4（FR-19b）需要——`EmailClient.send_text()` 用 `smtplib` 直打 Gmail SMTP（SSL），不安裝第三方套件，複用既有 `GMAIL_USER`／`GMAIL_PASSWORD`
 - [x] Step S.12（2026-08-05，見 FR-12、ADR-12）：建立 `submodules/calendar/`（`client.py`、`README.md`、`requirements.txt`、`.env.example`），robinson SPEC.md Step 2.7（FR-66）需要——`CalendarClient` 提供 `create_event()`／`update_event()`／`delete_event()`，用 `google-api-python-client` 直打 Google Calendar API v3，OAuth 2.0 認證比照 `gdrive`（見 ADR-10）但使用獨立一組憑證與 `calendar.events` scope；新增一次性互動授權腳本 `get_refresh_token.py`（比照 `gdrive` 的 Step S.9）；10 個測試，覆蓋率 100%
+- [x] Step S.13（2026-08-07，見 FR-11／FR-14、ADR-11 追記／ADR-14）：`submodules/email` 新增 `fetch_yesterday_emails_from_domain()`（IMAP 讀信）；新建 `submodules/newsfeed/`（`client.py`、`README.md`、`requirements.txt`、`.env.example`），robinson SPEC.md Step 3.1（FR-23）需要
 
 ## 測試策略
 
@@ -397,7 +434,8 @@ submodules/
 - [x] `llm.client.LLMClient` 本地端節流保護（ADR-5，2026-07-31，4 個測試）：超過門檻拋 `LLMQuotaGuardError` 且不呼叫底層 SDK／同一 `api_key` 跨 instance 共用計數／不同 `api_key` 互不影響／時間視窗過期後計數重置
 - [x] `gdrive.client.GDriveClient`：mock `google.oauth2.credentials.Credentials`／`googleapiclient.discovery.build`，驗證 `upload_file()` 帶正確 `filename`/`parents`/`mimetype`，回傳 `webViewLink`；空 `refresh_token`／`client_id`／`client_secret`／`folder_id` 應拋出 `ValueError`；`Credentials()` 收到正確的 OAuth 參數（2026-07-31，4 個測試，覆蓋率 100%；**2026-08-02 更新**：依 ADR-10 改為 OAuth 2.0 認證，建構子從 2 參數改為 4 參數，共 7 個測試，覆蓋率維持 100%）
 - [x] `voice.client.VoiceClient`（2026-08-01，ADR-9，6 個測試，覆蓋率 100%）：mock `requests.post`，驗證 `transcribe()` 組出正確的 multipart payload（`headers`／`files`／`data`）、回傳去除頭尾空白的純文字、支援自訂 `model`／`filename`／`mime_type`；空 `api_key` 應拋出 `ValueError`；底層 request 失敗（`raise_for_status()` 拋例外）應往外拋，不吞例外
-- [x] `email.client.EmailClient`（2026-08-05，ADR-11，5 個測試，覆蓋率 100%）：mock `smtplib.SMTP_SSL`，驗證 `send_text()` 以正確的 host/port 建立連線並呼叫 `login()`／`sendmail()`，`sendmail()` 的 envelope（from/to）與信件內容（`Subject`／`From`／`To`／純文字 body，用 `email.message_from_string()` 解析驗證）正確；空 `username`／`password` 應拋出 `ValueError`；底層 SMTP 例外（如登入失敗）應往外拋，不吞例外——由呼叫端（`webhook._send_email_fallback()`）決定要不要吞
+- [x] `email.client.EmailClient`（2026-08-05，ADR-11，5 個測試，覆蓋率 100%）：mock `smtplib.SMTP_SSL`，驗證 `send_text()` 以正確的 host/port 建立連線並呼叫 `login()`／`sendmail()`，`sendmail()` 的 envelope（from/to）與信件內容（`Subject`／`From`／`To`／純文字 body，用 `email.message_from_string()` 解析驗證）正確；空 `username`／`password` 應拋出 `ValueError`；底層 SMTP 例外（如登入失敗）應往外拋，不吞例外——由呼叫端（`webhook._send_email_fallback()`）決定要不要吞。**2026-08-07 擴充**（ADR-11 追記，見 FR-11、FR-23，+23 個測試，共 31 個測試，覆蓋率維持 100%）：新增 `fetch_yesterday_emails_from_domain()`，mock `imaplib.IMAP4_SSL`，驗證正確組出 `SINCE`/`BEFORE`/`FROM` 搜尋條件（以台灣時間換算「昨天」）、以 `login()`／`select("INBOX", readonly=True)`／`search()`／`fetch()` 依序呼叫、正確解析純文字與 multipart 信件內容、正確過濾寄件者網域（含子網域偽造情境）與寄送日期不符者、`search`/`fetch` 回傳非 `OK` 時優雅跳過、套用重試機制（`imaplib.IMAP4.error` 不重試／`OSError` 才重試）；另涵蓋 `_is_from_domain()`／`_sent_on_date()`／`_extract_plain_text()` 三個私有輔助函式的邊界情況（大小寫、空字串、格式錯誤的 Date header、無時區的 naive datetime、multipart 找不到 `text/plain` 分段等）
+- [x] `newsfeed.client.NewsFeedClient`（2026-08-07，見 FR-14、ADR-14，測試覆蓋率 100%）：mock `requests.get`，驗證 `fetch_yesterday_articles()`／`fetch_articles_published_on()` 正確解析 RSS XML 取出 `title`/`link`，只回傳發布日期（換算台灣時區）符合目標日期的文章；`<item>` 缺少必要欄位時跳過；套用重試機制（連線失敗／逾時／HTTP 429／5xx 才重試，其餘不重試）
 - [x] `calendar.client.CalendarClient`（2026-08-05，見 FR-12、ADR-12，10 個測試，覆蓋率 100%）：mock `google.oauth2.credentials.Credentials`／`googleapiclient.discovery.build`（比照 `gdrive` 測試手法），驗證 `create_event()`／`update_event()`／`delete_event()` 帶正確的 `calendarId`／事件內容（含全天事件 `date`／有時間點事件 `dateTime`+`timeZone` 兩種格式），回傳新增後的 event ID；空 `refresh_token`／`client_id`／`client_secret`／`calendar_id` 應拋出 `ValueError`
 - [x] `retry.client.call_with_retry()`（2026-08-07，見 FR-13、ADR-13，6 個測試，覆蓋率 100%）：mock `time.sleep`，驗證第一次成功不重試／可重試例外重試後成功／Exponential Backoff 秒數依序為 1s/2s/4s／重試次數用盡後往外拋出最後一次的原始例外／`is_retryable` 判定為 `False` 時不重試、立即拋出／`max_attempts`／`backoff_seconds` 可被覆寫
 - [x] 6 個既有子模組套用重試機制後的測試更新（2026-08-07，見 FR-19i、ADR-13）：`llm`（+7 個測試，含 ServerError／ClientError 429／永久性 ClientError 404 不重試／`generate_with_image` 也套用／重試用盡拋出／`ConnectionError`／`LLMQuotaGuardError` 不受重試影響）、`telegram`（+7 個測試，`call()`／`get_file_bytes()` 皆套用，含連線錯誤／5xx／400 不重試／重試用盡／`is_retryable` 邊界情況）、`voice`（+4 個測試）、`gdrive`（+5 個測試，含 `HttpError` 403 不重試／`is_retryable` 邊界情況）、`calendar`（+5 個測試，含 `HttpError` 404 不重試／`is_retryable` 邊界情況）、`email`（+3 個測試，含 `SMTPAuthenticationError` 不重試）；全部經由 monkeypatch `submodules.retry.client.time.sleep`（或共用同一個 `time` 模組物件）驗證不會真的等待，測試維持毫秒等級執行速度；全專案 795 個測試全過，這 7 個子模組（含新增的 `retry`）皆維持 100% 覆蓋率
@@ -417,6 +455,7 @@ submodules/
 | 子模組自己的 `requirements.txt` 與主專案根目錄 `requirements.txt` 版本/內容不同步 | 中 | 中 | ADR-4 已明訂根目錄 `requirements.txt` 為部署權威來源，日後新增/更新子模組依賴時兩邊都要改 |
 | ADR-5 的節流狀態掛在 class 層級（單一 process 內共用），若未來改成多 process/多 worker 部署，各 process 會各自維護一份節流計數，實際節流效果會打折（見 ADR-5 已知取捨） | 低 | 低 | 目前 Render 部署方式是單一 Flask process，不受影響；若未來真的改多 worker，需重新評估升級為外部共用計數（ADR-5 方案 C） |
 | ADR-6 只提升了 RPD 上限（20→500），本地端節流保護（ADR-5）目前只防 RPM、沒有防 RPD，單日用量若逼近 500 次仍會被官方 429 擋下 | 中 | 低 | 目前個人/家庭規模用量離 500/天還有很大緩衝；若未來實測發現常態性逼近上限，需要另外補上「每日次數」的本地端節流層 |
+| IThome／TechCrunch 未來改版 RSS 結構或 Feed 網址失效，`newsfeed.client.NewsFeedClient` 解析不到文章 | 低 | 低 | 屬於「暫時性錯誤」判定外的情況（非連線問題，重試無效），會直接往外拋，由呼叫端（`src/bot/skill_growth.py`）優雅降級為「該來源今天沒有新聞」，不影響其他來源與其他模組 |
 
 ## 變更記錄
 
@@ -439,3 +478,4 @@ submodules/
 | 2026-08-05 | Robin 討論 Google Calendar 能拿來做什麼後，確認先做「待辦事項／重要通知／體態目標期限」單向同步寫入共用行事曆（不含讀取查空檔）；新增 FR-12、Step S.12（尚未實作）、ADR-12：規劃 `submodules/calendar/`（`CalendarClient`，Google Calendar API v3，OAuth 2.0，獨立一組憑證＋`calendar.events` scope，不與 `gdrive` 共用憑證）；對應 robinson SPEC.md FR-66、Step 2.7、ADR-17；本次僅規格文件，程式尚未動工 | Claude（依 Robin「幫我補三點至規格書」指示） |
 | 2026-08-05 | **Step S.12 完成**：Robin 完成 Google Cloud Console 手動設定（Calendar API、獨立 OAuth 用戶端、共用行事曆）並指示開工；建立 `submodules/calendar/`（`client.py`、`README.md`、`requirements.txt`、`.env.example`、`get_refresh_token.py`）：`CalendarClient` 提供 `create_event()`／`update_event()`／`delete_event()`，事件內容格式（全天 `date` 或有時間點 `dateTime`+`Asia/Taipei` 時區）由呼叫端透過 `all_day` 參數決定；10 個測試（mock `Credentials`／`build`，比照 `gdrive` 手法），覆蓋率 100%；全專案 730 個測試全過。根目錄 `requirements.txt` 已含 `google-api-python-client`／`google-auth`（gdrive 沿用），不需新增 | Claude（依 Robin「Google Calendar 已設定完，可以開工了」指示實作） |
 | 2026-08-07 | **新增 FR-13、ADR-13：`submodules/retry` 共用重試工具（對應 robinson SPEC.md Step 2.5、FR-19i）**。Robin 確認繼續 Phase 2 Step 2.5 後，經 AskUserQuestion 確認三個設計問題：① 程式碼放置方式選「抽成共用 retry 工具」（而非 6 個 client 各自複製），是 ADR-4「子模組彼此獨立、互不 import」的刻意例外 ② 重試判斷標準選「只重試暫時性錯誤」（連線失敗、逾時、HTTP 429／5xx），永久性錯誤（401/403/404 等）直接往外拋 ③ 套用範圍確認這次只套用到 6 個現有子模組，104 求職爬蟲 API 留到 Phase 4 開工時比照。新增 `submodules/retry/`（`call_with_retry()`，只負責重試迴圈與 Exponential Backoff 時間控制，`is_retryable` 判斷式由呼叫端傳入）；`llm`／`telegram`／`voice`／`gdrive`／`calendar`／`email` 六個 `client.py` 都套用，各自定義符合自己 SDK 例外型別的 `_is_retryable_xxx_error()`；`LLMClient` 既有的本地端節流保護（`LLMQuotaGuardError`）刻意留在重試包裹範圍之外，因為節流是時間窗口邏輯，立即重試無意義。TDD 全程 RED→GREEN：先寫 `retry` 的 6 個測試，再逐一為 6 個子模組補上重試情境測試（成功重試、永久性錯誤不重試、重試用盡拋出、`is_retryable` 邊界情況）；全專案 795 個測試全過，7 個子模組（含新增的 `retry`）皆維持 100% 覆蓋率 | Claude（依 Robin 於 AskUserQuestion 確認範圍後實作） |
+| 2026-08-07 | **Robin 選定 Phase 3 Step 3.1（每日重點技術分享，FR-22／FR-23）開工**：經 AskUserQuestion 確認三個設計問題：① TLDR 電子報辨識方式選「寄件者網域比對」（`tldrnewsletter.com`，比主旨關鍵字穩定）② IThome／TechCrunch 新聞來源選「RSS Feed」（輕量、不用額外套件）③ 去重機制核准於 `users` 表新增 `skill_growth_pushed_on`（DATE）欄位（依 ADR-10 流程，比照 `todos.daily_pushed_on` 慣例），對應 migration `0033_add_skill_growth_pushed_on_to_users.sql`。ADR-11 追記：`submodules/email` 新增 `fetch_yesterday_emails_from_domain()`（IMAP 讀信，+23 個測試，共 31 個，覆蓋率 100%）；新增 FR-14、ADR-14：建立 `submodules/newsfeed/`（`NewsFeedClient`，`requests`＋標準函式庫 `xml.etree.ElementTree` 解析 RSS，不裝 `feedparser`） | Claude（依 Robin「從 3-1 開始吧」指示，經 AskUserQuestion 確認範圍後實作） |
