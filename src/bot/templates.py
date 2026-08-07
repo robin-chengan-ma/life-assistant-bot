@@ -75,10 +75,24 @@ FEATURE_LIST = [
         ],
     },
     {
-        "key": "skill_growth",
-        "name": "技能成長（TOEIC／技術情報）",
+        "key": "tech_intel",
+        "name": "技術情報（新聞／電子報／YouTube）",
         "owner_only": True,
-        "desc": "每日技術摘要、TOEIC 題庫、YouTube 技術影片推薦",
+        "desc": "每日技術新聞與電子報摘要、YouTube 技術影片推薦",
+        "examples": [],
+    },
+    {
+        "key": "certificate",
+        "name": "證照準備（TOEIC 等）",
+        "owner_only": True,
+        "desc": "TOEIC 題庫等證照準備（尚未開發）",
+        "examples": [],
+    },
+    {
+        "key": "language",
+        "name": "語言學習",
+        "owner_only": True,
+        "desc": "英文口說練習、其他語言學習（尚未開發）",
         "examples": [],
     },
     {

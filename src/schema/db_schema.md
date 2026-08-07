@@ -188,14 +188,14 @@ COMMENT ON COLUMN conversation_logs.deleted_at IS '軟刪除時間戳記；FR-13
 
 **建立日期**：2026-07-30
 **用途**：每位使用者各功能模組獨立開關，對應 FR-2。
-**Migration 檔案**：`src/migrations/0005_create_feature_toggles_table.sql`
+**Migration 檔案**：`src/migrations/0005_create_feature_toggles_table.sql`（建表）、`src/migrations/0034_split_skill_growth_toggle.sql`（2026-08-07，`skill_growth` 拆成 `tech_intel`／`certificate`／`language` 三個獨立開關）
 
 ```sql
 CREATE TABLE feature_toggles (
     id BIGSERIAL PRIMARY KEY,
     user_id BIGINT NOT NULL REFERENCES users(id),
     feature_key TEXT NOT NULL CHECK (feature_key IN (
-        'todo', 'job_search', 'budget', 'body', 'skill_growth',
+        'todo', 'job_search', 'budget', 'body', 'tech_intel', 'certificate', 'language',
         'mood_journal', 'friend_mode', 'important_notify'
     )),
     is_enabled BOOLEAN NOT NULL DEFAULT TRUE,
@@ -206,15 +206,16 @@ CREATE TABLE feature_toggles (
 COMMENT ON TABLE feature_toggles IS '功能開關表：對應 FR-2，每位使用者各模組獨立開關';
 COMMENT ON COLUMN feature_toggles.id IS '內部主鍵';
 COMMENT ON COLUMN feature_toggles.user_id IS '所屬使用者，對應 users.id';
-COMMENT ON COLUMN feature_toggles.feature_key IS '功能代號：todo=待辦, job_search=求職, budget=記帳, body=體態管理, skill_growth=技能成長, mood_journal=心情小記, friend_mode=好友模式, important_notify=重要通知';
+COMMENT ON COLUMN feature_toggles.feature_key IS '功能代號：todo=待辦, job_search=求職, budget=記帳, body=體態管理, tech_intel=技術情報（新聞/電子報/YouTube）, certificate=證照準備（TOEIC等）, language=語言學習, mood_journal=心情小記, friend_mode=好友模式, important_notify=重要通知';
 COMMENT ON COLUMN feature_toggles.is_enabled IS '是否開啟此功能';
 COMMENT ON COLUMN feature_toggles.updated_at IS '最後變更時間';
 ```
 
 **設計理由**：
-- `feature_key` 用 `CHECK` 鎖定 FR-2 列出的 8 個模組英文代號，避免打錯字造成查詢對不上
+- `feature_key` 用 `CHECK` 鎖定 FR-2 列出的 10 個模組英文代號，避免打錯字造成查詢對不上
 - `UNIQUE (user_id, feature_key)` 確保每人每個功能只有一筆設定
-- 新使用者綁定成功時，由程式邏輯一次幫他把 8 個 `feature_key` 都插入預設值（`is_enabled = TRUE`），不是 schema 本身的責任
+- 新使用者綁定成功時，由程式邏輯一次幫他把 10 個 `feature_key` 都插入預設值（`is_enabled = TRUE`），不是 schema 本身的責任
+- **2026-08-07 拆分**：原本規劃的單一 `skill_growth`（涵蓋每日技術分享、TOEIC、YouTube）拆成三個獨立開關——Robin 認為證照準備（`certificate`，TOEIC 等）跟技術情報訂閱（`tech_intel`，新聞/電子報/YouTube）性質不同，語言學習（`language`，英文口說、其他語言，尚未開發）也該獨立於證照準備之外，三者應能各自開關，不該綁在一起。既有的 `skill_growth` 資料列由 `0034` migration 搬移為 `tech_intel`（保留原本的開關狀態），`certificate`／`language` 則等對應功能實際開工、使用者第一次觸發「我的功能設定」時，由既有的 `ensure_default_toggles()` 自動補上預設值
 
 ---
 

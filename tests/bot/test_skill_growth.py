@@ -59,7 +59,7 @@ def test_collect_skips_when_no_owner_bound(fake_db):
 
 def test_collect_skips_when_feature_toggle_disabled(fake_db):
     owner_id = _seed_owner(fake_db)
-    fake_db.insert("feature_toggles", {"user_id": owner_id, "feature_key": "skill_growth", "is_enabled": False})
+    fake_db.insert("feature_toggles", {"user_id": owner_id, "feature_key": "tech_intel", "is_enabled": False})
     email_client, newsfeed_client, llm_client = _make_clients(newsletter_texts=["電子報內容"])
 
     skill_growth.collect_and_store_daily_digest(
@@ -172,7 +172,7 @@ def test_push_skips_when_no_owner_bound(fake_db):
 
 def test_push_skips_when_feature_toggle_disabled(fake_db):
     owner_id = _seed_owner(fake_db)
-    fake_db.insert("feature_toggles", {"user_id": owner_id, "feature_key": "skill_growth", "is_enabled": False})
+    fake_db.insert("feature_toggles", {"user_id": owner_id, "feature_key": "tech_intel", "is_enabled": False})
     _seed_digest(fake_db, digest_date=date(2026, 8, 6), summary_text="摘要")
     telegram_client = MagicMock()
 

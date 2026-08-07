@@ -4,14 +4,14 @@ from src.bot import toggles
 def test_toggle_feature_keys_excludes_complaint():
     # 客訴回饋是固定入口，不是可關閉的功能模組，不該出現在開關清單裡
     assert "complaint" not in toggles.TOGGLE_FEATURE_KEYS
-    assert len(toggles.TOGGLE_FEATURE_KEYS) == 8
+    assert len(toggles.TOGGLE_FEATURE_KEYS) == 10
 
 
-def test_ensure_default_toggles_inserts_all_eight_for_new_user(fake_db):
+def test_ensure_default_toggles_inserts_all_ten_for_new_user(fake_db):
     toggles.ensure_default_toggles(fake_db, user_id=1)
 
     rows = fake_db.select("feature_toggles", where="user_id = %s", params=(1,))
-    assert len(rows) == 8
+    assert len(rows) == 10
     assert all(row["is_enabled"] is True for row in rows)
     assert {row["feature_key"] for row in rows} == set(toggles.TOGGLE_FEATURE_KEYS)
 
@@ -22,7 +22,7 @@ def test_ensure_default_toggles_is_idempotent_and_keeps_existing_state(fake_db):
     toggles.ensure_default_toggles(fake_db, user_id=1)
 
     rows = fake_db.select("feature_toggles", where="user_id = %s", params=(1,))
-    assert len(rows) == 8
+    assert len(rows) == 10
     budget_row = next(r for r in rows if r["feature_key"] == "budget")
     assert budget_row["is_enabled"] is False  # 已存在的設定不能被覆蓋回預設值
 
@@ -83,7 +83,7 @@ def test_toggle_by_index_returns_none_for_out_of_range_index(fake_db):
     toggles.ensure_default_toggles(fake_db, user_id=1)
 
     assert toggles.toggle_by_index(fake_db, user_id=1, index=0) is None
-    assert toggles.toggle_by_index(fake_db, user_id=1, index=9) is None
+    assert toggles.toggle_by_index(fake_db, user_id=1, index=11) is None
 
 
 def test_is_feature_enabled_reflects_current_state(fake_db):

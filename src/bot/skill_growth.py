@@ -16,8 +16,12 @@
 「這筆是否已推播過」，避免 08:00 那個小時內 `/healthz` 多次觸發重複推播。NFR-11「以來源日期避免
 重複摘要」由 `digest_date` 天然涵蓋，不需要額外的內容雜湊表。
 
-功能開關（見 `src/bot/toggles.py`）：`skill_growth` 是 `owner_only=True` 的功能，收集與推播前都
+功能開關（見 `src/bot/toggles.py`）：`tech_intel` 是 `owner_only=True` 的功能，收集與推播前都
 會檢查 Robin 本人的開關狀態，關閉時直接跳過（不收集、不推播，也不消耗 Gemini API 額度）。
+2026-08-07 同日再修正：原本規劃的 `skill_growth` 開關拆成三個獨立開關（`tech_intel`／
+`certificate`／`language`，見 docs/specs/feature-toggles/SPEC.md FR-3 追記），Robin 認為 TOEIC
+（`certificate`）跟這裡的新聞/電子報技術情報（`tech_intel`）性質不同，不該共用同一把開關；
+本模組（每日技術分享）只用其中的 `tech_intel`。
 
 來源容錯（見 docs/specs/submodules-core/SPEC.md ADR-14 風險表）：TLDR 電子報／IThome／
 TechCrunch 三個來源任一抓取失敗，只記 log、視為當天該來源沒有內容，不影響其他來源與整體收集
@@ -36,7 +40,7 @@ from submodules.cloudsql.client import CloudSQLClient
 _TAIWAN_TZ = ZoneInfo("Asia/Taipei")
 _COLLECT_HOUR = 23
 _PUSH_HOUR = 8
-_FEATURE_KEY = "skill_growth"
+_FEATURE_KEY = "tech_intel"
 
 _TLDR_SENDER_DOMAIN = "tldrnewsletter.com"
 _ITHOME_RSS_URL = "https://www.ithome.com.tw/rss"

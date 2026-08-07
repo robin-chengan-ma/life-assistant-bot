@@ -180,7 +180,7 @@ def test_family_member_binding_auto_creates_default_toggles(fake_db, monkeypatch
 
     bound = fake_db.select("users", where="telegram_user_id = %s", params=(FAMILY_ID,), fetch_one=True)
     rows = fake_db.select("feature_toggles", where="user_id = %s", params=(bound["id"],))
-    assert len(rows) == 8
+    assert len(rows) == 10
 
 
 def test_known_family_member_can_trigger_my_toggles(fake_db, monkeypatch):

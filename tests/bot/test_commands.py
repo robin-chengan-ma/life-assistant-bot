@@ -634,7 +634,7 @@ def test_start_my_toggles_ensures_defaults_and_sets_awaiting_index_state(fake_db
 
     assert store.get(1) == {"flow": "toggle", "step": "awaiting_index", "target_user_id": 42}
     assert "1. " in reply
-    assert len(fake_db.select("feature_toggles", where="user_id = %s", params=(42,))) == 8
+    assert len(fake_db.select("feature_toggles", where="user_id = %s", params=(42,))) == 10
 
 
 def test_handle_toggle_step_awaiting_index_toggles_and_shows_updated_list(fake_db):
@@ -714,7 +714,7 @@ def test_handle_toggle_step_awaiting_user_selection_valid_index_moves_to_awaitin
 
     assert store.get(1) == {"flow": "set_toggle", "step": "awaiting_index", "target_user_id": dad_id}
     assert "1. " in reply
-    assert len(fake_db.select("feature_toggles", where="user_id = %s", params=(dad_id,))) == 8
+    assert len(fake_db.select("feature_toggles", where="user_id = %s", params=(dad_id,))) == 10
 
 
 def test_handle_toggle_step_awaiting_user_selection_invalid_index_reprompts(fake_db):
