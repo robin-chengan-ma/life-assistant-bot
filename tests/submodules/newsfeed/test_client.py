@@ -119,29 +119,6 @@ def test_fetch_articles_published_on_strips_whitespace_from_title_and_link(monke
     assert result == [{"title": "有空白的標題", "link": "https://example.com/space"}]
 
 
-def test_fetch_yesterday_articles_uses_taiwan_yesterday_as_target_date(monkeypatch):
-    now = datetime(2026, 8, 7, 1, 0, tzinfo=timezone.utc)  # 台灣時間 2026-08-07 09:00
-    yesterday_pub_date = format_datetime(datetime(2026, 8, 6, 12, 0, tzinfo=_TAIWAN_TZ))
-    rss = _make_rss_bytes([{"title": "昨天的文章", "link": "https://example.com/y", "pub_date": yesterday_pub_date}])
-    monkeypatch.setattr(client_module.requests, "get", MagicMock(return_value=_fake_response(rss)))
-
-    client = NewsFeedClient()
-    result = client.fetch_yesterday_articles("https://example.com/rss", now=now)
-
-    assert result == [{"title": "昨天的文章", "link": "https://example.com/y"}]
-
-
-def test_fetch_yesterday_articles_defaults_now_to_current_utc_time(monkeypatch):
-    mock_get = MagicMock(return_value=_fake_response(_make_rss_bytes([])))
-    monkeypatch.setattr(client_module.requests, "get", mock_get)
-
-    client = NewsFeedClient()
-    result = client.fetch_yesterday_articles("https://example.com/rss")
-
-    assert result == []
-    mock_get.assert_called_once()
-
-
 # --- 外部 API 重試機制（FR-19i，見 docs/specs/submodules-core/SPEC.md ADR-13）---
 
 

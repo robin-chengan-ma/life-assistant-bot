@@ -216,38 +216,33 @@ def test_check_important_notifications_swallows_exception(monkeypatch):
     fake_db.close.assert_called_once()
 
 
-def test_check_skill_growth_digest_skips_when_env_vars_missing(monkeypatch):
+def test_check_skill_growth_collection_skips_when_env_vars_missing(monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     monkeypatch.delenv("GMAIL_USER", raising=False)
     monkeypatch.delenv("GMAIL_PASSWORD", raising=False)
     monkeypatch.delenv("GEMINI_API_SKILL_GROWTH_KEY", raising=False)
 
-    main._check_skill_growth_digest()  # 不應該拋例外，直接跳過
+    main._check_skill_growth_collection()  # 不應該拋例外，直接跳過
 
 
-def test_check_skill_growth_digest_skips_when_only_gemini_key_missing(monkeypatch):
-    # DB/Telegram/Gmail 都設定齊全，但缺這個功能專屬的 Gemini Key 時，同樣要優雅跳過。
+def test_check_skill_growth_collection_skips_when_only_gemini_key_missing(monkeypatch):
+    # DB/Gmail 都設定齊全，但缺這個功能專屬的 Gemini Key 時，同樣要優雅跳過。
     monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
     monkeypatch.setenv("GMAIL_USER", "you@gmail.com")
     monkeypatch.setenv("GMAIL_PASSWORD", "fake-app-password")
     monkeypatch.delenv("GEMINI_API_SKILL_GROWTH_KEY", raising=False)
 
-    main._check_skill_growth_digest()  # 不應該拋例外，直接跳過
+    main._check_skill_growth_collection()  # 不應該拋例外，直接跳過
 
 
-def test_check_skill_growth_digest_calls_skill_growth_module_when_env_vars_set(monkeypatch):
+def test_check_skill_growth_collection_calls_skill_growth_module_when_env_vars_set(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
     monkeypatch.setenv("GMAIL_USER", "you@gmail.com")
     monkeypatch.setenv("GMAIL_PASSWORD", "fake-app-password")
     monkeypatch.setenv("GEMINI_API_SKILL_GROWTH_KEY", "fake-gemini-key")
 
     fake_db = MagicMock()
     monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", MagicMock(return_value=fake_db))
-    fake_telegram = MagicMock()
-    monkeypatch.setattr("submodules.telegram.client.TelegramClient", MagicMock(return_value=fake_telegram))
     fake_email = MagicMock()
     fake_email_cls = MagicMock(return_value=fake_email)
     monkeypatch.setattr("submodules.email.client.EmailClient", fake_email_cls)
@@ -257,20 +252,19 @@ def test_check_skill_growth_digest_calls_skill_growth_module_when_env_vars_set(m
     fake_llm_cls = MagicMock(return_value=fake_llm)
     monkeypatch.setattr("submodules.llm.client.LLMClient", fake_llm_cls)
 
-    fake_check_digest = MagicMock()
-    monkeypatch.setattr("src.bot.skill_growth.check_and_push_daily_digest", fake_check_digest)
+    fake_collect = MagicMock()
+    monkeypatch.setattr("src.bot.skill_growth.collect_and_store_daily_digest", fake_collect)
 
-    main._check_skill_growth_digest()
+    main._check_skill_growth_collection()
 
     fake_email_cls.assert_called_once_with(username="you@gmail.com", password="fake-app-password")
     fake_llm_cls.assert_called_once_with(api_key="fake-gemini-key")
-    fake_check_digest.assert_called_once_with(fake_db, fake_telegram, fake_email, fake_newsfeed, fake_llm)
+    fake_collect.assert_called_once_with(fake_db, fake_email, fake_newsfeed, fake_llm)
     fake_db.close.assert_called_once()
 
 
-def test_check_skill_growth_digest_swallows_exception(monkeypatch):
+def test_check_skill_growth_collection_swallows_exception(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
     monkeypatch.setenv("GMAIL_USER", "you@gmail.com")
     monkeypatch.setenv("GMAIL_PASSWORD", "fake-app-password")
     monkeypatch.setenv("GEMINI_API_SKILL_GROWTH_KEY", "fake-gemini-key")
@@ -278,10 +272,50 @@ def test_check_skill_growth_digest_swallows_exception(monkeypatch):
     fake_db = MagicMock()
     monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", MagicMock(return_value=fake_db))
     monkeypatch.setattr(
+        "submodules.email.client.EmailClient", MagicMock(side_effect=RuntimeError("boom"))
+    )
+
+    main._check_skill_growth_collection()  # 不應該往外拋
+
+    fake_db.close.assert_called_once()
+
+
+def test_check_skill_growth_push_skips_when_env_vars_missing(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+
+    main._check_skill_growth_push()  # 不應該拋例外，直接跳過
+
+
+def test_check_skill_growth_push_calls_skill_growth_module_when_env_vars_set(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+
+    fake_db = MagicMock()
+    monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", MagicMock(return_value=fake_db))
+    fake_telegram = MagicMock()
+    monkeypatch.setattr("submodules.telegram.client.TelegramClient", MagicMock(return_value=fake_telegram))
+
+    fake_push = MagicMock()
+    monkeypatch.setattr("src.bot.skill_growth.check_and_push_daily_digest", fake_push)
+
+    main._check_skill_growth_push()
+
+    fake_push.assert_called_once_with(fake_db, fake_telegram)
+    fake_db.close.assert_called_once()
+
+
+def test_check_skill_growth_push_swallows_exception(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+
+    fake_db = MagicMock()
+    monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", MagicMock(return_value=fake_db))
+    monkeypatch.setattr(
         "submodules.telegram.client.TelegramClient", MagicMock(side_effect=RuntimeError("boom"))
     )
 
-    main._check_skill_growth_digest()  # 不應該往外拋
+    main._check_skill_growth_push()  # 不應該往外拋
 
     fake_db.close.assert_called_once()
 

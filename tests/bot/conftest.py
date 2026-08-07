@@ -28,6 +28,7 @@ class FakeCloudSQLClient:
             "diet_logs": [],
             "body_goals": [],
             "important_notifications_log": [],
+            "skill_growth_digests": [],
         }
         self._id_counter = itertools.count(1)
 
@@ -179,6 +180,9 @@ class FakeCloudSQLClient:
         # 2026-08-07（Step 3.1，見 robinson SPEC.md FR-22）：每日技術摘要查 Robin 的 users 記錄。
         if where == "is_owner = %s AND telegram_user_id IS NOT NULL":
             return row.get("is_owner") == params[0] and row.get("telegram_user_id") is not None
+        # 2026-08-07（Step 3.1 修正，見 robinson SPEC.md FR-22/FR-23）：每日技術摘要收集/推播查詢。
+        if where == "digest_date = %s":
+            return row.get("digest_date") == params[0]
 
         raise NotImplementedError(f"FakeCloudSQLClient 尚未支援這個 where 條件：{where}")
 

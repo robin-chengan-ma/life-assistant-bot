@@ -1,17 +1,19 @@
-"""RSS 新聞來源通用 Client：抓取 RSS Feed 中「台灣時間昨天」發布的文章清單。
+"""RSS 新聞來源通用 Client：抓取 RSS Feed 中發布日期落在指定日期的文章清單。
 
 用 `requests` 直接 GET RSS Feed URL、用標準函式庫 `xml.etree.ElementTree` 解析 XML，不安裝
 `feedparser` 等第三方 RSS 套件——RSS 本質就是 XML，標準函式庫足以應付「取出 title/link/pubDate」
 這種單純需求（比照 `submodules/telegram`／`submodules/voice`「輕量優先、能用標準函式庫就不多裝
 依賴」的做法）。
 
-用途（見 robinson SPEC.md FR-23，Step 3.1）：每日技術摘要讀取 IThome／TechCrunch 昨日新聞。
+用途（見 robinson SPEC.md FR-23，Step 3.1）：每日技術摘要讀取 IThome／TechCrunch 新聞。呼叫端
+指定要讀哪一天（`target_date`），這個 Client 不假設「今天」或「昨天」——Robin 要求固定台灣時間
+23:00 收集「當天」的新聞、隔天 08:00 才推播，日期語意由呼叫端（`src/bot/skill_growth.py`）決定。
 
 RSS 2.0 規格的 `<pubDate>` 是 RFC 822 格式，跟 Email `Date` header 同一套格式，複用標準函式庫
 `email.utils.parsedate_to_datetime` 解析，手法跟 `submodules/email` 的 `_sent_on_date()` 一致。
 """
 import xml.etree.ElementTree as ET
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from email.utils import parsedate_to_datetime
 from zoneinfo import ZoneInfo
 
@@ -86,10 +88,3 @@ class NewsFeedClient:
             return articles
 
         return call_with_retry(_do_fetch, is_retryable=_is_retryable_requests_error)
-
-    def fetch_yesterday_articles(self, feed_url: str, now: datetime | None = None) -> list[dict]:
-        """便利方法：抓取台灣時間「昨天」發布的文章，供 FR-23 每日技術摘要直接呼叫。"""
-        now = now or datetime.now(timezone.utc)
-        now_local = now.astimezone(_TAIWAN_TZ)
-        yesterday_local = (now_local - timedelta(days=1)).date()
-        return self.fetch_articles_published_on(feed_url, yesterday_local)

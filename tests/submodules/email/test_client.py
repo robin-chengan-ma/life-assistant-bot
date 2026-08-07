@@ -5,7 +5,7 @@
 import email as email_lib
 import imaplib
 import smtplib
-from datetime import datetime, timezone
+from datetime import datetime
 from email.header import decode_header
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -124,7 +124,7 @@ def test_send_text_raises_after_exhausting_retries(monkeypatch):
     assert mock_sleep.call_args_list == [((1,),), ((2,),)]
 
 
-# --- fetch_yesterday_emails_from_domain（FR-23，Step 3.1）---
+# --- fetch_emails_from_domain_on_date（FR-23，Step 3.1）---
 
 _TAIWAN_TZ = client_module._TAIWAN_TZ
 
@@ -151,110 +151,97 @@ def _patch_imap_ssl(monkeypatch):
     return mock_imap_ssl_cls, mock_conn
 
 
-def test_fetch_yesterday_emails_builds_search_with_taiwan_yesterday_range(monkeypatch):
+def test_fetch_emails_on_date_builds_search_with_given_date_range(monkeypatch):
     mock_imap_ssl_cls, mock_conn = _patch_imap_ssl(monkeypatch)
     mock_conn.search.return_value = ("OK", [b""])
-    now = datetime(2026, 8, 7, 1, 0, tzinfo=timezone.utc)  # 台灣時間 2026-08-07 09:00
 
     client = EmailClient(username="you@gmail.com", password="app-password")
-    result = client.fetch_yesterday_emails_from_domain("tldrnewsletter.com", now=now)
+    result = client.fetch_emails_from_domain_on_date("tldrnewsletter.com", client_module.date(2026, 8, 7))
 
     assert result == []
     mock_imap_ssl_cls.assert_called_once_with("imap.gmail.com")
     mock_conn.login.assert_called_once_with("you@gmail.com", "app-password")
     mock_conn.select.assert_called_once_with("INBOX", readonly=True)
     mock_conn.search.assert_called_once_with(
-        None, '(SINCE "06-Aug-2026" BEFORE "07-Aug-2026" FROM "tldrnewsletter.com")'
+        None, '(SINCE "07-Aug-2026" BEFORE "08-Aug-2026" FROM "tldrnewsletter.com")'
     )
 
 
-def test_fetch_yesterday_emails_returns_plain_text_of_matching_emails(monkeypatch):
+def test_fetch_emails_on_date_returns_plain_text_of_matching_emails(monkeypatch):
     _, mock_conn = _patch_imap_ssl(monkeypatch)
-    yesterday = datetime(2026, 8, 6, 7, 0, tzinfo=_TAIWAN_TZ)
-    raw1 = _make_raw_email(from_addr="TLDR <dan@tldrnewsletter.com>", dt=yesterday, body="內容一")
-    raw2 = _make_raw_email(from_addr="TLDR AI <ai@tldrnewsletter.com>", dt=yesterday, body="內容二")
+    target_day = datetime(2026, 8, 7, 22, 0, tzinfo=_TAIWAN_TZ)
+    raw1 = _make_raw_email(from_addr="TLDR <dan@tldrnewsletter.com>", dt=target_day, body="內容一")
+    raw2 = _make_raw_email(from_addr="TLDR AI <ai@tldrnewsletter.com>", dt=target_day, body="內容二")
     mock_conn.search.return_value = ("OK", [b"1 2"])
     mock_conn.fetch.side_effect = [("OK", [(b"1", raw1)]), ("OK", [(b"2", raw2)])]
 
     client = EmailClient(username="you@gmail.com", password="app-password")
-    result = client.fetch_yesterday_emails_from_domain(
-        "tldrnewsletter.com", now=datetime(2026, 8, 7, 1, 0, tzinfo=timezone.utc)
-    )
+    result = client.fetch_emails_from_domain_on_date("tldrnewsletter.com", client_module.date(2026, 8, 7))
 
     assert result == ["內容一", "內容二"]
 
 
-def test_fetch_yesterday_emails_filters_out_spoofed_domain(monkeypatch):
+def test_fetch_emails_on_date_filters_out_spoofed_domain(monkeypatch):
     _, mock_conn = _patch_imap_ssl(monkeypatch)
-    yesterday = datetime(2026, 8, 6, 7, 0, tzinfo=_TAIWAN_TZ)
-    raw = _make_raw_email(from_addr="spoof@fake-tldrnewsletter.com", dt=yesterday, body="偽造來源")
+    target_day = datetime(2026, 8, 7, 22, 0, tzinfo=_TAIWAN_TZ)
+    raw = _make_raw_email(from_addr="spoof@fake-tldrnewsletter.com", dt=target_day, body="偽造來源")
     mock_conn.search.return_value = ("OK", [b"1"])
     mock_conn.fetch.return_value = ("OK", [(b"1", raw)])
 
     client = EmailClient(username="you@gmail.com", password="app-password")
-    result = client.fetch_yesterday_emails_from_domain(
-        "tldrnewsletter.com", now=datetime(2026, 8, 7, 1, 0, tzinfo=timezone.utc)
-    )
+    result = client.fetch_emails_from_domain_on_date("tldrnewsletter.com", client_module.date(2026, 8, 7))
 
     assert result == []
 
 
-def test_fetch_yesterday_emails_filters_out_wrong_date(monkeypatch):
+def test_fetch_emails_on_date_filters_out_wrong_date(monkeypatch):
     _, mock_conn = _patch_imap_ssl(monkeypatch)
-    two_days_ago = datetime(2026, 8, 5, 7, 0, tzinfo=_TAIWAN_TZ)
-    raw = _make_raw_email(from_addr="dan@tldrnewsletter.com", dt=two_days_ago, body="太舊了")
+    wrong_day = datetime(2026, 8, 6, 22, 0, tzinfo=_TAIWAN_TZ)
+    raw = _make_raw_email(from_addr="dan@tldrnewsletter.com", dt=wrong_day, body="不是那一天")
     mock_conn.search.return_value = ("OK", [b"1"])
     mock_conn.fetch.return_value = ("OK", [(b"1", raw)])
 
     client = EmailClient(username="you@gmail.com", password="app-password")
-    result = client.fetch_yesterday_emails_from_domain(
-        "tldrnewsletter.com", now=datetime(2026, 8, 7, 1, 0, tzinfo=timezone.utc)
-    )
+    result = client.fetch_emails_from_domain_on_date("tldrnewsletter.com", client_module.date(2026, 8, 7))
 
     assert result == []
 
 
-def test_fetch_yesterday_emails_returns_empty_when_search_not_ok(monkeypatch):
+def test_fetch_emails_on_date_returns_empty_when_search_not_ok(monkeypatch):
     _, mock_conn = _patch_imap_ssl(monkeypatch)
     mock_conn.search.return_value = ("NO", [None])
 
     client = EmailClient(username="you@gmail.com", password="app-password")
-    result = client.fetch_yesterday_emails_from_domain(
-        "tldrnewsletter.com", now=datetime(2026, 8, 7, 1, 0, tzinfo=timezone.utc)
-    )
+    result = client.fetch_emails_from_domain_on_date("tldrnewsletter.com", client_module.date(2026, 8, 7))
 
     assert result == []
 
 
-def test_fetch_yesterday_emails_skips_message_when_fetch_not_ok(monkeypatch):
+def test_fetch_emails_on_date_skips_message_when_fetch_not_ok(monkeypatch):
     _, mock_conn = _patch_imap_ssl(monkeypatch)
     mock_conn.search.return_value = ("OK", [b"1"])
     mock_conn.fetch.return_value = ("NO", None)
 
     client = EmailClient(username="you@gmail.com", password="app-password")
-    result = client.fetch_yesterday_emails_from_domain(
-        "tldrnewsletter.com", now=datetime(2026, 8, 7, 1, 0, tzinfo=timezone.utc)
-    )
+    result = client.fetch_emails_from_domain_on_date("tldrnewsletter.com", client_module.date(2026, 8, 7))
 
     assert result == []
 
 
-def test_fetch_yesterday_emails_extracts_from_multipart_email(monkeypatch):
+def test_fetch_emails_on_date_extracts_from_multipart_email(monkeypatch):
     _, mock_conn = _patch_imap_ssl(monkeypatch)
-    yesterday = datetime(2026, 8, 6, 7, 0, tzinfo=_TAIWAN_TZ)
-    raw = _make_raw_email(from_addr="dan@tldrnewsletter.com", dt=yesterday, body="多部分內容", multipart=True)
+    target_day = datetime(2026, 8, 7, 22, 0, tzinfo=_TAIWAN_TZ)
+    raw = _make_raw_email(from_addr="dan@tldrnewsletter.com", dt=target_day, body="多部分內容", multipart=True)
     mock_conn.search.return_value = ("OK", [b"1"])
     mock_conn.fetch.return_value = ("OK", [(b"1", raw)])
 
     client = EmailClient(username="you@gmail.com", password="app-password")
-    result = client.fetch_yesterday_emails_from_domain(
-        "tldrnewsletter.com", now=datetime(2026, 8, 7, 1, 0, tzinfo=timezone.utc)
-    )
+    result = client.fetch_emails_from_domain_on_date("tldrnewsletter.com", client_module.date(2026, 8, 7))
 
     assert result == ["多部分內容"]
 
 
-def test_fetch_yesterday_emails_retries_on_connection_error_then_succeeds(monkeypatch):
+def test_fetch_emails_on_date_retries_on_connection_error_then_succeeds(monkeypatch):
     mock_sleep = MagicMock()
     monkeypatch.setattr(retry_client_module.time, "sleep", mock_sleep)
     _, mock_conn = _patch_imap_ssl(monkeypatch)
@@ -262,16 +249,14 @@ def test_fetch_yesterday_emails_retries_on_connection_error_then_succeeds(monkey
     mock_conn.search.return_value = ("OK", [b""])
 
     client = EmailClient(username="you@gmail.com", password="app-password")
-    result = client.fetch_yesterday_emails_from_domain(
-        "tldrnewsletter.com", now=datetime(2026, 8, 7, 1, 0, tzinfo=timezone.utc)
-    )
+    result = client.fetch_emails_from_domain_on_date("tldrnewsletter.com", client_module.date(2026, 8, 7))
 
     assert result == []
     assert mock_conn.login.call_count == 2
     mock_sleep.assert_called_once_with(1)
 
 
-def test_fetch_yesterday_emails_does_not_retry_imap_protocol_error(monkeypatch):
+def test_fetch_emails_on_date_does_not_retry_imap_protocol_error(monkeypatch):
     mock_sleep = MagicMock()
     monkeypatch.setattr(retry_client_module.time, "sleep", mock_sleep)
     _, mock_conn = _patch_imap_ssl(monkeypatch)
@@ -279,15 +264,13 @@ def test_fetch_yesterday_emails_does_not_retry_imap_protocol_error(monkeypatch):
 
     client = EmailClient(username="you@gmail.com", password="wrong-password")
     with pytest.raises(imaplib.IMAP4.error):
-        client.fetch_yesterday_emails_from_domain(
-            "tldrnewsletter.com", now=datetime(2026, 8, 7, 1, 0, tzinfo=timezone.utc)
-        )
+        client.fetch_emails_from_domain_on_date("tldrnewsletter.com", client_module.date(2026, 8, 7))
 
     assert mock_conn.login.call_count == 1
     mock_sleep.assert_not_called()
 
 
-def test_fetch_yesterday_emails_raises_after_exhausting_retries(monkeypatch):
+def test_fetch_emails_on_date_raises_after_exhausting_retries(monkeypatch):
     mock_sleep = MagicMock()
     monkeypatch.setattr(retry_client_module.time, "sleep", mock_sleep)
     _, mock_conn = _patch_imap_ssl(monkeypatch)
@@ -295,23 +278,10 @@ def test_fetch_yesterday_emails_raises_after_exhausting_retries(monkeypatch):
 
     client = EmailClient(username="you@gmail.com", password="app-password")
     with pytest.raises(ConnectionError):
-        client.fetch_yesterday_emails_from_domain(
-            "tldrnewsletter.com", now=datetime(2026, 8, 7, 1, 0, tzinfo=timezone.utc)
-        )
+        client.fetch_emails_from_domain_on_date("tldrnewsletter.com", client_module.date(2026, 8, 7))
 
     assert mock_conn.login.call_count == 3
     assert mock_sleep.call_args_list == [((1,),), ((2,),)]
-
-
-def test_fetch_yesterday_emails_defaults_now_to_current_utc_time(monkeypatch):
-    _, mock_conn = _patch_imap_ssl(monkeypatch)
-    mock_conn.search.return_value = ("OK", [b""])
-
-    client = EmailClient(username="you@gmail.com", password="app-password")
-    result = client.fetch_yesterday_emails_from_domain("tldrnewsletter.com")
-
-    assert result == []
-    mock_conn.search.assert_called_once()
 
 
 # --- _is_from_domain ---

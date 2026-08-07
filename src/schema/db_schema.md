@@ -68,7 +68,6 @@ COMMENT ON COLUMN users.created_at IS '這筆使用者記錄建立的時間（�
 | 2026-08-04 | 新增 `finance_monthly_report_sent_month`（FR-44a 月底記帳月報推播去重用） | Robin 要求「記帳摘要請在每月底自動推一次月報」，設計比照 `budget_alert_50_sent_month`／`budget_alert_80_sent_month` | `0022_add_finance_monthly_report_field_to_users.sql` |
 | 2026-08-04 | 新增 `height_cm`（身高，初始設定、變動才修正） | Step 2.2 體態管理模組 FR-46，設計理由見下方 `body_weight_logs` 表 | `0023_add_height_to_users.sql` |
 | 2026-08-04 | 新增 `birthday`（生日，只比對月/日） | Step 2.3 重要通知模組 FR-53，設計理由見下方 `important_notifications_log` 表 | `0028_add_birthday_to_users.sql`；已知 5 位家人（弟弟／大妹／小妹／爸爸／媽媽）生日資料見 `0030_seed_family_birthdays.sql` |
-| 2026-08-07 | 新增 `skill_growth_pushed_on`（每日技術摘要推播去重用） | Step 3.1 個人技能成長模組 FR-22，設計比照 `todos.daily_pushed_on` | `0033_add_skill_growth_pushed_on_to_users.sql` |
 
 ---
 
@@ -622,3 +621,33 @@ CREATE TABLE important_notifications_log (
 - `UNIQUE (notification_key, year)` 確保同一個通知類型同一年只會推播一次，即使 `/healthz` 每 10 分鐘觸發一次 cron 檢查、同一天內會被命中好幾次
 - 不用 `month`／`day` 額外欄位記錄實際觸發日期，因為「哪一天觸發」本來就是即時計算出來的（農曆節日每年日期不同），只需要知道「這一年這個類型推播過了沒」即可決定要不要再推播一次
 - 只用 `notification_key`＋`year` 做唯一約束就足夠當索引，資料量小（一年最多十幾筆），不需要額外複合索引
+
+---
+
+### skill_growth_digests
+
+**建立日期**：2026-08-07
+**用途**：個人技能成長模組的每日技術摘要收集與推播狀態，對應 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) FR-22、FR-23（Step 3.1）。
+**Migration 檔案**：`src/migrations/0033_add_skill_growth_pushed_on_to_users.sql`（檔名沿用最初規劃「加欄位」時取的，內容已改為建這張表，見檔案開頭註解說明；因尚未 push／套用過，直接修改檔案內容而非另開新檔）
+
+```sql
+CREATE TABLE skill_growth_digests (
+    id BIGSERIAL PRIMARY KEY,
+    digest_date DATE NOT NULL UNIQUE,
+    summary_text TEXT,
+    pushed_on DATE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+COMMENT ON TABLE skill_growth_digests IS '個人技能成長模組：每日技術摘要的收集與推播狀態（FR-22、FR-23）。固定台灣時間 23:00 收集當天 TLDR 電子報＋IThome／TechCrunch 新聞並經 Gemini 產出摘要，寫入一筆；隔天固定台灣時間 08:00 讀取「昨天」那筆資料推播給 Robin';
+COMMENT ON COLUMN skill_growth_digests.digest_date IS '收集內容所屬的日期（23:00 收集當下的「今天」）；UNIQUE 確保同一天只會收集一次，避免 23:00 那個小時內 /healthz 多次觸發重複收集與重複呼叫 Gemini';
+COMMENT ON COLUMN skill_growth_digests.summary_text IS 'Gemini 產出的中文重點摘要與總結分享；NULL 代表當天 TLDR 電子報／IThome／TechCrunch 三個來源皆無內容';
+COMMENT ON COLUMN skill_growth_digests.pushed_on IS '這筆摘要推播給 Robin 的日期（收集隔天的 08:00）；避免同一天 08:00 那個小時內 /healthz 多次觸發重複推播；NULL 代表尚未推播';
+COMMENT ON COLUMN skill_growth_digests.created_at IS '這筆收集結果建立的時間';
+```
+
+**設計理由**：
+- 2026-08-07 經 Robin 回饋修正：原規劃在 `check_and_push_daily_digest()` 執行當下（08:00）才即時抓取「昨天」的信件/新聞；Robin 改要求分成兩個獨立排程時間點——固定 23:00 收集「當天」的信件/新聞、隔天 08:00 才推播，讓收集與推播解耦，這樣資料需要跨時間點持久化，原本規劃在 `users` 表加一個 `skill_growth_pushed_on` 去重欄位已不夠用，改成獨立一張表存收集結果本身
+- `digest_date NOT NULL UNIQUE`：同一天只會有一筆收集結果，`UNIQUE` 約束直接防止 23:00 那個小時內 `/healthz` 被觸發多次時重複收集/重複呼叫 Gemini（不需要額外查詢判斷是否已收集過，`INSERT` 前查一次 `digest_date` 是否存在即可）
+- `summary_text` 允許 `NULL`：代表當天三個來源都沒有內容，此時不呼叫 Gemini（省 Token），隔天推播時看到 `NULL` 就回覆 Robin 指定的固定訊息「未獲得最新技術分享」
+- `pushed_on` 沿用 `todos.daily_pushed_on` 的慣例，記錄「這筆資料是否已經推播過」，避免 08:00 那個小時內重複推播；跟 `digest_date` 分開兩個欄位是因為推播時間點（隔天）跟收集時間點（當天）本來就不同一天

@@ -1,6 +1,6 @@
 """Email 通用 Client：透過 Gmail SMTP（SSL）寄信、透過 Gmail IMAP（SSL）讀信。
 
-命名為 email 而不是 gmail，是為了讓對外呼叫介面（`send_text`／`fetch_yesterday_emails_from_domain`）
+命名為 email 而不是 gmail，是為了讓對外呼叫介面（`send_text`／`fetch_emails_from_domain_on_date`）
 維持穩定；未來若要換成其他信箱服務，呼叫端的程式碼不需要跟著改。刻意只用 Python 標準函式庫
 `smtplib`／`imaplib`／`email`，不額外安裝第三方套件（比照 `submodules/telegram`／`submodules/voice`
 「輕量優先、能用標準函式庫就不多裝依賴」的做法）。
@@ -9,9 +9,12 @@
 API 本身故障或 Bot Token 失效，連私訊 Robin 的錯誤通知都送不出去；這個 Client 提供一條
 完全獨立於 Telegram 的備援管道，只在 Telegram 送達失敗時才觸發。
 
-讀信用途（見 robinson SPEC.md FR-23，Step 3.1）：每日技術摘要要讀取 Robin 訂閱的 TLDR 電子報。
-2026-08-07 與 Robin 確認：不用主旨關鍵字比對（電子報版本多、主旨格式不保證固定），改用「寄件者
-網域比對」（TLDR 電子報固定由 `tldrnewsletter.com` 網域寄出），較不易漏抓或誤抓。
+讀信用途（見 robinson SPEC.md FR-23，Step 3.1）：每日技術摘要要讀取 Robin 訂閱的 TLDR 電子報
+（寄件者 `dan@tldrnewsletter.com`）。2026-08-07 與 Robin 確認：不用主旨關鍵字比對（電子報版本多、
+主旨格式不保證固定），改用「寄件者網域比對」（TLDR 電子報固定由 `tldrnewsletter.com` 網域寄出），
+較不易漏抓或誤抓。呼叫端指定要讀哪一天（`target_date`），不在這裡假設「昨天」或「今天」——
+Robin 要求固定台灣時間 23:00 收集「當天」的信件、隔天 08:00 才推播，日期語意由呼叫端
+（`src/bot/skill_growth.py`）決定，這個 Client 只負責「給定日期，讀出那天的信」。
 
 `password` 必須是 Google 帳號的「應用程式密碼」（App Password），不是一般登入密碼——Google
 自 2022 年起要求已開啟兩步驟驗證的帳號改用應用程式密碼才能通過 SMTP／IMAP 驗證，這是
@@ -22,7 +25,7 @@ Google 的既定機制，不是本模組可以繞過的限制。同一組 `GMAIL
 """
 import imaplib
 import smtplib
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta, timezone
 from email import message_from_bytes
 from email.mime.text import MIMEText
 from email.utils import parseaddr, parsedate_to_datetime
@@ -97,8 +100,8 @@ def _extract_plain_text(parsed_message) -> str:
 class EmailClient:
     """封裝 Gmail SMTP（SSL）寄信、Gmail IMAP（SSL）讀信的最小 Client。
 
-    寄信只支援純文字信件（`send_text`）；讀信只支援「依寄件者網域＋昨天這一天」篩選收件匣信件
-    （`fetch_yesterday_emails_from_domain`），目前唯一呼叫端是 Step 3.1 每日技術摘要（FR-23）
+    寄信只支援純文字信件（`send_text`）；讀信只支援「依寄件者網域＋指定日期」篩選收件匣信件
+    （`fetch_emails_from_domain_on_date`），目前唯一呼叫端是 Step 3.1 每日技術摘要（FR-23）
     讀取 TLDR 電子報，需要更多能力時再依實際需求擴充。
     """
 
@@ -124,20 +127,20 @@ class EmailClient:
 
         call_with_retry(_do_send, is_retryable=_is_retryable_smtp_error)
 
-    def fetch_yesterday_emails_from_domain(self, sender_domain: str, now: datetime | None = None) -> list[str]:
-        """讀取寄件者網域符合 `sender_domain`、寄送日期為「台灣時間昨天」的信件純文字內容清單。
+    def fetch_emails_from_domain_on_date(self, sender_domain: str, target_date: date) -> list[str]:
+        """讀取寄件者網域符合 `sender_domain`、寄送日期（台灣時間）為 `target_date` 的信件純文字內容清單。
 
         對應 FR-23：Robin 訂閱的 TLDR 電子報固定由 `tldrnewsletter.com` 網域寄出，用寄件者網域
         比對（而非主旨關鍵字）辨識，避免電子報改版主旨格式時漏抓。IMAP 的 `SEARCH SINCE/BEFORE`
         是以「日曆日」為單位、且不保證時區精確，所以先用寬鬆的 `SINCE/BEFORE` 區間＋`FROM` 縮小
-        範圍抓信，抓回來後再用信件 `Date` header 換算台灣時間精確比對是否真的落在「昨天」，並用
-        `_is_from_domain()` 二次確認寄件網域，避免時區誤差或子字串誤配多抓到不該抓的信。
+        範圍抓信，抓回來後再用信件 `Date` header 換算台灣時間精確比對是否真的落在 `target_date`，
+        並用 `_is_from_domain()` 二次確認寄件網域，避免時區誤差或子字串誤配多抓到不該抓的信。
+
+        `target_date` 由呼叫端決定要讀哪一天（例如固定台灣時間 23:00 收集「當天」信件時傳入
+        當天日期），這個 Client 本身不假設任何相對日期語意。
         """
-        now = now or datetime.now(timezone.utc)
-        now_local = now.astimezone(_TAIWAN_TZ)
-        yesterday_local = (now_local - timedelta(days=1)).date()
-        imap_since = yesterday_local.strftime("%d-%b-%Y")
-        imap_before = now_local.date().strftime("%d-%b-%Y")
+        imap_since = target_date.strftime("%d-%b-%Y")
+        imap_before = (target_date + timedelta(days=1)).strftime("%d-%b-%Y")
 
         def _do_fetch() -> list[str]:
             texts: list[str] = []
@@ -157,7 +160,7 @@ class EmailClient:
                     parsed_message = message_from_bytes(msg_data[0][1])
                     if not _is_from_domain(parsed_message.get("From", ""), sender_domain):
                         continue
-                    if not _sent_on_date(parsed_message.get("Date", ""), yesterday_local):
+                    if not _sent_on_date(parsed_message.get("Date", ""), target_date):
                         continue
                     texts.append(_extract_plain_text(parsed_message))
             return texts

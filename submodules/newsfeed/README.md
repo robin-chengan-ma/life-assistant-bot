@@ -19,13 +19,10 @@ from submodules.newsfeed.client import NewsFeedClient
 
 client = NewsFeedClient()
 
-# 抓取台灣時間「昨天」發布的文章（FR-23 每日技術摘要直接用這個）
-articles = client.fetch_yesterday_articles("https://www.ithome.com.tw/rss")
-# [{"title": "...", "link": "https://..."}, ...]
-
-# 或指定任意日期
+# 抓取發布日期（換算台灣時區）落在指定日期的文章；呼叫端決定要抓哪一天
 from datetime import date
-articles = client.fetch_articles_published_on("https://techcrunch.com/feed/", date(2026, 8, 6))
+articles = client.fetch_articles_published_on("https://www.ithome.com.tw/rss", date(2026, 8, 7))
+# [{"title": "...", "link": "https://..."}, ...]
 ```
 
 ## 設計限制（務必遵守）
