@@ -29,7 +29,7 @@ class FakeCloudSQLClient:
             "body_goals": [],
             "important_notifications_log": [],
             "skill_growth_digests": [],
-            "toeic_questions": [],
+            "certificate_questions": [],
             "toeic_vocab_questions": [],
         }
         self._id_counter = itertools.count(1)

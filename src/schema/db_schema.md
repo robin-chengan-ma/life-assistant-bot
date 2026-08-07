@@ -686,6 +686,13 @@ CREATE INDEX idx_toeic_questions_test_id ON toeic_questions (test_id);
 - `options` 用 `JSONB` 存 Gemini Vision 解析出的選項陣列，欄位數不固定（可能 3～5 個選項）比起拆成 `option_a`/`option_b`... 固定欄位更貼合實際情況
 - `audio_gdrive_url` 允許 `NULL`：`write`（填空/單字題）類型只有圖片，沒有對應音檔
 
+**變更紀錄**：
+- 2026-08-07（同日追記）：Robin 詢問「以後新增 GCP、AWS 等其他證照考試，現有機制能否直接沿用」，確認需求後泛用化本表，經 Robin 核准 `0038_generalize_toeic_questions_to_certificate_questions.sql`：
+  - 表名由 `toeic_questions` 重新命名為 **`certificate_questions`**（`idx_toeic_questions_test_id` 索引同步改名為 `idx_certificate_questions_test_id`），本節上方的 CREATE TABLE／設計理由仍保留原文不改寫，只在此追記變更
+  - 新增 `exam_type TEXT NOT NULL` 欄位（從檔名第一段解析，例如 `toeic`／`gcp`／`aws`），**刻意不加 CHECK 限制清單**——Robin 明確要求「exam_type 不能直接鎖死這三類，因為會有多種可能」，未來新增證照類型只需要換檔名前綴，不必改程式碼或再開 migration
+  - 新增 `idx_certificate_questions_exam_type` 索引，供未來依證照類型篩題
+  - 對應程式碼：`src/bot/toeic.py` 的 `parse_filename()`／`classify_drive_files()`／`_insert_question()` 皆已改用 `exam_type`；`sync_track1_from_drive()` 掃描 Drive 資料夾時也從「檔名含 toeic 關鍵字」改成「列出整個資料夾所有檔案」（Robin 確認選擇），避免用關鍵字過濾漏掉其他證照類型的檔案
+
 ---
 
 ### toeic_vocab_questions
@@ -716,3 +723,4 @@ CREATE UNIQUE INDEX idx_toeic_vocab_questions_target_word ON toeic_vocab_questio
 - 這張表的選項固定就是英翻中選擇題的 4 個選項，跟 `toeic_questions`（軌道一，選項數不固定、來源是圖片 OCR）語意不同，用固定的 `option_a`～`option_d` 四欄比 `JSONB` 更直覺、也方便直接用 `correct_option` 對答案
 - `LOWER(target_word)` 唯一索引：避免同一個單字（含大小寫差異，例如 `Abundant` 跟 `abundant`）重複生成，週排程生成前會先查詢既有單字清單，在 Prompt 裡明確告知 Gemini 要避開
 - 每週要生成幾題由 `users.toeic_weekly_question_count` 決定（Robin 自訂，預設 21 題＝一天 3 題 x 7 天），不寫死在這張表
+- 2026-08-07 追記：軌道一（`certificate_questions`）已泛用化為任意證照類型，但這張表（軌道二，Gemini 生成單字題）刻意維持 TOEIC 專用，未跟著改名——單字題的生成邏輯（英文單字→中文選擇題）是 TOEIC 特有的語言學習玩法，跟 GCP／AWS 這類技術證照的「考古題」性質不同，沒有泛用化的必要

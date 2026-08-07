@@ -49,17 +49,47 @@ def _vocab_reply(word="abundant", correct="A"):
 
 def test_parse_filename_write_question():
     parsed = toeic.parse_filename("toeic_0001_write_1.png")
-    assert parsed == {"test_id": "0001", "type": "write", "question_number": 1, "extension": "png"}
+    assert parsed == {
+        "exam_type": "toeic",
+        "test_id": "0001",
+        "type": "write",
+        "question_number": 1,
+        "extension": "png",
+    }
 
 
 def test_parse_filename_listen_split_audio():
     parsed = toeic.parse_filename("toeic_0001_listen_3.mp3")
-    assert parsed == {"test_id": "0001", "type": "listen", "question_number": 3, "extension": "mp3"}
+    assert parsed == {
+        "exam_type": "toeic",
+        "test_id": "0001",
+        "type": "listen",
+        "question_number": 3,
+        "extension": "mp3",
+    }
 
 
 def test_parse_filename_listen_whole_audio_has_no_question_number():
     parsed = toeic.parse_filename("toeic_0001_listen.mp3")
-    assert parsed == {"test_id": "0001", "type": "listen", "question_number": None, "extension": "mp3"}
+    assert parsed == {
+        "exam_type": "toeic",
+        "test_id": "0001",
+        "type": "listen",
+        "question_number": None,
+        "extension": "mp3",
+    }
+
+
+def test_parse_filename_supports_other_exam_types():
+    # 2026-08-07 追加：exam_type 泛用化，開放任意證照類型（不寫死 toeic/gcp/aws 清單）。
+    parsed = toeic.parse_filename("gcp_0002_write_1.png")
+    assert parsed == {
+        "exam_type": "gcp",
+        "test_id": "0002",
+        "type": "write",
+        "question_number": 1,
+        "extension": "png",
+    }
 
 
 def test_parse_filename_returns_none_for_non_toeic_file():
@@ -84,10 +114,10 @@ def test_classify_drive_files_buckets_correctly():
 
     classified = toeic.classify_drive_files(files)
 
-    assert classified["write_images"] == {("0001", 1): files[0]}
-    assert classified["listen_images"] == {("0001", 1): files[1]}
-    assert classified["listen_audio_segments"] == {("0001", 1): files[2]}
-    assert classified["listen_whole_audio"] == {"0002": files[3]}
+    assert classified["write_images"] == {("toeic", "0001", 1): files[0]}
+    assert classified["listen_images"] == {("toeic", "0001", 1): files[1]}
+    assert classified["listen_audio_segments"] == {("toeic", "0001", 1): files[2]}
+    assert classified["listen_whole_audio"] == {("toeic", "0002"): files[3]}
 
 
 def test_classify_drive_files_ignores_unmatched_files():
@@ -123,9 +153,10 @@ def test_sync_processes_new_write_question(fake_db):
 
     toeic.sync_track1_from_drive(fake_db, gdrive_client, image_llm_clients, voice_client)
 
-    rows = fake_db.select("toeic_questions")
+    rows = fake_db.select("certificate_questions")
     assert len(rows) == 1
     row = rows[0]
+    assert row["exam_type"] == "toeic"
     assert row["test_id"] == "0001"
     assert row["question_type"] == "write"
     assert row["question_number"] == 1
@@ -138,8 +169,9 @@ def test_sync_processes_new_write_question(fake_db):
 
 def test_sync_skips_already_processed_write_question(fake_db):
     fake_db.insert(
-        "toeic_questions",
+        "certificate_questions",
         {
+            "exam_type": "toeic",
             "test_id": "0001",
             "question_type": "write",
             "question_number": 1,
@@ -157,7 +189,7 @@ def test_sync_skips_already_processed_write_question(fake_db):
 
     toeic.sync_track1_from_drive(fake_db, gdrive_client, image_llm_clients, voice_client)
 
-    assert len(fake_db.select("toeic_questions")) == 1
+    assert len(fake_db.select("certificate_questions")) == 1
     gdrive_client.download_file.assert_not_called()
     image_llm_clients[0].generate_with_image.assert_not_called()
 
@@ -171,7 +203,7 @@ def test_sync_skips_when_vision_parse_fails(fake_db):
 
     toeic.sync_track1_from_drive(fake_db, gdrive_client, image_llm_clients, voice_client)
 
-    assert fake_db.select("toeic_questions") == []
+    assert fake_db.select("certificate_questions") == []
 
 
 def test_sync_skips_when_vision_llm_raises(fake_db):
@@ -183,7 +215,7 @@ def test_sync_skips_when_vision_llm_raises(fake_db):
 
     toeic.sync_track1_from_drive(fake_db, gdrive_client, image_llm_clients, voice_client)
 
-    assert fake_db.select("toeic_questions") == []
+    assert fake_db.select("certificate_questions") == []
 
 
 def test_sync_processes_listen_question_with_existing_split_audio(fake_db):
@@ -198,7 +230,7 @@ def test_sync_processes_listen_question_with_existing_split_audio(fake_db):
 
     toeic.sync_track1_from_drive(fake_db, gdrive_client, image_llm_clients, voice_client)
 
-    rows = fake_db.select("toeic_questions")
+    rows = fake_db.select("certificate_questions")
     assert len(rows) == 1
     assert rows[0]["question_type"] == "listen"
     assert rows[0]["image_gdrive_url"] == "image-url"
@@ -214,7 +246,7 @@ def test_sync_leaves_listen_question_pending_when_no_audio_available(fake_db):
 
     toeic.sync_track1_from_drive(fake_db, gdrive_client, image_llm_clients, voice_client)
 
-    assert fake_db.select("toeic_questions") == []
+    assert fake_db.select("certificate_questions") == []
     gdrive_client.download_file.assert_not_called()
 
 
@@ -247,7 +279,7 @@ def test_sync_splits_whole_audio_and_processes_listen_questions(fake_db):
 
     toeic.sync_track1_from_drive(fake_db, gdrive_client, image_llm_clients, voice_client)
 
-    rows = fake_db.select("toeic_questions")
+    rows = fake_db.select("certificate_questions")
     assert len(rows) == 2
     texts = {row["question_number"]: row["question_text"] for row in rows}
     assert texts == {1: "聽力第一題", 2: "聽力第二題"}
@@ -268,8 +300,27 @@ def test_sync_skips_split_batch_when_whisper_fails(fake_db):
 
     toeic.sync_track1_from_drive(fake_db, gdrive_client, image_llm_clients, voice_client)
 
-    assert fake_db.select("toeic_questions") == []
+    assert fake_db.select("certificate_questions") == []
     image_llm_clients[0].generate_with_image.assert_not_called()
+
+
+def test_sync_processes_non_toeic_exam_type_and_scans_whole_folder(fake_db):
+    # 2026-08-07 追加：exam_type 泛用化，驗證非 TOEIC 證照（例如 GCP）也能走同一套流程，
+    # 且 Drive 掃描不再用檔名關鍵字過濾（list_files 呼叫不帶 name_contains）。
+    files = [{"id": "f1", "name": "gcp_0002_write_1.png", "mimeType": "image/png", "webViewLink": "url1"}]
+    gdrive_client = _make_gdrive_client(files, {"f1": b"image-bytes"})
+    image_llm_clients = [MagicMock()]
+    image_llm_clients[0].generate_with_image.return_value = _vision_reply("GCP 考題")
+    voice_client = MagicMock()
+
+    toeic.sync_track1_from_drive(fake_db, gdrive_client, image_llm_clients, voice_client)
+
+    gdrive_client.list_files.assert_called_once_with()
+    rows = fake_db.select("certificate_questions")
+    assert len(rows) == 1
+    assert rows[0]["exam_type"] == "gcp"
+    assert rows[0]["test_id"] == "0002"
+    assert rows[0]["question_text"] == "GCP 考題"
 
 
 # --- _segment_length_variance / _split_points_for_target_length ---

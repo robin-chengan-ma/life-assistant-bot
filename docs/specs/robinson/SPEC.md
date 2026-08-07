@@ -146,9 +146,9 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 - [x] FR-23（**2026-08-07 完成並修正，見 Step 3.1、submodules-core SPEC.md ADR-11 追記／ADR-14**）：每日重點技術分享（開關）：固定台灣時間 23:00 擷取 Gmail「當天」TLDR 電子報 + IThome / TechCrunch「當天」新聞，經 Gemini 產出中文重點摘要與總結分享，隔天 08:00 推播（依 NFR-11，以來源日期避免重複摘要已處理過的電子報/新聞）。實作細節：①TLDR 電子報寄件者固定為 `dan@tldrnewsletter.com`，用 `submodules/email` 新增的 `fetch_emails_from_domain_on_date(sender_domain, target_date)`（IMAP，寄件者網域比對 `tldrnewsletter.com`，經 AskUserQuestion 確認；呼叫端指定日期，不假設「今天」或「昨天」）②IThome／TechCrunch 用新增的 `submodules/newsfeed`（RSS Feed，`requests`＋標準函式庫 `xml.etree.ElementTree`，同樣以指定日期查詢）③三個來源任一失敗只記 log、視為當天無內容，不影響其他來源與整體收集④三個來源都沒內容時，收集階段不呼叫 Gemini（`summary_text` 寫入 `NULL`），推播階段一律回覆 Robin 指定的固定訊息「未獲得最新技術分享」，不靜默跳過（NFR-10）；找不到前一晚的收集結果（例如收集當下服務整小時都不可用）同樣回覆這則固定訊息⑤去重用「來源日期」（每天固定只收集「當天」）＋`skill_growth_digests.digest_date`（收集去重，UNIQUE 約束）／`pushed_on`（推播去重）機制，不需要額外的內容雜湊表⑥`tech_intel` 功能開關（`owner_only=True`；**2026-08-07 同日再修正**：原規劃的 `skill_growth` 拆成 `tech_intel`／`certificate`／`language` 三個獨立開關，見 feature-toggles SPEC.md FR-3 追記，本功能只用其中的 `tech_intel`，因為 Robin 認為證照準備〔TOEIC〕跟技術情報訂閱性質不同、不該共用同一把開關）關閉時，收集與推播兩階段都會跳過，不消耗 Gemini API 額度⑦Gemini 呼叫用獨立的 `GEMINI_API_SKILL_GROWTH_KEY`（Robin 已於 2026-08-07 申請並設定到 `.env`／Render 部署環境）
 - [ ] FR-24：證照題庫（`certificate` 開關，2026-08-07 起獨立於技術情報 `tech_intel` 之外，見 feature-toggles SPEC.md FR-3 追記）：使用者設定目標（時間、目標分數），Robinson 可在使用者不知如何準備時提供方向建議。**2026-08-07（Step 3.2）確認範圍**：這條「目標設定＋方向建議」的對話式功能與 FR-26（自訂每日題數/彈性排程）性質相近，一併留到 Step 3.3 展開；Step 3.2 只完成 FR-25a～FR-25f 的題庫建立 Pipeline
 - [x] FR-25：TOEIC 為第一個題庫，每次出題預設 1 題聽力 + 2 題填空 + 3 題單字英翻中，採「雙軌混合架構」產生題目；未來可套用同模板擴充 AWS / GCP 等其他證照（**2026-08-07 完成，見 Step 3.2**）：
-  - [x] FR-25a：軌道一（高準確度題庫）來源 — Robin 將題目照片（圖檔）與聽力音檔（MP3）上傳至 Google Drive 指定資料夾。**2026-08-07 確認實際檔名規則**：`toeic_{測驗場次代號}_write_{題號}.{ext}`（填空/單字題，僅圖片）、`toeic_{測驗場次代號}_listen_{題號}.{ext}`（聽力題，Robin 已切好的單題圖片/音檔）、`toeic_{測驗場次代號}_listen.mp3`（聽力題整包音檔，尚未切割）
-  - [x] FR-25b：軌道一檔名比對規則 — 若為已分拆的音檔，系統直接比對圖檔與音檔的檔名規則（見 FR-25a 實際格式，檔名含 `toeic` 字樣供辨識歸類，見 ADR-13），比對成功即整合為一筆完整題目；若為整包大型 MP3，Robinson 呼叫 Groq Whisper API（`VOICE_API_KEY`，`transcribe_with_segments()`）取得逐句時間軸，依語句停頓自動切割為獨立小音檔（**2026-07-30 更新**：語音轉文字改採 Groq Whisper，取代先前「一律用 Gemini」的規劃，見 ADR-12；**2026-08-07 新增 ADR-18**：切割邏輯是尚未經真實錄音驗證的啟發式判斷，Robin 已知情並選擇這次一起做）
-  - [x] FR-25c：軌道一圖文解析與入庫 — 使用 Gemini Vision 解析題目圖檔中的文字與選項，寫入 Neon DB `toeic_questions` 表（題目文字、選項、對應圖檔 URL、對應音檔 URL）；**依原文刻意不存正解**（題目照片本身未必附答案）
+  - [x] FR-25a：軌道一（高準確度題庫）來源 — Robin 將題目照片（圖檔）與聽力音檔（MP3）上傳至 Google Drive 指定資料夾。**2026-08-07 確認實際檔名規則**：`toeic_{測驗場次代號}_write_{題號}.{ext}`（填空/單字題，僅圖片）、`toeic_{測驗場次代號}_listen_{題號}.{ext}`（聽力題，Robin 已切好的單題圖片/音檔）、`toeic_{測驗場次代號}_listen.mp3`（聽力題整包音檔，尚未切割）。**2026-08-07 同日追記（見 ADR-18 決策 4）**：檔名格式泛用化為 `{exam_type}_{測驗場次代號}_write/listen_{題號}.{ext}`，`exam_type` 開放任意字串（不限 toeic），供 GCP／AWS 等未來證照類型直接沿用同一套 Pipeline
+  - [x] FR-25b：軌道一檔名比對規則 — 若為已分拆的音檔，系統直接比對圖檔與音檔的檔名規則（見 FR-25a 實際格式，檔名含 `toeic` 字樣供辨識歸類，見 ADR-13），比對成功即整合為一筆完整題目；若為整包大型 MP3，Robinson 呼叫 Groq Whisper API（`VOICE_API_KEY`，`transcribe_with_segments()`）取得逐句時間軸，依語句停頓自動切割為獨立小音檔（**2026-07-30 更新**：語音轉文字改採 Groq Whisper，取代先前「一律用 Gemini」的規劃，見 ADR-12；**2026-08-07 新增 ADR-18**：切割邏輯是尚未經真實錄音驗證的啟發式判斷，Robin 已知情並選擇這次一起做；**同日再追記**：檔名比對改用 FR-25a 泛用化後的 `exam_type` 前綴而非固定 `toeic` 關鍵字，Google Drive 掃描也改成列出整個資料夾所有檔案，不再用關鍵字過濾）
+  - [x] FR-25c：軌道一圖文解析與入庫 — 使用 Gemini Vision 解析題目圖檔中的文字與選項，寫入 Neon DB `toeic_questions` 表（題目文字、選項、對應圖檔 URL、對應音檔 URL）；**依原文刻意不存正解**（題目照片本身未必附答案）。**2026-08-07 同日追記**：資料表重新命名為 `certificate_questions` 並新增 `exam_type` 欄位，Vision 解析 Prompt 也改為依 `exam_type` 動態組字（例如「這張『GCP』證照考試的題目照片」），詳見 ADR-18 決策 4、`src/schema/db_schema.md`
   - [x] FR-25d：軌道二（單字刷題庫）題目規格 — Gemini 即時生成多益最新核心單字英翻中選擇題，每題須包含：單字（Target Word）、題目（英翻中選答）、4 個繁體中文選項（1 個正確答案＋3 個具干擾性的錯誤選項）、英文實用例句（Example Sentence）、例句繁體中文翻譯
   - [x] FR-25e：軌道二儲存機制 — 生成後同步寫入 DB（`toeic_vocab_questions`）供後續測驗重複抽考，避免重複呼叫 API 造成 Token 浪費；每週生成題數由 `users.toeic_weekly_question_count` 決定（Robin 自訂，預設 21 題＝一天 3 題）
   - [x] FR-25f：排程與去重規則 — 兩軌道的檔案掃描/生成排程統一為每週日台灣時間 22:00（Robin 2026-08-07 指定，取代原「排程頻率未定案」狀態）。**2026-08-07 修正去重規則**：原規劃「檔名中的日期是否落在過去一週內」與 Robin 實際確認的檔名格式（無日期）對不上，改用 `toeic_questions.source_image_filename` 是否已存在資料庫判斷是否處理過（符合 NFR-11 ETL 去重原則，效果等價，更貼合實際檔名設計）；軌道二額外靠 `users.toeic_pipeline_last_run_on`（今天是否已執行過）避免 `/healthz` 同一小時內多次觸發重複生成
@@ -673,20 +673,24 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 1. **`gdrive` 擴大 OAuth scope 而非改走 Telegram 上傳**：Robin 選擇維持「直接把照片/音檔手動丟進 Google Drive 資料夾，機器人每週排程掃描」的工作流程（符合 FR-25a／25f 原文設計），而非改成透過 Telegram 傳送。原本 `submodules/gdrive` 刻意只做 `upload_file()`、scope 固定 `drive.file`（只能看到本程式自己建立的檔案），看不到 Robin 手動上傳的檔案；本次新增 `list_files()`／`download_file()`，scope 擴大為 `drive.file + drive.readonly`，Robin 需重新執行一次 `get_refresh_token.py` 取得新 refresh token。
 2. **整包聽力 MP3 自動切割這次一起做**：Robin 手上還沒有真實錄音可以驗證切法對不對，經提醒風險後仍選擇一起做。切割邏輯（`src/bot/toeic._find_split_plan()`）用 Groq Whisper 逐句時間軸之間的停頓當候選切割點，是**尚未經真實素材驗證的啟發式判斷**，Robin 上傳第一份整包音檔後大概率需要依實際效果調整參數。**2026-08-07 同日追加驗證**：Robin 上傳真實錄音 `Test01_Part1.mp3`（6 題、276.7 秒）實測，發現原始版本（單純取最大的幾個停頓當切割點）會把開頭一段作答說明語音（TOEIC Part 1 開考前的固定口頭指示，實測約 117.6 秒）整段併入第一題，導致第一段長度是其他題目的 5 倍以上；Robin 確認「有的音檔可能有這種說明語音、有的可能沒有，都要考慮到」。修正為：候選切割點先依「停頓長度至少達全音檔最大停頓的一半」篩選掉句子內部的小停頓雜訊，再把「完全沒有說明語音」與「音檔前 60% 範圍內每一個候選停頓都當作一次可能的說明語音結尾」逐一試切、實際比較每種切法的「每段長度變異數」，選變異數最小（最平均）的一組——用真實錄音重新實測後，正確排除了說明語音，6 段題目長度落在 12.5～36.3 秒之間（多數集中在 27～29 秒），較先前的 152.8 秒異常值大幅改善；新增迴歸測試 `test_split_audio_by_question_count_excludes_leading_instructions_regression()` 用合成音檔重現同樣情境防止未來退化。
 3. **Step 3.2 範圍只到「建題庫」**：每週日 22:00 建好題庫後，「每天早上 8 點上線」的每日推播/作答/批改功能明確留給 Step 3.3（FR-26～FR-30），避免兩個 Step 的邊界混在一起、之後要調整作答邏輯時牽動範圍過大。FR-24 的「目標設定＋方向建議」對話式功能因性質與 FR-26 相近，也一併留到 Step 3.3。
+4. **同日追加：`exam_type` 泛用化，不寫死證照種類清單**：Robin 完工後詢問「以後新增 GCP、AWS 等其他證照考試，現有機制能否直接沿用」。原始設計把 TOEIC 寫死在檔名前綴解析（`toeic_XXXX_write_1.png`）、資料表名（`toeic_questions`）、Vision Prompt 內文，無法直接套用到其他證照類型。Robin 明確要求「exam_type 不能直接鎖死這三類（TOEIC/GCP/AWS），因為會有多種可能，不然就是一律在 Telegram 設定 exam_type」，於是當場決定泛用化：檔名格式改為 `{exam_type}_{test_id}_write/listen_{題號}.{ext}`，`exam_type` 從檔名第一段開放解析成任意字串（不加 CHECK 限制、不寫死列舉清單），資料表 `toeic_questions` 重新命名為 `certificate_questions` 並新增 `exam_type` 欄位（見 `0038_generalize_toeic_questions_to_certificate_questions.sql`，Robin 核准）；Drive 掃描邏輯同步從「檔名關鍵字過濾」改成「列出整個資料夾所有檔案」（經 AskUserQuestion 確認 Robin 選擇「直接列出整個資料夾所有檔案」而非改用 Telegram 設定），避免關鍵字過濾漏掉非 TOEIC 檔案。軌道二（`toeic_vocab_questions`、Gemini 生成單字題）刻意維持 TOEIC 專用不泛用化，因為英文單字題的生成玩法跟技術證照的考古題性質不同，見 `src/schema/db_schema.md` `toeic_vocab_questions` 變更紀錄。
 
 **理由**：
 - 決策 1：符合 Robin 原本設想的使用情境（拍照後直接丟資料夾，不用透過聊天視窗一張張傳），且是 FR-25a／25f 原文已經隱含的設計，改用 Telegram 反而需要另外修改 SPEC 文字。
 - 決策 2：一次把 Pipeline 做完整，比分兩次交付更有效率；風險已提前告知 Robin 並取得同意，且程式碼有完整 try/except 保護，切割失敗只會讓那一批聽力題暫緩處理、不影響其他題目或系統穩定性。
 - 決策 3：延續 Step 3.1（每日技術分享）的「先確認範圍再動工」慣例，避免範圍蔓延（scope creep）。
+- 決策 4：Robin 對未來擴充性有明確要求（不寫死清單），開放式字串解析成本低（不需要 CHECK 約束、不需要每次新增證照類型就開 migration），符合「新增證照類型只換檔名前綴、不改程式碼」的目標；若日後真的需要更嚴謹的驗證（例如防呆打錯字），可以之後再視實際使用情況加上應用層級的白名單提示，不影響資料庫層彈性。
 
 **替代方案**：
 - 決策 1 替代方案：透過 Telegram 上傳（見上方比較）——不用改 OAuth scope，但不符合 Robin 原本設想的工作流程，已否決。
 - 決策 2 替代方案：先只做「已切好的小檔案比對」，大型 MP3 自動切割留到有真實素材後再做——風險更低，但 Robin 選擇效率優先，已否決。
+- 決策 4 替代方案：一律在 Telegram 對話設定 `exam_type`（Robin 提出的備案）——多一道手動設定步驟、且跟「檔名驅動」的既有工作流程不一致，已否決；另一個被否決的方案是用 CHECK 約束鎖死 `('toeic', 'gcp', 'aws')` 固定清單——直接違反 Robin「不能鎖死這三類」的明確要求，已否決。
 
 **後果**：
 - Robin 需要在方便的時候執行 `get_refresh_token.py` 並更新 `.env`／Render 的 `GDRIVE_OAUTH_REFRESH_TOKEN`，否則軌道一在正式環境會因為看不到 Drive 檔案而永遠掃到 0 筆（不影響軌道二的單字題生成，兩者互相獨立、任一邊失敗不影響另一邊，見 `run_weekly_pipeline()`）。
 - 整包 MP3 切割邏輯的參數（停頓門檻等）未來可能需要依 Robin 實測結果調整，不是一次到位的定案。
 - FR-24、FR-26～FR-30（含每日推播機制）留待 Step 3.3 一併展開規劃。
+- `exam_type` 沒有拼字檢查，Robin 上傳檔案時若打錯字（例如 `gcp` 打成 `gpc`）會被當成新的證照類型獨立存在，不會報錯也不會自動歸併；目前刻意不處理，等真的發生再視情況加防呆。
 
 **狀態**：accepted
 

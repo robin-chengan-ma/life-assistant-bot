@@ -1,4 +1,4 @@
-"""TOEIC 雙軌題庫 Pipeline（對應 docs/specs/robinson/SPEC.md FR-24、FR-25a～FR-25f、Step 3.2）。
+"""證照題庫 Pipeline（對應 docs/specs/robinson/SPEC.md FR-24、FR-25a～FR-25f、Step 3.2）。
 
 僅 Robin 可用（`certificate` 功能開關）。**這個模組只負責「把題庫建好、存進 DB」**，不處理
 推播/作答/批改（FR-26～FR-30，留待 Step 3.3；2026-08-07 經 AskUserQuestion 與 Robin 確認的
@@ -7,28 +7,36 @@
 
 兩條軌道：
 - **軌道一**（`sync_track1_from_drive()`）：掃描 Google Drive 資料夾內 Robin 手動上傳的題目
-  照片/音檔，依檔名比對成一題一題，呼叫 Gemini Vision 解析文字與選項，寫入 `toeic_questions`。
-  聽力題若只有整包 MP3、還沒切成單題小檔，先用 Groq Whisper 依語句停頓自動切割（見
-  `_find_split_plan()`：**啟發式邏輯，是 Robin 2026-08-07 已知情並選擇這次一起做的風險項**。
-  同日用 Robin 提供的真實錄音 `Test01_Part1.mp3` 實測，發現有些音檔開頭會有一段作答說明語音
-  （例如 TOEIC Part 1 開考前的固定口頭指示），若直接照「取最大的幾個停頓」切割，說明語音會被
-  併進第一題、導致第一段長度異常；改為「無說明語音／有說明語音」兩種假設各切一次、比較每段
-  長度變異數，自動選出較合理的一組，說明語音若被判定存在會直接捨棄不計入任何題目。之後可能
-  仍需依更多真實素材微調）。
+  照片/音檔，依檔名比對成一題一題，呼叫 Gemini Vision 解析文字與選項，寫入 `certificate_
+  questions`。聽力題若只有整包 MP3、還沒切成單題小檔，先用 Groq Whisper 依語句停頓自動切割
+  （見 `_find_split_plan()`：**啟發式邏輯，是 Robin 2026-08-07 已知情並選擇這次一起做的風險
+  項**。同日用 Robin 提供的真實錄音 `Test01_Part1.mp3` 實測，發現有些音檔開頭會有一段作答
+  說明語音（例如 TOEIC Part 1 開考前的固定口頭指示），若直接照「取最大的幾個停頓」切割，說明
+  語音會被併進第一題、導致第一段長度異常；改為「無說明語音／有說明語音」兩種假設各切一次、
+  比較每段長度變異數，自動選出較合理的一組，說明語音若被判定存在會直接捨棄不計入任何題目。
+  之後可能仍需依更多真實素材微調）。**2026-08-07 追加（Robin 提出未來要擴充 GCP／AWS 等其他
+  證照）**：軌道一泛用化為支援任意證照類型（`exam_type` 是開放字串、不寫死清單，來源就是檔名
+  第一段），新增證照類型完全不需要改程式碼，只要換檔名前綴即可；聽力/切割相關能力仍保留給任何
+  可能有聽力的證照使用，但軌道二單字題生成刻意仍只服務 TOEIC（見下方）。
 - **軌道二**（`generate_track2_vocab_questions()`）：呼叫 Gemini 即時生成多益核心單字英翻中
   選擇題，依 `users.toeic_weekly_question_count`（Robin 自訂，預設 21）產生新題，跳過已存在
-  的單字避免重複出題、浪費 Token（FR-25e）。
+  的單字避免重複出題、浪費 Token（FR-25e）。**這條軌道刻意維持 TOEIC 專屬**：「單字刷題」是
+  語言檢定特有的概念，GCP／AWS 這類證照沒有對應需求，不需要、也不該泛用化。
 
-檔名規則（Robin 2026-08-07 確認）：
-- `toeic_{test_id}_write_{題號}.{ext}`：填空/單字題，只有圖片
-- `toeic_{test_id}_listen_{題號}.{ext}`：聽力題，Robin 已切好的單題圖片/音檔
-- `toeic_{test_id}_listen.mp3`：聽力題整包音檔（無題號），尚未切割，交給系統自動切割
+檔名規則（Robin 2026-08-07 確認，同日追加 `exam_type` 前綴支援任意證照類型）：
+- `{exam_type}_{test_id}_write_{題號}.{ext}`：填空/單字題（或任何無聽力的一般考題），只有圖片
+- `{exam_type}_{test_id}_listen_{題號}.{ext}`：聽力題，Robin 已切好的單題圖片/音檔
+- `{exam_type}_{test_id}_listen.mp3`：聽力題整包音檔（無題號），尚未切割，交給系統自動切割
+- `exam_type` 開放任意小寫英數字/連字號組合（例如 `toeic`／`gcp`／`aws-saa`），不寫死清單；
+  Drive 掃描不再用檔名關鍵字過濾（原本是 `name_contains="toeic"`），改成整個資料夾列出所有
+  檔案，交給 `parse_filename()` 判斷哪些符合命名規則，不符合的直接忽略（Robin 2026-08-07
+  確認：這個資料夾裡其他用途的檔案量不大，直接全列出換取實作簡單、不需要另外約定共用前綴）
 
 去重（**2026-08-07 修正 FR-25f**：原規劃用「檔名日期是否在過去一週內」判斷，但 Robin 確認的
-實際檔名格式沒有日期，這條規則對不上；改用 `toeic_questions.source_image_filename` 是否已存在
-資料庫判斷是否處理過，更直覺也不會漏掉任何檔案）。軌道一天然是冪等的（重複掃到已處理過的檔案
-會直接跳過），軌道二額外靠 `users.toeic_pipeline_last_run_on` 擋下同一個週日 22:00 那個小時內
-`/healthz` 多次觸發造成的重複生成（否則會超出預期的每週題數）。
+實際檔名格式沒有日期，這條規則對不上；改用 `certificate_questions.source_image_filename` 是否
+已存在資料庫判斷是否處理過，更直覺也不會漏掉任何檔案）。軌道一天然是冪等的（重複掃到已處理過
+的檔案會直接跳過），軌道二額外靠 `users.toeic_pipeline_last_run_on` 擋下同一個週日 22:00 那個
+小時內 `/healthz` 多次觸發造成的重複生成（否則會超出預期的每週題數）。
 """
 import io
 import json
@@ -52,12 +60,16 @@ _FEATURE_KEY = "certificate"
 
 _AUDIO_EXTENSIONS = {"mp3", "m4a", "wav", "ogg"}
 
+# exam_type 開放任意小寫英數字/連字號組合（例如 toeic、gcp、aws-saa），不寫死清單；
+# test_id 沿用原本的英數字場次代號規則。
 _FILENAME_PATTERN = re.compile(
-    r"^toeic_(?P<test_id>[0-9A-Za-z]+)_(?P<type>write|listen)(?:_(?P<qnum>\d+))?\.(?P<ext>[A-Za-z0-9]+)$"
+    r"^(?P<exam_type>[0-9a-z][0-9a-z-]*)_(?P<test_id>[0-9A-Za-z]+)_(?P<type>write|listen)"
+    r"(?:_(?P<qnum>\d+))?\.(?P<ext>[A-Za-z0-9]+)$"
 )
 
 _VISION_PARSE_PROMPT = (
-    "你是 Robinson，請解析這張多益（TOEIC）題目照片，用以下固定格式輸出，不要輸出其他任何文字：\n"
+    "你是 Robinson，請解析這張「{exam_type}」證照考試的題目照片，用以下固定格式輸出，"
+    "不要輸出其他任何文字：\n"
     "QUESTION: <題目文字>\n"
     "OPTIONS: <選項，用「|」分隔，例如 A. xxx|B. xxx|C. xxx|D. xxx>\n"
     "若圖片中同時有多題，只解析看起來最完整、最主要的一題；若圖片模糊到完全無法辨識文字，"
@@ -84,14 +96,15 @@ _VOCAB_GENERATE_PROMPT = (
 
 
 def parse_filename(filename: str) -> dict | None:
-    """解析 TOEIC 素材檔名，回傳 `test_id`／`type`／`question_number`／`extension`；
-    不符合規則（非 TOEIC 素材）回傳 `None`。
+    """解析證照素材檔名，回傳 `exam_type`／`test_id`／`type`／`question_number`／`extension`；
+    不符合規則（非本 Pipeline 使用的素材）回傳 `None`。
     """
     match = _FILENAME_PATTERN.match(filename)
     if match is None:
         return None
     groups = match.groupdict()
     return {
+        "exam_type": groups["exam_type"],
         "test_id": groups["test_id"],
         "type": groups["type"],
         "question_number": int(groups["qnum"]) if groups["qnum"] else None,
@@ -102,11 +115,11 @@ def parse_filename(filename: str) -> dict | None:
 def classify_drive_files(files: list[dict]) -> dict:
     """把 Drive 檔案清單依檔名規則分成四類，供後續比對/切割使用；不符合命名規則的檔案忽略。
 
-    回傳結構：
-    - `write_images`：`{(test_id, qnum): file}`，填空/單字題圖片
-    - `listen_images`：`{(test_id, qnum): file}`，聽力題圖片
-    - `listen_audio_segments`：`{(test_id, qnum): file}`，已切好的單題聽力音檔
-    - `listen_whole_audio`：`{test_id: file}`，尚未切割的整包聽力音檔
+    key 一律包含 `exam_type`，避免不同證照類型剛好用了相同 `test_id` 造成互相覆蓋。回傳結構：
+    - `write_images`：`{(exam_type, test_id, qnum): file}`，填空/單字題（或任何無聽力考題）圖片
+    - `listen_images`：`{(exam_type, test_id, qnum): file}`，聽力題圖片
+    - `listen_audio_segments`：`{(exam_type, test_id, qnum): file}`，已切好的單題聽力音檔
+    - `listen_whole_audio`：`{(exam_type, test_id): file}`，尚未切割的整包聽力音檔
     """
     write_images: dict = {}
     listen_images: dict = {}
@@ -119,19 +132,20 @@ def classify_drive_files(files: list[dict]) -> dict:
             continue
 
         is_audio = parsed["extension"].lower() in _AUDIO_EXTENSIONS
+        exam_type = parsed["exam_type"]
         test_id = parsed["test_id"]
         qnum = parsed["question_number"]
 
         if parsed["type"] == "write":
             if qnum is not None and not is_audio:
-                write_images[(test_id, qnum)] = file
+                write_images[(exam_type, test_id, qnum)] = file
         else:  # listen
             if qnum is None and is_audio:
-                listen_whole_audio[test_id] = file
+                listen_whole_audio[(exam_type, test_id)] = file
             elif qnum is not None and is_audio:
-                listen_audio_segments[(test_id, qnum)] = file
+                listen_audio_segments[(exam_type, test_id, qnum)] = file
             elif qnum is not None and not is_audio:
-                listen_images[(test_id, qnum)] = file
+                listen_images[(exam_type, test_id, qnum)] = file
 
     return {
         "write_images": write_images,
@@ -147,7 +161,7 @@ def classify_drive_files(files: list[dict]) -> dict:
 def _is_already_processed(db: CloudSQLClient, source_image_filename: str) -> bool:
     return (
         db.select(
-            "toeic_questions",
+            "certificate_questions",
             where="source_image_filename = %s",
             params=(source_image_filename,),
             fetch_one=True,
@@ -168,15 +182,17 @@ def _parse_vision_output(raw: str) -> dict | None:
     return {"question_text": question_text, "options": options}
 
 
-def _parse_question_image(image_bytes: bytes, image_llm_clients: list) -> dict | None:
+def _parse_question_image(image_bytes: bytes, image_llm_clients: list, exam_type: str) -> dict | None:
     """呼叫 Gemini Vision 解析題目文字與選項；解析失敗或格式不符回傳 `None`（呼叫端記 log 跳過，
-    不寫入髒資料，見 SPEC.md 風險表「比對失敗時不寫入資料庫」）。
+    不寫入髒資料，見 SPEC.md 風險表「比對失敗時不寫入資料庫」）。`exam_type` 帶入 prompt 讓
+    Gemini 知道這是哪種證照的題目（例如 toeic／gcp／aws），不寫死特定證照的措辭。
     """
     llm_client = random.choice(image_llm_clients)
+    prompt = _VISION_PARSE_PROMPT.format(exam_type=exam_type)
     try:
-        raw = llm_client.generate_with_image(_VISION_PARSE_PROMPT, image_bytes, mime_type="image/jpeg")
+        raw = llm_client.generate_with_image(prompt, image_bytes, mime_type="image/jpeg")
     except Exception:
-        _logger.exception("Gemini Vision 解析 TOEIC 題目圖片失敗")
+        _logger.exception("Gemini Vision 解析證照題目圖片失敗（exam_type=%s）", exam_type)
         return None
 
     parsed = _parse_vision_output(raw)
@@ -185,10 +201,20 @@ def _parse_question_image(image_bytes: bytes, image_llm_clients: list) -> dict |
     return parsed
 
 
-def _insert_question(db: CloudSQLClient, test_id: str, question_type: str, qnum: int, parsed: dict, image_file: dict, audio_url: str | None) -> None:
+def _insert_question(
+    db: CloudSQLClient,
+    exam_type: str,
+    test_id: str,
+    question_type: str,
+    qnum: int,
+    parsed: dict,
+    image_file: dict,
+    audio_url: str | None,
+) -> None:
     db.insert(
-        "toeic_questions",
+        "certificate_questions",
         {
+            "exam_type": exam_type,
             "test_id": test_id,
             "question_type": question_type,
             "question_number": qnum,
@@ -202,14 +228,14 @@ def _insert_question(db: CloudSQLClient, test_id: str, question_type: str, qnum:
 
 
 def _process_write_questions(db: CloudSQLClient, gdrive_client, image_llm_clients: list, classified: dict) -> None:
-    for (test_id, qnum), image_file in classified["write_images"].items():
+    for (exam_type, test_id, qnum), image_file in classified["write_images"].items():
         if _is_already_processed(db, image_file["name"]):
             continue
         image_bytes = gdrive_client.download_file(image_file["id"])
-        parsed = _parse_question_image(image_bytes, image_llm_clients)
+        parsed = _parse_question_image(image_bytes, image_llm_clients, exam_type)
         if parsed is None:
             continue
-        _insert_question(db, test_id, "write", qnum, parsed, image_file, audio_url=None)
+        _insert_question(db, exam_type, test_id, "write", qnum, parsed, image_file, audio_url=None)
 
 
 def _process_listen_questions_with_existing_audio(
@@ -221,12 +247,14 @@ def _process_listen_questions_with_existing_audio(
             continue
         if _is_already_processed(db, image_file["name"]):
             continue
-        test_id, qnum = key
+        exam_type, test_id, qnum = key
         image_bytes = gdrive_client.download_file(image_file["id"])
-        parsed = _parse_question_image(image_bytes, image_llm_clients)
+        parsed = _parse_question_image(image_bytes, image_llm_clients, exam_type)
         if parsed is None:
             continue
-        _insert_question(db, test_id, "listen", qnum, parsed, image_file, audio_url=audio_file.get("webViewLink"))
+        _insert_question(
+            db, exam_type, test_id, "listen", qnum, parsed, image_file, audio_url=audio_file.get("webViewLink")
+        )
 
 
 # 2026-08-07（Robin 實測 Test01_Part1.mp3 後追加）：有些整包音檔開頭會有一段作答說明語音
@@ -364,51 +392,62 @@ def _split_whole_audio(gdrive_client, voice_client, whole_audio_file: dict, ques
 def _process_listen_questions_needing_split(
     db: CloudSQLClient, gdrive_client, image_llm_clients: list, voice_client, classified: dict
 ) -> None:
-    # 依 test_id 分組：找出「有聽力圖片、還沒有對應單題音檔、且該場次有整包音檔」的題號。
-    pending_by_test_id: dict[str, list[int]] = {}
-    for (test_id, qnum), image_file in classified["listen_images"].items():
-        if (test_id, qnum) in classified["listen_audio_segments"]:
+    # 依 (exam_type, test_id) 分組：找出「有聽力圖片、還沒有對應單題音檔、且該場次有整包音檔」的題號。
+    pending_by_test: dict[tuple[str, str], list[int]] = {}
+    for (exam_type, test_id, qnum), image_file in classified["listen_images"].items():
+        if (exam_type, test_id, qnum) in classified["listen_audio_segments"]:
             continue
         if _is_already_processed(db, image_file["name"]):
             continue
-        if test_id not in classified["listen_whole_audio"]:
+        if (exam_type, test_id) not in classified["listen_whole_audio"]:
             continue
-        pending_by_test_id.setdefault(test_id, []).append(qnum)
+        pending_by_test.setdefault((exam_type, test_id), []).append(qnum)
 
-    for test_id, question_numbers in pending_by_test_id.items():
-        whole_audio_file = classified["listen_whole_audio"][test_id]
+    for (exam_type, test_id), question_numbers in pending_by_test.items():
+        whole_audio_file = classified["listen_whole_audio"][(exam_type, test_id)]
         try:
             segments_by_qnum = _split_whole_audio(gdrive_client, voice_client, whole_audio_file, question_numbers)
         except Exception:
-            _logger.exception("整包 MP3 切割失敗（test_id=%s），這批聽力題暫緩處理，下次排程重試", test_id)
+            _logger.exception(
+                "整包 MP3 切割失敗（exam_type=%s, test_id=%s），這批聽力題暫緩處理，下次排程重試",
+                exam_type, test_id,
+            )
             continue
 
         for qnum in question_numbers:
             segment_bytes = segments_by_qnum.get(qnum)
             if segment_bytes is None:
                 continue
-            image_file = classified["listen_images"][(test_id, qnum)]
+            image_file = classified["listen_images"][(exam_type, test_id, qnum)]
             try:
-                segment_filename = f"toeic_{test_id}_listen_{qnum}.mp3"
+                segment_filename = f"{exam_type}_{test_id}_listen_{qnum}.mp3"
                 audio_url = gdrive_client.upload_file(segment_filename, segment_bytes, mime_type="audio/mpeg")
             except Exception:
-                _logger.exception("上傳切割後的聽力小檔失敗（test_id=%s, qnum=%s）", test_id, qnum)
+                _logger.exception(
+                    "上傳切割後的聽力小檔失敗（exam_type=%s, test_id=%s, qnum=%s）", exam_type, test_id, qnum
+                )
                 continue
 
             image_bytes = gdrive_client.download_file(image_file["id"])
-            parsed = _parse_question_image(image_bytes, image_llm_clients)
+            parsed = _parse_question_image(image_bytes, image_llm_clients, exam_type)
             if parsed is None:
                 continue
-            _insert_question(db, test_id, "listen", qnum, parsed, image_file, audio_url=audio_url)
+            _insert_question(db, exam_type, test_id, "listen", qnum, parsed, image_file, audio_url=audio_url)
 
 
 def sync_track1_from_drive(db: CloudSQLClient, gdrive_client, image_llm_clients: list, voice_client) -> None:
     """FR-25a～FR-25c：掃描 Drive 資料夾，比對新的 write/listen 題目並解析寫入 DB。
 
+    支援任意證照類型（`exam_type` 從檔名第一段解析而來，不寫死清單）。**2026-08-07 追加**：
+    不再用檔名關鍵字（原本是 `name_contains="toeic"`）過濾 Drive 檔案列表，改成列出整個資料夾
+    所有檔案，交給 `parse_filename()` 判斷哪些符合命名規則——因為 `exam_type` 開放任意字串後，
+    沒有單一關鍵字可以用來過濾，Robin 確認這個資料夾其他用途的檔案量不大，直接全列出換取實作
+    簡單（見 Robin AskUserQuestion 選定）。
+
     掃到 0 個檔案（例如 Robin 還沒上傳任何素材）時三個 `_process_*` 函式都會直接跑完、不做
     任何事，不會報錯，符合「還沒有素材也能安全部署」的要求。
     """
-    files = gdrive_client.list_files(name_contains="toeic")
+    files = gdrive_client.list_files()
     classified = classify_drive_files(files)
 
     _process_write_questions(db, gdrive_client, image_llm_clients, classified)
