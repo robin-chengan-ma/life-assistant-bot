@@ -6,6 +6,7 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request
+from google.genai import errors as genai_errors
 
 from src.bot.router import handle_message, handle_photo_message, handle_voice_message
 from src.bot.state import ConversationStateStore
@@ -13,7 +14,7 @@ from submodules.calendar.client import CalendarClient
 from submodules.cloudsql.client import CloudSQLClient
 from submodules.email.client import EmailClient
 from submodules.gdrive.client import GDriveClient
-from submodules.llm.client import LLMClient
+from submodules.llm.client import LLMClient, LLMQuotaGuardError
 from submodules.telegram.client import TelegramClient
 from submodules.voice.client import VoiceClient
 
@@ -28,14 +29,27 @@ _voice_lockout_store = ConversationStateStore()
 
 _logger = logging.getLogger(__name__)
 
-# FR-19：對外一律回這句安全用語，不揭露技術細節（Traceback 只私訊 Robin，見 FR-19a）。
-# 完整的「一般感冒級／重大疾病級」分級降級（FR-19f/FR-19g，需要區分是不是 LLM 本身掛掉）
-# 留待 Phase 2 Step 2.6，Phase 1 先用同一句安全用語涵蓋所有未預期例外。
-_UNEXPECTED_ERROR_REPLY = "羅賓森好像不太舒服，等一下再試試看喔！"
+# 2026-08-07（Step 2.6，見 robinson SPEC.md FR-19f／FR-19g）：分級降級的兩句固定範本，
+# 一律不經過 LLM 生成（節省 Token，也因為「重大疾病級」的定義就是 LLM 本身已經叫不動了）。
+#
+# 「一般感冒級」（FR-19f）：LLM API 本身仍可正常運作，只是其他元件（DB／GDrive／Calendar／
+# Telegram 送出以外的其他呼叫等）暫時異常，且已用盡 FR-19i 的重試機制。
+_GENERAL_COLD_REPLY = (
+    "🤒 主任，我好像有點小感冒（系統暫時性異常），不過別擔心！"
+    "我已經自動紀錄日誌通知 Robin 處理囉，請稍後再試一次！"
+)
+
+# 「重大疾病級」（FR-19g）：Try 區塊執行到呼叫 LLM API 本身直接拋出例外（Gemini 伺服器錯誤、
+# API Key 失效、額度用罄、本地端節流保護觸發等，且已用盡 FR-19i 重試機制），代表 LLM 已完全
+# 無法處理任何請求，此時完全繞過 LLM，直接回這句寫死在後端的靜態字串。
+_MAJOR_ILLNESS_REPLY = (
+    "🚨 主人與各位家人非常抱歉，我最近患上了重大的疾病（AI 核心服務暫時無法運作），"
+    "目前無法回答任何問題。Robin 已收到緊急通知並正在全力搶救中！"
+)
 
 # 2026-08-02 追加修正（見 robinson SPEC.md FR-19，Robin 回報「打了訊息 Robinson 完全不理我」）：
 # 根因是沒有拋出例外，但 Gemini 那次生成剛好回傳空字串，導致 `reply` 被覆寫成 ""，連預設的
-# `_UNEXPECTED_ERROR_REPLY` 安全網都被蓋掉，下面 `if reply:` 判斷為 False、完全不送出任何
+# `_GENERAL_COLD_REPLY` 安全網都被蓋掉，下面 `if reply:` 判斷為 False、完全不送出任何
 # Telegram 訊息——使用者只會看到已讀不回，連安全用語都收不到。用不同措辭跟例外安全網區分，
 # 讓使用者知道是「這句沒接上」而不是「系統掛了」，鼓勵他換句話說再試一次。
 _EMPTY_REPLY_FALLBACK = "不好意思，我剛剛好像沒接上你的話，可以再說一次或換個方式講講看嗎？"
@@ -67,6 +81,11 @@ _ROBIN_ERROR_NOTIFY_TEMPLATE = (
     "Traceback：\n{traceback_text}"
     "{log_link_line}"
 )
+
+# 2026-08-07（Step 2.6，見 FR-19g）：「重大疾病級」私訊 Robin 時，在既有通知內容前面
+# 加這段最高等級告警橫幅，讓他一眼就能從眾多訊息中分辨這是「LLM 核心完全掛掉」而不是
+# 一般的暫時性小問題（一般感冒級沒有這段橫幅，內容格式不變）。
+_CRITICAL_SEVERITY_BANNER = "🚨🚨🚨 最高等級告警：LLM 核心服務故障（重大疾病級） 🚨🚨🚨\n\n"
 
 # FR-19b：上傳到 Google Drive 的完整錯誤 log 檔案內容範本，跟 Telegram 訊息分開排版
 # （這份不受 Telegram 4096 字元上限限制，Traceback 一律完整、不截斷）。
@@ -136,7 +155,9 @@ def _send_email_fallback(subject: str, body: str) -> None:
         _logger.exception("備援 email 通知寄送失敗，Robin 這次完全沒有收到任何主動通知")
 
 
-def _notify_robin_of_error(feature: str, telegram_user_id: int, input_summary: str) -> None:
+def _notify_robin_of_error(
+    feature: str, telegram_user_id: int, input_summary: str, *, severity: str = "general"
+) -> None:
     """FR-19a／FR-19b：例外發生時，除了 log（見呼叫端的 `_logger.exception`），額外私訊 Robin
     完整原始 Traceback，並把完整錯誤 log 上傳 Google Drive、附上專屬連結（見 ADR-15，
     supersede 原本 Step 2.4 規劃的 AI 自主診斷／GitHub PR 機制），讓 Robin 自己判斷原因、決定
@@ -144,8 +165,13 @@ def _notify_robin_of_error(feature: str, telegram_user_id: int, input_summary: s
     所有人。Telegram 本身送達失敗時，改寄 email 備援通知（見 ADR-16，`_send_email_fallback()`）。
 
     **這個函式只會私訊 Robin 一人**（`ROBIN_TELEGRAM_TOKEN`），觸發當下的一般使用者與其他家人
-    完全不會看到這裡的任何內容——他們收到的是 `webhook.py` 主流程另外送出的 `_UNEXPECTED_ERROR_REPLY`
-    安全用語，兩者是完全獨立的兩條訊息路徑，任何情況下都不能混在一起。
+    完全不會看到這裡的任何內容——他們收到的是 `webhook.py` 主流程另外送出的 `_GENERAL_COLD_REPLY`
+    或 `_MAJOR_ILLNESS_REPLY` 安全用語，兩者是完全獨立的兩條訊息路徑，任何情況下都不能混在一起。
+
+    `severity`（2026-08-07，Step 2.6，見 FR-19g）：`"critical"` 時在通知內容前面加上
+    `_CRITICAL_SEVERITY_BANNER` 最高等級告警橫幅，讓 Robin 一眼區分這是 LLM 核心完全掛掉
+    （FR-19g 重大疾病級），還是其他元件的一般暫時性問題（FR-19f 一般感冒級，預設值
+    `"general"`，不加橫幅）；除了這段前綴，其餘通知內容與送達邏輯完全相同。
 
     分兩段 try/except：第一段組裝通知內容（Traceback、log 上傳），失敗就直接放棄（沒有內容可
     寄，email 備援也無用武之地）；第二段專門負責「透過 Telegram 送達」，只有這段失敗才觸發
@@ -184,6 +210,8 @@ def _notify_robin_of_error(feature: str, telegram_user_id: int, input_summary: s
             traceback_text=traceback_text[-3200:],
             log_link_line=log_link_line,
         )
+        if severity == "critical":
+            message = _CRITICAL_SEVERITY_BANNER + message
     except Exception:
         _logger.exception("組裝 Robin 錯誤通知內容失敗，無法送出任何通知（含 email 備援）")
         return
@@ -228,6 +256,61 @@ def _build_calendar_client() -> CalendarClient | None:
     return CalendarClient(
         refresh_token=refresh_token, client_id=client_id, client_secret=client_secret, calendar_id=calendar_id,
     )
+
+
+def _is_llm_failure(exc: Exception) -> bool:
+    """FR-19g（2026-08-07，Step 2.6）：判斷這次未預期例外是否屬於「LLM API 本身」失敗
+    （Gemini 伺服器錯誤、API Key 失效、額度用罄、本地端節流保護觸發等，已用盡 FR-19i 的
+    重試機制），而非其他元件（DB／GDrive／Calendar／Telegram 等）的暫時性問題（FR-19f）。
+
+    `LLMQuotaGuardError`（`submodules/llm` 本地端節流保護，見 ADR-5）與
+    `google.genai.errors.APIError`（涵蓋 `ServerError`／`ClientError`，即 Gemini 官方
+    回傳的所有錯誤）是唯獨呼叫 LLM 才會拋出的例外型別，不會跟 `psycopg2`、
+    `googleapiclient`、`requests` 等其他元件的例外混淆，用它們當分類依據最準確。
+    """
+    return isinstance(exc, (LLMQuotaGuardError, genai_errors.APIError))
+
+
+def _broadcast_major_illness_to_family(db: CloudSQLClient | None, exclude_telegram_user_id: int) -> None:
+    """FR-19g：LLM 核心服務故障時，除了觸發當下的使用者已經透過主流程的 `reply` 收到
+    `_MAJOR_ILLNESS_REPLY`，額外主動廣播同一句話給「所有已綁定的家人帳號」。
+
+    刻意排除兩種人：① Robin 自己（`is_owner = TRUE`）——他走 `_notify_robin_of_error()`
+    的最高等級 StackTrace 告警，不是這句給家人看的安全用語 ② 觸發當下的使用者
+    （`exclude_telegram_user_id`）——他已經透過主流程另外收到同一句話，這裡不重複發送。
+
+    這個函式發生的任何失敗（DB 查詢失敗、Telegram 送不出去）都只能記 log，絕對不能再往外
+    拋出——它本身就是在處理另一個未預期例外的安全網內部，若這裡又炸出新的未預期例外，
+    會讓整個安全網失去意義；單一家人傳送失敗不影響其他人，逐一 try/except 後繼續下一位
+    （比照 `commands.handle_recovered()` 廣播「我康復了」的既有寫法）。
+    """
+    if db is None:
+        _logger.warning("重大疾病級廣播略過：db 連線不可用")
+        return
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    if not bot_token:
+        _logger.warning("重大疾病級廣播略過：未設定 TELEGRAM_BOT_TOKEN")
+        return
+
+    try:
+        family_users = db.select(
+            "users",
+            columns=("telegram_user_id",),
+            where="telegram_user_id IS NOT NULL AND is_owner = FALSE",
+        )
+    except Exception:
+        _logger.exception("重大疾病級廣播查詢家人清單失敗")
+        return
+
+    telegram_client = TelegramClient(bot_token)
+    for user in family_users:
+        target_telegram_user_id = user["telegram_user_id"]
+        if target_telegram_user_id == exclude_telegram_user_id:
+            continue
+        try:
+            telegram_client.send_text(chat_id=target_telegram_user_id, text=_MAJOR_ILLNESS_REPLY)
+        except Exception:
+            _logger.exception("重大疾病級廣播給 telegram_user_id=%s 失敗", target_telegram_user_id)
 
 
 def _is_duplicate_update(update_id: int) -> bool:
@@ -368,7 +451,7 @@ def telegram_webhook():
         error_feature = "text"
         error_input_summary = _summarize_user_input(text_extracted[1])
 
-    reply = _UNEXPECTED_ERROR_REPLY
+    reply = _GENERAL_COLD_REPLY
     db = None
     try:
         db = CloudSQLClient()
@@ -438,20 +521,33 @@ def telegram_webhook():
                 privacy_llm_client=_build_privacy_llm_client(), telegram_client=telegram_client,
                 calendar_client=_build_calendar_client(),
             )
-    except Exception:
-        # 安全網（見 FR-19f/FR-19g，Phase 2 才會做完整的分級降級）：任何未預期例外（例如 Gemini
-        # 429 額度超限、本地端節流保護 LLMQuotaGuardError、DB 連線失敗等）都要在這裡吞掉，改回
-        # 安全用語並仍然回 200——否則 Flask 會回 500，Telegram 收不到 200 就會自動重送同一則
-        # 訊息，變成「失敗 → 重試 → 再失敗」的迴圈，把 API 額度燒得更快。
-        # FR-19a：除了記錄完整 Traceback 與情境到 log，額外私訊 Robin 原始 log（簡化版通知，
-        # Phase 1 不含 AI 自主診斷，見 Step 2.4）。
+    except Exception as exc:
+        # 安全網：任何未預期例外都要在這裡吞掉，改回安全用語並仍然回 200——否則 Flask 會回
+        # 500，Telegram 收不到 200 就會自動重送同一則訊息，變成「失敗 → 重試 → 再失敗」的
+        # 迴圈，把 API 額度燒得更快。FR-19i 的重試機制已經在各 submodules/*/client.py
+        # 內建完成（見 submodules-core SPEC.md ADR-13），走到這裡代表 3 次重試已經全部
+        # 用盡，正式判定這次 Request 失敗，才進入下面的分級降級。
+        #
+        # 2026-08-07（Step 2.6，見 FR-19f／FR-19g）：依錯誤來源分兩級——
+        # 「重大疾病級」：LLM API 本身直接拋出例外（`_is_llm_failure()` 判定），代表 LLM
+        # 已完全無法處理任何請求，完全繞過 LLM 回寫死的 `_MAJOR_ILLNESS_REPLY`，向 Robin
+        # 推播最高等級告警，並廣播給所有已綁定家人。
+        # 「一般感冒級」：其他情況（DB／GDrive／Calendar／解析邏輯等元件異常），回
+        # `_GENERAL_COLD_REPLY`，私訊 Robin 完整錯誤詳情即可，不需要廣播全員。
+        # FR-19a：兩種情況都會記錄完整 Traceback 與情境到 log，並私訊 Robin 原始內容
+        # （簡化版通知，見 Step 2.4）。
         _logger.exception(
             "處理 Telegram 訊息時發生未預期例外（觸發功能=%s，telegram_user_id=%s），已回覆安全用語並停止重試",
             error_feature,
             telegram_user_id,
         )
-        reply = _UNEXPECTED_ERROR_REPLY
-        _notify_robin_of_error(error_feature, telegram_user_id, error_input_summary)
+        if _is_llm_failure(exc):
+            reply = _MAJOR_ILLNESS_REPLY
+            _notify_robin_of_error(error_feature, telegram_user_id, error_input_summary, severity="critical")
+            _broadcast_major_illness_to_family(db, telegram_user_id)
+        else:
+            reply = _GENERAL_COLD_REPLY
+            _notify_robin_of_error(error_feature, telegram_user_id, error_input_summary, severity="general")
     finally:
         if db is not None:
             db.close()
