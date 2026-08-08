@@ -120,10 +120,26 @@ class CloudSQLClient:
         安全注意事項：這是繞過 select/insert/update/delete 參數化保護的逃生口，query 內容
         一律只能是程式內部信任的字串常數（例如 migration 檔案內容），絕對不可以把使用者輸入
         直接拼進 query。目前用於 src/migrations/runner.py 的 migration 執行機制（見 ADR-11）。
+
+        **2026-08-08（production 事故修復）**：`params` 為 `None`（沒有要參數化的值，本來就是
+        `execute()` 呼叫端的大宗用法，例如 migration 檔案的原始 DDL）時，一律呼叫
+        `cursor.execute(query)`（不帶第二個參數），而不是像過去那樣退回傳一個空 tuple `()`。
+        原因：psycopg2 只要 `execute()` 收到「非 None」的第二個參數（即使是空 tuple），就會
+        對整個 query 字串套用 Python `%`-style 格式化解析，此時 query 內容裡任何字面上的 `%`
+        字元（例如 migration 檔案裡 `COMMENT ON COLUMN ... IS 'FR-43 50% 門檻...'` 這種註解
+        文字，或 `LIKE '%xxx%'`／PostgreSQL `format()` 的 `%I`）都會被誤判成參數佔位符，因為
+        沒有對應的參數可以代入而丟出 `IndexError: tuple index out of range`——這正是 Robin
+        2026-08-08 回報的 production 事故根因（migration `0018_add_budget_fields_to_users.sql`
+        卡住，導致 Phase 2／3 所有後續 migration 都沒套用到 Neon）。不帶第二個參數呼叫
+        `cursor.execute()` 時，psycopg2 完全不解析 `%`，query 會被當成純字串原封不動送出，
+        這才是「執行任意信任字串常數」該有的行為。
         """
         with self._get_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute(query, params or ())
+                if params is None:
+                    cursor.execute(query)
+                else:
+                    cursor.execute(query, params)
 
     def execute_query(self, query: str, params: tuple | None = None) -> list[dict[str, Any]]:
         """執行任意「會回傳資料列」的 SQL 語句（SELECT 類），回傳結果列。
@@ -135,8 +151,14 @@ class CloudSQLClient:
 
         安全注意事項：跟 execute() 一樣，query 內容一律只能是程式內部信任的字串常數，絕對不可以
         把使用者輸入直接拼進 query。
+
+        **2026-08-08**：`params` 為 `None` 時同樣不帶第二個參數呼叫 `cursor.execute()`，理由
+        同 `execute()` 的說明——避免字面 `%` 字元被誤判成參數佔位符。
         """
         with self._get_connection() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-                cursor.execute(query, params or ())
+                if params is None:
+                    cursor.execute(query)
+                else:
+                    cursor.execute(query, params)
                 return [dict(row) for row in cursor.fetchall()]
