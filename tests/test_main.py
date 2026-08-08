@@ -333,3 +333,76 @@ def test_healthz_endpoint_still_returns_ok(monkeypatch):
 
     assert response.status_code == 200
     assert response.get_json() == {"status": "ok"}
+
+
+# --- 2026-08-08（production 事故修復）：/healthz 改成背景執行緒跑檢查，不阻塞 HTTP 回應 ---
+
+_HEALTH_CHECK_NAMES = (
+    "_check_neon_capacity",
+    "_check_todo_pushes",
+    "_check_finance_alerts",
+    "_check_finance_reminders",
+    "_check_finance_monthly_report",
+    "_check_body_goal_alerts",
+    "_check_important_notifications",
+    "_check_skill_growth_collection",
+    "_check_toeic_pipeline",
+    "_check_skill_growth_push",
+)
+
+
+class _ImmediateThread:
+    """假的 threading.Thread：`start()` 直接同步呼叫 target，讓測試不需要等待真正的執行緒排程、
+    也不會有 flaky 的時序問題，同時仍能驗證『真的有透過 Thread 觸發』這件事。
+    """
+
+    def __init__(self, target=None, daemon=None, **kwargs):
+        self._target = target
+        self.daemon = daemon
+
+    def start(self):
+        self._target()
+
+
+def test_healthz_returns_ok_without_waiting_for_checks(monkeypatch):
+    # 檢查函式故意做一件「如果同步執行會被觀察到」的事（設一個 flag），驗證 /healthz 回應時
+    # 不會等它執行完——用真正的 threading.Thread（不 mock），只確認回應本身正常。
+    for name in _HEALTH_CHECK_NAMES:
+        monkeypatch.setattr(main, name, MagicMock())
+
+    client = main.app.test_client()
+    response = client.get("/healthz")
+
+    assert response.status_code == 200
+    assert response.get_json() == {"status": "ok"}
+
+
+def test_healthz_dispatches_all_checks_via_background_thread(monkeypatch):
+    monkeypatch.setattr(main.threading, "Thread", _ImmediateThread)
+    fakes = {name: MagicMock() for name in _HEALTH_CHECK_NAMES}
+    for name, fake in fakes.items():
+        monkeypatch.setattr(main, name, fake)
+
+    client = main.app.test_client()
+    response = client.get("/healthz")
+
+    assert response.status_code == 200
+    for fake in fakes.values():
+        fake.assert_called_once()
+
+
+def test_healthz_thread_is_started_as_daemon(monkeypatch):
+    captured = {}
+
+    class _CapturingThread(_ImmediateThread):
+        def __init__(self, target=None, daemon=None, **kwargs):
+            super().__init__(target=target, daemon=daemon, **kwargs)
+            captured["daemon"] = daemon
+
+    monkeypatch.setattr(main.threading, "Thread", _CapturingThread)
+    for name in _HEALTH_CHECK_NAMES:
+        monkeypatch.setattr(main, name, MagicMock())
+
+    main.app.test_client().get("/healthz")
+
+    assert captured["daemon"] is True

@@ -1,5 +1,6 @@
 import logging
 import os
+import threading
 
 from flask import Flask, jsonify
 
@@ -380,39 +381,20 @@ def root():
     return "Robinson is alive.", 200
 
 
-@app.route("/healthz")
-def health_check():
-    """極簡健康檢查端點，供 cron-job.org 每 10 分鐘呼叫一次，避免 Render 免費方案休眠。
+def _run_background_checks() -> None:
+    """實際執行 `/healthz` 附掛的 10 個排程檢查，在背景執行緒跑，見 `health_check()`。
 
-    對應 FR-3 / docs/specs/robinson/SPEC.md，路由定義見 src/schema/api_schema.md。
+    **2026-08-08 追加（production 事故修復）**：這 10 個檢查原本是在 `/healthz` 的 HTTP
+    request 裡依序同步執行，平常大部分檢查會因為「還沒到時間」提早 return、很快；但每天台灣
+    時間 08:00 這個時間點，待辦每日摘要、重要通知、技術摘要推播三個排程剛好卡在同一小時，會在
+    同一次 request 裡真的依序執行完（查 DB、發 Telegram、甚至呼叫 Gemini），Robin 實測發現這
+    導致單次 `/healthz` 耗時超過 40 秒，遠超過 cron-job.org 預設的 30 秒逾時，被判定成
+    keep-alive 失敗（詳見 PROGRESS.md 事故紀錄）。改成丟進背景執行緒後，HTTP 回應不再等待這些
+    檢查跑完，`/healthz` 回應時間跟這 10 個檢查的實際執行時間脫鉤。
 
-    2026-08-02（Step 1.6，見 FR-21）：順便觸發 Neon 容量檢查，借用 cron-job.org 既有的
-    每 10 分鐘呼叫頻率，不需要額外的排程機制。
-
-    2026-08-02（Step 1.7，見 FR-31a、FR-32）：同樣借用這個頻率，順便觸發待辦事項的逾期標記與
-    兩種推播檢查，見 `_check_todo_pushes()`。
-
-    2026-08-04（Step 2.1，見 FR-43）：同樣借用這個頻率，順便觸發記帳預算門檻預警檢查，
-    見 `_check_finance_alerts()`。
-
-    2026-08-04（記帳模組擴充，見 FR-42a）：同樣借用這個頻率，順便觸發每日記帳提醒檢查，
-    見 `_check_finance_reminders()`。
-
-    2026-08-04（記帳模組擴充，見 FR-44a）：同樣借用這個頻率，順便觸發月底記帳月報推播檢查，
-    見 `_check_finance_monthly_report()`。
-
-    2026-08-04（Step 2.2，見 FR-45）：同樣借用這個頻率，順便觸發體態目標的運動目標達成通知與
-    期限將近提醒檢查，見 `_check_body_goal_alerts()`。
-
-    2026-08-04（Step 2.3，見 FR-53）：同樣借用這個頻率，順便觸發重要通知（固定節日/家人生日）
-    檢查，見 `_check_important_notifications()`。
-
-    2026-08-07（Step 3.1，見 FR-22、FR-23）：同樣借用這個頻率，順便觸發每日技術摘要的收集
-    （固定 23:00，見 `_check_skill_growth_collection()`）與推播（固定隔天 08:00，見
-    `_check_skill_growth_push()`）兩個階段檢查。
-
-    2026-08-07（Step 3.2，見 FR-24、FR-25a～FR-25f）：同樣借用這個頻率，順便觸發 TOEIC 雙軌
-    題庫 Pipeline 檢查（固定每週日 22:00），見 `_check_toeic_pipeline()`。
+    這些檢查函式本來就已經各自做好「同一小時內多次觸發也不會重複推播」的去重設計（例如
+    `daily_pushed_on`、`skill_growth_digests.pushed_on` 等欄位，見各自模組 docstring），所以
+    背景執行緒偶爾跟下一次 `/healthz` 觸發重疊執行，本身是安全的，不會造成重複推播。
     """
     _check_neon_capacity()
     _check_todo_pushes()
@@ -424,6 +406,24 @@ def health_check():
     _check_skill_growth_collection()
     _check_toeic_pipeline()
     _check_skill_growth_push()
+
+
+@app.route("/healthz")
+def health_check():
+    """極簡健康檢查端點，供 cron-job.org 每 10 分鐘呼叫一次，避免 Render 免費方案休眠。
+
+    對應 FR-3 / docs/specs/robinson/SPEC.md，路由定義見 src/schema/api_schema.md。
+
+    2026-08-02（Step 1.6，見 FR-21）起，陸續借用這個每 10 分鐘一次的呼叫頻率，順便觸發多項
+    排程檢查（Neon 容量、待辦推播、記帳預警/提醒/月報、體態目標預警、重要通知、技術摘要收集/
+    推播、TOEIC pipeline），實際清單見 `_run_background_checks()`。
+
+    **2026-08-08 追加（production 事故修復）**：這些檢查改成丟進背景執行緒（daemon thread）
+    執行，`/healthz` 本身立即回 200，不等待檢查跑完，避免 cron-job.org 因為單次 request 耗時
+    過長（尤其每天 08:00 多個排程同時真的執行時）而誤判逾時，詳見 `_run_background_checks()`
+    docstring。
+    """
+    threading.Thread(target=_run_background_checks, daemon=True).start()
     return jsonify({"status": "ok"}), 200
 
 
