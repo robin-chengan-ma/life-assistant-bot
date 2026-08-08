@@ -1988,6 +1988,10 @@ def handle_finance_summary(db: CloudSQLClient, user_id: int) -> str:
 # 三個子功能（身高體重／運動／飲食）+ 共用一張目標表，設計語言比照記帳/心情小記：
 # - 身高：`/set_height`，單輪（不合理範圍時原地重問，不是 LLM 分流，理由是純數字範圍檢查不需要
 #   語意判斷）。
+# - 腰圍（2026-08-08 追加，FR-46 擴充）：`/set_waist`，單輪，設計與身高完全對稱（初始設定、
+#   變動才修正，非每日紀錄）；額外在 `/log_weight` 記錄體重後，若使用者從未設定過腰圍，順便問
+#   一次要不要記錄（`pending_waist_offer`），問過一次後不會每次記體重都重複問。腰圍只是參考
+#   指標、非必要欄位，BMI 計算不使用腰圍。
 # - 體重：`/log_weight`（單輪，記錄後即時附上 BMI 說明與體重目標達成判斷）／`/backfill_weight`
 #   （多一個前置問日期）／`/my_weight_logs`（查詢→更新/刪除，更新時重新走一次體重輸入）。
 # - 運動：`/log_exercise`（活動→時長→心率三輪，記錄後呼叫 LLM 估算卡路里）／`/backfill_exercise`／
@@ -2004,6 +2008,10 @@ def handle_finance_summary(db: CloudSQLClient, user_id: int) -> str:
 
 _HEIGHT_UNREASONABLE_REPLY = "這個身高數字好像不太合理喔（成人身高大概在 140~220 公分之間），麻煩再確認一次告訴我："
 _WEIGHT_UNREASONABLE_REPLY = "這個體重數字好像不太合理喔（成人體重大概要有 40 公斤以上），麻煩再確認一次告訴我："
+# 2026-08-08 追加（FR-46 擴充）：腰圍為參考指標、非必要欄位，措辭刻意比身高/體重柔和，強調可跳過。
+_WAIST_UNREASONABLE_REPLY = "這個腰圍數字好像不太合理喔（大概在 40~200 公分之間），麻煩再確認一次告訴我（不想記錄的話也可以直接跟我說「跳過」）："
+_WAIST_OFFER_PROMPT = "順便問一下，要不要也記錄一下腰圍呢？（可直接輸入公分數字，不想記錄的話回覆「跳過」或任何話都可以，之後想記錄再跟我說「設定腰圍」就好）"
+_WAIST_OFFER_SKIPPED_REPLY = "好的，那就先不記錄腰圍，之後想記錄的話直接跟我說「設定腰圍」即可！"
 
 _WEIGHT_ACTION_CLASSIFY_PROMPT = (
     "使用者剛被 Robinson 反問要把選定的這筆體重紀錄「更新」還是「刪除」，這是使用者這一則的回覆："
@@ -2100,6 +2108,59 @@ def handle_height_value_step(db: CloudSQLClient, state_store: ConversationStateS
     return f"好的，已經幫你記錄身高為 {height:.1f} 公分囉！"
 
 
+# --- 腰圍（2026-08-08 追加，FR-46 擴充）---
+#
+# 設計比照身高：獨立指令「設定腰圍」／`/set_waist` 可隨時主動設定/更新；另外在
+# handle_weight_value_step() 記錄體重後，若使用者「從未設定過腰圍」，會順便問一次要不要記錄
+# （見 _WAIST_OFFER_PROMPT／handle_waist_offer_step()），問過一次之後除非使用者自己再更新，
+# 不會每次記體重都重複問，避免每天打擾。腰圍只是參考指標，跳過完全不影響其他功能。
+
+
+def start_set_waist(state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
+    """「設定腰圍」／`/set_waist`：開始設定腰圍（FR-46 擴充）。"""
+    state_store.set(telegram_user_id, {"flow": "pending_waist_value", "target_user_id": user_id})
+    return "好的，請告訴我你的腰圍（公分）："
+
+
+def handle_waist_value_step(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
+    """處理 `pending_waist_value` 狀態下使用者提供的腰圍數值；不合理範圍原地反問，不清除狀態。"""
+    state = state_store.get(telegram_user_id)
+    waist = _parse_positive_float(text)
+    if waist is None:
+        return "不好意思，我沒看懂，麻煩輸入一個數字喔（例如：80）"
+    if not body.is_waist_reasonable(waist):
+        return _WAIST_UNREASONABLE_REPLY
+
+    target_user_id = state["target_user_id"]
+    state_store.clear(telegram_user_id)
+    body.set_waist(db, target_user_id, waist)
+    return f"好的，已經幫你記錄腰圍為 {waist:.1f} 公分囉！"
+
+
+def handle_waist_offer_step(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
+    """處理 `pending_waist_offer` 狀態下使用者對「順便問要不要記錄腰圍」的回覆（見
+    handle_weight_value_step()）。
+
+    這一步刻意不用 LLM 分類「要/不要」，直接嘗試把回覆解析成數字：能解析出合理範圍內的數字就
+    當作腰圍存起來；解析出數字但超出合理範圍則原地反問一次（不清除狀態，比照身高/體重的既有
+    寫法）；完全無法解析成數字（包含「跳過」「不用」等任何說法）一律視為跳過，直接結束這輪，
+    不強迫使用者一定要明確拒絕——腰圍本來就是可有可無的參考指標，低摩擦比嚴謹分類更重要。
+    """
+    state = state_store.get(telegram_user_id)
+    target_user_id = state["target_user_id"]
+    waist = _parse_positive_float(text)
+
+    if waist is None:
+        state_store.clear(telegram_user_id)
+        return _WAIST_OFFER_SKIPPED_REPLY
+    if not body.is_waist_reasonable(waist):
+        return _WAIST_UNREASONABLE_REPLY
+
+    state_store.clear(telegram_user_id)
+    body.set_waist(db, target_user_id, waist)
+    return f"好的，已經幫你記錄腰圍為 {waist:.1f} 公分囉！"
+
+
 # --- 體重 ---
 
 
@@ -2154,6 +2215,12 @@ def handle_weight_value_step(
 
     `calendar_client`（2026-08-05，見 FR-66c、ADR-17）：透傳給 `body.check_weight_goal_achieved()`，
     達成時順便刪除對應的 Calendar 事件。
+
+    2026-08-08 追加（FR-46 擴充）：只有「新增一筆體重紀錄」（`weight_id is None`，排除
+    `/my_weight_logs` 觸發的更新流程）且「使用者從未設定過腰圍」時，才會順便問一次要不要記錄
+    腰圍（見 handle_waist_offer_step()）；問過一次之後除非使用者自己再更新，不會每次記體重都
+    重複問。這種情況下刻意不清除對話狀態，改成切到 `pending_waist_offer`，讓使用者下一則回覆
+    被導去處理腰圍，而不是直接結束這輪對話。
     """
     state = state_store.get(telegram_user_id)
     weight = _parse_positive_float(text)
@@ -2165,9 +2232,9 @@ def handle_weight_value_step(
     target_user_id = state["target_user_id"]
     weight_date = state["weight_date"]
     weight_id = state.get("weight_id")
-    state_store.clear(telegram_user_id)
 
-    if weight_id is None:
+    is_new_entry = weight_id is None
+    if is_new_entry:
         body.create_weight_log(db, target_user_id, weight, weight_date)
     else:
         body.update_weight_log(db, weight_id, weight)
@@ -2179,6 +2246,13 @@ def handle_weight_value_step(
     goal_message = body.check_weight_goal_achieved(db, target_user_id, weight, calendar_client=calendar_client)
     if goal_message:
         reply += "\n\n" + goal_message
+
+    should_offer_waist = is_new_entry and body.get_waist(db, target_user_id) is None
+    if should_offer_waist:
+        state_store.set(telegram_user_id, {"flow": "pending_waist_offer", "target_user_id": target_user_id})
+        reply += "\n\n" + _WAIST_OFFER_PROMPT
+    else:
+        state_store.clear(telegram_user_id)
     return reply
 
 

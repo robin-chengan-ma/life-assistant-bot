@@ -69,6 +69,7 @@ COMMENT ON COLUMN users.created_at IS '這筆使用者記錄建立的時間（�
 | 2026-08-04 | 新增 `height_cm`（身高，初始設定、變動才修正） | Step 2.2 體態管理模組 FR-46，設計理由見下方 `body_weight_logs` 表 | `0023_add_height_to_users.sql` |
 | 2026-08-04 | 新增 `birthday`（生日，只比對月/日） | Step 2.3 重要通知模組 FR-53，設計理由見下方 `important_notifications_log` 表 | `0028_add_birthday_to_users.sql`；已知 5 位家人（弟弟／大妹／小妹／爸爸／媽媽）生日資料見 `0030_seed_family_birthdays.sql` |
 | 2026-08-07 | 新增 `toeic_weekly_question_count`（軌道二每週生成題數，預設 21）／`toeic_pipeline_last_run_on`（週排程去重） | Step 3.2 TOEIC 雙軌題庫 Pipeline FR-25e／FR-25f，設計理由見下方 `toeic_questions`／`toeic_vocab_questions` 表 | `0037_add_toeic_weekly_question_count_to_users.sql` |
+| 2026-08-08 | 新增 `waist_cm`（腰圍，初始設定、變動才修正，設計比照 `height_cm`） | 體態管理模組擴充 FR-46：Robin 要求新增腰圍設定，明確定位為「參考指標、非必要」，BMI 計算不使用此欄位；合理範圍 40~200 公分（比身高體重寬鬆，因為只是參考用途，不用像身高體重那麼嚴格） | `0046_add_waist_to_users.sql` |
 
 ---
 

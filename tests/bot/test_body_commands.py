@@ -88,7 +88,10 @@ def test_handle_weight_value_step_valid_creates_row_with_bmi_and_goal_message(fa
     assert "77.0 公斤" in reply
     assert "BMI" in reply
     assert "恭喜" in reply
-    assert store.get(1) is None
+    # 2026-08-08 追加（FR-46 擴充）：新增一筆體重紀錄、使用者從未設定過腰圍時，會順便問一次要不要
+    # 記錄腰圍，狀態機不會直接清空，下方「腰圍」測試區塊完整驗證這條流程。
+    assert "腰圍" in reply
+    assert store.get(1) == {"flow": "pending_waist_offer", "target_user_id": user_id}
 
 
 def test_handle_weight_backfill_date_step_clear_moves_to_weight_value(fake_db, monkeypatch):
@@ -390,3 +393,117 @@ def test_handle_goal_cancel_confirm_step_deletes_calendar_event_when_synced(fake
     )
 
     calendar_client.delete_event.assert_called_once_with(event_id="event-abc123")
+
+
+# --- 腰圍（2026-08-08 追加，FR-46 擴充）---
+
+
+def test_start_set_waist_asks_waist(fake_db):
+    store = ConversationStateStore()
+    reply = commands.start_set_waist(store, telegram_user_id=1, user_id=42)
+    assert "腰圍" in reply
+    assert store.get(1) == {"flow": "pending_waist_value", "target_user_id": 42}
+
+
+def test_handle_waist_value_step_unparseable_reprompts(fake_db):
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_waist_value", "target_user_id": 42})
+
+    reply = commands.handle_waist_value_step(fake_db, store, telegram_user_id=1, text="不知道")
+
+    assert "沒看懂" in reply
+    assert store.get(1) == {"flow": "pending_waist_value", "target_user_id": 42}
+
+
+def test_handle_waist_value_step_unreasonable_reprompts(fake_db):
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_waist_value", "target_user_id": 42})
+
+    reply = commands.handle_waist_value_step(fake_db, store, telegram_user_id=1, text="300")
+
+    assert "不太合理" in reply
+    assert store.get(1) == {"flow": "pending_waist_value", "target_user_id": 42}
+
+
+def test_handle_waist_value_step_valid_saves_and_clears(fake_db):
+    user_id = fake_db.insert("users", {"telegram_user_id": 1, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_waist_value", "target_user_id": user_id})
+
+    reply = commands.handle_waist_value_step(fake_db, store, telegram_user_id=1, text="80")
+
+    assert "80.0 公分" in reply
+    assert store.get(1) is None
+    assert commands.body.get_waist(fake_db, user_id) == 80.0
+
+
+def test_weight_log_offers_waist_when_never_set(fake_db):
+    """新增一筆體重紀錄、使用者從未設定過腰圍時，順便問一次要不要記錄（FR-46 擴充）。"""
+    user_id = fake_db.insert("users", {"telegram_user_id": 1, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_weight_value", "target_user_id": user_id, "weight_date": date(2026, 8, 4), "weight_id": None})
+
+    reply = commands.handle_weight_value_step(fake_db, store, telegram_user_id=1, text="77")
+
+    assert "腰圍" in reply
+    assert store.get(1) == {"flow": "pending_waist_offer", "target_user_id": user_id}
+
+
+def test_weight_log_does_not_offer_waist_when_already_set(fake_db):
+    user_id = fake_db.insert("users", {"telegram_user_id": 1, "role": "爸爸", "is_owner": False, "waist_cm": 80.0})
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_weight_value", "target_user_id": user_id, "weight_date": date(2026, 8, 4), "weight_id": None})
+
+    reply = commands.handle_weight_value_step(fake_db, store, telegram_user_id=1, text="77")
+
+    assert "腰圍" not in reply
+    assert store.get(1) is None
+
+
+def test_weight_log_update_does_not_offer_waist(fake_db):
+    """更新既有體重紀錄（`/my_weight_logs` 觸發，`weight_id` 非 None）不順便問腰圍，只有新增
+    紀錄才問（FR-46 擴充）。"""
+    user_id = fake_db.insert("users", {"telegram_user_id": 1, "role": "爸爸", "is_owner": False})
+    weight_id = commands.body.create_weight_log(fake_db, user_id, 80.0, date(2026, 8, 1))
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_weight_value", "target_user_id": user_id, "weight_date": date(2026, 8, 1), "weight_id": weight_id})
+
+    reply = commands.handle_weight_value_step(fake_db, store, telegram_user_id=1, text="78")
+
+    assert "腰圍" not in reply
+    assert store.get(1) is None
+
+
+def test_handle_waist_offer_step_valid_number_saves_waist(fake_db):
+    user_id = fake_db.insert("users", {"telegram_user_id": 1, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_waist_offer", "target_user_id": user_id})
+
+    reply = commands.handle_waist_offer_step(fake_db, store, telegram_user_id=1, text="85")
+
+    assert "85.0 公分" in reply
+    assert store.get(1) is None
+    assert commands.body.get_waist(fake_db, user_id) == 85.0
+
+
+def test_handle_waist_offer_step_unreasonable_number_reprompts(fake_db):
+    user_id = fake_db.insert("users", {"telegram_user_id": 1, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_waist_offer", "target_user_id": user_id})
+
+    reply = commands.handle_waist_offer_step(fake_db, store, telegram_user_id=1, text="5")
+
+    assert "不太合理" in reply
+    assert store.get(1) == {"flow": "pending_waist_offer", "target_user_id": user_id}
+
+
+def test_handle_waist_offer_step_non_numeric_reply_skips(fake_db):
+    user_id = fake_db.insert("users", {"telegram_user_id": 1, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_waist_offer", "target_user_id": user_id})
+
+    reply = commands.handle_waist_offer_step(fake_db, store, telegram_user_id=1, text="跳過")
+
+    assert "先不記錄腰圍" in reply
+    assert store.get(1) is None
+    assert commands.body.get_waist(fake_db, user_id) is None

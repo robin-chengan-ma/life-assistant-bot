@@ -205,7 +205,7 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 ### 功能性需求 — 體態管理
 
 - [x] FR-45：視覺化與預警通知（沿用記帳模組的告警機制）（**2026-08-04 完成**：三種預警情境——目標達成通知（體重目標每次記錄即時檢查、運動目標借用 `/healthz` 頻率排程加總累積分鐘數）、目標期限前 7 天提醒、BMI 異常提醒（記錄體重當下就地附加，不用排程），詳見 `src/bot/body.py`）
-- [x] FR-46：身體數據：目標設定、身高（初始設定，變動才修正）、體重（有量才記）、自動計算 BMI 並附標準說明；記錄前需做合理範圍檢查（成人身高約 140～220 公分、體重約 40 公斤以上），數字或單位明顯不合理時需向使用者確認，不直接寫入（**2026-08-04 完成**：`/set_height`、`/log_weight`／`/backfill_weight`／`/my_weight_logs` 從一開始就內建補記/更新/刪除，超出合理範圍原地反問重新輸入，不直接寫入）
+- [x] FR-46：身體數據：目標設定、身高（初始設定，變動才修正）、體重（有量才記）、自動計算 BMI 並附標準說明；記錄前需做合理範圍檢查（成人身高約 140～220 公分、體重約 40 公斤以上），數字或單位明顯不合理時需向使用者確認，不直接寫入（**2026-08-04 完成**：`/set_height`、`/log_weight`／`/backfill_weight`／`/my_weight_logs` 從一開始就內建補記/更新/刪除，超出合理範圍原地反問重新輸入，不直接寫入）。**2026-08-08 擴充**：新增腰圍（初始設定，變動才修正，設計與身高完全對稱，不像體重需要每天/每次的歷史紀錄）。腰圍刻意定位為「參考指標，非必要」——BMI 計算不使用腰圍，缺少腰圍不影響任何既有功能。兩種觸發方式：① 獨立指令「設定腰圍」／`/set_waist`，隨時可主動設定/更新 ② 記錄體重（`/log_weight` 新增一筆，不含 `/my_weight_logs` 觸發的更新流程）後，若使用者從未設定過腰圍，Robinson 會順便問一次「要不要也記錄一下腰圍呢？」；問過一次之後除非使用者自己再更新，不會每次記體重都重複問，避免每天打擾。回覆時直接輸入公分數字即完成記錄，任何無法解析成數字的回覆（含「跳過」「不用」等）一律視為跳過、不強迫明確拒絕；合理範圍 40～200 公分（比身高體重寬鬆，畢竟只是參考用途）
 - [x] FR-47：運動：目標設定、運動習慣紀錄（項目、時長、心率選填）、自動估算當日消耗卡路里（**2026-08-04 完成**：`/log_exercise`／`/backfill_exercise`／`/my_exercise_logs`，卡路里改用 LLM 估算而非 MET 公式，經 AskUserQuestion 與 Robin 確認，估算失敗不擋下紀錄）
 - [x] FR-48：飲食：目標設定、飲食與飲水紀錄、自動拆算每餐蛋白質/碳水/脂肪/卡路里（**2026-08-04 完成**：`/log_diet`／`/backfill_diet`／`/my_diet_logs`，飲食與飲水同一張表用 `entry_type` 區分；三大營養素拆算沿用 `GEMINI_API_BOT_KEY`，經 AskUserQuestion 與 Robin 確認；務必附上 FR-17c 估算誤差聲明。體態目標（`/set_body_goal`／`/my_body_goals`）三個子功能共用一張 `body_goals` 表，飲食目標因太主觀不做自動達成判斷，只能手動取消，這是已知的刻意簡化）
 
@@ -237,7 +237,21 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 
 > 本節僅先定調架構、技術棧與資料模型方向；登入流程與 App 各頁面的詳細互動邏輯留待 Phase 4 對應 Step 開工時展開獨立 spec（`docs/specs/mobile-app/SPEC.md`，屆時建立），此處視為 **Placeholder**。
 
-- [ ] FR-64：唯讀 BI Dashboard 視覺化——將記帳、體態管理等模組的資料計算為圖表（消費圓餅圖、體重/運動趨勢折線圖等）與篩選介面，呈現於 Mobile App；App 端不提供任何新增/修改/刪除資料的操作入口，所有寫入操作仍一律透過 Telegram Bot 完成（取代原 FR-54 的 Notion 方案）
+- [ ] FR-64：唯讀 BI Dashboard 視覺化——將記帳、體態管理等模組的資料計算為圖表（消費圓餅圖、體重/運動趨勢折線圖等）與篩選介面，呈現於 Mobile App；App 端原則上不提供新增/修改/刪除資料的操作入口，寫入操作以 Telegram Bot 為主（取代原 FR-54 的 Notion 方案）。**2026-08-08 追加例外（見 FR-64a）**：藍牙體重計量測是唯一的例外，因為量測動作天生發生在手機上（App 端做藍牙掃描），不透過 Telegram 硬做反而會脫離使用情境；除此之外的資料異動仍一律透過 Telegram Bot
+- [ ] FR-64a（2026-08-08 新增，Placeholder）：藍牙體重計整合——Robin 已購入支援藍牙廣播（BLE Advertisement）的體重計，並用 nRF Connect for Mobile 實測確認可從掃描結果的 Manufacturer Data（廠商資料）取得量測後的體重值。App 端新增「開始測量」按鈕，點擊後啟動藍牙掃描，10 秒內偵測到體重值則顯示並記錄；10 秒內未偵測到則顯示「未取得您的體重值」，不記錄任何資料。**體重紀錄維持雙入口**：人不在家、沒帶體重計時，同樣可以直接在 Telegram 手動輸入體重值（既有 FR-46 `/log_weight` 流程不變）；兩種入口最終都寫入同一張 `body_weight_logs`，App 端這支寫入 API 是 FR-64「App 不寫資料」原則的唯一例外，但仍遵循「後端算好結果、App 只負責渲染/呼叫」的既有分層原則，實際寫入邏輯復用現有 `body.create_weight_log()` 等既有服務層函式，不另外複製一份業務邏輯。
+
+  **藍牙資料解析規格**（Robin 已用 nRF Connect for Mobile 實測驗證，Phase 4 開工時 App 端直接依此規格解析）：掃描到裝置後讀取廣播封包中的 Manufacturer Data 欄位，取一個 16 位元（2 bytes）的十六進位整數；取出整包 hex 資料中索引 2、3 的位元組（big-endian），組成體重原始值後除以 100 得到公斤數。Python 對照範例（Robin 提供，供未來 App 端 TypeScript/原生藍牙 SDK 實作時對照）：
+
+  ```python
+  # 拿到的 HEX 範例：16 C0 24 D6 ...
+  raw_bytes = bytearray.fromhex("16C024D61388000025000000000000")
+  # 取出索引 2 與 3（即 0x24D6）
+  weight_raw = (raw_bytes[2] << 8) + raw_bytes[3]  # 0x24D6 -> 9430
+  # 直接除以 100 得到公斤數
+  weight_kg = weight_raw / 100.0  # 94.3 kg
+  ```
+
+  未涵蓋（留待 Phase 4 開工展開獨立 spec 時細部設計）：如何辨識/篩選出「這台特定體重計」的廣播封包（避免掃到附近其他藍牙裝置）、掃描逾時之外的例外處理（藍牙未開啟、權限未授權等）、App 端寫入 API 的路由設計與身分驗證細節（沿用 FR-65 的 `APP Access Token`）。
 - [ ] FR-65：多用戶登入機制——App 面向所有使用者（Multi-user，不僅限於 Robin）：
   - [ ] FR-65a：一般使用者登入需輸入 `user_name`、稱謂、`APP Access Token` 三項完成驗證
   - [ ] FR-65b：Robin（Owner）登入僅需輸入 `user_name`、`APP Access Token` 兩項（比照 Telegram 免通關密碼的管理者身分簡化）
@@ -1016,3 +1030,6 @@ FR-56 的 `/function` 路由目前只定義了「回傳範圍」（所有功能�
 | 2026-08-07 | **Step 3.3 規格定案（新增 ADR-19）＋第一階段實作：答案照片比對機制（FR-27 部分）**。經多輪對話與 AskUserQuestion 確認每日 08:00 推播、正解改用 Robin 拍照上傳的 `_ans` 答案照（取代 AI 推論）、FR-29 改為純文字彈性問答（不做圖表）、作答紀錄採統一表串連軌道一/軌道二等設計，詳見上方 ADR-19 全文；延伸 `src/bot/toeic.py` 完成 `_ans` 檔名比對補正解／詳解機制，新增 `answer_logs`／`certificate_goals`／`exam_official_scores` 三張表（`0039`～`0042` migration）。全專案 952 個測試全過 | Claude（依 Robin「都已經確認了，直接開工吧」指示定案規格並實作第一切片） |
 | 2026-08-08 | **Production 事故修復：`/healthz` 逾時＋migration 累積未套用（根因 `CloudSQLClient.execute()` 對含 `%` 字元的 SQL 註解誤觸發格式化解析）**。詳見 PROGRESS.md 對應兩則里程碑與 submodules-core SPEC.md 變更記錄；`/healthz` 10 個排程檢查改丟背景 daemon thread、`CloudSQLClient.execute()`／`execute_query()` 改為 `params is None` 時不帶第二參數呼叫。全專案 958 個測試全過，push 後 Robin 確認 25 筆積壓 migration（`0018`～`0042`）一次套用成功 | Claude（依 Robin 回報的 production 錯誤診斷並修復） |
 | 2026-08-08 | **Step 3.3 每日推播/作答細部設計定案（新增 ADR-20）＋每日 08:00 推播出題機制實作完成（FR-26）**。經多輪 AskUserQuestion 確認出題數量/比例依 `exam_type` 是否為 TOEIC 而不同、新題:複習題比例 7:3、作答格式限 A/B/C/D、23:00 靜默跳過、彈性排程比照 `budget_overrides` 三種語意，詳見上方 ADR-20 全文；新增 `certificate_daily_settings`／`certificate_daily_schedule_overrides`／`certificate_daily_assignments` 三張表（`0043`～`0045` migration）與 `src/bot/certificate_quiz.py`（出題比例拆分、複習池選題、`/healthz` 推播排程，決策 3/4/5 的對話觸發部分留待「作答與批改流程」實作）。全專案 993 個測試全過，`certificate_quiz.py` 達 100% 覆蓋率；本次先本地 commit，push 留待 Robin 之後一起處理 | Claude（延續 ADR-20 定案設計實作出題引擎） |
+| 2026-08-08 | **彈性排程新增第四種語意「平攤到鄰近幾天」，ADR-20 決策 5/6 補充**。Robin 補充「把今天的平攤到其他天（儘量挑離今天近的日期）」的用法，並要求算完分攤方案要先給他確認、同意才寫入，不能自動生效；經 AskUserQuestion 確認演算法規則：明天起連續每天 +1 題、攤完為止，命中既有排程覆蓋則跳過往後找。規格層級調整，實際計算與確認對話流程留待「作答與批改對話流程」實作 | Claude（依 Robin 補充的需求，經 AskUserQuestion 確認演算法規則後更新規格） |
+| 2026-08-08 | **Phase 2 體態管理擴充：新增腰圍設定（FR-46）**。Robin 要求新增「腰圍」，設計比照身高（初始設定、變動才修正，非每日紀錄）；明確定位為參考指標、非必要，BMI 計算不使用腰圍。經 AskUserQuestion 確認「記體重後順便問腰圍」的頻率：只有使用者從未設定過腰圍時才問，設定過之後不會每次記體重都重複問。新增 `users.waist_cm`（`0046_add_waist_to_users.sql`，合理範圍 40～200 公分）；`src/bot/body.py` 新增 `is_waist_reasonable()`／`set_waist()`／`get_waist()`，鏡射身高既有實作；`src/bot/commands.py` 新增獨立「設定腰圍」／`/set_waist` 單輪流程，並修改 `handle_weight_value_step()`：新增一筆體重紀錄（非 `/my_weight_logs` 觸發的更新）且使用者尚未設定腰圍時，順便詢問，回覆可直接輸入公分數字或任意方式跳過（不強迫明確拒絕）；`src/bot/router.py` 註冊對應觸發詞與狀態分派。TDD 全程，新增/更新 `test_body.py`／`test_body_commands.py`／`test_body_router.py`，`body.py` 與新增程式碼皆有測試覆蓋，全專案 1009 個測試全過 | Claude（依 Robin 提出的需求，經 AskUserQuestion 確認詢問頻率後實作） |
+| 2026-08-08 | **Phase 4 Mobile App 新增功能說明：藍牙體重計整合（新增 FR-64a，規格層級，Phase 4 尚未開工不涉及程式碼）**。Robin 已購入支援藍牙廣播的體重計，並用 nRF Connect for Mobile 實測確認可從 Manufacturer Data 取得體重值，提供完整解析公式（取 hex 資料索引 2、3 組成 16 位元整數，除以 100 得公斤數）。記錄設計：App 端「開始測量」按鈕觸發 10 秒藍牙掃描，逾時顯示「未取得您的體重值」；體重紀錄維持雙入口（App 藍牙掃描或 Telegram 手動輸入皆可），兩者最終寫入同一張 `body_weight_logs`。這是 FR-64「App 不寫資料」原則的唯一例外（因量測動作天生發生在手機端），已同步修正 FR-64 條文加註例外說明；App 端裝置篩選、藍牙例外處理、寫入 API 路由細節留待 Phase 4 開工時展開 | Claude（依 Robin 提供的藍牙測試結果與解析公式撰寫規格） |

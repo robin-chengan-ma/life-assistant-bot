@@ -56,6 +56,8 @@ _MY_TRANSACTIONS_TRIGGERS = {"/my_transactions", "我的記帳紀錄"}
 _FINANCE_SUMMARY_TRIGGERS = {"/my_finance_summary", "我的記帳摘要"}
 # 2026-08-04（Step 2.2，見 robinson SPEC.md FR-45～FR-48）：體態管理模組觸發詞，設計比照記帳/心情小記。
 _SET_HEIGHT_TRIGGERS = {"/set_height", "設定身高"}
+# 2026-08-08 追加（FR-46 擴充）：腰圍為參考指標，觸發詞設計與身高完全對稱。
+_SET_WAIST_TRIGGERS = {"/set_waist", "設定腰圍"}
 _LOG_WEIGHT_TRIGGERS = {"/log_weight", "我要記錄體重"}
 _BACKFILL_WEIGHT_TRIGGERS = {"/backfill_weight", "我要補記體重"}
 _MY_WEIGHT_LOGS_TRIGGERS = {"/my_weight_logs", "我的體重紀錄"}
@@ -207,6 +209,9 @@ def handle_message(
     if text in _SET_HEIGHT_TRIGGERS:
         # 2026-08-04（Step 2.2，見 robinson SPEC.md FR-46）：設定身高，單輪。
         return commands.start_set_height(state_store, telegram_user_id, user_id)
+    if text in _SET_WAIST_TRIGGERS:
+        # 2026-08-08 追加（FR-46 擴充）：設定腰圍，單輪，設計與身高完全對稱。
+        return commands.start_set_waist(state_store, telegram_user_id, user_id)
     if text in _LOG_WEIGHT_TRIGGERS:
         return commands.start_weight_log(state_store, telegram_user_id, user_id)
     if text in _BACKFILL_WEIGHT_TRIGGERS:
@@ -520,6 +525,13 @@ def _dispatch_active_flow(
     # 2026-08-04（Step 2.2，見 robinson SPEC.md FR-45～FR-48）：體態管理多輪對話流，結構比照記帳。
     if flow == "pending_height_value":
         return commands.handle_height_value_step(db, state_store, telegram_user_id, text)
+    if flow == "pending_waist_value":
+        # 2026-08-08 追加（FR-46 擴充）：設定腰圍，單輪，設計與身高完全對稱。
+        return commands.handle_waist_value_step(db, state_store, telegram_user_id, text)
+    if flow == "pending_waist_offer":
+        # 2026-08-08 追加（FR-46 擴充）：記體重後「順便問要不要記腰圍」的回覆，見
+        # commands.handle_weight_value_step() 的觸發時機說明。
+        return commands.handle_waist_offer_step(db, state_store, telegram_user_id, text)
     if flow == "pending_weight_backfill_date":
         return commands.handle_weight_backfill_date_step(llm_client, state_store, telegram_user_id, text)
     if flow == "pending_weight_value":

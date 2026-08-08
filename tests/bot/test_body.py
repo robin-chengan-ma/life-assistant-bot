@@ -27,6 +27,29 @@ def test_set_and_get_height(fake_db):
     assert body.get_height(fake_db, user_id) == 173.0
 
 
+# --- 腰圍（2026-08-08 追加，FR-46 擴充）---
+
+
+def test_is_waist_reasonable_boundaries():
+    assert body.is_waist_reasonable(40) is True
+    assert body.is_waist_reasonable(200) is True
+    assert body.is_waist_reasonable(39.9) is False
+    assert body.is_waist_reasonable(200.1) is False
+
+
+def test_get_waist_returns_none_when_user_not_found(fake_db):
+    assert body.get_waist(fake_db, 9999) is None
+
+
+def test_set_and_get_waist(fake_db):
+    user_id = fake_db.insert("users", {"telegram_user_id": 1, "role": "Robin", "is_owner": True})
+    assert body.get_waist(fake_db, user_id) is None
+
+    body.set_waist(fake_db, user_id, 80.0)
+
+    assert body.get_waist(fake_db, user_id) == 80.0
+
+
 # --- 體重與 BMI ---
 
 

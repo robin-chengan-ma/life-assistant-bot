@@ -35,6 +35,61 @@ def test_set_height_full_flow(fake_db, monkeypatch):
     assert commands.body.get_height(fake_db, user_id) == 173.0
 
 
+def test_set_waist_full_flow(fake_db, monkeypatch):
+    """2026-08-08 追加（FR-46 擴充）：獨立指令「設定腰圍」，設計與身高完全對稱。"""
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+
+    reply1 = router.handle_message(fake_db, store, FAMILY_ID, "設定腰圍")
+    assert "腰圍" in reply1
+    assert store.get(FAMILY_ID)["flow"] == "pending_waist_value"
+
+    reply2 = router.handle_message(fake_db, store, FAMILY_ID, "80")
+    assert "80.0 公分" in reply2
+    assert store.get(FAMILY_ID) is None
+    assert commands.body.get_waist(fake_db, user_id) == 80.0
+
+
+def test_log_weight_offers_waist_then_records_it_full_flow(fake_db, monkeypatch):
+    """記體重後順便問腰圍，回覆數字直接記錄（FR-46 擴充）。"""
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+
+    router.handle_message(fake_db, store, FAMILY_ID, "我要記錄體重")
+    reply2 = router.handle_message(fake_db, store, FAMILY_ID, "75")
+    assert "腰圍" in reply2
+    assert store.get(FAMILY_ID)["flow"] == "pending_waist_offer"
+
+    reply3 = router.handle_message(fake_db, store, FAMILY_ID, "82")
+    assert "82.0 公分" in reply3
+    assert store.get(FAMILY_ID) is None
+    assert commands.body.get_waist(fake_db, user_id) == 82.0
+
+
+def test_log_weight_offers_waist_then_skip_full_flow(fake_db, monkeypatch):
+    """記體重後順便問腰圍，跳過不記錄；因為腰圍仍未設定，下次記體重會再問一次（判斷依據是
+    「有沒有設定過」而不是「有沒有問過」，見 body.get_waist() 的用法，FR-46 擴充）。真正設定過
+    之後才會停止再問，見 test_log_weight_offers_waist_then_records_it_full_flow()。"""
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+
+    router.handle_message(fake_db, store, FAMILY_ID, "我要記錄體重")
+    router.handle_message(fake_db, store, FAMILY_ID, "75")
+    reply3 = router.handle_message(fake_db, store, FAMILY_ID, "跳過")
+    assert "先不記錄腰圍" in reply3
+    assert store.get(FAMILY_ID) is None
+    assert commands.body.get_waist(fake_db, user_id) is None
+
+    # 腰圍仍未設定，再記一次體重會再順便問一次。
+    router.handle_message(fake_db, store, FAMILY_ID, "我要記錄體重")
+    reply5 = router.handle_message(fake_db, store, FAMILY_ID, "76")
+    assert "腰圍" in reply5
+    assert store.get(FAMILY_ID)["flow"] == "pending_waist_offer"
+
+
 def test_log_weight_full_flow(fake_db, monkeypatch):
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
@@ -46,7 +101,11 @@ def test_log_weight_full_flow(fake_db, monkeypatch):
 
     reply2 = router.handle_message(fake_db, store, FAMILY_ID, "75")
     assert "75.0 公斤" in reply2
-    assert store.get(FAMILY_ID) is None
+    # 2026-08-08 追加（FR-46 擴充）：新增一筆體重紀錄、使用者從未設定過腰圍時，會順便問一次要不要
+    # 記錄腰圍，狀態機不會直接清空；完整的腰圍互動流程見 test_set_waist_full_flow()／
+    # test_log_weight_offers_waist_then_skip_full_flow()。
+    assert "腰圍" in reply2
+    assert store.get(FAMILY_ID)["flow"] == "pending_waist_offer"
 
 
 def test_backfill_weight_full_flow(fake_db, monkeypatch):
@@ -64,7 +123,8 @@ def test_backfill_weight_full_flow(fake_db, monkeypatch):
 
     reply3 = router.handle_message(fake_db, store, FAMILY_ID, "80")
     assert "80.0 公斤" in reply3
-    assert store.get(FAMILY_ID) is None
+    # 補記（新增紀錄）同樣會順便問腰圍，見上方 test_log_weight_full_flow() 的說明。
+    assert store.get(FAMILY_ID)["flow"] == "pending_waist_offer"
 
 
 def test_my_weight_logs_full_flow_update(fake_db, monkeypatch):
@@ -88,6 +148,9 @@ def test_my_weight_logs_full_flow_update(fake_db, monkeypatch):
 
     reply4 = router.handle_message(fake_db, store, FAMILY_ID, "78")
     assert "78.0 公斤" in reply4
+    # 更新既有紀錄不順便問腰圍，只有新增紀錄才問（FR-46 擴充）。
+    assert "腰圍" not in reply4
+    assert store.get(FAMILY_ID) is None
     row = fake_db.select("body_weight_logs", where="id = %s", params=(log_id,), fetch_one=True)
     assert row["weight_kg"] == 78.0
 

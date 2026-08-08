@@ -1,9 +1,13 @@
 """體態管理純邏輯（對應 docs/specs/robinson/SPEC.md FR-45～FR-48，Step 2.2）。
 
-負責：身高設定、體重/運動/飲食三個子功能的紀錄 CRUD（含補記/更新/刪除，從一開始就內建，理由
-同記帳模組）、BMI 計算與分級、運動消耗卡路里與飲食三大營養素的 LLM 估算、體態目標（三個子功能
-共用一張表）的設定/查詢/取消、FR-45 三種預警情境的判斷與推播。不處理任何 Telegram 對話流程，
+負責：身高／腰圍設定、體重/運動/飲食三個子功能的紀錄 CRUD（含補記/更新/刪除，從一開始就內建，
+理由同記帳模組）、BMI 計算與分級、運動消耗卡路里與飲食三大營養素的 LLM 估算、體態目標（三個子
+功能共用一張表）的設定/查詢/取消、FR-45 三種預警情境的判斷與推播。不處理任何 Telegram 對話流程，
 那是 src/bot/commands.py 的責任，保持這個模組是純粹的資料操作與計算，方便獨立測試。
+
+2026-08-08 追加（FR-46 擴充）：新增腰圍（`waist_cm`）設定，設計比照身高——存在 `users` 表、
+「設定一次、變動才修正」，不像體重需要每天記錄的歷史表。腰圍刻意定位為「參考指標、非必要」：
+`calculate_bmi()` 不使用腰圍，缺少腰圍不影響 BMI 計算或任何既有功能。
 
 2026-08-04 經 AskUserQuestion 確認的設計決策：
 ① 運動消耗卡路里改用 LLM 估算（而非 MET 公式），符合 FR-56g 情境3「用自然口吻回覆＋估算免責
@@ -36,6 +40,9 @@ _logger = logging.getLogger(__name__)
 _MIN_HEIGHT_CM = 140.0
 _MAX_HEIGHT_CM = 220.0
 _MIN_WEIGHT_KG = 40.0
+# 2026-08-08 追加（FR-46 擴充）：腰圍合理範圍，比身高體重寬鬆，因為只是參考指標、非必要欄位。
+_MIN_WAIST_CM = 40.0
+_MAX_WAIST_CM = 200.0
 
 # BMI 分級標準（衛福部國健署標準），供 format_bmi_note() 組健康提醒文字。
 _BMI_CATEGORIES: list[tuple[float, str]] = [
@@ -84,6 +91,34 @@ def get_height(db: CloudSQLClient, user_id: int) -> float | None:
         return None
     height = row.get("height_cm")
     return float(height) if height is not None else None
+
+
+# ---------------------------------------------------------------------------
+# 腰圍（2026-08-08 追加，FR-46 擴充：初始設定，變動才修正，設計比照身高）
+#
+# 腰圍只是參考指標、不是必要欄位——BMI 計算只需要身高體重，不使用腰圍。設計刻意跟身高完全
+# 對稱（同樣存在 `users` 表、同樣「設定一次、變動才修正」，不像體重需要每天記錄的歷史表）。
+# ---------------------------------------------------------------------------
+
+
+def is_waist_reasonable(waist_cm: float) -> bool:
+    """FR-46 合理範圍檢查：成人腰圍約 40～200 公分（比身高體重寬鬆，畢竟只是參考用途）。"""
+    return _MIN_WAIST_CM <= waist_cm <= _MAX_WAIST_CM
+
+
+def set_waist(db: CloudSQLClient, user_id: int, waist_cm: float) -> None:
+    """設定/修正使用者腰圍；呼叫端必須先呼叫 `is_waist_reasonable()` 確認合理範圍，這裡不重複
+    檢查（DB 層的 CHECK 約束是最後一道防線）。"""
+    db.update("users", {"waist_cm": waist_cm}, where="id = %s", params=(user_id,))
+
+
+def get_waist(db: CloudSQLClient, user_id: int) -> float | None:
+    """查詢使用者目前設定的腰圍；尚未設定時回傳 None。"""
+    row = db.select("users", where="id = %s", params=(user_id,), fetch_one=True)
+    if row is None:
+        return None
+    waist = row.get("waist_cm")
+    return float(waist) if waist is not None else None
 
 
 # ---------------------------------------------------------------------------
