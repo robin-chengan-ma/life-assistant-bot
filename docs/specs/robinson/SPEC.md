@@ -152,9 +152,9 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
   - [x] FR-25d：軌道二（單字刷題庫）題目規格 — Gemini 即時生成多益最新核心單字英翻中選擇題，每題須包含：單字（Target Word）、題目（英翻中選答）、4 個繁體中文選項（1 個正確答案＋3 個具干擾性的錯誤選項）、英文實用例句（Example Sentence）、例句繁體中文翻譯
   - [x] FR-25e：軌道二儲存機制 — 生成後同步寫入 DB（`toeic_vocab_questions`）供後續測驗重複抽考，避免重複呼叫 API 造成 Token 浪費；每週生成題數由 `users.toeic_weekly_question_count` 決定（Robin 自訂，預設 21 題＝一天 3 題）
   - [x] FR-25f：排程與去重規則 — 兩軌道的檔案掃描/生成排程統一為每週日台灣時間 22:00（Robin 2026-08-07 指定，取代原「排程頻率未定案」狀態）。**2026-08-07 修正去重規則**：原規劃「檔名中的日期是否落在過去一週內」與 Robin 實際確認的檔名格式（無日期）對不上，改用 `toeic_questions.source_image_filename` 是否已存在資料庫判斷是否處理過（符合 NFR-11 ETL 去重原則，效果等價，更貼合實際檔名設計）；軌道二額外靠 `users.toeic_pipeline_last_run_on`（今天是否已執行過）避免 `/healthz` 同一小時內多次觸發重複生成
-- [ ] FR-26：使用者可自訂每日題數、各證照類型比例、或將當日題目挪到其他天（彈性排程）。**2026-08-07（Step 3.3 設計定案，見 ADR-19）**：每日固定台灣時間 08:00 推播（比照 `skill_growth_digests` 排程模式，借用 `/healthz` 頻率）；推播候選池只從「已補齊正解（`correct_answer` 非 NULL）」的題目抽選（見 FR-27），沒有正解的題目不會出現在每日推播，避免使用者作答完卻無法批改
-- [ ] FR-27：每題作答後提供正解與詳解，並記錄該題對錯，錯題可排入後續複習。**2026-08-07（Step 3.3 設計定案，見 ADR-19）**：正解不再由 AI 推論——Robin 拍攝購買的測驗書正確解答／詳解，檔名 `{exam_type}_{test_id}_write/listen_{題號}_ans.png` 上傳至 Google Drive 同一資料夾；每週日 22:00 排程掃描時先處理一般題目檔案建立題目列，再處理 `_ans` 檔案，用 `(exam_type, test_id, question_type, question_number)` 比對到既有題目後 `UPDATE` 補上 `correct_answer`／`explanation`，不新建題目列；因此正解與詳解在建題庫階段就已備妥，作答當下不必即時呼叫 Gemini。作答結果（對/錯、作答時間、對應題目、`exam_type`）寫入新增的作答紀錄表，供 FR-29 統計與錯題複習使用
-- [ ] FR-28：當日題目未完成，20:00 提醒是否要作答，23:00 前仍未做則視為跳過；使用者要求延期時 Robinson 需記住新的排程
+- [ ] FR-26：使用者可自訂每日題數、各證照類型比例、或將當日題目挪到其他天（彈性排程）。**2026-08-07（Step 3.3 設計定案，見 ADR-19）**：每日固定台灣時間 08:00 推播（比照 `skill_growth_digests` 排程模式，借用 `/healthz` 頻率）；推播候選池只從「已補齊正解（`correct_answer` 非 NULL）」的題目抽選（見 FR-27），沒有正解的題目不會出現在每日推播，避免使用者作答完卻無法批改。**2026-08-08（見 ADR-20）**：非 TOEIC 證照只能調「每日出題數量」，TOEIC 額外可調「聽力/填空/單字」三軌比例；另有跟三軌比例不同維度的「新題/複習題」比例（預設 7:3，所有證照類型通用）；彈性排程支援「今天改到別天」「直接取消今天的」「某日期區間每日題數改為 N」三種語意，區間外日期不受影響
+- [ ] FR-27：每題作答後提供正解與詳解，並記錄該題對錯，錯題可排入後續複習。**2026-08-07（Step 3.3 設計定案，見 ADR-19）**：正解不再由 AI 推論——Robin 拍攝購買的測驗書正確解答／詳解，檔名 `{exam_type}_{test_id}_write/listen_{題號}_ans.png` 上傳至 Google Drive 同一資料夾；每週日 22:00 排程掃描時先處理一般題目檔案建立題目列，再處理 `_ans` 檔案，用 `(exam_type, test_id, question_type, question_number)` 比對到既有題目後 `UPDATE` 補上 `correct_answer`／`explanation`，不新建題目列；因此正解與詳解在建題庫階段就已備妥，作答當下不必即時呼叫 Gemini。作答結果（對/錯、作答時間、對應題目、`exam_type`）寫入新增的作答紀錄表，供 FR-29 統計與錯題複習使用。**2026-08-08（見 ADR-20）**：作答只接受回覆選項字母 A/B/C/D，格式不符時需先請使用者重新輸入正確格式才能繼續批改；錯題複習池只放「最新一次作答結果是答錯」的題目，答對一次就從複習池移除，不做間隔重複演算法
+- [ ] FR-28：當日題目未完成，20:00 提醒是否要作答，23:00 前仍未做則視為跳過；使用者要求延期時 Robinson 需記住新的排程。**2026-08-08（見 ADR-20）**：23:00 視為跳過採靜默處理，不主動發送通知
 - [ ] FR-29：使用者可用自然語言詢問一段時間內的答對/答錯成效。**2026-08-07（Step 3.3 設計定案，見 ADR-19，取代原「圖表方式呈現」的規劃）**：查證後確認 Phase 2 記帳／體態管理模組從一開始就是文字摘要、沒有任何畫圖表模組；圖表視覺化統一交給 Phase 4 Mobile App（FR-64）。本條在 Telegram 端一律用文字簡述回覆，範例：「上週總共測驗 N1 題，答對 N2 題，平均每天答對 N3 題，你最常出錯的地方是……，最常答對的地方是……」；沒有作答的日子要列出來並從平均計算中排除；使用者沒說清楚 `exam_type` 或「正式測驗 vs 日常小考」時 Robinson 需反問，不可自行猜測；需支援跨時間區間比較（如「上週和上上週比較」），彈性解析使用者描述的日期範圍；錯題統計維度沿用既有的 `question_type`（write/listen）與 `exam_type`，不新增更細的主題標籤欄位
 - [ ] FR-30：保留欄位記錄實際應考日期與正式成績。**2026-08-07（Step 3.3 設計定案，見 ADR-19）**：正式成績與「每日小考作答紀錄」是不同概念——同一 `exam_type` 可能多次應考，各自有獨立的應考日期與分數，另建資料表記錄，不與每日小考的作答紀錄混用
 
@@ -729,6 +729,42 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 
 **狀態**：accepted
 
+### ADR-20：Step 3.3 每日推播出題（FR-26）與作答（FR-27）細部設計
+
+**背景**：ADR-19 定案 Step 3.3 整體範圍後，開工前針對「每日推播出題」「作答」這兩塊互相牽動的功能，經多輪對話與 AskUserQuestion 進一步確認設計細節。
+
+**決策**：
+1. **出題數量/比例依 `exam_type` 是否為 TOEIC 而不同**：非 TOEIC 的證照類型只能調「每日出題數量」（單一數字，預設 6 題）；TOEIC 除了「每日出題數量」，還能另外調「聽力／填空／單字」三軌的出題比例（沿用 FR-25 原文預設 1:2:3）。理由：非 TOEIC 證照沒有軌道二（單字題）可分配，只有一個題庫池，沒有「比例」可言；現階段只有 TOEIC 有實際題庫，其他證照類型的分配邏輯留待真的新增時再設計，避免現在就為假設性需求過度設計。
+2. **新題／複習題比例**：另開一個跟 TOEIC 三軌比例不同維度的「複習比例」，預設新題:複習題 = 7:3，所有 `exam_type` 通用（TOEIC 會先照三軌比例分好各軌題數，再從各軌題數裡挖一部分改成複習題）。複習池只放「最新一次作答結果是答錯」的題目，跳過（未作答）不算複習池的一部分——避免使用者單純那天沒空作答，就被系統誤判成弱點反覆推播；複習題只要重新答對一次就從複習池移除，不做「連續答對 N 次才算精熟」的間隔重複演算法（先求簡單）；複習池題數不夠湊滿比例時，用新題目補滿，不會因此少出題。
+3. **作答格式**：只接受回覆選項字母 `A`／`B`／`C`／`D`，不用 LLM 解析口語化的回答；回覆格式不符時，Robinson 需先請使用者重新輸入正確格式，收到有效字母前不進入批改流程。
+4. **23:00 視為跳過採靜默處理**：不主動發送「今天當作跳過」的通知，使用者要查才會知道當天沒作答，避免每天晚上又多一則提醒訊息。
+5. **彈性排程支援三種語意**：①「今天不想做，改到別天」——單純把當天這批題目挪到指定日期 ②「直接取消今天的」——不補、不挪 ③「某個日期區間的每日出題數量改成 N 題」——只影響該區間，區間外的日期維持原本的全局每日出題數量設定，比照 `budget_overrides`「全局預設值＋特殊區間覆蓋」的既有模式。
+
+**理由**：
+- 決策 1：符合現況（只有 TOEIC 有實際題庫）與 AGENTS.md「不為假設性未來需求設計」的通用原則。
+- 決策 2：把「複習」跟「TOEIC 特有的三軌分配」拆成兩個獨立維度，邏輯更單純，也讓複習機制天然適用所有證照類型，不用等其他證照類型上線才補。
+- 決策 3、4：降低實作複雜度與訊息干擾，符合 Robin 明確選擇的方向。
+- 決策 5：延續 `budget_overrides`（FR-41a）已經驗證過的「全局預設＋特殊區間覆蓋」設計模式，不用重新發明一套排程資料結構。
+
+**資料表設計**（實際建表 SQL 依 ADR-10 流程提出，**2026-08-08 已建表**，見 `0043`～`0045` migration、`src/schema/db_schema.md`）：
+- `certificate_daily_settings`：每個 `user_id`＋`exam_type` 一筆，存 `daily_question_count`／`review_ratio_new`／`review_ratio_review`／`listen_ratio`／`write_ratio`／`vocab_ratio`（後三者僅 TOEIC 填值，其他證照類型固定 `NULL`）
+- `certificate_daily_schedule_overrides`：比照 `budget_overrides`，存 `start_date`／`end_date`／`daily_question_count`，查詢當天生效題數時先查是否有覆蓋當天的區間，沒有才 fallback 用 `certificate_daily_settings` 的全局值
+- `certificate_daily_assignments`：記錄每天實際推播了哪幾題（兩個可為 NULL 的外鍵＋ CHECK，比照 `answer_logs` 串連軌道一/軌道二），並標記 `is_review`；20:00 提醒／23:00 視為跳過都靠「今天的 assignments 裡有沒有對應的 `answer_logs`」判斷還沒作答的題目
+
+**實作進度（2026-08-08）**：每日 08:00 出題與推播的核心邏輯已完成（`src/bot/certificate_quiz.py`：依 `certificate_daily_schedule_overrides`／`certificate_daily_settings` 解析當天生效題數與比例、依決策 1/2 拆池選題、寫入 `certificate_daily_assignments` 並推播，掛上 `/healthz` 背景排程），對應決策 1、2、5（資料層/查詢邏輯部分）已實作；**決策 3（作答格式驗證）、4（23:00 靜默跳過）、5（彈性排程的三種語意在 Telegram 對話中如何觸發）尚未實作**，留待「作答與批改對話流程」該步驟一併展開（`certificate_daily_settings`／`certificate_daily_schedule_overrides` 目前只能靠直接寫 DB 設定，還沒有對應的 Telegram 指令）。
+
+**替代方案**：
+- 決策 1 替代方案：現在就設計成通用規則（比例由題庫現有結構動態算）——已否決，Robin 選擇先服務實際存在的需求。
+- 決策 3 替代方案：用 LLM 解析口語化回答——已否決，選擇題本來就適合固定格式回覆，LLM 解析反而增加不確定性。
+- 決策 4 替代方案：發送跳過通知（比照 FR-19h 不靜默精神）——已否決，Robin 認為每天已經有 20:00 提醒，晚上再一則跳過通知太多。
+
+**後果**：
+- `certificate_daily_assignments` 需要在每日 08:00 推播當下就寫入完整的「今天推了哪幾題」清單，後續 20:00 提醒／23:00 跳過判斷／複習池計算都依賴這張表，寫入時機與內容正確性很重要。
+- 複習池查詢需要「同一題目最新一次作答結果」的邏輯（不是所有歷史記錄都算），查詢複雜度比單純的 `answer_logs` 全表掃描高一些。
+- 彈性排程的三種語意（挪動/取消/區間覆蓋）需要比照 FR-31 待辦事項的自然語言解析模式處理，複雜度不低，且與 `certificate_daily_schedule_overrides` 的覆蓋語意需要一致對應。
+
+**狀態**：accepted
+
 ## 實作計畫
 
 > 分期原則見 ADR-4；每個 Phase 完成後才進入下一個 Phase 的詳細 spec 與 TDD 循環。本 spec 僅列到模組層級，各模組進入實作前應個別建立 `docs/specs/<feature-slug>/SPEC.md` 展開 API 設計與資料表結構。
@@ -974,3 +1010,7 @@ FR-56 的 `/function` 路由目前只定義了「回傳範圍」（所有功能�
 | 2026-08-07 | **Phase 3 Step 3.1 完成：每日重點技術分享（FR-22、FR-23）**。Robin 指示「從 3-1 開始吧」，經 AskUserQuestion 確認三個設計問題：① TLDR 電子報辨識方式選「寄件者網域比對」（`tldrnewsletter.com`）② IThome／TechCrunch 新聞來源選「RSS Feed」③ 去重機制核准於 `users` 表新增 `skill_growth_pushed_on`（DATE）欄位（依 ADR-10 流程，`0033_add_skill_growth_pushed_on_to_users.sql`），比照 `todos.daily_pushed_on` 慣例。`submodules/email` 新增 `fetch_yesterday_emails_from_domain()`（IMAP 讀信，見 submodules-core SPEC.md ADR-11 追記）；新增 `submodules/newsfeed`（`NewsFeedClient`，`requests`＋標準函式庫 `xml.etree.ElementTree` 解析 RSS，見 ADR-14）；新增 `src/bot/skill_growth.py`：`check_and_push_daily_digest()` 固定台灣時間 08:00 推播，三個來源（TLDR／IThome／TechCrunch）任一抓取失敗只記 log、視為當日無內容，不影響其他來源與整體推播；三個來源都沒內容時仍推播固定的「今天沒有新內容」訊息（NFR-10）；`skill_growth` 功能開關（`owner_only=True`）關閉時跳過；Gemini 呼叫改用新增的獨立 `GEMINI_API_SKILL_GROWTH_KEY`。`main.py` 新增 `_check_skill_growth_digest()` 借用 `/healthz` 既有頻率。同步補齊前次 Step 2.5／2.6 遺留未打勾的 Step 2.5／2.6／NFR-9／NFR-10 checkbox 與缺漏的變更記錄列。全專案 878 個測試全過（`src/bot/skill_growth.py`／`submodules/email/client.py`／`submodules/newsfeed/client.py` 皆達 100% 覆蓋率）；本次僅本地 commit，push 留待 Robin 之後一起處理 | Claude（依 Robin「從 3-1 開始吧」指示，經 AskUserQuestion 確認範圍後實作） |
 | 2026-08-07 | **Step 3.1 當日修正：拆成「23:00 收集／08:00 推播」兩階段，改用 `skill_growth_digests` 表**。Robin 驗收時提出三點：① TLDR 電子報寄件者確認為 `dan@tldrnewsletter.com`（沿用既有的網域比對邏輯）② 排程改為固定台灣時間 23:00 收集「當天」的信件與新聞（不是原本 08:00 即時抓「昨天」），隔天 08:00 才推播，看板固定顯示「前一晚收集到的內容」③ 三個來源都沒抓到任何內容時，看板固定回覆「未獲得最新技術分享」（不是原本較長的口語化訊息）。經 AskUserQuestion 確認新的 DB 設計：新增 `skill_growth_digests` 表（`digest_date` UNIQUE 約束防止 23:00 那個小時內重複收集、`summary_text` 可為 `NULL` 代表當天三個來源都沒內容、`pushed_on` 記錄推播去重日期），取代原本規劃的 `users.skill_growth_pushed_on` 欄位（因尚未 push／套用過，直接修改 `0033` migration 內容，不留下加欄位又刪欄位的歷史包袱）。`submodules/email` 的 `fetch_yesterday_emails_from_domain()` 改為 `fetch_emails_from_domain_on_date(sender_domain, target_date)`，`submodules/newsfeed` 移除不再需要的 `fetch_yesterday_articles()` 便利方法（呼叫端一律指定日期，不假設「今天」或「昨天」）；`src/bot/skill_growth.py` 拆成 `collect_and_store_daily_digest()`（23:00，寫入 DB）與 `check_and_push_daily_digest()`（08:00，讀 DB 推播；找不到前一晚收集結果時同樣回覆固定訊息並補寫一筆去重標記，避免同一小時內重複推播）；`main.py` 對應拆成 `_check_skill_growth_collection()`／`_check_skill_growth_push()` 兩個 `/healthz` 檢查函式。全專案測試結果見下一則記錄 | Claude（依 Robin 驗收回饋，經 AskUserQuestion 確認 DB 設計後修正） |
 | 2026-08-07 | **功能開關拆分：`skill_growth` 拆成 `tech_intel`／`certificate`／`language` 三個獨立開關**。Robin 驗收 Step 3.1 後回饋：TOEIC（證照準備）跟技術情報（YouTube 技術情報／新聞電子報分享）性質不同，一個是語言/硬實力學習追蹤、一個是資訊訂閱推播，不該共用同一把開關；並補充語言學習（英文口說、其他語言，尚未開發）也該獨立於證照準備之外。經 AskUserQuestion 確認 key 命名（`certificate`／`tech_intel`／`language`，比照既有 8 個開關「不加模組前綴」的命名風格）與既有資料處理方式（既有 `skill_growth` 開關資料搬移到 `tech_intel`，保留原本開啟狀態）。新增 migration `0034_split_skill_growth_toggle.sql`（Robin 依 ADR-10 核准）：動態尋找並移除 `feature_toggles.feature_key` 現有 CHECK 約束、新增涵蓋 10 個代號的新約束，`UPDATE ... SET feature_key = 'tech_intel' WHERE feature_key = 'skill_growth'`；`templates.FEATURE_LIST` 對應拆成三筆項目；`src/bot/skill_growth.py` 的 `_FEATURE_KEY` 改為 `"tech_intel"`；YouTube 技術情報模組（FR-57～59，尚未開發）確認共用 `tech_intel`，與每日技術分享同屬「技術情報訂閱」性質。測試更新：`test_skill_growth.py` 的 `feature_key` 斷言、`test_toggles.py`／`test_commands.py`／`test_router.py` 硬編碼的「8 個模組」改為「10 個模組」（含 `toggle_by_index` 邊界測試 index 由 9 改為 11）。全專案 888 個測試全過，`skill_growth.py`／`toggles.py`／`templates.py` 皆維持 100% 覆蓋率；本次先本地 commit，push 留待 Robin 之後一起處理 | Claude（依 Robin 提出的拆分需求，經 AskUserQuestion 確認命名與資料搬移方式後實作） |
+| 2026-08-07 | **Phase 3 Step 3.2 完成：TOEIC 雙軌題庫 Pipeline（FR-24、FR-25a～FR-25f，新增 ADR-18），同日兩次追加修正（整包音檔切割排除說明語音、`exam_type` 泛用化改名 `certificate_questions`）**。詳細設計決策與實作內容見 ADR-18、上方 FR-25a～FR-25c 條文與 PROGRESS.md 對應里程碑；新增 `src/bot/toeic.py`、`toeic_questions`（後改名 `certificate_questions`）／`toeic_vocab_questions` 表（`0035`～`0038` migration）。全專案 942 個測試全過 | Claude（依 Robin「開發 3-2 吧」指示，經 AskUserQuestion 確認範圍後實作） |
+| 2026-08-07 | **Step 3.3 規格定案（新增 ADR-19）＋第一階段實作：答案照片比對機制（FR-27 部分）**。經多輪對話與 AskUserQuestion 確認每日 08:00 推播、正解改用 Robin 拍照上傳的 `_ans` 答案照（取代 AI 推論）、FR-29 改為純文字彈性問答（不做圖表）、作答紀錄採統一表串連軌道一/軌道二等設計，詳見上方 ADR-19 全文；延伸 `src/bot/toeic.py` 完成 `_ans` 檔名比對補正解／詳解機制，新增 `answer_logs`／`certificate_goals`／`exam_official_scores` 三張表（`0039`～`0042` migration）。全專案 952 個測試全過 | Claude（依 Robin「都已經確認了，直接開工吧」指示定案規格並實作第一切片） |
+| 2026-08-08 | **Production 事故修復：`/healthz` 逾時＋migration 累積未套用（根因 `CloudSQLClient.execute()` 對含 `%` 字元的 SQL 註解誤觸發格式化解析）**。詳見 PROGRESS.md 對應兩則里程碑與 submodules-core SPEC.md 變更記錄；`/healthz` 10 個排程檢查改丟背景 daemon thread、`CloudSQLClient.execute()`／`execute_query()` 改為 `params is None` 時不帶第二參數呼叫。全專案 958 個測試全過，push 後 Robin 確認 25 筆積壓 migration（`0018`～`0042`）一次套用成功 | Claude（依 Robin 回報的 production 錯誤診斷並修復） |
+| 2026-08-08 | **Step 3.3 每日推播/作答細部設計定案（新增 ADR-20）＋每日 08:00 推播出題機制實作完成（FR-26）**。經多輪 AskUserQuestion 確認出題數量/比例依 `exam_type` 是否為 TOEIC 而不同、新題:複習題比例 7:3、作答格式限 A/B/C/D、23:00 靜默跳過、彈性排程比照 `budget_overrides` 三種語意，詳見上方 ADR-20 全文；新增 `certificate_daily_settings`／`certificate_daily_schedule_overrides`／`certificate_daily_assignments` 三張表（`0043`～`0045` migration）與 `src/bot/certificate_quiz.py`（出題比例拆分、複習池選題、`/healthz` 推播排程，決策 3/4/5 的對話觸發部分留待「作答與批改流程」實作）。全專案 993 個測試全過，`certificate_quiz.py` 達 100% 覆蓋率；本次先本地 commit，push 留待 Robin 之後一起處理 | Claude（延續 ADR-20 定案設計實作出題引擎） |

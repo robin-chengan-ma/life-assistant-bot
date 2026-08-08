@@ -1,7 +1,7 @@
 ---
 title: Robinson 產品開發階段紀錄
 spec: docs/specs/robinson/SPEC.md
-updated: 2026-08-07
+updated: 2026-08-08
 ---
 
 # Robinson 產品開發階段紀錄
@@ -15,7 +15,7 @@ updated: 2026-08-07
 
 ## 目前階段
 
-**Phase 1（MVP）全部 Step 完成；Phase 2（記帳＋體態管理＋重要通知＋系統韌性與自主診斷治理）全部 7 個 Step 完成；Phase 3（個人技能成長＋好友模式）Step 3.1（每日重點技術分享）、Step 3.2（TOEIC 雙軌題庫 Pipeline）完成，Step 3.3（作答紀錄、成效追蹤與正式成績）規格已於 2026-08-07 定案（見 SPEC.md ADR-19），第一階段（答案照片比對機制＋新資料表）已實作，其餘每日推播/作答批改/提醒/成效問答/目標設定/正式成績留待後續逐一展開**
+**Phase 1（MVP）全部 Step 完成；Phase 2（記帳＋體態管理＋重要通知＋系統韌性與自主診斷治理）全部 7 個 Step 完成；Phase 3（個人技能成長＋好友模式）Step 3.1（每日重點技術分享）、Step 3.2（TOEIC 雙軌題庫 Pipeline）完成，Step 3.3（作答紀錄、成效追蹤與正式成績）規格已定案（見 SPEC.md ADR-19、ADR-20），答案照片比對機制與每日 08:00 推播出題機制已實作，其餘作答批改/提醒/成效問答/目標設定/正式成績留待後續逐一展開**
 
 ## 目標時程（2026-07-30 更新：改為三週制，因新增多模態影像/語音處理架構；2026-08-04 更新：Phase 5「Notion 後台」取消，Mobile App 併入 Phase 4，見 SPEC.md ADR-14）
 
@@ -143,6 +143,9 @@ updated: 2026-08-07
 | 2026-08-08 | **Production 事故根因找到並修復：migration 卡在 `0018` 的 `IndexError`**。Robin 提供 Render 開機 log，確認卡在 `套用 migration：0018_add_budget_fields_to_users.sql` 這一行，緊接著 `IndexError: tuple index out of range`（`submodules/cloudsql/client.py` L126 `cursor.execute(query, params or ())`）。追查後確認：`0018` 的 `COMMENT ON COLUMN` 註解文字含字面 `%` 字元（「FR-43 50% 門檻預警去重用」），而 `CloudSQLClient.execute()` 舊版邏輯只要 `params` 是 `None` 就退回傳一個空 tuple `()` 給 `cursor.execute()`，觸發 psycopg2 對 query 字串做 `%`-style 格式化解析，字面 `%` 被誤判成參數佔位符、找不到對應值就丟出這個例外——這正是「Phase 2/3 所有 migration 從 0018 起都沒套用到 Neon」的根因；`grep` 確認 `0034_split_skill_growth_toggle.sql` 也含 `%`（`LIKE`／PostgreSQL `format()` 的 `%I`），修好前會是下一個卡點。修正（見 [submodules-core SPEC.md](../submodules-core/SPEC.md) 變更記錄）：`execute()`／`execute_query()` 改為 `params is None` 時完全不帶第二個參數呼叫 `cursor.execute(query)`，不觸發 % 解析；新增/改寫 6 個測試，全專案 958 個測試全過。本次先本地 commit，**尚未 push**——需要 push 一次才會真的觸發 Render 重新部署、讓 migration 從 `0018` 開始重跑 | Claude（依 Robin 提供的 Render 開機 log traceback 找出根因並修復） |
 | 2026-08-08 | **Production 事故解決確認**：push 後 Robin 提供最新 Render 開機 log，確認一口氣套用了 25 筆待處理 migration（`0018`～`0042`，涵蓋 Phase 2 記帳/體態/重要通知、Phase 3 技術摘要/TOEIC/Step 3.3 第一階段），schema 已追上最新程式碼；`/healthz` 逾時修復也已隨同一次部署上線。**兩個 production 事故（migration 未套用、`/healthz` 逾時）皆已解決**，Step 3.3 剩餘功能開發（每日推播/作答批改/提醒/成效問答/目標設定/正式成績）可以恢復進行 | Claude（確認 Robin 提供的部署後 log） |
 
+| 2026-08-08 | **Step 3.3 每日推播/作答細部設計定案，新增 SPEC.md ADR-20**。兩個 production 事故解決後，Robin 針對「每日 08:00 推播出題」「作答批改」進一步確認設計：① 非 TOEIC 證照只能調「每日出題數量」，TOEIC 額外可調「聽力/填空/單字」三軌比例（現階段只有 TOEIC 有實際題庫，其他證照類型的分配邏輯留待真的新增時再設計）② 另一個獨立維度「新題:複習題」比例預設 7:3、所有證照類型通用，複習池只放「最新一次作答結果答錯」的題目（跳過不算），答對一次就移除、不做間隔重複演算法，複習題不夠時用新題補滿 ③ 作答只接受 A/B/C/D，格式不符要先請使用者重新輸入才能繼續批改 ④ 23:00 視為跳過採靜默處理，不主動發通知 ⑤ 彈性排程支援「今天改到別天」「直接取消今天的」「某日期區間每日題數改為 N」三種語意，比照 `budget_overrides` 的「全局預設＋特殊區間覆蓋」模式。新增資料表設計（尚未建表）：`certificate_daily_settings`（每日出題設定）、`certificate_daily_schedule_overrides`（彈性排程覆蓋）、`certificate_daily_assignments`（記錄每天實際推播的題目，供 20:00 提醒/23:00 跳過判斷/複習池計算使用）。已改寫 SPEC.md FR-26～FR-28 並新增 ADR-20；準備開始實作 | Claude（依 Robin 多輪回覆確認設計細節） |
+| 2026-08-08 | **Step 3.3 每日 08:00 推播出題機制實作完成（FR-26，ADR-20 決策 1/2/5）**。新增 3 張表（`certificate_daily_settings`／`certificate_daily_schedule_overrides`／`certificate_daily_assignments`，`0043`～`0045` migration，Robin 依 ADR-10 核准）並補齊 `src/schema/db_schema.md` 說明。新增 `src/bot/certificate_quiz.py`：`effective_daily_question_count()` 依「日期區間覆蓋 → 全局設定 → 預設值（6 題）」順序解析當天生效題數；`_split_by_ratio()` 整數比例拆分（餘數依序分給前面項目，總和一定等於總數）；TOEIC 依三軌比例（預設 1:2:3）拆出聽力/填空/單字子池，其他證照類型只有單一混合池；每個子池再依「新題:複習題」比例（預設 7:3）拆分，複習池只取「最新一次作答結果答錯」的題目（同一題後來答對就整個離開候選池，不再是新題也不再是複習題），複習題不夠湊比例時用新題補滿，不因此少出題；`assign_daily_questions()` 寫入 `certificate_daily_assignments` 且同一天重複呼叫具冪等性（直接回傳既有清單，不重複消耗題庫）；`check_and_push_daily_quiz()` 固定台灣時間 08:00、逐一巡覽題庫裡目前有的每個 `exam_type` 各自出題推播，靠「這個 exam_type 今天是否已經指派過」（而非額外的 `pushed_on` 欄位）判斷是否該推播，避免同一小時內 `/healthz` 多次觸發重複推播；單一 exam_type 出題失敗（例如題庫資料異常）只記 log 並跳過，不影響其他證照類型。`main.py` 新增 `_check_certificate_daily_quiz_push()` 掛上既有 `/healthz` 背景執行緒清單。TDD 全程，`tests/bot/test_certificate_quiz.py` 32 個測試、`certificate_quiz.py` 達 100% 覆蓋率；`tests/test_main.py` 同步新增 3 個對應測試。全專案 993 個測試全過。**Step 3.3 剩餘範圍**（作答與批改對話流程、20:00/23:00 提醒與延期指令、FR-29 彈性文字問答、FR-24 目標設定/方向建議、FR-30 正式成績記錄）尚未實作，比照專案一貫做法留待逐一展開確認；本次先本地 commit，push 留待 Robin 之後一起處理 | Claude（延續 ADR-20 定案設計實作出題引擎） |
+
 ## 待決事項
 
 目前**沒有阻塞 Phase 1 開工的待決事項**。
@@ -160,7 +163,7 @@ updated: 2026-08-07
 
 1. ~~**Step 3.1：每日重點技術分享**（FR-22、FR-23）~~ **已於 2026-08-07 完成，同日經 Robin 驗收回饋修正為兩階段設計**（固定台灣時間 23:00 收集 TLDR 電子報`dan@tldrnewsletter.com`＋IThome／TechCrunch RSS 當天內容並寫入 `skill_growth_digests`，隔天固定 08:00 推播前一晚收集結果給 Robin；三個來源皆無內容時固定回覆「未獲得最新技術分享」，見上方里程碑紀錄；`GEMINI_API_SKILL_GROWTH_KEY` 已由 Robin 申請並設定到 `.env`／Render，待下次 `git push` 部署後即可實際運作）
 2. ~~**Step 3.2：TOEIC 雙軌題庫 Pipeline**（FR-24、FR-25a～FR-25f）~~ **已於 2026-08-07 完成，同日再追加 `exam_type` 泛用化**（軌道一拍照/音檔入庫、軌道二 Gemini 單字題即時生成，固定每週日 22:00 排程；`exam_type` 開放任意字串，`toeic_questions` 已改名 `certificate_questions`，見下方里程碑紀錄與 SPEC.md ADR-18）；Robin 已重新跑 `get_refresh_token.py` 並更新 `.env`／Render 的 `GDRIVE_OAUTH_REFRESH_TOKEN`，待 `git push` 部署後軌道一即可正常掃描 Drive 檔案
-3. **Step 3.3：作答紀錄、成效追蹤與正式成績**（FR-26～FR-30，含 FR-24 目標設定/方向建議、每日推播機制）**規格已於 2026-08-07 定案（見 SPEC.md ADR-19），實作中**：正解改用 Robin 拍照上傳的 `_ans` 答案照（延伸 Step 3.2 檔名比對）、每日 08:00 推播、20:00/23:00 提醒、FR-29 成效改為彈性自然語言文字問答（不做圖表）、FR-30 正式成績獨立建表
+3. **Step 3.3：作答紀錄、成效追蹤與正式成績**（FR-26～FR-30，含 FR-24 目標設定/方向建議、每日推播機制）**規格已於 2026-08-07 定案（見 SPEC.md ADR-19、ADR-20），實作中**：正解改用 Robin 拍照上傳的 `_ans` 答案照（延伸 Step 3.2 檔名比對，已完成）、每日 08:00 推播出題（**已於 2026-08-08 完成，見上方里程碑紀錄**）；剩餘：作答與批改對話流程＋20:00/23:00 提醒與延期指令、FR-29 成效改為彈性自然語言文字問答（不做圖表）、FR-24 目標設定/方向建議、FR-30 正式成績獨立建表
 4. **Step 3.4：YouTube 技術情報模組**（FR-57～FR-59，見 ADR-9）—— YouTube Data API 擷取、三層 Top 3 篩選、每週四自動推播、配額監控與 Fallback 降級，尚未開始
 5. **Step 3.5：好友模式**（FR-51、FR-52，尚薄，待展開細節），尚未開始
 

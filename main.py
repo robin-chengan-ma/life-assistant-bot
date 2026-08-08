@@ -350,6 +350,33 @@ def _check_toeic_pipeline() -> None:
         db.close()
 
 
+def _check_certificate_daily_quiz_push() -> None:
+    """在 /healthz 被呼叫時順便檢查證照題庫每日推播出題（Step 3.3，見 robinson SPEC.md FR-26、
+    ADR-20）：固定台灣時間 08:00，依題庫裡目前有的每個 exam_type 各自計算今天要出的題目、
+    寫入 `certificate_daily_assignments` 並推播通知，詳見 src/bot/certificate_quiz.py 模組
+    docstring。
+
+    這個階段只需要 `TELEGRAM_BOT_TOKEN`（軌道一/軌道二題庫已經由 `_check_toeic_pipeline()`
+    的週排程建好，這裡只是依題庫現況出題推播），不需要任何 Gemini/Drive 相關金鑰；收件人是查
+    `users.is_owner = TRUE` 動態決定，不需要 `ROBIN_TELEGRAM_TOKEN`。
+    """
+    if not (os.environ.get("DATABASE_URL") and os.environ.get("TELEGRAM_BOT_TOKEN")):
+        return
+
+    from src.bot import certificate_quiz
+    from submodules.cloudsql.client import CloudSQLClient
+    from submodules.telegram.client import TelegramClient
+
+    db = CloudSQLClient()
+    try:
+        telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
+        certificate_quiz.check_and_push_daily_quiz(db, telegram_client)
+    except Exception:
+        logger.exception("證照題庫每日推播出題失敗，不影響健康檢查端點本身")
+    finally:
+        db.close()
+
+
 def _run_startup_migrations() -> None:
     """開機自動套用尚未執行過的 DB migration（ADR-11）。
 
@@ -406,6 +433,7 @@ def _run_background_checks() -> None:
     _check_skill_growth_collection()
     _check_toeic_pipeline()
     _check_skill_growth_push()
+    _check_certificate_daily_quiz_push()
 
 
 @app.route("/healthz")
@@ -416,7 +444,7 @@ def health_check():
 
     2026-08-02（Step 1.6，見 FR-21）起，陸續借用這個每 10 分鐘一次的呼叫頻率，順便觸發多項
     排程檢查（Neon 容量、待辦推播、記帳預警/提醒/月報、體態目標預警、重要通知、技術摘要收集/
-    推播、TOEIC pipeline），實際清單見 `_run_background_checks()`。
+    推播、TOEIC pipeline、證照題庫每日推播出題），實際清單見 `_run_background_checks()`。
 
     **2026-08-08 追加（production 事故修復）**：這些檢查改成丟進背景執行緒（daemon thread）
     執行，`/healthz` 本身立即回 200，不等待檢查跑完，避免 cron-job.org 因為單次 request 耗時

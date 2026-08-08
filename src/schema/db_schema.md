@@ -815,3 +815,96 @@ CREATE INDEX idx_exam_official_scores_user_exam_type ON exam_official_scores (us
 - 跟 `answer_logs`（每日小考作答紀錄）刻意分開建表：正式成績是「一次考試的最終結果」，每日小考是「每天練習的逐題紀錄」，語意與查詢邏輯都不同，混在一起會互相干擾
 - 不加 `UNIQUE` 限制：同一 `exam_type` 可能多次應考（例如多益考了兩次），每次都是獨立一筆
 - `score` 用 `TEXT`：理由同 `certificate_goals.target_score`
+
+---
+
+### certificate_daily_settings
+
+**建立日期**：2026-08-08
+**用途**：Step 3.3 每日出題設定，對應 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) FR-26、ADR-20。
+**Migration 檔案**：`src/migrations/0043_create_certificate_daily_settings_table.sql`
+
+```sql
+CREATE TABLE certificate_daily_settings (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id),
+    exam_type TEXT NOT NULL,
+    daily_question_count INT NOT NULL DEFAULT 6,
+    review_ratio_new INT NOT NULL DEFAULT 7,
+    review_ratio_review INT NOT NULL DEFAULT 3,
+    listen_ratio INT,
+    write_ratio INT,
+    vocab_ratio INT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (user_id, exam_type)
+);
+```
+
+**設計理由**：
+- `UNIQUE (user_id, exam_type)`：同一使用者同一 exam_type 只保留一筆最新設定，重新設定即覆蓋（UPSERT），比照 `certificate_goals`
+- `listen_ratio`／`write_ratio`／`vocab_ratio` 三欄只有 TOEIC 會填值，其他證照類型固定 `NULL`：非 TOEIC 證照沒有軌道二（單字題），只有單一題庫池可抽，沒有三軌比例可分配（見 ADR-20 決策 1）
+- `review_ratio_new`／`review_ratio_review`（新題:複習題比例）刻意跟三軌比例分開兩組欄位：這是不同維度的設定，且所有 exam_type 通用，不像三軌比例只有 TOEIC 適用（見 ADR-20 決策 2）
+
+---
+
+### certificate_daily_schedule_overrides
+
+**建立日期**：2026-08-08
+**用途**：Step 3.3 彈性排程的日期區間覆蓋，對應 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) FR-26、ADR-20 決策 5。
+**Migration 檔案**：`src/migrations/0044_create_certificate_daily_schedule_overrides_table.sql`
+
+```sql
+CREATE TABLE certificate_daily_schedule_overrides (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id),
+    exam_type TEXT NOT NULL,
+    start_date DATE NOT NULL,
+    end_date DATE NOT NULL,
+    daily_question_count INT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK (end_date >= start_date),
+    CHECK (daily_question_count >= 0)
+);
+
+CREATE INDEX idx_certificate_daily_schedule_overrides_user_exam_type
+    ON certificate_daily_schedule_overrides (user_id, exam_type);
+```
+
+**設計理由**：
+- 比照 `budget_overrides`「全局預設值＋特殊區間覆蓋」的既有模式：查詢當天生效題數時先查是否有覆蓋當天的區間，沒有才 fallback 用 `certificate_daily_settings` 的全局值
+- `daily_question_count` 允許 `0`：「直接取消今天的」用單筆當天 `daily_question_count=0` 表示；「今天改到別天」則用兩筆覆蓋組合（今天設 0＋目標日期加開對應題數）
+- 不加 `UNIQUE` 限制：同一使用者同一 exam_type 可能同時有多個不重疊的區間覆蓋（例如這週跟下個月各自調整過）
+
+---
+
+### certificate_daily_assignments
+
+**建立日期**：2026-08-08
+**用途**：Step 3.3 記錄每天實際推播的題目，對應 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) FR-27、FR-28、ADR-20。
+**Migration 檔案**：`src/migrations/0045_create_certificate_daily_assignments_table.sql`
+
+```sql
+CREATE TABLE certificate_daily_assignments (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id),
+    exam_type TEXT NOT NULL,
+    assigned_date DATE NOT NULL,
+    certificate_question_id BIGINT REFERENCES certificate_questions(id),
+    vocab_question_id BIGINT REFERENCES toeic_vocab_questions(id),
+    is_review BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT certificate_daily_assignments_exactly_one_question CHECK (
+        (certificate_question_id IS NOT NULL AND vocab_question_id IS NULL)
+        OR (certificate_question_id IS NULL AND vocab_question_id IS NOT NULL)
+    )
+);
+
+CREATE INDEX idx_certificate_daily_assignments_user_date
+    ON certificate_daily_assignments (user_id, assigned_date);
+```
+
+**設計理由**：
+- 兩個可為 NULL 的外鍵＋ CHECK 串連軌道一/軌道二題庫，設計比照 `answer_logs`
+- 是否已作答不在本表直接存狀態，靠比對同一題目在 `answer_logs` 有沒有對應紀錄動態判斷——避免兩張表的「作答狀態」互相不同步
+- `is_review` 只是記錄「這題是不是從複習池挑出來的」，供統計/除錯用，不影響作答批改邏輯本身（批改邏輯只在乎正解對不對）
