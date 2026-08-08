@@ -247,6 +247,9 @@ class FakeCloudSQLClient:
                 and row.get("question_type") == params[2]
                 and row.get("vocab_question_id") is not None
             )
+        # 2026-08-08（Step 3.3，見 robinson SPEC.md FR-27/FR-28）：作答與批改流程查詢。
+        if where == "assignment_id = %s":
+            return row.get("assignment_id") == params[0]
 
         raise NotImplementedError(f"FakeCloudSQLClient 尚未支援這個 where 條件：{where}")
 

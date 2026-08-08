@@ -1533,3 +1533,106 @@ def test_handle_voice_message_short_circuits_final_confirm_even_within_correctio
     assert "打字" in reply
     assert reply != router._VOICE_CORRECTION_WINDOW_REPLY
     assert telegram_client.last_file_id is None
+
+
+# --- 證照題庫作答與彈性排程調整（Step 3.3，見 robinson SPEC.md FR-27、FR-26 決策 5、6）---
+# `certificate` 是 owner_only 功能，這裡只驗證觸發詞路由與 flow 狀態分派本身接得起來，
+# 完整的作答/排程調整邏輯已在 tests/bot/test_certificate_answer_commands.py 涵蓋。
+
+
+def _seed_certificate_question_for_router(fake_db, **overrides):
+    row = {
+        "exam_type": "ielts", "question_type": "write", "test_id": "0001", "question_number": 1,
+        "question_text": "題目", "options": ["A", "B", "C", "D"], "correct_answer": "A",
+    }
+    row.update(overrides)
+    return fake_db.insert("certificate_questions", row)
+
+
+def _seed_certificate_assignment_for_router(fake_db, user_id, **overrides):
+    row = {
+        "user_id": user_id, "exam_type": "ielts", "assigned_date": date.today(),
+        "certificate_question_id": None, "vocab_question_id": None, "is_review": False,
+    }
+    row.update(overrides)
+    return fake_db.insert("certificate_daily_assignments", row)
+
+
+def test_start_quiz_trigger_presents_question_and_sets_state(fake_db, monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
+    owner_row = fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
+    qid = _seed_certificate_question_for_router(fake_db)
+    _seed_certificate_assignment_for_router(fake_db, owner_row, certificate_question_id=qid)
+    store = ConversationStateStore()
+
+    reply = router.handle_message(fake_db, store, ROBIN_ID, "開始作答")
+
+    assert "第 1/1 題" in reply
+    assert store.get(ROBIN_ID)["flow"] == "pending_quiz_answer"
+
+
+def test_pending_quiz_answer_flow_dispatches_through_router(fake_db, monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
+    owner_row = fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
+    qid = _seed_certificate_question_for_router(fake_db)
+    _seed_certificate_assignment_for_router(fake_db, owner_row, certificate_question_id=qid)
+    store = ConversationStateStore()
+    router.handle_message(fake_db, store, ROBIN_ID, "開始作答")
+
+    reply = router.handle_message(fake_db, store, ROBIN_ID, "A")
+
+    assert "✅ 答對了" in reply
+    assert store.get(ROBIN_ID) is None
+
+
+def test_adjust_quiz_schedule_trigger_and_flow_dispatches_through_router(fake_db, monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
+    fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
+    _seed_certificate_question_for_router(fake_db)
+    store = ConversationStateStore()
+    llm_client = _FakeLLMClient(response_text="INTENT: CANCEL")
+
+    start_reply = router.handle_message(fake_db, store, ROBIN_ID, "調整出題排程")
+    assert start_reply == commands._QUIZ_SCHEDULE_INTENT_ASK
+    assert store.get(ROBIN_ID)["flow"] == "pending_quiz_schedule_intent"
+
+    confirm_reply = router.handle_message(fake_db, store, ROBIN_ID, "今天不想做了", llm_client=llm_client)
+    assert "取消" in confirm_reply
+    assert store.get(ROBIN_ID) is None
+
+
+def test_adjust_quiz_schedule_with_multiple_exam_types_dispatches_choice_step(fake_db, monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
+    fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
+    _seed_certificate_question_for_router(fake_db, exam_type="ielts")
+    _seed_certificate_question_for_router(fake_db, exam_type="toeic", question_number=1)
+    store = ConversationStateStore()
+
+    choice_ask_reply = router.handle_message(fake_db, store, ROBIN_ID, "調整出題排程")
+    assert "1. ielts" in choice_ask_reply
+    assert store.get(ROBIN_ID)["flow"] == "pending_quiz_schedule_exam_type_choice"
+
+    intent_ask_reply = router.handle_message(fake_db, store, ROBIN_ID, "1")
+    assert intent_ask_reply == commands._QUIZ_SCHEDULE_INTENT_ASK
+    assert store.get(ROBIN_ID)["flow"] == "pending_quiz_schedule_intent"
+
+
+def test_adjust_quiz_schedule_spread_confirm_dispatches_through_router(fake_db, monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
+    fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
+    _seed_certificate_question_for_router(fake_db)
+    fake_db.insert(
+        "certificate_daily_settings",
+        {"user_id": 1, "exam_type": "ielts", "daily_question_count": 3, "review_ratio_new": 7, "review_ratio_review": 3},
+    )
+    store = ConversationStateStore()
+    router.handle_message(fake_db, store, ROBIN_ID, "調整出題排程")
+    spread_llm_client = _FakeLLMClient(response_text="INTENT: SPREAD")
+    proposal_reply = router.handle_message(fake_db, store, ROBIN_ID, "平攤到最近幾天", llm_client=spread_llm_client)
+    assert store.get(ROBIN_ID)["flow"] == "pending_quiz_schedule_spread_confirm"
+
+    confirm_llm_client = _FakeLLMClient(response_text="STATUS: CONFIRM")
+    confirm_reply = router.handle_message(fake_db, store, ROBIN_ID, "OK", llm_client=confirm_llm_client)
+
+    assert "完成" in confirm_reply
+    assert store.get(ROBIN_ID) is None

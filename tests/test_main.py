@@ -360,6 +360,46 @@ def test_check_certificate_daily_quiz_push_swallows_exception(monkeypatch):
     fake_db.close.assert_called_once()
 
 
+def test_check_certificate_answer_reminder_skips_when_env_vars_missing(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+
+    main._check_certificate_answer_reminder()  # 不應該拋例外，直接跳過
+
+
+def test_check_certificate_answer_reminder_calls_certificate_answer_module_when_env_vars_set(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+
+    fake_db = MagicMock()
+    monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", MagicMock(return_value=fake_db))
+    fake_telegram = MagicMock()
+    monkeypatch.setattr("submodules.telegram.client.TelegramClient", MagicMock(return_value=fake_telegram))
+
+    fake_check = MagicMock()
+    monkeypatch.setattr("src.bot.certificate_answer.check_and_push_answer_reminders", fake_check)
+
+    main._check_certificate_answer_reminder()
+
+    fake_check.assert_called_once_with(fake_db, fake_telegram)
+    fake_db.close.assert_called_once()
+
+
+def test_check_certificate_answer_reminder_swallows_exception(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+
+    fake_db = MagicMock()
+    monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", MagicMock(return_value=fake_db))
+    monkeypatch.setattr(
+        "submodules.telegram.client.TelegramClient", MagicMock(side_effect=RuntimeError("boom"))
+    )
+
+    main._check_certificate_answer_reminder()  # 不應該往外拋
+
+    fake_db.close.assert_called_once()
+
+
 def test_healthz_endpoint_still_returns_ok(monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
@@ -389,6 +429,7 @@ _HEALTH_CHECK_NAMES = (
     "_check_toeic_pipeline",
     "_check_skill_growth_push",
     "_check_certificate_daily_quiz_push",
+    "_check_certificate_answer_reminder",
 )
 
 

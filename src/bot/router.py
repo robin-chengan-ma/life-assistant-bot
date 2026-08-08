@@ -69,6 +69,11 @@ _BACKFILL_DIET_TRIGGERS = {"/backfill_diet", "我要補記飲食"}
 _MY_DIET_LOGS_TRIGGERS = {"/my_diet_logs", "我的飲食紀錄"}
 _SET_BODY_GOAL_TRIGGERS = {"/set_body_goal", "我要設定體態管理目標"}
 _MY_BODY_GOALS_TRIGGERS = {"/my_body_goals", "我的體態目標"}
+# 2026-08-08（Step 3.3，見 robinson SPEC.md FR-27、FR-26 決策 5）：證照題庫作答與彈性排程調整，
+# `certificate` 功能開關本身是 owner_only（見 templates.py FEATURE_LIST），這兩個觸發詞只放在
+# is_owner 分支，比照 _SET_TOGGLE_TRIGGERS 等既有 Owner 專屬觸發詞的位置。
+_START_QUIZ_TRIGGERS = {"/start_quiz", "開始作答"}
+_ADJUST_QUIZ_SCHEDULE_TRIGGERS = {"/adjust_quiz_schedule", "調整出題排程"}
 # 2026-08-02（Step 1.9，見 robinson SPEC.md FR-60）：任何身分皆可觸發客訴收集流程。
 _COMPLAINT_TRIGGERS = {"/complaint", "我要客訴你"}
 _CLEAN_ALL_DIALOG_TRIGGERS = {"/clean-all-dialog", "我想要刪除所有對話紀錄"}
@@ -153,6 +158,12 @@ def handle_message(
             return commands.start_my_toggles(db, state_store, telegram_user_id, user_id)
         if text in _RECOVERED_TRIGGERS:
             return commands.handle_recovered(db, telegram_client)
+        if text in _START_QUIZ_TRIGGERS:
+            # 2026-08-08（FR-27）：開始依序作答目前所有待作答的證照題庫題目。
+            return commands.start_quiz_answer(db, state_store, telegram_user_id, user_id)
+        if text in _ADJUST_QUIZ_SCHEDULE_TRIGGERS:
+            # 2026-08-08（FR-26 決策 5、6）：開始彈性排程調整流程（MOVE/CANCEL/RANGE/SPREAD）。
+            return commands.start_quiz_schedule_adjust(db, state_store, telegram_user_id, user_id)
     else:
         user = auth.find_user_by_telegram_id(db, telegram_user_id)
         if user is None:
@@ -602,6 +613,16 @@ def _dispatch_active_flow(
         return commands.handle_family_birthday_select_step(db, state_store, telegram_user_id, text)
     if flow == "pending_family_birthday_date":
         return commands.handle_family_birthday_date_step(db, state_store, telegram_user_id, text)
+    # 2026-08-08（Step 3.3，見 robinson SPEC.md FR-27、FR-26 決策 5、6）：證照題庫作答（一次一題）
+    # 與彈性排程調整（選 exam_type → 自由描述 → LLM 分類語意 → SPREAD 需額外確認提案）。
+    if flow == "pending_quiz_answer":
+        return commands.handle_quiz_answer_step(db, state_store, telegram_user_id, text)
+    if flow == "pending_quiz_schedule_exam_type_choice":
+        return commands.handle_quiz_schedule_exam_type_choice_step(state_store, telegram_user_id, text)
+    if flow == "pending_quiz_schedule_intent":
+        return commands.handle_quiz_schedule_intent_step(db, llm_client, state_store, telegram_user_id, text)
+    if flow == "pending_quiz_schedule_spread_confirm":
+        return commands.handle_quiz_schedule_spread_confirm_step(db, llm_client, state_store, telegram_user_id, text)
     if flow == "pending_complaint_content":
         # 2026-08-02（Step 1.9，見 robinson SPEC.md FR-61、FR-62）：寫入客訴＋Gemini 分析私訊 Robin。
         return commands.handle_complaint_content_step(

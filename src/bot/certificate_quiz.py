@@ -52,7 +52,7 @@ def _get_settings(db: CloudSQLClient, user_id: int, exam_type: str) -> dict | No
     )
 
 
-def _get_active_schedule_override(
+def get_active_schedule_override(
     db: CloudSQLClient, user_id: int, exam_type: str, target_date: date
 ) -> dict | None:
     """回傳覆蓋當天的區間設定；同一天理論上不該有多筆重疊區間，若有則取第一筆命中的。"""
@@ -72,7 +72,7 @@ def effective_daily_question_count(
     """FR-26：查詢某天實際生效的出題數量——先查日期區間覆蓋，沒有才 fallback 用全局設定，
     都沒設定過就用預設值（見模組 docstring）。
     """
-    override = _get_active_schedule_override(db, user_id, exam_type, target_date)
+    override = get_active_schedule_override(db, user_id, exam_type, target_date)
     if override is not None:
         return override["daily_question_count"]
 
@@ -291,7 +291,7 @@ def assign_daily_questions(
 # --- 推播 ---
 
 
-def _distinct_exam_types_with_questions(db: CloudSQLClient) -> list[str]:
+def distinct_exam_types_with_questions(db: CloudSQLClient) -> list[str]:
     """回傳題庫裡目前有哪些 exam_type（已補齊正解的題目才算，見 FR-26）。"""
     rows = db.select("certificate_questions")
     return sorted({row["exam_type"] for row in rows if row.get("correct_answer") is not None})
@@ -331,7 +331,7 @@ def check_and_push_daily_quiz(db: CloudSQLClient, telegram_client, now: datetime
         return
 
     today = now_local.date()
-    for exam_type in _distinct_exam_types_with_questions(db):
+    for exam_type in distinct_exam_types_with_questions(db):
         already_assigned_today = bool(_existing_assignments(db, owner["id"], exam_type, today))
 
         try:

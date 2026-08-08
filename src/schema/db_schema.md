@@ -70,6 +70,7 @@ COMMENT ON COLUMN users.created_at IS '這筆使用者記錄建立的時間（�
 | 2026-08-04 | 新增 `birthday`（生日，只比對月/日） | Step 2.3 重要通知模組 FR-53，設計理由見下方 `important_notifications_log` 表 | `0028_add_birthday_to_users.sql`；已知 5 位家人（弟弟／大妹／小妹／爸爸／媽媽）生日資料見 `0030_seed_family_birthdays.sql` |
 | 2026-08-07 | 新增 `toeic_weekly_question_count`（軌道二每週生成題數，預設 21）／`toeic_pipeline_last_run_on`（週排程去重） | Step 3.2 TOEIC 雙軌題庫 Pipeline FR-25e／FR-25f，設計理由見下方 `toeic_questions`／`toeic_vocab_questions` 表 | `0037_add_toeic_weekly_question_count_to_users.sql` |
 | 2026-08-08 | 新增 `waist_cm`（腰圍，初始設定、變動才修正，設計比照 `height_cm`） | 體態管理模組擴充 FR-46：Robin 要求新增腰圍設定，明確定位為「參考指標、非必要」，BMI 計算不使用此欄位；合理範圍 40~200 公分（比身高體重寬鬆，因為只是參考用途，不用像身高體重那麼嚴格） | `0046_add_waist_to_users.sql` |
+| 2026-08-08 | 新增 `certificate_answer_reminder_sent_on`（FR-28 20:00 作答提醒去重用） | Step 3.3 作答與批改流程，設計比照 `finance_reminder_sent_date`／`toeic_pipeline_last_run_on` 等既有「當日去重」欄位慣例，避免 `/healthz` 同一小時內多次觸發重複推播 | `0048_add_certificate_answer_reminder_field_to_users.sql` |
 
 ---
 
@@ -737,7 +738,7 @@ CREATE UNIQUE INDEX idx_toeic_vocab_questions_target_word ON toeic_vocab_questio
 
 **建立日期**：2026-08-07
 **用途**：Step 3.3 作答紀錄，對應 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) FR-27、FR-29、ADR-19 決策 6。
-**Migration 檔案**：`src/migrations/0040_create_answer_logs_table.sql`
+**Migration 檔案**：`src/migrations/0040_create_answer_logs_table.sql`；`assignment_id` 欄位見 `0047_add_assignment_id_to_answer_logs.sql`（2026-08-08 追加）
 
 ```sql
 CREATE TABLE answer_logs (
@@ -750,6 +751,7 @@ CREATE TABLE answer_logs (
     is_correct BOOLEAN NOT NULL,
     answered_on DATE NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    assignment_id BIGINT REFERENCES certificate_daily_assignments(id),  -- 0047 追加
     CONSTRAINT answer_logs_exactly_one_question CHECK (
         (certificate_question_id IS NOT NULL AND vocab_question_id IS NULL)
         OR (certificate_question_id IS NULL AND vocab_question_id IS NOT NULL)
@@ -758,12 +760,14 @@ CREATE TABLE answer_logs (
 
 CREATE INDEX idx_answer_logs_user_answered_on ON answer_logs (user_id, answered_on);
 CREATE INDEX idx_answer_logs_user_exam_type ON answer_logs (user_id, exam_type);
+CREATE INDEX idx_answer_logs_assignment_id ON answer_logs (assignment_id);  -- 0047 追加
 ```
 
 **設計理由**：
 - 2026-08-07 經 AskUserQuestion 與 Robin 確認：軌道一（`certificate_questions`）跟軌道二（`toeic_vocab_questions`）是兩張分開的題庫表，用兩個可為 NULL 的外鍵 + `CHECK` 限制只能填一個串連，取代「分兩張作答紀錄表、查詢時 UNION」的方案，讓 FR-29 統計一段時間成效可以用單一 SQL 查完
 - `exam_type`／`question_type` 皆為寫入當下複製自對應題目的冗餘欄位，避免統計查詢時要多一層 JOIN 回題庫表才能篩選/分組；`question_type` 的值為 `write`／`listen`（軌道一）或 `vocab`（軌道二固定值），供 FR-29「最常出錯的地方」統計使用
 - `answered_on` 用 `DATE` 而非 `TIMESTAMPTZ`：FR-29 需要用「日期」為單位判斷某天有沒有作答、計算平均時要排除未作答日，不需要到秒等級的時間精度
+- **2026-08-08 追加 `assignment_id`**（見 `src/bot/certificate_answer.py`）：作答與批改流程（FR-27/FR-28）開工時發現，原本規劃的「靠比對同一題目在 `answer_logs` 有沒有對應紀錄」判斷「這個 assignment 是否已作答」在允許跨日晚補答（見 FR-28 決策）的情境下會不夠精準——同一題目可能因複習池機制被指派超過一次，光比對題目 id 無法區分是回答「今天這一批」還是更早的批次；直接記錄對應的 `assignment_id`，查詢就變成單純的存在性檢查，不需要猜測
 
 ---
 
@@ -907,5 +911,5 @@ CREATE INDEX idx_certificate_daily_assignments_user_date
 
 **設計理由**：
 - 兩個可為 NULL 的外鍵＋ CHECK 串連軌道一/軌道二題庫，設計比照 `answer_logs`
-- 是否已作答不在本表直接存狀態，靠比對同一題目在 `answer_logs` 有沒有對應紀錄動態判斷——避免兩張表的「作答狀態」互相不同步
+- 是否已作答不在本表直接存狀態，靠查詢 `answer_logs.assignment_id` 有沒有指回這一筆判斷（2026-08-08 追加，見 `answer_logs` 表變更紀錄）——避免兩張表的「作答狀態」互相不同步，也不需要用題目 id／日期比對猜測
 - `is_review` 只是記錄「這題是不是從複習池挑出來的」，供統計/除錯用，不影響作答批改邏輯本身（批改邏輯只在乎正解對不對）

@@ -377,6 +377,32 @@ def _check_certificate_daily_quiz_push() -> None:
         db.close()
 
 
+def _check_certificate_answer_reminder() -> None:
+    """在 /healthz 被呼叫時順便檢查證照題庫 20:00 作答提醒（Step 3.3，見 robinson SPEC.md
+    FR-28、ADR-20 決策 4）：固定台灣時間 20:00，若還有題目沒作答，提醒一次（單純提醒，不直接
+    發題目），詳見 src/bot/certificate_answer.py 模組 docstring。
+
+    跟 `_check_certificate_daily_quiz_push()` 一樣只需要 `TELEGRAM_BOT_TOKEN`，不需要任何
+    Gemini/Drive 相關金鑰；收件人是查 `users.is_owner = TRUE` 動態決定，不需要
+    `ROBIN_TELEGRAM_TOKEN`。
+    """
+    if not (os.environ.get("DATABASE_URL") and os.environ.get("TELEGRAM_BOT_TOKEN")):
+        return
+
+    from src.bot import certificate_answer
+    from submodules.cloudsql.client import CloudSQLClient
+    from submodules.telegram.client import TelegramClient
+
+    db = CloudSQLClient()
+    try:
+        telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
+        certificate_answer.check_and_push_answer_reminders(db, telegram_client)
+    except Exception:
+        logger.exception("證照題庫 20:00 作答提醒檢查失敗，不影響健康檢查端點本身")
+    finally:
+        db.close()
+
+
 def _run_startup_migrations() -> None:
     """開機自動套用尚未執行過的 DB migration（ADR-11）。
 
@@ -409,7 +435,7 @@ def root():
 
 
 def _run_background_checks() -> None:
-    """實際執行 `/healthz` 附掛的 10 個排程檢查，在背景執行緒跑，見 `health_check()`。
+    """實際執行 `/healthz` 附掛的 11 個排程檢查，在背景執行緒跑，見 `health_check()`。
 
     **2026-08-08 追加（production 事故修復）**：這 10 個檢查原本是在 `/healthz` 的 HTTP
     request 裡依序同步執行，平常大部分檢查會因為「還沒到時間」提早 return、很快；但每天台灣
@@ -434,6 +460,7 @@ def _run_background_checks() -> None:
     _check_toeic_pipeline()
     _check_skill_growth_push()
     _check_certificate_daily_quiz_push()
+    _check_certificate_answer_reminder()
 
 
 @app.route("/healthz")
@@ -444,7 +471,8 @@ def health_check():
 
     2026-08-02（Step 1.6，見 FR-21）起，陸續借用這個每 10 分鐘一次的呼叫頻率，順便觸發多項
     排程檢查（Neon 容量、待辦推播、記帳預警/提醒/月報、體態目標預警、重要通知、技術摘要收集/
-    推播、TOEIC pipeline、證照題庫每日推播出題），實際清單見 `_run_background_checks()`。
+    推播、TOEIC pipeline、證照題庫每日推播出題／20:00 作答提醒），實際清單見
+    `_run_background_checks()`。
 
     **2026-08-08 追加（production 事故修復）**：這些檢查改成丟進背景執行緒（daemon thread）
     執行，`/healthz` 本身立即回 200，不等待檢查跑完，避免 cron-job.org 因為單次 request 耗時

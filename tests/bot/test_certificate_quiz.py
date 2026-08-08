@@ -80,14 +80,14 @@ def test_split_by_ratio_returns_zeros_when_ratio_sum_is_zero():
     assert certificate_quiz._split_by_ratio(6, [0, 0]) == [0, 0]
 
 
-# --- _get_active_schedule_override / effective_daily_question_count ---
+# --- get_active_schedule_override / effective_daily_question_count ---
 
 
-def test_get_active_schedule_override_returns_none_when_no_overrides(fake_db):
-    assert certificate_quiz._get_active_schedule_override(fake_db, 1, "ielts", date(2026, 8, 8)) is None
+def testget_active_schedule_override_returns_none_when_no_overrides(fake_db):
+    assert certificate_quiz.get_active_schedule_override(fake_db, 1, "ielts", date(2026, 8, 8)) is None
 
 
-def test_get_active_schedule_override_returns_matching_range(fake_db):
+def testget_active_schedule_override_returns_matching_range(fake_db):
     fake_db.insert(
         "certificate_daily_schedule_overrides",
         {
@@ -103,7 +103,7 @@ def test_get_active_schedule_override_returns_matching_range(fake_db):
         },
     )
 
-    result = certificate_quiz._get_active_schedule_override(fake_db, 1, "ielts", date(2026, 8, 9))
+    result = certificate_quiz.get_active_schedule_override(fake_db, 1, "ielts", date(2026, 8, 9))
 
     assert result["daily_question_count"] == 8
 
@@ -162,14 +162,14 @@ def test_effective_count_falls_back_to_settings_when_override_out_of_range(fake_
     assert certificate_quiz.effective_daily_question_count(fake_db, 1, "ielts", date(2026, 8, 20)) == 10
 
 
-# --- _distinct_exam_types_with_questions ---
+# --- distinct_exam_types_with_questions ---
 
 
-def test_distinct_exam_types_with_questions_excludes_questions_without_correct_answer(fake_db):
+def testdistinct_exam_types_with_questions_excludes_questions_without_correct_answer(fake_db):
     _seed_certificate_question(fake_db, exam_type="ielts", correct_answer=None)
     _seed_certificate_question(fake_db, exam_type="gcp", correct_answer="A")
 
-    assert certificate_quiz._distinct_exam_types_with_questions(fake_db) == ["gcp"]
+    assert certificate_quiz.distinct_exam_types_with_questions(fake_db) == ["gcp"]
 
 
 # --- assign_daily_questions ---

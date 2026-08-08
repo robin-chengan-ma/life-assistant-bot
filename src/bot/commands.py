@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from src.bot import auth, body, finance, knowledge, mood, notifications, privacy, templates, toggles
+from src.bot import certificate_answer, certificate_quiz, certificate_schedule
 from src.bot import complaint as complaint_module
 from src.bot import todo as todo_module
 from src.bot.state import ConversationStateStore
@@ -2999,3 +3000,291 @@ def handle_family_birthday_date_step(
     target_user = db.select("users", where="id = %s", params=(target_user_id,), fetch_one=True)
     role = target_user["role"] if target_user else "這位家人"
     return f"已經記下 {role} 的生日了，之後到了會自動提醒大家喔！"
+
+
+# ---------------------------------------------------------------------------
+# 證照題庫作答與彈性排程調整（2026-08-08 追加，Step 3.3，見 robinson SPEC.md FR-27、FR-28、
+# FR-26、ADR-20 決策 3～6）
+#
+# - 作答：「開始作答」／`/start_quiz`，一次一題（依序作答，答完才給下一題，經 Robin 確認）；
+#   只接受回覆 A/B/C/D，格式不符原地反問（決策 3）；跨多個 exam_type 依序做完一個再做下一個
+#   （`certificate_answer.get_pending_assignments()` 已依 exam_type 排序）。
+# - 彈性排程調整：「調整出題排程」／`/adjust_quiz_schedule`，先選 exam_type（只有一個時跳過這
+#   一題）→ 自由描述想怎麼調整 → LLM 分類成四種語意之一（MOVE／CANCEL／RANGE／SPREAD，經 Robin
+#   確認採 LLM 判斷語意而非固定指令）。前三種語意是使用者已經明確下的指令，直接套用不需要額外
+#   確認；SPREAD（平攤）語意需要先算出提案、列出「幾月幾號各要多幾題」給 Robin 確認，同意才寫
+#   入，有調整意見（例如指定想攤成幾天）則依建議重算再次確認，直到 Robin 同意或取消為止（經
+#   Robin 明確要求，見 ADR-20 決策 5④、6）。
+# ---------------------------------------------------------------------------
+
+_QUIZ_ANSWER_FORMAT_REPROMPT = "請回覆 A、B、C 或 D 其中一個字母喔："
+_QUIZ_NO_PENDING_QUESTIONS_REPLY = "目前沒有題目待作答喔！"
+
+_QUIZ_SCHEDULE_NO_EXAM_TYPE_REPLY = "目前題庫裡還沒有任何有正解的題目，沒有可以調整的排程喔。"
+_QUIZ_SCHEDULE_EXAM_TYPE_ASK_TEMPLATE = "你目前有多個證照題庫，這次要調整哪一個的出題排程呢？請輸入編號：\n{options}"
+_QUIZ_SCHEDULE_INVALID_INDEX_REPLY = "不好意思，麻煩輸入清單裡的編號喔："
+_QUIZ_SCHEDULE_INTENT_ASK = (
+    "好的，今天的題目你想怎麼調整呢？可以直接跟我說，例如：\n"
+    "・改到別天（例如：今天不想做，改明天）\n"
+    "・直接取消今天的\n"
+    "・某個時間區間的每日題數要改成幾題\n"
+    "・平攤到最近幾天"
+)
+_QUIZ_SCHEDULE_UNCLEAR_REPLY = "不好意思，我還是不太確定你想怎麼調整，可以再講清楚一點嗎？"
+_QUIZ_SCHEDULE_INVALID_DATE_REPLY = "這個日期好像不是未來的日期喔，麻煩再確認一次告訴我要改到哪一天："
+_QUIZ_SCHEDULE_INVALID_RANGE_REPLY = "不好意思，我沒有完全聽懂區間跟題數，可以再講清楚一點嗎？（例如：8/10 到 8/15 每天改成 3 題）"
+_QUIZ_SCHEDULE_SPREAD_UNCLEAR_REPLY = "不好意思，我還是不太確定，你可以回覆「OK」同意這個方案，或直接跟我說想怎麼調整（例如攤成幾天）："
+_QUIZ_SCHEDULE_SPREAD_INVALID_DAYS_REPLY = "不好意思，我沒聽懂你想攤成幾天，可以再講一次嗎？（例如：攤成 3 天）"
+
+_QUIZ_SCHEDULE_INTENT_CLASSIFY_PROMPT = (
+    "使用者正在調整證照題庫每日出題排程，Robinson 剛反問「今天的題目你想怎麼調整？」，這是使用者"
+    "這一則的回覆：「{text}」。\n"
+    "【現在的日期（台灣時區，計算相對日期時一律以此為準）】\n{current_date_text}\n\n"
+    "請判斷使用者想要下面五種語意中的哪一種，並嚴格照下面格式輸出，每個欄位各自一行，"
+    "不要輸出其他任何文字：\n"
+    "INTENT: MOVE（今天的題目整批挪到指定的某一天）／CANCEL（今天的題目直接取消，不補不挪）／"
+    "RANGE（某個日期區間的每日出題數量改成 N 題）／SPREAD（今天的題目平攤到接下來幾天，"
+    "使用者不需要自己講出要攤幾天或哪幾天，這是 Robinson 自己算的）／UNCLEAR（看不出來、"
+    "或講的是其他事情）\n"
+    "MOVE_DATE: 若為 MOVE，目標日期，格式 YYYY-MM-DD（其他情況可省略）\n"
+    "RANGE_START: 若為 RANGE，區間起始日期，格式 YYYY-MM-DD（其他情況可省略）\n"
+    "RANGE_END: 若為 RANGE，區間結束日期，格式 YYYY-MM-DD（其他情況可省略）\n"
+    "RANGE_COUNT: 若為 RANGE，每日題數，純數字（其他情況可省略）"
+)
+_QUIZ_SCHEDULE_SPREAD_CONFIRM_CLASSIFY_PROMPT = (
+    "使用者剛看到 Robinson 算出來的「平攤方案」提案（把今天的題目分攤到接下來幾天），這是使用者"
+    "這一則的回覆：「{text}」。\n"
+    "請判斷使用者的意思，並嚴格照下面格式輸出，每個欄位各自一行，不要輸出其他任何文字：\n"
+    "STATUS: CONFIRM（同意這個方案）／CANCEL（不想調整了，取消這次操作）／"
+    "CUSTOM_DAYS（明確講出想攤成幾天，不是目前這個方案的天數）／UNCLEAR（看不懂、或想法還不明確）\n"
+    "DAYS: 若為 CUSTOM_DAYS，使用者想要攤成的天數，純數字（其他情況可省略）"
+)
+
+
+# --- 作答 ---
+
+
+def _parse_answer_letter(text: str) -> str | None:
+    """只接受 A/B/C/D（大小寫皆可），不用 LLM 解析口語化回答（ADR-20 決策 3）。"""
+    cleaned = text.strip().upper()
+    return cleaned if cleaned in ("A", "B", "C", "D") else None
+
+
+def _present_current_quiz_question(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int) -> str:
+    """呈現目前佇列位置的題目；資料異常（`certificate_answer.build_question_view()` 回傳
+    `None`，理論上不該發生，是最後一道防線）或題目已被刪除（例如透過排程調整流程被取消）時自動
+    跳過，找下一題；全部跑完就清除狀態並回覆完成訊息。"""
+    state = state_store.get(telegram_user_id)
+    assignment_ids = state["assignment_ids"]
+    total = len(assignment_ids)
+    position = state["position"]
+
+    while position < total:
+        assignment_id = assignment_ids[position]
+        assignment = db.select(
+            "certificate_daily_assignments", where="id = %s", params=(assignment_id,), fetch_one=True
+        )
+        view = certificate_answer.build_question_view(db, assignment) if assignment else None
+        if view is not None:
+            state["position"] = position
+            state["current_view"] = view
+            state_store.set(telegram_user_id, state)
+            return certificate_answer.format_question_prompt(view, position + 1, total)
+        if assignment is None:
+            _logger.warning("assignment id=%s 在作答流程中已不存在，跳過", assignment_id)
+        else:
+            _logger.warning("assignment id=%s 對應的題目資料異常（正解無法解析），跳過", assignment_id)
+        position += 1
+
+    state_store.clear(telegram_user_id)
+    return certificate_answer.ALL_DONE_MESSAGE
+
+
+def start_quiz_answer(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
+    """「開始作答」／`/start_quiz`：依序作答目前所有待作答的題目（FR-27，一次一題）。"""
+    pending = certificate_answer.get_pending_assignments(db, user_id)
+    if not pending:
+        return _QUIZ_NO_PENDING_QUESTIONS_REPLY
+
+    state_store.set(
+        telegram_user_id,
+        {
+            "flow": "pending_quiz_answer", "target_user_id": user_id,
+            "assignment_ids": [row["id"] for row in pending], "position": 0, "current_view": None,
+        },
+    )
+    return _present_current_quiz_question(db, state_store, telegram_user_id)
+
+
+def handle_quiz_answer_step(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
+    """處理 `pending_quiz_answer` 狀態下使用者的作答回覆；只接受 A/B/C/D，格式不符原地反問，
+    不清除狀態、也不算跳題（ADR-20 決策 3）。"""
+    state = state_store.get(telegram_user_id)
+    letter = _parse_answer_letter(text)
+    if letter is None:
+        return _QUIZ_ANSWER_FORMAT_REPROMPT
+
+    assignment_ids = state["assignment_ids"]
+    position = state["position"]
+    assignment_id = assignment_ids[position]
+    assignment = db.select(
+        "certificate_daily_assignments", where="id = %s", params=(assignment_id,), fetch_one=True
+    )
+    view = state.get("current_view")
+    if view is None and assignment is not None:
+        view = certificate_answer.build_question_view(db, assignment)
+
+    if assignment is None or view is None:
+        # 這題在呈現之後、作答之前被刪除或資料異常（例如透過排程調整流程被取消），跳過這題。
+        state["position"] = position + 1
+        state_store.set(telegram_user_id, state)
+        return _present_current_quiz_question(db, state_store, telegram_user_id)
+
+    is_correct = certificate_answer.grade_answer(letter, view)
+    certificate_answer.record_answer(db, state["target_user_id"], assignment, view, is_correct, _now().date())
+    feedback = certificate_answer.format_grading_feedback(is_correct, view)
+
+    state["position"] = position + 1
+    state_store.set(telegram_user_id, state)
+    next_prompt = _present_current_quiz_question(db, state_store, telegram_user_id)
+    return f"{feedback}\n\n{next_prompt}"
+
+
+# --- 彈性排程調整 ---
+
+
+def start_quiz_schedule_adjust(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
+    """「調整出題排程」／`/adjust_quiz_schedule`：開始彈性排程調整流程（FR-26 決策 5）。"""
+    exam_types = certificate_quiz.distinct_exam_types_with_questions(db)
+    if not exam_types:
+        return _QUIZ_SCHEDULE_NO_EXAM_TYPE_REPLY
+
+    if len(exam_types) == 1:
+        state_store.set(
+            telegram_user_id,
+            {"flow": "pending_quiz_schedule_intent", "target_user_id": user_id, "exam_type": exam_types[0]},
+        )
+        return _QUIZ_SCHEDULE_INTENT_ASK
+
+    state_store.set(
+        telegram_user_id,
+        {"flow": "pending_quiz_schedule_exam_type_choice", "target_user_id": user_id, "exam_type_options": exam_types},
+    )
+    options_text = "\n".join(f"{i}. {exam_type}" for i, exam_type in enumerate(exam_types, start=1))
+    return _QUIZ_SCHEDULE_EXAM_TYPE_ASK_TEMPLATE.format(options=options_text)
+
+
+def handle_quiz_schedule_exam_type_choice_step(state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
+    """處理 `pending_quiz_schedule_exam_type_choice` 狀態下使用者選擇的 exam_type 編號。"""
+    state = state_store.get(telegram_user_id)
+    options = state["exam_type_options"]
+    cleaned = text.strip()
+    if not cleaned.isdigit() or not (1 <= int(cleaned) <= len(options)):
+        return _QUIZ_SCHEDULE_INVALID_INDEX_REPLY
+
+    state_store.set(
+        telegram_user_id,
+        {
+            "flow": "pending_quiz_schedule_intent", "target_user_id": state["target_user_id"],
+            "exam_type": options[int(cleaned) - 1],
+        },
+    )
+    return _QUIZ_SCHEDULE_INTENT_ASK
+
+
+def handle_quiz_schedule_intent_step(
+    db: CloudSQLClient, llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str
+) -> str:
+    """處理 `pending_quiz_schedule_intent` 狀態下使用者對「今天的題目你想怎麼調整？」的自由描述
+    回覆，用 LLM 分類成四種語意之一（見模組 docstring）。MOVE／CANCEL／RANGE 直接套用；SPREAD
+    需要先算提案進入 `pending_quiz_schedule_spread_confirm` 等待確認。
+    """
+    state = state_store.get(telegram_user_id)
+    target_user_id = state["target_user_id"]
+    exam_type = state["exam_type"]
+    today = _now().date()
+
+    parsed = _parse_key_value_block(
+        llm_client.generate_text(
+            _QUIZ_SCHEDULE_INTENT_CLASSIFY_PROMPT.format(text=text, current_date_text=_current_date_text())
+        )
+    )
+    intent = parsed.get("INTENT", "UNCLEAR")
+
+    if intent == "CANCEL":
+        certificate_schedule.apply_cancel(db, target_user_id, exam_type, today)
+        state_store.clear(telegram_user_id)
+        return f"好的，已經取消今天「{exam_type}」的題目囉，不補也不挪。"
+
+    if intent == "MOVE":
+        target_date = _parse_date_only(parsed.get("MOVE_DATE", ""))
+        if target_date is None or target_date <= today:
+            return _QUIZ_SCHEDULE_INVALID_DATE_REPLY
+        certificate_schedule.apply_move(db, target_user_id, exam_type, today, target_date)
+        state_store.clear(telegram_user_id)
+        return f"好的，已經把今天「{exam_type}」的題目挪到 {target_date.month}/{target_date.day} 囉！"
+
+    if intent == "RANGE":
+        start = _parse_date_only(parsed.get("RANGE_START", ""))
+        end = _parse_date_only(parsed.get("RANGE_END", ""))
+        count_raw = parsed.get("RANGE_COUNT", "").strip()
+        if start is None or end is None or start > end or not count_raw.isdigit():
+            return _QUIZ_SCHEDULE_INVALID_RANGE_REPLY
+        count = int(count_raw)
+        certificate_schedule.apply_range_override(db, target_user_id, exam_type, today, start, end, count)
+        state_store.clear(telegram_user_id)
+        return f"好的，{start.month}/{start.day} 到 {end.month}/{end.day} 這段期間「{exam_type}」每天的出題數量已經改成 {count} 題囉！"
+
+    if intent == "SPREAD":
+        plan = certificate_schedule.compute_spread_plan(db, target_user_id, exam_type, today)
+        state_store.set(
+            telegram_user_id,
+            {
+                "flow": "pending_quiz_schedule_spread_confirm", "target_user_id": target_user_id,
+                "exam_type": exam_type, "plan": plan,
+            },
+        )
+        return certificate_schedule.format_spread_proposal(plan)
+
+    return _QUIZ_SCHEDULE_UNCLEAR_REPLY
+
+
+def handle_quiz_schedule_spread_confirm_step(
+    db: CloudSQLClient, llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str
+) -> str:
+    """處理 `pending_quiz_schedule_spread_confirm` 狀態下使用者對「平攤方案」提案的回覆
+    （ADR-20 決策 5④、6）：同意才真正寫入；有調整意見（目前支援明確講出想攤成幾天）則依建議
+    重算，再次列出方案等待確認，反覆直到 Robin 同意或取消為止。
+    """
+    state = state_store.get(telegram_user_id)
+    target_user_id = state["target_user_id"]
+    exam_type = state["exam_type"]
+    plan = state["plan"]
+    today = _now().date()
+
+    parsed = _parse_key_value_block(
+        llm_client.generate_text(_QUIZ_SCHEDULE_SPREAD_CONFIRM_CLASSIFY_PROMPT.format(text=text))
+    )
+    status = parsed.get("STATUS", "UNCLEAR")
+
+    if status == "CONFIRM":
+        certificate_schedule.apply_spread_plan(db, target_user_id, exam_type, today, plan)
+        state_store.clear(telegram_user_id)
+        return "好的，已經照這個方案分攤完成囉！"
+
+    if status == "CANCEL":
+        state_store.clear(telegram_user_id)
+        return "好的，那這次先不調整。"
+
+    if status == "CUSTOM_DAYS":
+        days_raw = parsed.get("DAYS", "").strip()
+        if not days_raw.isdigit() or int(days_raw) <= 0:
+            return _QUIZ_SCHEDULE_SPREAD_INVALID_DAYS_REPLY
+        new_plan = certificate_schedule.compute_spread_plan(
+            db, target_user_id, exam_type, today, num_days=int(days_raw)
+        )
+        state["plan"] = new_plan
+        state_store.set(telegram_user_id, state)
+        return certificate_schedule.format_spread_proposal(new_plan)
+
+    return _QUIZ_SCHEDULE_SPREAD_UNCLEAR_REPLY
