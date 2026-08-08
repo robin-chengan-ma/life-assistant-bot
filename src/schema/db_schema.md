@@ -795,6 +795,9 @@ CREATE TABLE certificate_goals (
 - `target_date`／`target_score` 皆允許 `NULL`：使用者可能只想設定分數目標、不確定確切考試日期，反之亦然
 - `target_score` 用 `TEXT`：`exam_type` 開放任意字串，有些是量化分數（TOEIC 850）、有些是通過/未通過（GCP／AWS 這類技術證照沒有量化分數），比照 `exam_official_scores.score` 的設計
 
+**變更紀錄**：
+- 2026-08-08（Step 3.3 剩餘範圍，見 SPEC.md FR-24）：建表當下（0041 migration）尚未有對應程式碼，本次補上 `src/bot/certificate_goals.py`（`get_goal()`／`set_goal()`〔UPSERT，讀到既有值就 `UPDATE`、沒有就 `INSERT`〕／`list_goals()`／`format_goal_set_reply()`／`format_goals_summary()`／`build_advice_prompt()`）；`commands.py` 新增「設定證照目標」／`/set_certificate_goal`、「我的證照目標」／`/my_certificate_goals`、「給我讀書建議」／`/certificate_advice` 三組對話流程/單次查詢指令
+
 ---
 
 ### exam_official_scores
@@ -820,6 +823,9 @@ CREATE INDEX idx_exam_official_scores_user_exam_type ON exam_official_scores (us
 - 跟 `answer_logs`（每日小考作答紀錄）刻意分開建表：正式成績是「一次考試的最終結果」，每日小考是「每天練習的逐題紀錄」，語意與查詢邏輯都不同，混在一起會互相干擾
 - 不加 `UNIQUE` 限制：同一 `exam_type` 可能多次應考（例如多益考了兩次），每次都是獨立一筆
 - `score` 用 `TEXT`：理由同 `certificate_goals.target_score`
+
+**變更紀錄**：
+- 2026-08-08（Step 3.3 剩餘範圍，見 SPEC.md FR-30）：建表當下（0042 migration）尚未有對應程式碼，本次補上 `src/bot/certificate_exam_scores.py`（`record_score()`／`list_scores()`／`distinct_exam_types()`／`format_scores_summary()`）；`commands.py` 新增「我要記錄正式成績」／`/log_exam_score`、「我的正式成績」／`/my_exam_scores`（經 AskUserQuestion 與 Robin 確認範圍：只做查詢列表，不含修改／刪除）
 
 ---
 

@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 from src.bot import auth, body, finance, knowledge, mood, notifications, privacy, templates, toggles
 from src.bot import certificate_answer, certificate_quiz, certificate_schedule
+from src.bot import certificate_exam_scores, certificate_goals, certificate_stats
 from src.bot import complaint as complaint_module
 from src.bot import todo as todo_module
 from src.bot.state import ConversationStateStore
@@ -3288,3 +3289,389 @@ def handle_quiz_schedule_spread_confirm_step(
         return certificate_schedule.format_spread_proposal(new_plan)
 
     return _QUIZ_SCHEDULE_SPREAD_UNCLEAR_REPLY
+
+
+# ---------------------------------------------------------------------------
+# 證照題庫成效問答、目標設定與正式成績（2026-08-08 追加，Step 3.3 剩餘範圍，見 robinson SPEC.md
+# FR-29、FR-24、FR-30、ADR-19）
+#
+# - FR-30 正式成績：「我要記錄正式成績」／「我的正式成績」，資料表 `exam_official_scores`
+#   （0042 migration，已存在）。查詢只做列表，不含修改／刪除（2026-08-08 經 AskUserQuestion 與
+#   Robin 確認範圍：正式成績是「考完就定案」的歷史紀錄，不像體重/記帳需要常態修正，先求簡單）。
+# - FR-24 目標設定與方向建議：「設定證照目標」／「我的證照目標」／「給我讀書建議」，資料表
+#   `certificate_goals`（0041 migration，已存在，UPSERT，重新設定即覆蓋）；方向建議依近 30 天
+#   FR-29 統計出的成效與目標時間長短，用 LLM 生成客製化文字，不走固定範本。
+# - FR-29 成效彈性文字問答：「查詢我的成效」，多輪對話直到 exam_type／正式-小考/期間都夠清楚為止
+#   ——每輪把使用者已經講過的內容全部疊加起來重新丟給 LLM 解析（而非死板的單欄位反問），讓使用者
+#   可以一次講清楚也可以分次補充；不做圖表（ADR-19 決策 4，圖表統一交給 Phase 4 App FR-64）。
+# ---------------------------------------------------------------------------
+
+_CERTIFICATE_ADVICE_LOOKBACK_DAYS = 30
+
+_SKIP_KEYWORDS = {"跳過", "不確定", "不知道", "沒有", "沒想法", "無"}
+
+
+def _is_skip_reply(text: str) -> bool:
+    return text.strip() in _SKIP_KEYWORDS
+
+
+def _certificate_exam_type_candidates(db: CloudSQLClient, user_id: int) -> list[str]:
+    """回傳這個使用者目前跟證照相關的所有已知 `exam_type`（題庫、作答紀錄、正式成績、既有目標
+    四個來源聯集），供「這是哪個證照類型」反問時列出候選清單。"""
+    candidates = set(certificate_quiz.distinct_exam_types_with_questions(db))
+    candidates |= set(certificate_stats.known_exam_types(db, user_id))
+    candidates |= {row["exam_type"] for row in certificate_goals.list_goals(db, user_id)}
+    candidates |= set(certificate_exam_scores.distinct_exam_types(db, user_id))
+    return sorted(candidates)
+
+
+def _exam_type_ask_text(candidates: list[str]) -> str:
+    if not candidates:
+        return "這是哪一個證照類型呢？（例如 toeic、gcp，直接輸入名稱即可）："
+    options_text = "\n".join(f"{i}. {c}" for i, c in enumerate(candidates, start=1))
+    return f"這是哪一個證照類型呢？可以輸入編號，或直接輸入證照類型名稱：\n{options_text}"
+
+
+def _resolve_exam_type_input(options: list[str], text: str) -> str | None:
+    """把使用者輸入換算成 `exam_type`：清單裡的編號直接對應；其他任何非空文字視為使用者自行輸入
+    的證照類型名稱（統一轉小寫比對，因為既有 `exam_type` 皆為小寫字串，見 SPEC.md ADR-18 決策
+    4）。完全空白（或無法辨識）回傳 `None`。"""
+    cleaned = text.strip()
+    if not cleaned:
+        return None
+    if options and cleaned.isdigit() and 1 <= int(cleaned) <= len(options):
+        return options[int(cleaned) - 1]
+    return cleaned.lower()
+
+
+_CERTIFICATE_DATE_PARSE_PROMPT = (
+    "使用者正在{context}，這是使用者這一則的回覆：「{date_reply}」。\n"
+    "【現在的日期（台灣時區，計算相對日期時一律以此為準）】\n{current_date_text}\n\n"
+    "請判斷使用者是否已經講清楚明確的日期，並嚴格照下面格式輸出，每個欄位各自一行，"
+    "不要輸出其他任何文字：\n"
+    "STATUS: CLEAR 或 UNCLEAR。使用者必須明確講出是哪一天（例如「昨天」「8/1」「2026-12-01」"
+    "「明年 3 月」都算明確；只要含糊、沒有講清楚是哪一天，一律填 UNCLEAR，絕對不可以自己亂猜。\n"
+    "DATE: 換算後的日期，格式一律為 YYYY-MM-DD（STATUS 為 UNCLEAR 時可省略）"
+)
+_CERTIFICATE_DATE_UNCLEAR_REPLY = "不好意思，我還是不太確定日期，可以再講清楚一點嗎？"
+
+
+# --- FR-30：正式成績 ---
+
+
+def start_log_exam_score(
+    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int
+) -> str:
+    """「我要記錄正式成績」／`/log_exam_score`：開始記錄正式應考成績流程（FR-30）。"""
+    candidates = _certificate_exam_type_candidates(db, user_id)
+    state_store.set(
+        telegram_user_id,
+        {"flow": "pending_exam_score_exam_type", "target_user_id": user_id, "exam_type_options": candidates},
+    )
+    return _exam_type_ask_text(candidates)
+
+
+def handle_exam_score_exam_type_step(state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
+    state = state_store.get(telegram_user_id)
+    exam_type = _resolve_exam_type_input(state["exam_type_options"], text)
+    if exam_type is None:
+        return "不好意思，我沒看懂，麻煩再告訴我一次證照類型："
+
+    state_store.set(
+        telegram_user_id,
+        {"flow": "pending_exam_score_date", "target_user_id": state["target_user_id"], "exam_type": exam_type},
+    )
+    return "這次應考是什麼時候呢？可以直接告訴我日期（例如：8/1、2026-08-01）："
+
+
+def handle_exam_score_date_step(
+    db: CloudSQLClient, llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str
+) -> str:
+    state = state_store.get(telegram_user_id)
+    parsed = _parse_key_value_block(
+        llm_client.generate_text(
+            _CERTIFICATE_DATE_PARSE_PROMPT.format(
+                context="記錄正式應考日期", date_reply=text, current_date_text=_current_date_text()
+            )
+        )
+    )
+    if parsed.get("STATUS") != "CLEAR":
+        return _CERTIFICATE_DATE_UNCLEAR_REPLY
+
+    exam_date = _parse_date_only(parsed.get("DATE", ""))
+    if exam_date is None:
+        return _CERTIFICATE_DATE_UNCLEAR_REPLY
+
+    state["flow"] = "pending_exam_score_value"
+    state["exam_date"] = exam_date
+    state_store.set(telegram_user_id, state)
+    return "這次的成績或結果是？（例如：850 分、通過）："
+
+
+def handle_exam_score_value_step(
+    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, text: str
+) -> str:
+    score = text.strip()
+    if not score:
+        return "不好意思，我沒看懂成績，麻煩再告訴我一次："
+
+    state = state_store.get(telegram_user_id)
+    certificate_exam_scores.record_score(db, state["target_user_id"], state["exam_type"], state["exam_date"], score)
+    state_store.clear(telegram_user_id)
+
+    exam_date = state["exam_date"]
+    return f"已經幫你記錄「{state['exam_type']}」{exam_date.year}/{exam_date.month}/{exam_date.day} 的正式成績：{score} 囉！"
+
+
+def handle_my_exam_scores(db: CloudSQLClient, user_id: int) -> str:
+    """「我的正式成績」／`/my_exam_scores`：列出所有正式應考紀錄，不分證照類型一次列完
+    （2026-08-08 經 AskUserQuestion 與 Robin 確認本次只做查詢列表，不含修改／刪除）。"""
+    rows = certificate_exam_scores.list_scores(db, user_id)
+    return certificate_exam_scores.format_scores_summary(None, rows)
+
+
+# --- FR-24：目標設定 ---
+
+
+def start_set_certificate_goal(
+    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int
+) -> str:
+    """「設定證照目標」／`/set_certificate_goal`：開始設定證照準備目標流程（FR-24）。"""
+    candidates = _certificate_exam_type_candidates(db, user_id)
+    state_store.set(
+        telegram_user_id,
+        {"flow": "pending_certificate_goal_exam_type", "target_user_id": user_id, "exam_type_options": candidates},
+    )
+    return _exam_type_ask_text(candidates)
+
+
+def handle_certificate_goal_exam_type_step(state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
+    state = state_store.get(telegram_user_id)
+    exam_type = _resolve_exam_type_input(state["exam_type_options"], text)
+    if exam_type is None:
+        return "不好意思，我沒看懂，麻煩再告訴我一次證照類型："
+
+    state_store.set(
+        telegram_user_id,
+        {
+            "flow": "pending_certificate_goal_target_date", "target_user_id": state["target_user_id"],
+            "exam_type": exam_type,
+        },
+    )
+    return "這個證照的目標考試時間是什麼時候呢？可以直接告訴我日期（例如：12/1、2026-12-01），不確定的話也可以回覆「跳過」："
+
+
+def handle_certificate_goal_target_date_step(
+    db: CloudSQLClient, llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str
+) -> str:
+    state = state_store.get(telegram_user_id)
+    if _is_skip_reply(text):
+        target_date = None
+    else:
+        parsed = _parse_key_value_block(
+            llm_client.generate_text(
+                _CERTIFICATE_DATE_PARSE_PROMPT.format(
+                    context="設定證照準備目標的考試時間", date_reply=text, current_date_text=_current_date_text()
+                )
+            )
+        )
+        if parsed.get("STATUS") != "CLEAR":
+            return f"{_CERTIFICATE_DATE_UNCLEAR_REPLY}（不確定的話也可以回覆「跳過」）"
+        target_date = _parse_date_only(parsed.get("DATE", ""))
+        if target_date is None:
+            return f"{_CERTIFICATE_DATE_UNCLEAR_REPLY}（不確定的話也可以回覆「跳過」）"
+
+    state["flow"] = "pending_certificate_goal_target_score"
+    state["target_date"] = target_date
+    state_store.set(telegram_user_id, state)
+    return "目標分數或成績是？（例如：850 分、通過就好，不確定的話也可以回覆「跳過」）："
+
+
+def handle_certificate_goal_target_score_step(
+    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, text: str
+) -> str:
+    state = state_store.get(telegram_user_id)
+    if _is_skip_reply(text):
+        target_score = None
+    else:
+        cleaned = text.strip()
+        if not cleaned:
+            return "不好意思，我沒看懂，麻煩再告訴我一次（或回覆「跳過」）："
+        target_score = cleaned
+
+    result = certificate_goals.set_goal(db, state["target_user_id"], state["exam_type"], state["target_date"], target_score)
+    state_store.clear(telegram_user_id)
+    return certificate_goals.format_goal_set_reply(state["exam_type"], result)
+
+
+def handle_my_certificate_goals(db: CloudSQLClient, user_id: int) -> str:
+    """「我的證照目標」／`/my_certificate_goals`：列出目前設定的所有證照準備目標（FR-24）。"""
+    return certificate_goals.format_goals_summary(certificate_goals.list_goals(db, user_id))
+
+
+# --- FR-24：方向建議 ---
+
+
+def _generate_certificate_advice(db: CloudSQLClient, llm_client, user_id: int, exam_type: str) -> str:
+    today = _now().date()
+    goal = certificate_goals.get_goal(db, user_id, exam_type)
+    period_start = today - timedelta(days=_CERTIFICATE_ADVICE_LOOKBACK_DAYS - 1)
+    stats = certificate_stats.compute_daily_period_stats(db, user_id, exam_type, period_start, today)
+    prompt = certificate_goals.build_advice_prompt(exam_type, goal, stats, today)
+    advice = llm_client.generate_text(prompt).strip()
+    return f"💡 「{exam_type}」讀書建議\n\n{advice}"
+
+
+def start_certificate_advice(
+    db: CloudSQLClient, llm_client, state_store: ConversationStateStore, telegram_user_id: int, user_id: int
+) -> str:
+    """「給我讀書建議」／`/certificate_advice`：依近 30 天成效與目標，用 LLM 生成方向建議（FR-24）。"""
+    candidates = _certificate_exam_type_candidates(db, user_id)
+    if not candidates:
+        return "目前還沒有任何證照相關資料，等有題庫或成績紀錄後我再幫你分析方向建議喔！"
+
+    if len(candidates) == 1:
+        return _generate_certificate_advice(db, llm_client, user_id, candidates[0])
+
+    state_store.set(
+        telegram_user_id,
+        {"flow": "pending_certificate_advice_exam_type", "target_user_id": user_id, "exam_type_options": candidates},
+    )
+    return _exam_type_ask_text(candidates)
+
+
+def handle_certificate_advice_exam_type_step(
+    db: CloudSQLClient, llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str
+) -> str:
+    state = state_store.get(telegram_user_id)
+    exam_type = _resolve_exam_type_input(state["exam_type_options"], text)
+    if exam_type is None:
+        return "不好意思，我沒看懂，麻煩再告訴我一次證照類型："
+
+    state_store.clear(telegram_user_id)
+    return _generate_certificate_advice(db, llm_client, state["target_user_id"], exam_type)
+
+
+# --- FR-29：成效彈性文字問答 ---
+
+_QUIZ_STATS_INITIAL_ASK = (
+    "想問哪方面的成效呢？直接跟我說就可以了，例如：\n"
+    "・上週答對幾題\n"
+    "・這個月 TOEIC 平均正確率\n"
+    "・這次跟上次模考成績比較一下"
+)
+_QUIZ_STATS_NO_DATA_REPLY = "目前還沒有任何證照的作答或成績紀錄，沒有東西可以查詢喔！"
+_QUIZ_STATS_UNCLEAR_REPLY = "不好意思，我還是不太確定你想問什麼，可以再講清楚一點嗎？"
+_QUIZ_STATS_NEED_PERIOD_REPLY = "麻煩告訴我你想查詢的時間範圍喔（例如：上週、這個月、8/1 到 8/7）："
+_QUIZ_STATS_NEED_SCOPE_REPLY = "你是想問正式測驗的成績，還是平常每日小考的作答成效呢？"
+
+_QUIZ_STATS_PARSE_PROMPT = (
+    "使用者正在查詢證照題庫的成效，這是使用者目前為止已經講過的內容（可能經過多輪反問，由上到下"
+    "依序疊加）：\n「{text}」\n\n"
+    "【目前有資料的證照類型】{known_exam_types}\n"
+    "【現在的日期（台灣時區，計算相對日期時一律以此為準）】\n{current_date_text}\n\n"
+    "請依序判斷以下四件事，只要有一件事不確定就整體判斷為對應的狀態（優先順序：先確認 "
+    "①EXAM_TYPE，再確認 ②SCOPE，再確認 ③PERIOD，四件事都確定了才是 CLEAR）：\n"
+    "① 使用者想查詢哪一種證照類型（EXAM_TYPE，必須是【目前有資料的證照類型】清單裡的其中一個；"
+    "如果清單只有一種，直接視為那一種，不需要使用者特別講出名字；如果清單有多種、使用者沒有明確"
+    "講出是哪一種、或提到的名字對不到清單裡任何一項，狀態填 NEED_EXAM_TYPE）\n"
+    "② 使用者問的是「正式測驗成績」還是「平常每日小考的作答成效」（SCOPE：DAILY 或 FORMAL；沒有"
+    "明確提到、無法判斷是哪一種，狀態填 NEED_SCOPE）\n"
+    "③ 使用者想查詢的時間範圍（PERIOD_START／PERIOD_END；使用者完全沒有提到任何時間範圍、或講得"
+    "含糊不清無法換算成明確的起訖日期，狀態填 NEED_PERIOD，絕對不可以自己猜一個預設範圍）\n"
+    "④ 使用者是否想比較兩個時間區間（COMPARE：YES 或 NO；只有明確講出「比較」「跟...比」之類的"
+    "意思，且能明確判斷出第二個時間區間時才填 YES，否則一律 NO；COMPARE 不影響 STATUS 判斷）\n\n"
+    "請嚴格照下面格式輸出，每個欄位各自一行，不要輸出其他任何文字：\n"
+    "STATUS: CLEAR／NEED_EXAM_TYPE／NEED_SCOPE／NEED_PERIOD／UNCLEAR"
+    "（完全看不懂使用者在問什麼、或問的是無關的事情才填 UNCLEAR）\n"
+    "EXAM_TYPE: 判斷出的證照類型（STATUS 為 CLEAR 時必填，其他情況可省略）\n"
+    "SCOPE: DAILY 或 FORMAL（STATUS 為 CLEAR 時必填，其他情況可省略）\n"
+    "PERIOD_START: 主要查詢區間起始日期，格式 YYYY-MM-DD（STATUS 為 CLEAR 時必填，其他情況可省略）\n"
+    "PERIOD_END: 主要查詢區間結束日期，格式 YYYY-MM-DD（STATUS 為 CLEAR 時必填，其他情況可省略）\n"
+    "COMPARE: YES 或 NO（STATUS 為 CLEAR 時必填，其他情況可省略）\n"
+    "COMPARE_START: 若 COMPARE 為 YES，對照區間起始日期，格式 YYYY-MM-DD（其他情況可省略）\n"
+    "COMPARE_END: 若 COMPARE 為 YES，對照區間結束日期，格式 YYYY-MM-DD（其他情況可省略）"
+)
+
+
+def start_quiz_stats_query(
+    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int
+) -> str:
+    """「查詢我的成效」／`/my_quiz_stats`：開始成效彈性文字問答流程（FR-29）。"""
+    known_types = certificate_stats.known_exam_types(db, user_id)
+    if not known_types:
+        return _QUIZ_STATS_NO_DATA_REPLY
+
+    state_store.set(telegram_user_id, {"flow": "pending_quiz_stats_query", "target_user_id": user_id, "history": []})
+    return _QUIZ_STATS_INITIAL_ASK
+
+
+def handle_quiz_stats_query_step(
+    db: CloudSQLClient, llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str
+) -> str:
+    """處理 `pending_quiz_stats_query` 狀態下使用者的自由描述；每輪把使用者已經講過的內容全部
+    疊加起來重新丟給 LLM 解析（而非死板的單欄位反問），讓使用者可以一次講清楚也可以分次補充
+    exam_type／正式-小考／時間區間（見模組上方說明）。
+    """
+    state = state_store.get(telegram_user_id)
+    target_user_id = state["target_user_id"]
+    history = state["history"] + [text]
+
+    known_types = certificate_stats.known_exam_types(db, target_user_id)
+    if not known_types:
+        state_store.clear(telegram_user_id)
+        return _QUIZ_STATS_NO_DATA_REPLY
+
+    known_exam_types_text = "、".join(known_types)
+    parsed = _parse_key_value_block(
+        llm_client.generate_text(
+            _QUIZ_STATS_PARSE_PROMPT.format(
+                text="\n".join(history), known_exam_types=known_exam_types_text, current_date_text=_current_date_text(),
+            )
+        )
+    )
+    status = parsed.get("STATUS", "UNCLEAR")
+
+    state["history"] = history
+    state_store.set(telegram_user_id, state)
+
+    if status == "NEED_EXAM_TYPE":
+        return f"你是想問哪個證照的成效呢？目前有資料的有：{known_exam_types_text}"
+    if status == "NEED_SCOPE":
+        return _QUIZ_STATS_NEED_SCOPE_REPLY
+    if status == "NEED_PERIOD":
+        return _QUIZ_STATS_NEED_PERIOD_REPLY
+
+    exam_type = parsed.get("EXAM_TYPE", "").strip()
+    scope = parsed.get("SCOPE", "").strip().upper()
+    period_start = _parse_date_only(parsed.get("PERIOD_START", "").strip())
+    period_end = _parse_date_only(parsed.get("PERIOD_END", "").strip())
+
+    if (
+        status != "CLEAR"
+        or exam_type not in known_types
+        or scope not in ("DAILY", "FORMAL")
+        or period_start is None
+        or period_end is None
+        or period_start > period_end
+    ):
+        return _QUIZ_STATS_UNCLEAR_REPLY
+
+    if scope == "FORMAL":
+        rows = certificate_stats.compute_formal_period_scores(db, target_user_id, exam_type, period_start, period_end)
+        reply = certificate_stats.format_formal_period_summary(exam_type, period_start, period_end, rows)
+    else:
+        stats = certificate_stats.compute_daily_period_stats(db, target_user_id, exam_type, period_start, period_end)
+        compare = parsed.get("COMPARE", "NO").strip().upper() == "YES"
+        compare_start = _parse_date_only(parsed.get("COMPARE_START", "").strip())
+        compare_end = _parse_date_only(parsed.get("COMPARE_END", "").strip())
+        if compare and compare_start is not None and compare_end is not None and compare_start <= compare_end:
+            stats_b = certificate_stats.compute_daily_period_stats(db, target_user_id, exam_type, compare_start, compare_end)
+            reply = certificate_stats.format_daily_period_comparison(
+                exam_type, (period_start, period_end), stats, (compare_start, compare_end), stats_b
+            )
+        else:
+            reply = certificate_stats.format_daily_period_summary(exam_type, period_start, period_end, stats)
+
+    state_store.clear(telegram_user_id)
+    return reply
