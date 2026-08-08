@@ -11,6 +11,7 @@ from src.bot import certificate_answer, certificate_quiz, certificate_schedule
 from src.bot import certificate_exam_scores, certificate_goals, certificate_stats
 from src.bot import complaint as complaint_module
 from src.bot import todo as todo_module
+from src.bot import youtube
 from src.bot.state import ConversationStateStore
 from submodules.cloudsql.client import CloudSQLClient
 
@@ -3675,3 +3676,76 @@ def handle_quiz_stats_query_step(
 
     state_store.clear(telegram_user_id)
     return reply
+
+
+# --- Step 3.4（見 robinson SPEC.md FR-57a、ADR-21）：YouTube 技術情報主題管理 ---
+#
+# 三個 Owner 專屬指令：「我的YouTube主題」單次查詢（不經狀態機，設計比照
+# handle_my_certificate_goals）；「新增YouTube主題」是單輪值輸入（設計比照 start_set_height／
+# handle_height_value_step）；「移除YouTube主題」是「列清單→輸入編號→直接刪除」單輪，設計比照
+# start_todo_list／handle_todo_list_action_step，但刪除主題屬於低風險、可隨時重新新增的操作，
+# 不需要待辦事項刪除那種「先選完成/取消再進二次確認」的額外關卡，選到編號後直接刪除即可。
+
+
+def handle_my_youtube_topics(db: CloudSQLClient, user_id: int) -> str:
+    """「我的YouTube主題」／`/my_youtube_topics`：列出目前設定的所有 YouTube 技術情報主題（FR-57a）。"""
+    return youtube.format_topics_list(youtube.list_topics(db, user_id))
+
+
+def start_add_youtube_topic(state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
+    """「新增YouTube主題」／`/add_youtube_topic`：開始新增一組主題（FR-57a）。"""
+    state_store.set(telegram_user_id, {"flow": "pending_youtube_topic_add", "target_user_id": user_id})
+    return "好的，請告訴我想訂閱的技術情報主題/關鍵字（例如：後端架構、AI Agent、DevOps）："
+
+
+def handle_youtube_topic_add_step(
+    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, text: str
+) -> str:
+    """處理 `pending_youtube_topic_add` 狀態下使用者提供的主題文字；空白原地反問，不清除狀態。"""
+    state = state_store.get(telegram_user_id)
+    topic = text.strip()
+    if not topic:
+        return "不好意思，我沒看懂，麻煩告訴我一個主題/關鍵字喔！"
+
+    target_user_id = state["target_user_id"]
+    state_store.clear(telegram_user_id)
+    result = youtube.add_topic(db, target_user_id, topic)
+    if result["already_exists"]:
+        return f"「{topic}」已經在你的主題清單裡囉，不用重複新增！"
+    return f"好的，已經幫你新增主題「{topic}」，下週四開始會納入推播考量！"
+
+
+def start_remove_youtube_topic(
+    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int
+) -> str:
+    """「移除YouTube主題」／`/remove_youtube_topic`：列出目前主題並進入可輸入編號刪除的模式（FR-57a）。"""
+    topics = youtube.list_topics(db, user_id)
+    listing = youtube.format_topics_list(topics)
+    if not topics:
+        return listing
+
+    state_store.set(
+        telegram_user_id,
+        {"flow": "pending_youtube_topic_remove", "target_user_id": user_id, "topic_ids": [t["id"] for t in topics]},
+    )
+    return f"{listing}\n\n請輸入要移除的主題編號，或輸入「結束」離開喔！"
+
+
+def handle_youtube_topic_remove_step(
+    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, text: str
+) -> str:
+    """處理 `pending_youtube_topic_remove` 狀態下使用者輸入的編號，選定後直接刪除該主題。"""
+    state = state_store.get(telegram_user_id)
+    if text in _EXIT_PHRASES:
+        state_store.clear(telegram_user_id)
+        return "好的，已結束 YouTube 主題查詢模式！"
+
+    topic_ids = state["topic_ids"]
+    if not text.isdigit() or not (1 <= int(text) <= len(topic_ids)):
+        return f"請輸入 1～{len(topic_ids)} 之間的編號，或輸入「結束」離開喔！"
+
+    topic_id = topic_ids[int(text) - 1]
+    target_user_id = state["target_user_id"]
+    state_store.clear(telegram_user_id)
+    youtube.remove_topic(db, target_user_id, topic_id)
+    return "好的，已經幫你移除這組主題囉！"

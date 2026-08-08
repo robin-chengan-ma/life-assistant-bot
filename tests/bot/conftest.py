@@ -37,6 +37,8 @@ class FakeCloudSQLClient:
             "certificate_daily_settings": [],
             "certificate_daily_schedule_overrides": [],
             "certificate_daily_assignments": [],
+            "youtube_topics": [],
+            "youtube_pushed_videos": [],
         }
         self._id_counter = itertools.count(1)
 
@@ -250,6 +252,11 @@ class FakeCloudSQLClient:
         # 2026-08-08（Step 3.3，見 robinson SPEC.md FR-27/FR-28）：作答與批改流程查詢。
         if where == "assignment_id = %s":
             return row.get("assignment_id") == params[0]
+        # 2026-08-08（Step 3.4，見 robinson SPEC.md FR-57a、FR-58c）：YouTube 主題管理與輪替查詢。
+        if where == "user_id = %s AND topic = %s":
+            return row.get("user_id") == params[0] and row.get("topic") == params[1]
+        if where == "id = %s AND user_id = %s":
+            return row.get("id") == params[0] and row.get("user_id") == params[1]
 
         raise NotImplementedError(f"FakeCloudSQLClient 尚未支援這個 where 條件：{where}")
 

@@ -400,6 +400,56 @@ def test_check_certificate_answer_reminder_swallows_exception(monkeypatch):
     fake_db.close.assert_called_once()
 
 
+def test_check_youtube_weekly_push_skips_when_env_vars_missing(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("YOUTUBE_API_KEY", raising=False)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("GEMINI_API_SKILL_GROWTH_KEY", raising=False)
+
+    main._check_youtube_weekly_push()  # 不應該拋例外，直接跳過
+
+
+def test_check_youtube_weekly_push_calls_youtube_module_when_env_vars_set(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
+    monkeypatch.setenv("YOUTUBE_API_KEY", "fake-youtube-key")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("GEMINI_API_SKILL_GROWTH_KEY", "fake-gemini-key")
+
+    fake_db = MagicMock()
+    monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", MagicMock(return_value=fake_db))
+    fake_youtube_client = MagicMock()
+    monkeypatch.setattr("submodules.youtube.client.YouTubeClient", MagicMock(return_value=fake_youtube_client))
+    fake_llm_client = MagicMock()
+    monkeypatch.setattr("submodules.llm.client.LLMClient", MagicMock(return_value=fake_llm_client))
+    fake_telegram = MagicMock()
+    monkeypatch.setattr("submodules.telegram.client.TelegramClient", MagicMock(return_value=fake_telegram))
+
+    fake_push = MagicMock()
+    monkeypatch.setattr("src.bot.youtube.check_and_push_weekly_youtube", fake_push)
+
+    main._check_youtube_weekly_push()
+
+    fake_push.assert_called_once_with(fake_db, fake_youtube_client, fake_llm_client, fake_telegram)
+    fake_db.close.assert_called_once()
+
+
+def test_check_youtube_weekly_push_swallows_exception(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
+    monkeypatch.setenv("YOUTUBE_API_KEY", "fake-youtube-key")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("GEMINI_API_SKILL_GROWTH_KEY", "fake-gemini-key")
+
+    fake_db = MagicMock()
+    monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", MagicMock(return_value=fake_db))
+    monkeypatch.setattr(
+        "submodules.youtube.client.YouTubeClient", MagicMock(side_effect=RuntimeError("boom"))
+    )
+
+    main._check_youtube_weekly_push()  # 不應該往外拋
+
+    fake_db.close.assert_called_once()
+
+
 def test_healthz_endpoint_still_returns_ok(monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)

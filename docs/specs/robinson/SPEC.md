@@ -41,7 +41,7 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 | 前台（唯讀） | Mobile App（React Native + Expo，Phase 4，見 ADR-14） | BI Dashboard：圖表視覺化（消費圓餅圖、體重折線圖等）與動態數據篩選；後端計算好圖表 JSON 結構後回傳，App 端只負責渲染，不提供任何寫入/CRUD 入口（**取代原規劃的 Notion 後台**） |
 | 排程 | cron-job.org | 每 10 分鐘打一次 keep-alive API，避免 Render 睡眠 |
 | 部署 | Render（免費方案，750 hr/月） | 應用程式 Host |
-| 資訊來源 | YouTube Data API v3 | 每週擷取技術情報影片候選清單，僅取中繼資料，不下載影音（見 FR-57～FR-59、ADR-9） |
+| 資訊來源 | YouTube Data API v3 | 每週擷取技術情報影片候選清單，僅取中繼資料（含統計數字），不下載影音（見 FR-57～FR-59、ADR-21，supersede ADR-9） |
 
 ## 重要資產（不可刪除）
 
@@ -160,15 +160,17 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 
 ### 功能性需求 — YouTube 技術情報模組（個人技能成長子功能，僅 Robin 可用；**2026-08-07 修正**：與每日技術分享〔FR-22／FR-23〕共用 `tech_intel` 開關，因為兩者同屬「技術情報訂閱」性質，見 feature-toggles SPEC.md FR-3 追記；獨立於「證照準備」`certificate`、「語言學習」`language` 兩個開關之外）
 
-- [ ] FR-57：輕量化資料獲取 — 呼叫 `YouTube Data API v3`（`order=relevance` 相關度優先）取得前 10 筆候選資料，僅擷取必要欄位（`title`、`channelTitle`、`publishedAt`、`videoId`、`url`），不下載或處理影音本身，避免龐大運算與 Token 成本
-- [ ] FR-58：Top 3 推薦篩選邏輯（三層輕量篩選架構）：
-  - [ ] FR-58a：格式過濾 — 自動剔除 Shorts 短影音與重複來源
-  - [ ] FR-58b：彈性品質與相關度評分 — 以「搜尋關鍵字匹配度」與「頻道權重」為主要排序依據（Rule-based Weight）；不對發布時間設定強制過濾門檻，避免剔除具高技術含量的經典影片；僅在特定快速迭代主題時，才將時間納入加分項
-  - [ ] FR-58c：歷史比對與精準輸出 — 過濾過去 30 天內已推播之 `video_id`（符合 NFR-11 ETL 去重原則），最終僅選取得分最高之 Top 3 筆資料，於 Telegram 以 Markdown 超連結（`[影片標題](url)`）呈現
-- [ ] FR-59：每週自動排程與配額控管：
-  - [ ] FR-59a：排程模組預設每週執行一次（每週四自動推播）
-  - [ ] FR-59b：配額成本 — 單次搜尋消耗 API 配額 100 Units（YouTube Data API v3 每日免費額度為 10,000 Units），並設每日 API 呼叫上限門檻 1,000 Units/日
-  - [ ] FR-59c：Fallback 降級機制 — 若超出每日配額上限或連線異常，依 FR-19i（重試機制）與 FR-19f（一般感冒級分級降級）處理：記錄 Exception 於日誌，並回傳友善提示，確保系統不崩潰
+- [x] FR-57：輕量化資料獲取（**2026-08-08 修正，見 ADR-21**）— 依每組主題設定的關鍵字，各自呼叫 `YouTube Data API v3` 的 `search.list`（`order=relevance` 相關度優先）取得前 10 筆候選資料，擷取 `title`／`description`／`channelTitle`／`publishedAt`／`videoId`／`url`；候選名單確定後，另呼叫 `videos.list`（`part=statistics`，可批次查多支影片）補上 `viewCount`／`likeCount`／`commentCount`，供 FR-58b 判讀熱度與品質；全程只讀取文字與統計數字，不下載或轉錄影音本身，避免龐大運算與 Token 成本。**2026-08-08 實作完成**：新增 `submodules/youtube`（`YouTubeClient`，API Key 認證，`search_videos()`／`get_video_details()`，重試邏輯沿用 `submodules/retry`）
+  - [x] FR-57a（**2026-08-08 新增，見 ADR-21**）：多主題設定 — Robin 可設定多組關鍵字/主題（例如「後端架構」「AI Agent」「DevOps」），每組各自獨立執行 FR-57 的候選蒐集；主題清單存資料庫，設定後每週自動沿用，增減主題需另用指令調整。**2026-08-08 實作完成**：新增 `youtube_topics` 表（0049 migration）；`src/bot/youtube.py` 的 `list_topics()`／`add_topic()`／`remove_topic()`／`format_topics_list()`；`commands.py`／`router.py` 新增「我的YouTube主題」／`/my_youtube_topics`（單次列表）、「新增YouTube主題」／`/add_youtube_topic`（單輪輸入）、「移除YouTube主題」／`/remove_youtube_topic`（列清單 → 輸入編號直接刪除，屬低風險可重新新增的操作，不需要待辦事項刪除那種二次確認）三個 Owner 專屬指令
+- [x] FR-58：Top 3 推薦篩選邏輯（**2026-08-08 改版，見 ADR-21，取代原「三層輕量規則式篩選」設計**）：
+  - [x] FR-58a（**2026-08-08 修正，見 ADR-21**）：格式過濾 — 只排除候選清單中重複出現的來源（同一支影片重複入選時去重）；**不特別排除 Shorts 短影音，時長不設限**，品質高低完全交給 FR-58b 的 LLM 判讀（含觀看數/讚數/留言數等數據）決定，不用時長門檻一刀切。**2026-08-08 實作完成**：`youtube._dedupe_by_video_id()`
+  - [x] FR-58b（**2026-08-08 改版，見 ADR-21，取代原「Rule-based Weight」設計**）：LLM 語意判讀 — 把候選的標題、說明欄、頻道名稱、發布時間、觀看次數、讚數、留言數交給 LLM，綜合判斷「是否符合設定的主題」與「這些數據代表的熱度/品質」給出排序，只讀文字與統計數字、不下載影片本身，成本維持低廉；不對發布時間設定強制過濾門檻，避免剔除具高技術含量的經典影片。**2026-08-08 實作完成**：`youtube._build_ranking_prompt()`／`_parse_scores()`／`score_candidates_for_topic()`；LLM 輸出格式解析失敗時優雅降級為依觀看數排序（`score` 標記為 `None`），不讓 Pipeline 卡住
+  - [x] FR-58c（**2026-08-08 新增，見 ADR-21**）：多主題分配與輪替公平性 — 每週固定推薦 3 支影片：只有 1 組主題時，從該組挑出 LLM 判斷分數最高的 3 支；有 2 組主題時，各保底 1 支，剩餘 1 個名額給兩組候選中分數最高者；有 3 組以上主題時，優先選「距離上次被推播最久」的 3 組各推 1 支，確保每個主題長期下來都有曝光機會，不會有主題永遠被排擠。**2026-08-08 實作完成**：`youtube.select_weekly_recommendations()`（`_topics_by_priority()` 依 `last_recommended_on` 由舊到新排序、`NULL` 最優先；單一通用「保底 + 補滿」演算法同時滿足三種情境，見模組 docstring）；同一支影片同時符合多組主題搜尋結果時，保底輪與補滿輪皆會跳過已保底/已選中的 `video_id`，避免重複計入
+  - [x] FR-58d（原 FR-58c）：歷史比對與精準輸出 — 過濾過去 30 天內已推播之 `video_id`（符合 NFR-11 ETL 去重原則），最終於 Telegram 以 Markdown 超連結（`[影片標題](url)`）呈現。**2026-08-08 實作完成**：新增 `youtube_pushed_videos` 表（0050 migration）；`youtube._filter_recently_pushed()`（30 天窗口）／`format_push_message()`（Markdown 超連結）
+- [x] FR-59：每週自動排程與配額控管：
+  - [x] FR-59a：排程模組預設每週執行一次（每週四自動推播）。**2026-08-08 實作完成**：`youtube.check_and_push_weekly_youtube()` 固定台灣時間週四 08:00，借用 `/healthz` 既有頻率；`users.youtube_last_run_on`（0051 migration）去重，比照既有排程模式
+  - [x] FR-59b（**2026-08-08 更新配額估算，見 ADR-21**）：配額成本 — 每組主題各消耗一次 `search.list`（100 Units／次）；`videos.list` 查統計資料成本低（每 50 支影片 1 Unit）。多組主題情境下（例如 5 組）單次執行約落在 500～600 Units，仍遠低於每日 1,000 Units 上限（自訂保守門檻）與 YouTube 官方每日 10,000 Units 免費額度——**配額為 Google 提供的免費每日用量上限，非計費機制，用不完不會扣款，超過上限當天暫停查詢、隔天重置**。**2026-08-08 實作範圍說明**：本次先實作排程與推播主流程，尚未實作主動累計每日配額用量的計數器（目前每週僅執行一次、單次估算遠低於門檻，風險低）；若之後主題數大幅增加導致接近門檻，需回頭補上配額計數與 FR-59c 的主動降級判斷
+  - [x] FR-59c：Fallback 降級機制 — 若超出每日配額上限或連線異常，依 FR-19i（重試機制）與 FR-19f（一般感冒級分級降級）處理：記錄 Exception 於日誌，並回傳友善提示，確保系統不崩潰。**2026-08-08 實作完成**：`submodules/youtube` 的 API 呼叫沿用 `submodules/retry`（HTTP 429/5xx、連線逾時自動重試）；`youtube.check_and_push_weekly_youtube()` 整段包 try/except，任何 Exception 只記錄日誌、不中斷 `/healthz`，且仍會標記 `youtube_last_run_on` 避免同一天重複嘗試
 
 ### 功能性需求 — 待辦事項
 
@@ -455,7 +457,7 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 
 **後果**：排序品質完全依賴 YouTube 官方相關度演算法 + 簡單規則，可能不如客製化推薦精準，但符合目前規模（每週 Top 3、僅 Robin 使用）與零成本要求；若未來要提升精準度，可在不改變資料獲取層的前提下，單獨升級 FR-58b 的評分規則。
 
-**狀態**：accepted
+**狀態**：superseded by ADR-21（2026-08-08，Step 3.4 開工前 Robin 釐清原始需求——他要的是「LLM 讀標題/說明欄判斷是否符合主題」而非本 ADR 討論並否決的「下載影片＋Gemini 摘要」，兩者成本量級差異很大，前者其實可以做，見 ADR-21）
 
 ### ADR-10：資料庫 Schema 建立採「先審核後執行」流程，並統一記錄於 `src/schema/`
 
@@ -785,6 +787,37 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 
 **狀態**：accepted
 
+### ADR-21：YouTube 技術情報改採「LLM 語意判讀 + 多維度指標 + 多主題輪替」，取代原「純 Rule-based 規則式篩選」（supersede ADR-9）
+
+**背景**：Step 3.4 開工前跟 Robin 確認 FR-57～FR-59 細節，發現書面規格跟 Robin 原始想法有落差——ADR-9 當時定案「Rule-based Weight（關鍵字匹配度 + 頻道權重），不用 ML/語意分析」，理由是評估過的替代方案（下載影片＋Gemini 摘要／Embedding 向量推薦）成本過高。但 Robin 澄清他要的其實是「LLM 讀候選影片的標題和說明欄，判斷是否符合我想看的主題」，並非 ADR-9 討論並否決的「下載/轉錄影片內容」，兩者成本量級完全不同——前者只是把 API 已經回傳的文字 metadata 餵給 LLM 做一次分類判斷，跟專案其他模組（例如 FR-29 成效問答）用 LLM 的方式同量級，並不昂貴。同時 Robin 也提出希望額外參考觀看次數／讚數／留言數等數據，以及支援多組主題（不只單一關鍵字）。
+
+**決策**：
+1. **LLM 完全取代 Rule-based Weight**：FR-58b 改為把候選影片的標題、說明欄、頻道名稱、發布時間，加上 FR-57 額外用 `videos.list` 補上的觀看次數／讚數／留言數，一次交給 LLM 判斷「是否符合設定的主題」與「這些數據代表的熱度/品質」，直接給出排序，不再另外計算關鍵字比對分數或頻道權重。
+2. **只讀文字與統計數字，不下載/轉錄影片本身**：維持 ADR-9 最初「零邊際成本」的精神——LLM 判讀的輸入完全來自 API 回傳的 metadata（標題、說明欄、統計數字），不下載影片、不做語音轉文字、不做影像分析，成本增量僅止於一次輕量 LLM 文字分類呼叫（比照 FR-29 量級），維持整包 Pipeline 的免費資源原則。
+3. **支援多組主題，每組各自蒐集候選**：Robin 可設定多組關鍵字/主題（例如「後端架構」「AI Agent」「DevOps」），各組各自呼叫 FR-57 的 `search.list` 取得候選，供 FR-58c 的分配邏輯挑選。
+4. **多主題分配採「保底 + 輪替」，不是每次都選同一批熱門主題**：每週固定推薦 3 支——只有 1 組主題時 3 支都出自該組；2 組主題時各保底 1 支、剩餘 1 個名額給分數最高的候選；3 組以上主題時，優先選「距離上次被推播最久」的 3 組各推 1 支（比照 `todos.daily_pushed_on`／`certificate_questions.source_image_filename` 這類既有「記錄上次狀態」去重慣例，新增 `last_recommended_on` 欄位追蹤輪替），確保每個主題長期都有曝光機會。
+5. **不刻意排除 Shorts 短影音，時長不設限**（2026-08-08 追加確認）：Robin 澄清 FR-58a 原文「剔除 Shorts」不是他真正在意的規則，他要的單純是「品質高」，不是「時長長」；因此 FR-58a 只保留候選清單內的重複來源去重，時長完全交給 FR-58b 的 LLM 判讀（含觀看數/讚數/留言數等品質訊號）決定要不要選入，不再另外用時長門檻過濾。
+
+**理由**：
+- 決策 1、2：Robin 要的判讀方式本來就沒有踩到 ADR-9 否決的成本紅線，屬於書面規格記錄跟原始需求有落差需要修正，不是重新開一次已經否決過的方案。
+- 決策 3、4：Robin 明確要多主題支援；「保底 + 輪替」比「永遠只推固定幾個主題」更符合「技術情報訂閱」的初衷——避免冷門但 Robin 有興趣的主題永遠被熱門主題排擠掉。
+- 決策 5：「品質」與「時長」是兩件事，用時長一刀切反而可能誤刪真正高品質的短影片、放過低品質的長影片；交給 LLM 綜合標題/說明欄/互動數據判斷更貼近 Robin 實際想要的「品質」定義。
+- 配額成本經重新估算（見 FR-59b）：多組主題情境下單次執行約落在 500～600 Units，仍遠低於自訂的每日 1,000 Units 保守上限與 Google 官方每日 10,000 Units 免費額度，此配額純粹是 Google 提供的免費用量上限、非計費機制，不會產生任何費用。
+
+**替代方案**：
+- 決策 1 替代方案：LLM 疊加在 Rule-based 之上（先規則式篩一批、LLM 只做最後把關）——已否決，Robin 選擇 LLM 完全取代，判斷邏輯更單純、不用維護兩套排序邏輯。
+- 決策 4 替代方案：固定只推「候選分數最高的 3 組」，不考慮輪替——已否決，Robin 對邊界情況授權「你自己處理」，選擇能兼顧公平曝光的輪替設計而非任由少數熱門主題長期壟斷版面。
+- 決策 5 替代方案：沿用原本的時長門檻（≤60 秒視為 Shorts 剔除）——已否決，不符合 Robin 實際想要的「品質優先」判斷標準。
+
+**後果**：
+- `src/bot/youtube.py`（暫定模組名稱）的 Prompt 設計需要把「文字判讀」與「數據判讀」講清楚給 LLM，避免 LLM 誤以為要點開連結看影片本身。
+- 需新增主題設定資料表（暫定 `youtube_topics`：`user_id`／`topic`／`last_recommended_on`，供多主題與輪替邏輯查詢），供 Robin 用指令新增/查詢/刪除主題；欄位與指令細節於 Step 3.4 正式開工、依 ADR-10 流程提出建表 SQL 時定案。
+- FR-57 新增一次 `videos.list` 呼叫（查統計數字），Pipeline 從單一 API 呼叫變成「`search.list`（每主題一次）+ `videos.list`（合併查詢候選統計）」兩階段，程式複雜度略增但成本仍低廉。
+- ADR-9 的原始三層規則式篩選設計正式作廢，本 ADR 生效後 Step 3.4 依此設計實作，不再需要另外維護 Rule-based Weight 的評分程式碼。
+- 決策 5 讓實作更單純：`videos.list` 回傳的 `contentDetails.duration`（ISO 8601 時長字串）不需要解析，FR-58a 只剩「候選清單內 `video_id` 去重」這個簡單邏輯。
+
+**狀態**：accepted
+
 ## 實作計畫
 
 > 分期原則見 ADR-4；每個 Phase 完成後才進入下一個 Phase 的詳細 spec 與 TDD 循環。本 spec 僅列到模組層級，各模組進入實作前應個別建立 `docs/specs/<feature-slug>/SPEC.md` 展開 API 設計與資料表結構。
@@ -829,7 +862,7 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 - [x] Step 3.1（**2026-08-07 完成**）：每日重點技術分享（FR-22、FR-23）
 - [x] Step 3.2（**2026-08-07 完成，見 FR-25a～FR-25f、ADR-18**）：TOEIC 雙軌題庫 Pipeline —— 軌道一拍照/音檔入庫（Gemini Vision 影像 Key + Groq Whisper 語音轉文字切割，見 ADR-12）、軌道二 Gemini 文字 Key 單字題即時生成、固定每週日 22:00 排程去重。經 AskUserQuestion 與 Robin 確認範圍：這次只建題庫，不含推播/作答/批改（FR-26～FR-30 留給 Step 3.3）。新增 `submodules/gdrive` 的 `list_files()`／`download_file()`（OAuth scope 擴大為 `drive.file + drive.readonly`，Robin 需重新走一次 `get_refresh_token.py`）、`submodules/voice` 的 `transcribe_with_segments()`；新增 `src/bot/toeic.py`（檔名解析/分類、Vision 解析、Whisper 切割、單字題生成、週排程進入點）；新增 `toeic_questions`／`toeic_vocab_questions` 表與 `users.toeic_weekly_question_count`／`toeic_pipeline_last_run_on` 欄位（`0035`～`0037` migration，Robin 核准）；`main.py` 新增 `_check_toeic_pipeline()`；Dockerfile 新增 `ffmpeg`（`pydub` 依賴，用於整包 MP3 切割）；33 個新測試全過（含用 `pydub` 產生真實靜音音檔驗證切割邏輯可正確解碼）
 - [x] Step 3.3（**2026-08-07 規格定案見 FR-24、FR-26～FR-30、ADR-19；2026-08-08 全數完成**）：每日推播出題與批改（08:00 推播、20:00/23:00 提醒與跳過，FR-26～FR-28，ADR-20，2026-08-08 分兩批完成，見上方里程碑紀錄）、正解改用 Robin 拍照上傳的 `_ans` 答案照（延伸 Step 3.2 檔名比對機制，不用 AI 推論）、作答紀錄表串連軌道一/軌道二、FR-29 成效改為彈性自然語言文字問答（不做圖表，圖表統一交給 Phase 4 App FR-64，2026-08-08 完成）、FR-30 正式成績獨立建表（2026-08-08 完成）、FR-24 目標設定與方向建議（2026-08-08 完成）。**Step 3.3 剩餘範圍實作完成**：新增 `src/bot/certificate_exam_scores.py`／`certificate_stats.py`／`certificate_goals.py` 三個純邏輯模組（皆 100% 覆蓋率），`commands.py` 新增 6 組對話流程／單次查詢指令（`log_exam_score`／`my_exam_scores`／`set_certificate_goal`／`my_certificate_goals`／`certificate_advice`／`my_quiz_stats`），`router.py` 註冊對應觸發詞與 `pending_*` 狀態分派；`certificate_goals`／`exam_official_scores` 兩張表沿用 Step 3.3 開工前已建好的 `0041`／`0042` migration，本次無新增 migration；新增 86 個測試，全專案測試數來到 1185 個全過，Phase 3 個人技能成長主線（不含 YouTube 模組與好友模式）至此全數完成
-- [ ] Step 3.4：YouTube 技術情報模組（FR-57～FR-59，見 ADR-9）—— YouTube Data API 擷取、三層 Top 3 篩選、每週四自動推播、配額監控與 Fallback 降級
+- [x] Step 3.4：YouTube 技術情報模組（FR-57～FR-59，**2026-08-08 設計改版，見 ADR-21，supersede ADR-9；同日完成實作**）—— YouTube Data API 擷取（含統計數字）、多主題設定、LLM 語意判讀取代 Rule-based 篩選、多主題輪替公平性、每週四自動推播、配額監控與 Fallback 降級
 - [ ] Step 3.5：好友模式（FR-51、FR-52）
 
 ### Phase 4：求職模組 + Mobile App（BI Dashboard）
@@ -896,7 +929,7 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 | 104 網站反爬蟲或條款變更 | 中 | 低 | 不使用瀏覽器自動化、每週僅一次、標準 UA/Referer、分頁間 2～4 秒隨機延遲、禁併發（FR-34a～FR-34c） |
 | 104 每週爬蟲重複寫入同一職缺，資料庫膨脹 | 中 | 中 | 以職缺唯一 ID/URL 做 ETL 去重，已存在則更新而非新增（FR-34d、NFR-11） |
 | YouTube API 每日配額（10,000 Units）被單一功能耗盡，影響其他模組 | 中 | 低 | 每週僅執行一次、單次僅消耗 100 Units，並設每日 1,000 Units 上限門檻（FR-59b） |
-| YouTube 推薦品質不佳（如關鍵字設定太寬泛、推到不相關影片） | 低 | 中 | Rule-based Weight 排序可事後調整（ADR-9 後果），不涉及重新訓練模型 |
+| YouTube 推薦品質不佳（如關鍵字設定太寬泛、推到不相關影片） | 低 | 中 | LLM 判讀 Prompt 可事後調整（ADR-21 後果），只是換文字描述、不涉及重新訓練模型 |
 | YouTube Data API 服務中斷或回應異常 | 低 | 低 | 依 FR-59c 走 FR-19i 重試機制與 FR-19f 分級降級，不影響其他模組運作 |
 | 全功能一次開發導致 MVP 難產 | 高 | 中 | 採 ADR-4 分期策略，Phase 1 聚焦最小可用範圍 |
 | AI 誤觸發自動修復、繞過人工審核直接改正式環境 | 高 | 低 | **2026-08-05 更新（見 ADR-15）**：此風險已隨 FR-19e（GitHub PR 自動化）整套取消而消除，Robinson 現在對正式環境程式碼完全不具備任何自動修改/部署能力，連「開 PR」這個較低風險的權限都沒有（NFR-8） |

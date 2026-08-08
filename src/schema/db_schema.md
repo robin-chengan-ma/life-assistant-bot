@@ -71,6 +71,7 @@ COMMENT ON COLUMN users.created_at IS '這筆使用者記錄建立的時間（�
 | 2026-08-07 | 新增 `toeic_weekly_question_count`（軌道二每週生成題數，預設 21）／`toeic_pipeline_last_run_on`（週排程去重） | Step 3.2 TOEIC 雙軌題庫 Pipeline FR-25e／FR-25f，設計理由見下方 `toeic_questions`／`toeic_vocab_questions` 表 | `0037_add_toeic_weekly_question_count_to_users.sql` |
 | 2026-08-08 | 新增 `waist_cm`（腰圍，初始設定、變動才修正，設計比照 `height_cm`） | 體態管理模組擴充 FR-46：Robin 要求新增腰圍設定，明確定位為「參考指標、非必要」，BMI 計算不使用此欄位；合理範圍 40~200 公分（比身高體重寬鬆，因為只是參考用途，不用像身高體重那麼嚴格） | `0046_add_waist_to_users.sql` |
 | 2026-08-08 | 新增 `certificate_answer_reminder_sent_on`（FR-28 20:00 作答提醒去重用） | Step 3.3 作答與批改流程，設計比照 `finance_reminder_sent_date`／`toeic_pipeline_last_run_on` 等既有「當日去重」欄位慣例，避免 `/healthz` 同一小時內多次觸發重複推播 | `0048_add_certificate_answer_reminder_field_to_users.sql` |
+| 2026-08-08 | 新增 `youtube_last_run_on`（FR-59a 週推播去重用） | Step 3.4 YouTube 技術情報模組，設計比照 `toeic_pipeline_last_run_on`，避免週四當天 `/healthz` 多次觸發重複推播 | `0051_add_youtube_last_run_on_to_users.sql` |
 
 ---
 
@@ -919,3 +920,52 @@ CREATE INDEX idx_certificate_daily_assignments_user_date
 - 兩個可為 NULL 的外鍵＋ CHECK 串連軌道一/軌道二題庫，設計比照 `answer_logs`
 - 是否已作答不在本表直接存狀態，靠查詢 `answer_logs.assignment_id` 有沒有指回這一筆判斷（2026-08-08 追加，見 `answer_logs` 表變更紀錄）——避免兩張表的「作答狀態」互相不同步，也不需要用題目 id／日期比對猜測
 - `is_review` 只是記錄「這題是不是從複習池挑出來的」，供統計/除錯用，不影響作答批改邏輯本身（批改邏輯只在乎正解對不對）
+
+---
+
+### youtube_topics
+
+**建立日期**：2026-08-08
+**用途**：Step 3.4 YouTube 技術情報多組主題設定，對應 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) FR-57a、ADR-21。
+**Migration 檔案**：`src/migrations/0049_create_youtube_topics_table.sql`
+
+```sql
+CREATE TABLE youtube_topics (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id),
+    topic TEXT NOT NULL,
+    last_recommended_on DATE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (user_id, topic)
+);
+```
+
+**設計理由**：
+- `UNIQUE (user_id, topic)`：避免同一使用者重複新增一模一樣的主題文字
+- `last_recommended_on` 允許 `NULL`：代表這個主題從未被選中推播過，供 FR-58c「優先選距離上次被推播最久的主題」的輪替公平性判斷使用（`NULL` 視為最優先，比任何有日期的都久）
+- 2026-08-08 經 Robin 與 Claude 對話釐清：ADR-9 原規劃的「單一關鍵字、Rule-based Weight」書面規格跟 Robin 原始需求有落差，改為 LLM 語意判讀＋支援多組主題＋保底輪替分配，見 SPEC.md ADR-21
+
+---
+
+### youtube_pushed_videos
+
+**建立日期**：2026-08-08
+**用途**：Step 3.4 YouTube 技術情報歷史推播紀錄，對應 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) FR-58d、ADR-21。
+**Migration 檔案**：`src/migrations/0050_create_youtube_pushed_videos_table.sql`
+
+```sql
+CREATE TABLE youtube_pushed_videos (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id),
+    video_id TEXT NOT NULL,
+    topic TEXT,
+    pushed_on DATE NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_youtube_pushed_videos_user_pushed_on ON youtube_pushed_videos (user_id, pushed_on);
+```
+
+**設計理由**：
+- 不加 `video_id` `UNIQUE`：同一支影片理論上可能在 30 天後再次被推薦，不強制唯一，去重靠查詢邏輯本身（篩掉 `pushed_on` 在過去 30 天內的紀錄）
+- `topic` 允許 `NULL`：只是記錄推播當下對應的主題文字，供除錯與統計用，不影響去重邏輯（去重只看 `video_id` + `pushed_on`）

@@ -82,6 +82,11 @@ _SET_CERTIFICATE_GOAL_TRIGGERS = {"/set_certificate_goal", "設定證照目標"}
 _MY_CERTIFICATE_GOALS_TRIGGERS = {"/my_certificate_goals", "我的證照目標"}
 _CERTIFICATE_ADVICE_TRIGGERS = {"/certificate_advice", "給我讀書建議"}
 _MY_QUIZ_STATS_TRIGGERS = {"/my_quiz_stats", "查詢我的成效"}
+# 2026-08-08 追加（Step 3.4，見 robinson SPEC.md FR-57a、ADR-21）：YouTube 技術情報主題管理，
+# `tech_intel` 功能開關本身是 owner_only，這三個觸發詞同樣只放在 is_owner 分支。
+_MY_YOUTUBE_TOPICS_TRIGGERS = {"/my_youtube_topics", "我的YouTube主題"}
+_ADD_YOUTUBE_TOPIC_TRIGGERS = {"/add_youtube_topic", "新增YouTube主題"}
+_REMOVE_YOUTUBE_TOPIC_TRIGGERS = {"/remove_youtube_topic", "移除YouTube主題"}
 # 2026-08-02（Step 1.9，見 robinson SPEC.md FR-60）：任何身分皆可觸發客訴收集流程。
 _COMPLAINT_TRIGGERS = {"/complaint", "我要客訴你"}
 _CLEAN_ALL_DIALOG_TRIGGERS = {"/clean-all-dialog", "我想要刪除所有對話紀錄"}
@@ -190,6 +195,15 @@ def handle_message(
         if text in _MY_QUIZ_STATS_TRIGGERS:
             # 2026-08-08（FR-29）：開始成效彈性文字問答流程。
             return commands.start_quiz_stats_query(db, state_store, telegram_user_id, user_id)
+        if text in _MY_YOUTUBE_TOPICS_TRIGGERS:
+            # 2026-08-08（Step 3.4，FR-57a）：查詢目前設定的 YouTube 技術情報主題（單次列表）。
+            return commands.handle_my_youtube_topics(db, user_id)
+        if text in _ADD_YOUTUBE_TOPIC_TRIGGERS:
+            # 2026-08-08（Step 3.4，FR-57a）：開始新增一組 YouTube 技術情報主題流程。
+            return commands.start_add_youtube_topic(state_store, telegram_user_id, user_id)
+        if text in _REMOVE_YOUTUBE_TOPIC_TRIGGERS:
+            # 2026-08-08（Step 3.4，FR-57a）：列出目前主題並進入可輸入編號刪除的模式。
+            return commands.start_remove_youtube_topic(db, state_store, telegram_user_id, user_id)
     else:
         user = auth.find_user_by_telegram_id(db, telegram_user_id)
         if user is None:
@@ -667,6 +681,11 @@ def _dispatch_active_flow(
         return commands.handle_certificate_advice_exam_type_step(db, llm_client, state_store, telegram_user_id, text)
     if flow == "pending_quiz_stats_query":
         return commands.handle_quiz_stats_query_step(db, llm_client, state_store, telegram_user_id, text)
+    # 2026-08-08 追加（Step 3.4，見 robinson SPEC.md FR-57a、ADR-21）：YouTube 技術情報主題管理。
+    if flow == "pending_youtube_topic_add":
+        return commands.handle_youtube_topic_add_step(db, state_store, telegram_user_id, text)
+    if flow == "pending_youtube_topic_remove":
+        return commands.handle_youtube_topic_remove_step(db, state_store, telegram_user_id, text)
     if flow == "pending_complaint_content":
         # 2026-08-02（Step 1.9，見 robinson SPEC.md FR-61、FR-62）：寫入客訴＋Gemini 分析私訊 Robin。
         return commands.handle_complaint_content_step(

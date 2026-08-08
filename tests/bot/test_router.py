@@ -1769,3 +1769,52 @@ def test_my_quiz_stats_trigger_and_flow_dispatches_through_router(fake_db, monke
 
     assert "toeic" in answer_reply
     assert store.get(ROBIN_ID) is None
+
+
+# --- Step 3.4（見 robinson SPEC.md FR-57a、ADR-21）：YouTube 技術情報主題管理觸發詞與流程分派 ---
+
+
+def test_my_youtube_topics_trigger_empty(fake_db, monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
+    fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
+    store = ConversationStateStore()
+
+    reply = router.handle_message(fake_db, store, ROBIN_ID, "我的YouTube主題")
+
+    assert "還沒有設定" in reply
+    assert store.get(ROBIN_ID) is None
+
+
+def test_add_youtube_topic_trigger_and_flow_dispatches_through_router(fake_db, monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
+    owner_row = fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
+    store = ConversationStateStore()
+
+    ask_topic = router.handle_message(fake_db, store, ROBIN_ID, "新增YouTube主題")
+    assert store.get(ROBIN_ID)["flow"] == "pending_youtube_topic_add"
+    assert "主題" in ask_topic
+
+    confirm_reply = router.handle_message(fake_db, store, ROBIN_ID, "AI Agent")
+    assert "AI Agent" in confirm_reply
+    assert store.get(ROBIN_ID) is None
+    rows = fake_db.select("youtube_topics", where="user_id = %s", params=(owner_row,))
+    assert [r["topic"] for r in rows] == ["AI Agent"]
+
+    list_reply = router.handle_message(fake_db, store, ROBIN_ID, "我的YouTube主題")
+    assert "AI Agent" in list_reply
+
+
+def test_remove_youtube_topic_trigger_and_flow_dispatches_through_router(fake_db, monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
+    owner_row = fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
+    fake_db.insert("youtube_topics", {"user_id": owner_row, "topic": "AI Agent", "last_recommended_on": None})
+    store = ConversationStateStore()
+
+    ask_number = router.handle_message(fake_db, store, ROBIN_ID, "移除YouTube主題")
+    assert store.get(ROBIN_ID)["flow"] == "pending_youtube_topic_remove"
+    assert "1. AI Agent" in ask_number
+
+    confirm_reply = router.handle_message(fake_db, store, ROBIN_ID, "1")
+    assert "移除" in confirm_reply
+    assert store.get(ROBIN_ID) is None
+    assert fake_db.select("youtube_topics", where="user_id = %s", params=(owner_row,)) == []

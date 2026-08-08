@@ -403,6 +403,43 @@ def _check_certificate_answer_reminder() -> None:
         db.close()
 
 
+def _check_youtube_weekly_push() -> None:
+    """在 /healthz 被呼叫時順便檢查 YouTube 技術情報週推播（Step 3.4，見 robinson SPEC.md
+    FR-57～FR-59、ADR-21）：固定台灣時間週四 08:00，依 Robin 設定的各組主題呼叫 YouTube Data API
+    蒐集候選影片、交給 LLM 語意判讀評分，依「保底 + 輪替」規則選出本週推薦，推播 Markdown 連結，
+    詳見 src/bot/youtube.py 模組 docstring。
+
+    需要 `YOUTUBE_API_KEY`（YouTube Data API v3）、`TELEGRAM_BOT_TOKEN`（推播）；LLM 評分沿用
+    `GEMINI_API_SKILL_GROWTH_KEY`（跟每日技術分享共用同一把獨立 Key——兩者同屬「技術情報訂閱」
+    性質、共用 `tech_intel` 功能開關，見 feature-toggles SPEC.md FR-3 追記，不需要為此另外申請
+    第 6 把 Gemini Key）；任一項未設定就直接跳過。
+    """
+    if not (
+        os.environ.get("DATABASE_URL")
+        and os.environ.get("YOUTUBE_API_KEY")
+        and os.environ.get("TELEGRAM_BOT_TOKEN")
+        and os.environ.get("GEMINI_API_SKILL_GROWTH_KEY")
+    ):
+        return
+
+    from src.bot import youtube
+    from submodules.cloudsql.client import CloudSQLClient
+    from submodules.llm.client import LLMClient
+    from submodules.telegram.client import TelegramClient
+    from submodules.youtube.client import YouTubeClient
+
+    db = CloudSQLClient()
+    try:
+        youtube_client = YouTubeClient(api_key=os.environ["YOUTUBE_API_KEY"])
+        llm_client = LLMClient(api_key=os.environ["GEMINI_API_SKILL_GROWTH_KEY"])
+        telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
+        youtube.check_and_push_weekly_youtube(db, youtube_client, llm_client, telegram_client)
+    except Exception:
+        logger.exception("YouTube 技術情報週推播失敗，不影響健康檢查端點本身")
+    finally:
+        db.close()
+
+
 def _run_startup_migrations() -> None:
     """開機自動套用尚未執行過的 DB migration（ADR-11）。
 
@@ -435,15 +472,15 @@ def root():
 
 
 def _run_background_checks() -> None:
-    """實際執行 `/healthz` 附掛的 11 個排程檢查，在背景執行緒跑，見 `health_check()`。
+    """實際執行 `/healthz` 附掛的 13 個排程檢查，在背景執行緒跑，見 `health_check()`。
 
-    **2026-08-08 追加（production 事故修復）**：這 10 個檢查原本是在 `/healthz` 的 HTTP
+    **2026-08-08 追加（production 事故修復）**：這些檢查原本是在 `/healthz` 的 HTTP
     request 裡依序同步執行，平常大部分檢查會因為「還沒到時間」提早 return、很快；但每天台灣
     時間 08:00 這個時間點，待辦每日摘要、重要通知、技術摘要推播三個排程剛好卡在同一小時，會在
     同一次 request 裡真的依序執行完（查 DB、發 Telegram、甚至呼叫 Gemini），Robin 實測發現這
     導致單次 `/healthz` 耗時超過 40 秒，遠超過 cron-job.org 預設的 30 秒逾時，被判定成
     keep-alive 失敗（詳見 PROGRESS.md 事故紀錄）。改成丟進背景執行緒後，HTTP 回應不再等待這些
-    檢查跑完，`/healthz` 回應時間跟這 10 個檢查的實際執行時間脫鉤。
+    檢查跑完，`/healthz` 回應時間跟這些檢查的實際執行時間脫鉤。
 
     這些檢查函式本來就已經各自做好「同一小時內多次觸發也不會重複推播」的去重設計（例如
     `daily_pushed_on`、`skill_growth_digests.pushed_on` 等欄位，見各自模組 docstring），所以
@@ -461,6 +498,7 @@ def _run_background_checks() -> None:
     _check_skill_growth_push()
     _check_certificate_daily_quiz_push()
     _check_certificate_answer_reminder()
+    _check_youtube_weekly_push()
 
 
 @app.route("/healthz")
@@ -471,8 +509,8 @@ def health_check():
 
     2026-08-02（Step 1.6，見 FR-21）起，陸續借用這個每 10 分鐘一次的呼叫頻率，順便觸發多項
     排程檢查（Neon 容量、待辦推播、記帳預警/提醒/月報、體態目標預警、重要通知、技術摘要收集/
-    推播、TOEIC pipeline、證照題庫每日推播出題／20:00 作答提醒），實際清單見
-    `_run_background_checks()`。
+    推播、TOEIC pipeline、證照題庫每日推播出題／20:00 作答提醒、YouTube 技術情報週推播），實際
+    清單見 `_run_background_checks()`。
 
     **2026-08-08 追加（production 事故修復）**：這些檢查改成丟進背景執行緒（daemon thread）
     執行，`/healthz` 本身立即回 200，不等待檢查跑完，避免 cron-job.org 因為單次 request 耗時
