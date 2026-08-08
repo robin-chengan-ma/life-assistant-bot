@@ -104,7 +104,17 @@ FEATURE_LIST = [
             "情境（心情分類選單＋日記內容）：使用者：「我想做心情筆記」→ Robinson：「好啊，那你今天的心情狀態如何？請幫我選一個 (生氣/焦慮、難過/低落、疲倦/厭世、普通/平淡、平靜/放鬆、高興/興奮)」→ 使用者：「高興/興奮」→ Robinson：「給我完整的日記內容」→ 使用者：「（日記內容）」→ Robinson：「好的，已經紀錄了」",
         ],
     },
-    {"key": "friend_mode", "name": "好友模式", "owner_only": False, "desc": "以聊天方式呈現心情趨勢並陪伴", "examples": []},
+    {
+        "key": "friend_mode",
+        "name": "好友模式",
+        "owner_only": False,
+        "desc": "說「陪我聊聊」，Robinson 會依你最近的心情、待辦、體態、記帳等近況陪你聊聊天",
+        "examples": [
+            "情境（單次觸發，Robinson 依近期紀錄生成陪伴回覆）：使用者：「陪我聊聊」→ Robinson："
+            "「最近感覺你心情起伏蠻大的耶😔😐😄，工作是不是有點累？看到你這幾天待辦事項也排得滿滿的，"
+            "記得也要留時間好好休息喔，有什麼想聊的都可以跟我說！」",
+        ],
+    },
     {"key": "important_notify", "name": "重要通知", "owner_only": False, "desc": "節日／生日提醒", "examples": []},
     {
         "key": "complaint",

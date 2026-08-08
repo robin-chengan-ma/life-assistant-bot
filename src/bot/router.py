@@ -48,6 +48,9 @@ _MOOD_JOURNAL_TRIGGERS = {"/mood_journal", "我想做心情筆記"}
 # 查詢並進入可更新/刪除模式，觸發詞設計比照上面 _MOOD_JOURNAL_TRIGGERS／_MY_TODOS_TRIGGERS。
 _MOOD_BACKFILL_TRIGGERS = {"/backfill_mood", "我要補記心情"}
 _MY_MOOD_JOURNALS_TRIGGERS = {"/my_mood_journals", "我的心情紀錄"}
+# 2026-08-08（Step 3.5，見 robinson SPEC.md FR-51、FR-52、ADR-22）：好友模式陪伴聊天，`friend_mode`
+# 開關 owner_only=False，所有使用者皆可用，放在共用觸發詞區塊；單輪生成完整回覆，不需要對話狀態機。
+_FRIEND_CHAT_TRIGGERS = {"/friend_chat", "陪我聊聊"}
 # 2026-08-04（Step 2.1，見 robinson SPEC.md FR-41～FR-44）：記帳模組觸發詞，設計比照心情小記。
 _FINANCE_SET_BUDGET_TRIGGERS = {"/set_budget", "設定記帳預算"}
 _FINANCE_ADD_TRIGGERS = {"/add_transaction", "我要記帳"}
@@ -242,6 +245,10 @@ def handle_message(
     if text in _MY_MOOD_JOURNALS_TRIGGERS:
         # 2026-08-02 追加（FR-49 更新/刪除擴充）：查詢清單並進入可更新/刪除的模式。
         return commands.start_mood_list(db, state_store, telegram_user_id, user_id)
+    if text in _FRIEND_CHAT_TRIGGERS:
+        # 2026-08-08（Step 3.5，見 robinson SPEC.md FR-51、FR-52、ADR-22）：好友模式陪伴聊天，
+        # 單次生成完整回覆，不需要對話狀態機。
+        return commands.start_friend_chat(db, llm_client, user_id)
     if text in _FINANCE_SET_BUDGET_TRIGGERS:
         # 2026-08-04（Step 2.1，見 robinson SPEC.md FR-41）：設定每月支出預算上限。
         return commands.start_finance_budget(state_store, telegram_user_id, user_id)

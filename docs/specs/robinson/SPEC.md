@@ -218,8 +218,8 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 
 ### 功能性需求 — 好友模式
 
-- [ ] FR-51：呈現心情趨勢圖
-- [ ] FR-52：讀取使用者近期紀錄數據，以聊天方式互動陪伴
+- [x] FR-51（**2026-08-08 規格定案並完成實作，見 ADR-22**）：心情趨勢改用文字／emoji 摘要呈現，不做圖片圖表——比照 FR-44（記帳）／FR-29（證照成效）既有決策「圖表統一交給 Phase 4 Mobile App（FR-64）」，Telegram 端只用文字或 emoji 序列（例如「最近 3 筆心情紀錄：😄😌😔（整體偏正向）」）呈現趨勢，不新增繪圖套件或請 LLM 生成圖片；未來 Mobile App 擴充範圍時再把 `mood_journals` 納入正式圖表。本條內容併入 FR-52 的好友聊天回覆中一併呈現，不獨立成一個查詢指令；實作見 `src/bot/friend_chat.py` 的 `_mood_provider()`
+- [x] FR-52（**2026-08-08 規格定案並完成實作，見 ADR-22**）：使用者主動觸發好友聊天（觸發詞「陪我聊聊」／`/friend_chat`），Robinson 動態讀取這位使用者「目前已開啟且近期有資料」的所有功能模組近期紀錄——不寫死固定模組清單，逐一檢查該使用者的 `feature_toggles` 開啟狀態＋該模組近期（預設近 7 天）是否有資料，兩者皆滿足才納入 Prompt 素材；組成 Prompt 交給 LLM 生成一段陪伴式對話回覆，內容自然涵蓋 FR-51 的心情趨勢摘要與其他模組近況（例如待辦完成度、體態/記帳動態、Robin 專屬的證照學習進度等，視該使用者實際使用的模組而定）。本次範圍僅做「被動模式」——使用者需自己觸發，不含主動關懷推播（例如偵測心情連續低落主動問候），主動關懷留待未來視實際使用回饋另開 Step 展開。單輪生成完整回覆，不強制走多輪反問狀態機，使用者後續接續聊天視為一般聊天，不特別維持「好友模式」狀態。**實作**：新增 `src/bot/friend_chat.py`（`_DATA_PROVIDERS` 登記表涵蓋心情小記／待辦事項／體態管理／記帳／證照準備五個既有模組的近期查詢 provider，`gather_recent_context()` 逐一檢查開關與資料、`build_companion_prompt()` 組 Prompt）；`commands.py` 新增 `start_friend_chat()`；`router.py` 新增「陪我聊聊」／`/friend_chat` 觸發詞，放在 owner／家人共用區塊（`friend_mode` 開關 `owner_only=False`）；`templates.py` 補上情境範例。TDD 全程，`friend_chat.py` 100% 覆蓋率，新增 32 個測試，全專案 1294 個測試全過
 
 ### 功能性需求 — 重要通知
 
@@ -818,6 +818,33 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 
 **狀態**：accepted
 
+### ADR-22：Step 3.5（好友模式）規格定案——心情趨勢改文字摘要、範圍限被動模式、資料來源動態涵蓋所有已使用模組
+
+**背景**：FR-51／FR-52 原始規格過於簡略（僅一行文字），開工前 Robin 要求先聽 Claude 對這個功能的設計想法再定案，經討論並用 AskUserQuestion 確認三個關鍵決策：① FR-51「心情趨勢圖」跟 FR-44／FR-29 既有「圖表統一交給 Phase 4 Mobile App」的架構決策是否衝突、如何處理 ② Step 3.5 這次要做到「僅被動模式（使用者主動觸發）」還是連「主動關懷推播」也一起做 ③ 好友聊天時要讀哪些模組的近期紀錄當素材——固定清單（僅心情/待辦/體態/記帳）或動態涵蓋該使用者所有實際使用中的模組（含 Robin 專屬模組）。
+
+**決策**：
+1. **FR-51 改為文字／emoji 摘要，不做圖片圖表**：比照 FR-44／FR-29 既有慣例，圖表視覺化統一留給 Phase 4 Mobile App（FR-64），之後擴充範圍再涵蓋 `mood_journals`；本次只在好友聊天回覆中用文字/emoji 呈現趨勢。
+2. **Step 3.5 這次只做被動模式**：使用者主動觸發（「陪我聊聊」／`/friend_chat`）才生成陪伴對話，不做排程主動關懷推播；主動關懷（例如偵測連續多日心情低落主動問候）留待未來視實際使用回饋另開 Step。
+3. **資料來源動態涵蓋該使用者所有已開啟且近期有資料的模組，不寫死固定清單**：每次觸發時逐一檢查該使用者的 `feature_toggles` 開啟狀態，開啟且該模組近期（預設近 7 天）有資料才納入 Prompt 素材；因此 Robin 觸發時可能包含技術情報／證照準備等僅 Robin 可用模組的近況，其他家人觸發時則只會看到自己有用到的模組（例如心情小記、待辦、體態、記帳），同一份程式邏輯自然適應不同使用者，不需要為「一般家人」與「Robin」寫兩套判斷邏輯。
+
+**理由**：
+- 決策 1：延續專案一貫的「圖表統一在 App 呈現、Telegram 端只做文字摘要」架構原則（FR-44、FR-29 皆同），避免同一份 `mood_journals` 資料在 Telegram 與未來 App 各自維護一套視覺化邏輯。
+- 決策 2：先驗證「被動陪伴聊天」這個核心價值，範圍小、風險低；主動關懷需要額外定義「異常訊號判斷規則」與「推播頻率」，複雜度更高，延續專案一貫「先求穩、範圍蔓延風險留給下一個 Step」的慣例（比照 Step 3.2「先只做建題庫」）。
+- 決策 3：「所有用到的功能模組」意味著好友模式的價值取決於使用者實際使用了哪些功能，寫死清單會讓 Robin 聊天時漏掉技術情報/證照進度這些他實際在乎的內容；動態判斷「這個使用者這個模組開了嗎、有資料嗎」比為每個使用者角色（Robin vs 家人）各寫一套模組清單更簡單，未來新增模組時也不需要回頭改好友模式的白名單。
+
+**替代方案**：
+- 決策 1 替代方案：現在就用繪圖套件或 LLM 生成圖片圖表——已否決，會產生跟未來 App 化圖表不一致的兩套邏輯，非本次 Robin 選擇的方向。
+- 決策 2 替代方案：被動＋主動一起做——已否決，Robin 選擇先做被動模式，主動關懷的判斷規則需要更多討論，留待之後。
+- 決策 3 替代方案：固定清單（僅心情/待辦/體態/記帳，排除 Robin 專屬模組）——已否決，Robin 選擇「所有用到的模組」，避免漏掉他自己實際在意的技術情報/證照進度。
+
+**後果**：
+- 好友聊天的 Prompt 組裝邏輯需要逐一呼叫各模組既有的「近期資料查詢」函式（例如 `mood.list_mood_journals()`、`body` 的體重/運動/飲食查詢、`finance` 的月度交易、`todo` 的完成狀況、`certificate_stats.compute_daily_period_stats()` 等），複用既有函式而非重新開發資料存取層；哪些模組「查無資料」就自然跳過，不特別提及。
+- 「近期」的時間窗口這次先訂為 7 天（比照日常陪伴聊天的即時感，跟 FR-24 方向建議用的 30 天「深度分析」用途不同），純粹是程式常數，之後 Robin 覺得太短/太長可以再調整，不需要動資料表。
+- 觸發詞「陪我聊聊」／`/friend_chat` 只做單輪生成完整回覆，不需要新增 `pending_*` 對話狀態機；使用者接續聊天視為一般聊天，不特別維持「好友模式」狀態，之後若要做主動關懷才需要新增排程與去重欄位。
+- 不需要新增資料表；`friend_mode` 功能開關已存在於 `templates.FEATURE_LIST`（`owner_only=False`），沿用即可。
+
+**狀態**：accepted
+
 ## 實作計畫
 
 > 分期原則見 ADR-4；每個 Phase 完成後才進入下一個 Phase 的詳細 spec 與 TDD 循環。本 spec 僅列到模組層級，各模組進入實作前應個別建立 `docs/specs/<feature-slug>/SPEC.md` 展開 API 設計與資料表結構。
@@ -863,7 +890,7 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 - [x] Step 3.2（**2026-08-07 完成，見 FR-25a～FR-25f、ADR-18**）：TOEIC 雙軌題庫 Pipeline —— 軌道一拍照/音檔入庫（Gemini Vision 影像 Key + Groq Whisper 語音轉文字切割，見 ADR-12）、軌道二 Gemini 文字 Key 單字題即時生成、固定每週日 22:00 排程去重。經 AskUserQuestion 與 Robin 確認範圍：這次只建題庫，不含推播/作答/批改（FR-26～FR-30 留給 Step 3.3）。新增 `submodules/gdrive` 的 `list_files()`／`download_file()`（OAuth scope 擴大為 `drive.file + drive.readonly`，Robin 需重新走一次 `get_refresh_token.py`）、`submodules/voice` 的 `transcribe_with_segments()`；新增 `src/bot/toeic.py`（檔名解析/分類、Vision 解析、Whisper 切割、單字題生成、週排程進入點）；新增 `toeic_questions`／`toeic_vocab_questions` 表與 `users.toeic_weekly_question_count`／`toeic_pipeline_last_run_on` 欄位（`0035`～`0037` migration，Robin 核准）；`main.py` 新增 `_check_toeic_pipeline()`；Dockerfile 新增 `ffmpeg`（`pydub` 依賴，用於整包 MP3 切割）；33 個新測試全過（含用 `pydub` 產生真實靜音音檔驗證切割邏輯可正確解碼）
 - [x] Step 3.3（**2026-08-07 規格定案見 FR-24、FR-26～FR-30、ADR-19；2026-08-08 全數完成**）：每日推播出題與批改（08:00 推播、20:00/23:00 提醒與跳過，FR-26～FR-28，ADR-20，2026-08-08 分兩批完成，見上方里程碑紀錄）、正解改用 Robin 拍照上傳的 `_ans` 答案照（延伸 Step 3.2 檔名比對機制，不用 AI 推論）、作答紀錄表串連軌道一/軌道二、FR-29 成效改為彈性自然語言文字問答（不做圖表，圖表統一交給 Phase 4 App FR-64，2026-08-08 完成）、FR-30 正式成績獨立建表（2026-08-08 完成）、FR-24 目標設定與方向建議（2026-08-08 完成）。**Step 3.3 剩餘範圍實作完成**：新增 `src/bot/certificate_exam_scores.py`／`certificate_stats.py`／`certificate_goals.py` 三個純邏輯模組（皆 100% 覆蓋率），`commands.py` 新增 6 組對話流程／單次查詢指令（`log_exam_score`／`my_exam_scores`／`set_certificate_goal`／`my_certificate_goals`／`certificate_advice`／`my_quiz_stats`），`router.py` 註冊對應觸發詞與 `pending_*` 狀態分派；`certificate_goals`／`exam_official_scores` 兩張表沿用 Step 3.3 開工前已建好的 `0041`／`0042` migration，本次無新增 migration；新增 86 個測試，全專案測試數來到 1185 個全過，Phase 3 個人技能成長主線（不含 YouTube 模組與好友模式）至此全數完成
 - [x] Step 3.4：YouTube 技術情報模組（FR-57～FR-59，**2026-08-08 設計改版，見 ADR-21，supersede ADR-9；同日完成實作**）—— YouTube Data API 擷取（含統計數字）、多主題設定、LLM 語意判讀取代 Rule-based 篩選、多主題輪替公平性、每週四自動推播、配額監控與 Fallback 降級
-- [ ] Step 3.5：好友模式（FR-51、FR-52）
+- [x] Step 3.5（**2026-08-08 規格定案並完成實作，見 FR-51、FR-52、ADR-22；Phase 3 至此全數完成**）：好友模式——被動觸發的陪伴聊天（「陪我聊聊」／`/friend_chat`），動態讀取使用者已開啟且近期有資料的所有模組，LLM 生成含心情趨勢文字摘要的陪伴回覆；不含主動關懷推播
 
 ### Phase 4：求職模組 + Mobile App（BI Dashboard）
 

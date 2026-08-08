@@ -6,7 +6,7 @@ import logging
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from src.bot import auth, body, finance, knowledge, mood, notifications, privacy, templates, toggles
+from src.bot import auth, body, finance, friend_chat, knowledge, mood, notifications, privacy, templates, toggles
 from src.bot import certificate_answer, certificate_quiz, certificate_schedule
 from src.bot import certificate_exam_scores, certificate_goals, certificate_stats
 from src.bot import complaint as complaint_module
@@ -1314,7 +1314,7 @@ def handle_mood_action_choice_step(
     """處理 `pending_mood_action_choice` 狀態下使用者對「要更新這筆還是刪除呢？」的回覆。
 
     選更新時沿用原本記錄的 `entry_date`（找不到就 fallback 用 `created_at` 換算，理由同
-    `mood._entry_date_of()`），重新走一次分類/內容兩輪反問，`journal_id` 帶著代表這是編輯而非新增。
+    `mood.entry_date_of()`），重新走一次分類/內容兩輪反問，`journal_id` 帶著代表這是編輯而非新增。
     """
     state = state_store.get(telegram_user_id)
     journal_id = state["journal_id"]
@@ -3749,3 +3749,23 @@ def handle_youtube_topic_remove_step(
     state_store.clear(telegram_user_id)
     youtube.remove_topic(db, target_user_id, topic_id)
     return "好的，已經幫你移除這組主題囉！"
+
+
+# --- FR-51、FR-52：好友模式（ADR-22）---
+
+
+def start_friend_chat(db: CloudSQLClient, llm_client, user_id: int) -> str:
+    """「陪我聊聊」／`/friend_chat`：被動觸發的好友模式陪伴聊天（FR-51、FR-52，ADR-22）。
+
+    全體使用者皆可用（`friend_mode` 開關 `owner_only=False`），單輪生成完整回覆，不走多輪對話
+    狀態機（見 ADR-22 後果）；動態讀取這位使用者已開啟且近期有資料的所有功能模組近況（見
+    `friend_chat.gather_recent_context()`），交給 LLM 生成陪伴式回覆，內容自然涵蓋 FR-51 的
+    心情趨勢文字/emoji 摘要。
+    """
+    user = db.select("users", where="id = %s", params=(user_id,), fetch_one=True)
+    role = user["role"] if user else "這位使用者"
+
+    today = _now().date()
+    context = friend_chat.gather_recent_context(db, user_id, today)
+    prompt = friend_chat.build_companion_prompt(role, context)
+    return llm_client.generate_text(prompt).strip()

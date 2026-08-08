@@ -1818,3 +1818,34 @@ def test_remove_youtube_topic_trigger_and_flow_dispatches_through_router(fake_db
     assert "移除" in confirm_reply
     assert store.get(ROBIN_ID) is None
     assert fake_db.select("youtube_topics", where="user_id = %s", params=(owner_row,)) == []
+
+
+# --- 好友模式（Step 3.5，見 robinson SPEC.md FR-51、FR-52、ADR-22） ---
+
+
+def test_friend_chat_trigger_dispatches_through_router_for_owner(fake_db, monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
+    owner_row = fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
+    fake_db.insert(
+        "mood_journals",
+        {"user_id": owner_row, "mood_category": "happy_excited", "content": "今天不錯", "entry_date": date.today()},
+    )
+    store = ConversationStateStore()
+    llm_client = _FakeLLMClient(response_text="主任最近心情看起來不錯耶，繼續保持喔！")
+
+    reply = router.handle_message(fake_db, store, ROBIN_ID, "陪我聊聊", llm_client=llm_client)
+
+    assert reply == "主任最近心情看起來不錯耶，繼續保持喔！"
+    assert "Robin" in llm_client.last_prompt
+    assert store.get(ROBIN_ID) is None
+
+
+def test_friend_chat_trigger_dispatches_through_router_for_family_member(fake_db):
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+    llm_client = _FakeLLMClient(response_text="爸爸最近過得如何呀？")
+
+    reply = router.handle_message(fake_db, store, FAMILY_ID, "/friend_chat", llm_client=llm_client)
+
+    assert reply == "爸爸最近過得如何呀？"
+    assert "爸爸" in llm_client.last_prompt

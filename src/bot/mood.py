@@ -85,7 +85,7 @@ def set_achievement_note(db: CloudSQLClient, journal_id: int, achievement_note: 
     db.update("mood_journals", {"achievement_note": achievement_note}, where="id = %s", params=(journal_id,))
 
 
-def _entry_date_of(row: dict) -> date:
+def entry_date_of(row: dict) -> date:
     """取這筆心情小記對應的日期：`entry_date` 有值就直接用；NULL（新增 entry_date 欄位前的
     舊資料）則 fallback 使用 `created_at` 換算成台灣時區後的日期部分。"""
     entry_date = row.get("entry_date")
@@ -102,7 +102,7 @@ def list_mood_journals(db: CloudSQLClient, user_id: int, limit: int = 10) -> lis
     可以篩掉，改用筆數上限控制清單長度）。
     """
     rows = db.select("mood_journals", where="user_id = %s", params=(user_id,))
-    rows.sort(key=lambda row: (_entry_date_of(row), row["id"]), reverse=True)
+    rows.sort(key=lambda row: (entry_date_of(row), row["id"]), reverse=True)
     return rows[:limit]
 
 
@@ -114,7 +114,7 @@ def format_mood_journal_list(journals: list[dict]) -> str:
     for index, item in enumerate(journals, start=1):
         content = item["content"]
         preview = content if len(content) <= 20 else content[:20] + "…"
-        entry_date = _entry_date_of(item)
+        entry_date = entry_date_of(item)
         lines.append(f"{index}. {entry_date:%Y/%m/%d} {category_label(item['mood_category'])}：{preview}")
     return "\n".join(lines)
 
