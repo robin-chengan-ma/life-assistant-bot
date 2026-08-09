@@ -39,6 +39,10 @@ class FakeCloudSQLClient:
             "certificate_daily_assignments": [],
             "youtube_topics": [],
             "youtube_pushed_videos": [],
+            # 2026-08-09（Step 4.1，見 robinson SPEC.md FR-33~FR-36、ADR-24）：求職模組。
+            "job_search_criteria": [],
+            "job_companies": [],
+            "job_postings": [],
         }
         self._id_counter = itertools.count(1)
 

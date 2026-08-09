@@ -90,6 +90,9 @@ _MY_QUIZ_STATS_TRIGGERS = {"/my_quiz_stats", "查詢我的成效"}
 _MY_YOUTUBE_TOPICS_TRIGGERS = {"/my_youtube_topics", "我的YouTube主題"}
 _ADD_YOUTUBE_TOPIC_TRIGGERS = {"/add_youtube_topic", "新增YouTube主題"}
 _REMOVE_YOUTUBE_TOPIC_TRIGGERS = {"/remove_youtube_topic", "移除YouTube主題"}
+# 2026-08-09（Step 4.1，見 robinson SPEC.md FR-33、FR-36、ADR-24 決策 2）：求職模組設定流程，
+# `job_search` 開關同步改為 owner_only=True，觸發詞只放在 is_owner 分支，家人完全看不到這個功能。
+_JOB_SEARCH_SETUP_TRIGGERS = {"/set_job_search", "我要找工作", "我最近想要找工作了"}
 # 2026-08-02（Step 1.9，見 robinson SPEC.md FR-60）：任何身分皆可觸發客訴收集流程。
 _COMPLAINT_TRIGGERS = {"/complaint", "我要客訴你"}
 _CLEAN_ALL_DIALOG_TRIGGERS = {"/clean-all-dialog", "我想要刪除所有對話紀錄"}
@@ -207,6 +210,9 @@ def handle_message(
         if text in _REMOVE_YOUTUBE_TOPIC_TRIGGERS:
             # 2026-08-08（Step 3.4，FR-57a）：列出目前主題並進入可輸入編號刪除的模式。
             return commands.start_remove_youtube_topic(db, state_store, telegram_user_id, user_id)
+        if text in _JOB_SEARCH_SETUP_TRIGGERS:
+            # 2026-08-09（Step 4.1，FR-33、FR-36）：開始求職模組設定流程，先問搜尋條件。
+            return commands.start_job_search_setup(state_store, telegram_user_id, user_id)
     else:
         user = auth.find_user_by_telegram_id(db, telegram_user_id)
         if user is None:
@@ -693,6 +699,30 @@ def _dispatch_active_flow(
         return commands.handle_youtube_topic_add_step(db, state_store, telegram_user_id, text)
     if flow == "pending_youtube_topic_remove":
         return commands.handle_youtube_topic_remove_step(db, state_store, telegram_user_id, text)
+    # 2026-08-09（Step 4.1，見 robinson SPEC.md FR-33、FR-36、ADR-24）：求職模組設定流程，
+    # 結構比照記帳/證照目標等既有多輪對話流，見 commands.py「求職模組設定流程」區塊開頭說明。
+    if flow == "pending_job_search_criteria":
+        return commands.handle_job_search_criteria_step(llm_client, state_store, telegram_user_id, text)
+    if flow == "pending_job_search_ready_confirm":
+        return commands.handle_job_search_ready_confirm_step(llm_client, state_store, telegram_user_id, text)
+    if flow == "pending_job_search_resume":
+        return commands.handle_job_search_resume_step(
+            state_store, telegram_user_id, text, privacy_llm_client=privacy_llm_client
+        )
+    if flow == "pending_job_search_resume_confirm":
+        return commands.handle_job_search_resume_confirm_step(llm_client, state_store, telegram_user_id, text)
+    if flow == "pending_job_search_expectation":
+        return commands.handle_job_search_expectation_step(
+            state_store, telegram_user_id, text, privacy_llm_client=privacy_llm_client
+        )
+    if flow == "pending_job_search_expectation_confirm":
+        return commands.handle_job_search_expectation_confirm_step(llm_client, state_store, telegram_user_id, text)
+    if flow == "pending_job_search_years_experience":
+        return commands.handle_job_search_years_experience_step(state_store, telegram_user_id, text)
+    if flow == "pending_job_search_salary_min":
+        return commands.handle_job_search_salary_min_step(state_store, telegram_user_id, text)
+    if flow == "pending_job_search_salary_max":
+        return commands.handle_job_search_salary_max_step(db, state_store, telegram_user_id, text)
     if flow == "pending_complaint_content":
         # 2026-08-02（Step 1.9，見 robinson SPEC.md FR-61、FR-62）：寫入客訴＋Gemini 分析私訊 Robin。
         return commands.handle_complaint_content_step(

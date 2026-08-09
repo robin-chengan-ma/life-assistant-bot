@@ -1849,3 +1849,30 @@ def test_friend_chat_trigger_dispatches_through_router_for_family_member(fake_db
 
     assert reply == "爸爸最近過得如何呀？"
     assert "爸爸" in llm_client.last_prompt
+
+
+# --- 求職模組（Step 4.1，見 robinson SPEC.md FR-33、FR-36、ADR-24） ---
+
+
+def test_job_search_setup_trigger_dispatches_through_router_for_owner(fake_db, monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
+    fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
+    store = ConversationStateStore()
+
+    reply = router.handle_message(fake_db, store, ROBIN_ID, "我最近想要找工作了")
+
+    assert "需求" in reply
+    assert store.get(ROBIN_ID)["flow"] == "pending_job_search_criteria"
+
+
+def test_job_search_setup_trigger_falls_through_to_chat_for_family_member(fake_db):
+    """權限邊界測試：`job_search` 為 ADR-24 決策 2 的 owner_only 功能，家人的觸發詞應該落入
+    一般聊天核心，而不是被授予求職模組設定流程的能力。"""
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+    llm_client = _FakeLLMClient(response_text="我不太懂這個指令耶！")
+
+    reply = router.handle_message(fake_db, store, FAMILY_ID, "我最近想要找工作了", llm_client=llm_client)
+
+    assert reply == "我不太懂這個指令耶！"
+    assert store.get(FAMILY_ID) is None

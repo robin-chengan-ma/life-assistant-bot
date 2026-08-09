@@ -10,6 +10,7 @@ from src.bot import auth, body, finance, friend_chat, knowledge, mood, notificat
 from src.bot import certificate_answer, certificate_quiz, certificate_schedule
 from src.bot import certificate_exam_scores, certificate_goals, certificate_stats
 from src.bot import complaint as complaint_module
+from src.bot import job_search
 from src.bot import todo as todo_module
 from src.bot import youtube
 from src.bot.state import ConversationStateStore
@@ -3769,3 +3770,258 @@ def start_friend_chat(db: CloudSQLClient, llm_client, user_id: int) -> str:
     context = friend_chat.gather_recent_context(db, user_id, today)
     prompt = friend_chat.build_companion_prompt(role, context)
     return llm_client.generate_text(prompt).strip()
+
+
+# --- Step 4.1（見 robinson SPEC.md FR-33、FR-36，ADR-24）：求職模組設定流程（僅 Robin 可用）---
+#
+# 收集流程共 8 輪，設計比照 FR-56f 情境範例：搜尋條件（FR-33，LLM 一次解析關鍵字/地區/薪資/
+# 產業別，關鍵字是唯一必要欄位，其餘沒提到一律視為「不限」）→ 說明每週排程限制＋準備確認
+# （CONFIRM 才繼續，CANCEL 直接結束不留下任何資料）→ 履歷全文（FR-36，含 PII 遮蔽＋確認/修正
+# 迴圈）→ 未來期望工作敘述（同上）→ 結構化年資 → 結構化期望薪資下限 → 上限（ADR-26 決策 1：
+# 這兩個結構化欄位刻意從自由文字拆出來明確詢問，不靠 LLM 從期望工作敘述猜測）。收集途中隨時
+# 可以修改前面步驟（履歷/期望工作敘述的確認迴圈），但不支援「回頭改搜尋條件」——不清楚就直接
+# 反問到清楚為止，不會走到後面才需要回頭改。最後一步收齊才一次寫入資料庫（FR-33 的
+# `job_search_criteria` INSERT 一筆、FR-36 的 `users` 五個欄位一起 UPDATE），中途任何一步
+# 放棄都不會留下部分資料。FR-34（爬蟲）、FR-35（公司背景 Email 協作）留待後續 commit 擴充。
+
+_JOB_SEARCH_CRITERIA_PROMPT = "好的，你有什麼特別的需求嗎（找什麼類型的職缺？地區？薪資待遇區間？產業類型？）："
+
+_JOB_SEARCH_CRITERIA_PARSE_PROMPT = (
+    "使用者想要設定 104 求職搜尋條件，這是使用者針對「有什麼特別的需求嗎（關鍵字/地區/薪資範圍/"
+    "產業別）」這句反問的回覆：「{text}」。\n"
+    "請嚴格照下面格式輸出，每個欄位各自一行，不要輸出其他任何文字：\n"
+    "STATUS: CLEAR 或 UNCLEAR。只要完全沒有提到任何職缺關鍵字（例如職稱、技能、產業方向）就填"
+    "UNCLEAR；只要有提到關鍵字，其餘欄位（地區/薪資/產業別）沒提到一律視為「不限」，不影響"
+    "STATUS 判斷，一律填 CLEAR\n"
+    "KEYWORD: 職缺關鍵字（STATUS 為 UNCLEAR 時可省略）\n"
+    "REGION: 地區文字，沒有提到或使用者說不限就填 NONE\n"
+    "SALARY_MIN: 薪資下限數字（純數字，不要千分位逗號或單位），沒有提到就填 NONE\n"
+    "SALARY_MAX: 薪資上限數字（純數字），沒有提到就填 NONE\n"
+    "INDUSTRY: 產業別文字，沒有提到或使用者說不限就填 NONE"
+)
+
+_JOB_SEARCH_WEEKLY_NOTICE = (
+    "好的，但我要提醒你一下，這個功能一週只會做一次喔，要等到排程啟動後，我才能給你清單與連結，"
+    "然後我需要你給我「詳細的履歷敘述（3500 字以內），記得不用給您的個資資訊如電子郵件或"
+    "手機號碼等」和「未來期望工作敘述（期望工作內容、企業文化、薪資、福利等）」，你準備好了嗎？"
+)
+
+_JOB_SEARCH_READY_CONFIRM_PROMPT = (
+    "Robinson 剛跟使用者說明求職功能一週只執行一次，並詢問「你準備好了嗎？」準備開始提供履歷與"
+    "期望工作敘述，這是使用者這一則的回覆：「{text}」。\n"
+    "請判斷使用者的意思，整則回覆只能輸出以下其中一個固定字，不要輸出其他任何文字：\n"
+    "(1) 準備好了，要繼續 → CONFIRM\n"
+    "(2) 還沒準備好/不要了 → CANCEL"
+)
+
+_JOB_SEARCH_REVISE_PROMPT = (
+    "Robinson 剛把使用者提供的內容記錄下來，並詢問「有需要修正嗎？」，這是使用者這一則的回覆："
+    "「{text}」。\n"
+    "請判斷使用者的意思，整則回覆只能輸出以下其中一個固定字，不要輸出其他任何文字：\n"
+    "(1) 不需要修正，可以繼續下一步 → CONFIRM\n"
+    "(2) 需要修正/重新提供 → REVISE"
+)
+
+
+def _parse_optional_text(value: str) -> str | None:
+    """把 LLM 輸出的欄位值換算成「使用者真的有講」的文字；空字串或 `NONE` 一律視為未提供。"""
+    value = (value or "").strip()
+    if not value or value.upper() == "NONE":
+        return None
+    return value
+
+
+def _parse_optional_int(value: str) -> int | None:
+    """把 LLM 輸出的欄位值換算成可為 `None` 的整數；空字串、`NONE`、或無法解析都回傳 `None`。"""
+    value = (value or "").strip()
+    if not value or value.upper() == "NONE":
+        return None
+    try:
+        return int(float(value))
+    except ValueError:
+        return None
+
+
+def _parse_non_negative_float(text: str) -> float | None:
+    """把使用者輸入的文字換算成 >= 0 的 float（年資允許 0，代表社會新鮮人）；無法解析回傳 None。"""
+    try:
+        value = float(text.strip())
+    except ValueError:
+        return None
+    return value if value >= 0 else None
+
+
+def start_job_search_setup(state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
+    """「/set_job_search」／「我要找工作」：開始求職模組設定流程（FR-33、FR-36，僅 Robin 可用）。"""
+    state_store.set(telegram_user_id, {"flow": "pending_job_search_criteria", "target_user_id": user_id})
+    return _JOB_SEARCH_CRITERIA_PROMPT
+
+
+def handle_job_search_criteria_step(
+    llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str
+) -> str:
+    """處理 `pending_job_search_criteria` 狀態下使用者提供的搜尋條件（FR-33）。
+
+    只有完全沒提到任何關鍵字才視為 UNCLEAR、原地反問；地區/薪資/產業別沒提到一律視為「不限」，
+    不會卡住整輪。解析成功後先存在 state 裡（尚未寫入資料庫），等
+    `pending_job_search_ready_confirm` 這一輪使用者確認要繼續才真正呼叫
+    `job_search.save_search_criteria()`（見 `handle_job_search_salary_max_step`）。
+    """
+    state = state_store.get(telegram_user_id)
+    parsed = _parse_key_value_block(llm_client.generate_text(_JOB_SEARCH_CRITERIA_PARSE_PROMPT.format(text=text)))
+    keyword = (parsed.get("KEYWORD") or "").strip()
+    if parsed.get("STATUS") != "CLEAR" or not keyword:
+        return "不好意思，我還是不太確定你想找什麼類型的職缺，可以再講清楚一點嗎？（例如：AI、資料相關）"
+
+    state_store.set(
+        telegram_user_id,
+        {
+            "flow": "pending_job_search_ready_confirm",
+            "target_user_id": state["target_user_id"],
+            "keyword": keyword,
+            "region": _parse_optional_text(parsed.get("REGION", "")),
+            "salary_min": _parse_optional_int(parsed.get("SALARY_MIN", "")),
+            "salary_max": _parse_optional_int(parsed.get("SALARY_MAX", "")),
+            "industry": _parse_optional_text(parsed.get("INDUSTRY", "")),
+        },
+    )
+    return _JOB_SEARCH_WEEKLY_NOTICE
+
+
+def handle_job_search_ready_confirm_step(
+    llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str
+) -> str:
+    """處理 `pending_job_search_ready_confirm` 狀態下使用者對「你準備好了嗎？」的回覆。"""
+    state = state_store.get(telegram_user_id)
+    decision = llm_client.generate_text(_JOB_SEARCH_READY_CONFIRM_PROMPT.format(text=text)).strip()
+    if decision != "CONFIRM":
+        state_store.clear(telegram_user_id)
+        return "好的，那我們先不設定，想開始時再跟我說一聲！"
+
+    state_store.set(telegram_user_id, {**state, "flow": "pending_job_search_resume"})
+    return "先給我詳細的履歷敘述（3500 字以內）！"
+
+
+def handle_job_search_resume_step(
+    state_store: ConversationStateStore, telegram_user_id: int, text: str, privacy_llm_client=None
+) -> str:
+    """處理 `pending_job_search_resume` 狀態下使用者提供的履歷全文（FR-36）。
+
+    `privacy_llm_client`：履歷可能不小心含個資，寫入 state（最終落地 `users.job_resume`）前
+    一律先過 `privacy.mask_text()`，設計比照 `handle_mood_content_step()`。
+    """
+    if not job_search.is_text_length_valid(text):
+        return "不好意思，履歷內容超過 3500 字了，麻煩精簡一下再重新提供喔！"
+
+    state = state_store.get(telegram_user_id)
+    masked_resume, pii_detected = privacy.mask_text(text, privacy_llm_client)
+    state_store.set(telegram_user_id, {**state, "flow": "pending_job_search_resume_confirm", "resume": masked_resume})
+    reply = "有需要修正嗎？沒有的話再給我未來期望工作敘述："
+    if pii_detected:
+        reply += _PII_DETECTED_REMINDER
+    return reply
+
+
+def handle_job_search_resume_confirm_step(
+    llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str
+) -> str:
+    """處理 `pending_job_search_resume_confirm` 狀態下使用者對「有需要修正嗎？」的回覆。"""
+    state = state_store.get(telegram_user_id)
+    decision = llm_client.generate_text(_JOB_SEARCH_REVISE_PROMPT.format(text=text)).strip()
+    if decision == "REVISE":
+        state_store.set(telegram_user_id, {**state, "flow": "pending_job_search_resume"})
+        return "好的，麻煩重新提供一次履歷內容："
+
+    state_store.set(telegram_user_id, {**state, "flow": "pending_job_search_expectation"})
+    return "好的，再給我未來期望工作敘述（期望工作內容、企業文化、薪資、福利等）："
+
+
+def handle_job_search_expectation_step(
+    state_store: ConversationStateStore, telegram_user_id: int, text: str, privacy_llm_client=None
+) -> str:
+    """處理 `pending_job_search_expectation` 狀態下使用者提供的期望工作敘述（FR-36）。"""
+    if not job_search.is_text_length_valid(text):
+        return "不好意思，內容超過 3500 字了，麻煩精簡一下再重新提供喔！"
+
+    state = state_store.get(telegram_user_id)
+    masked_expectation, pii_detected = privacy.mask_text(text, privacy_llm_client)
+    state_store.set(
+        telegram_user_id,
+        {**state, "flow": "pending_job_search_expectation_confirm", "expectation": masked_expectation},
+    )
+    reply = "有需要修正嗎？沒有的話我接著問你的年資："
+    if pii_detected:
+        reply += _PII_DETECTED_REMINDER
+    return reply
+
+
+def handle_job_search_expectation_confirm_step(
+    llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str
+) -> str:
+    """處理 `pending_job_search_expectation_confirm` 狀態下使用者對「有需要修正嗎？」的回覆。"""
+    state = state_store.get(telegram_user_id)
+    decision = llm_client.generate_text(_JOB_SEARCH_REVISE_PROMPT.format(text=text)).strip()
+    if decision == "REVISE":
+        state_store.set(telegram_user_id, {**state, "flow": "pending_job_search_expectation"})
+        return "好的，麻煩重新提供一次未來期望工作敘述："
+
+    state_store.set(telegram_user_id, {**state, "flow": "pending_job_search_years_experience"})
+    return "好的，你的年資大概是幾年呢？（直接給我數字就好，例如：3.5，社會新鮮人可以填 0）"
+
+
+def handle_job_search_years_experience_step(
+    state_store: ConversationStateStore, telegram_user_id: int, text: str
+) -> str:
+    """處理 `pending_job_search_years_experience` 狀態下使用者提供的年資數字
+    （FR-36，ADR-26 決策 1：從自由文字拆出來的結構化欄位，明確詢問不靠 LLM 猜測）。"""
+    years = _parse_non_negative_float(text)
+    if years is None:
+        return "不好意思，我沒看懂，麻煩直接輸入數字喔（例如：3.5）"
+    if not job_search.is_years_of_experience_reasonable(years):
+        return "這個年資數字看起來不太合理，麻煩確認一下再重新輸入喔（0～60 之間）！"
+
+    state = state_store.get(telegram_user_id)
+    state_store.set(telegram_user_id, {**state, "flow": "pending_job_search_salary_min", "years_of_experience": years})
+    return "好的，那你期望的薪資下限是多少呢？（直接給我數字就好）"
+
+
+def handle_job_search_salary_min_step(state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
+    """處理 `pending_job_search_salary_min` 狀態下使用者提供的期望薪資下限（FR-36，ADR-26 決策 1）。"""
+    amount = _parse_amount(text)
+    if amount is None:
+        return "不好意思，我沒看懂，麻煩輸入一個數字喔（例如：50000）"
+
+    state = state_store.get(telegram_user_id)
+    state_store.set(
+        telegram_user_id, {**state, "flow": "pending_job_search_salary_max", "expected_salary_min": int(amount)}
+    )
+    return "那期望薪資上限呢？（直接給我數字就好）"
+
+
+def handle_job_search_salary_max_step(
+    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, text: str
+) -> str:
+    """處理 `pending_job_search_salary_max` 狀態下使用者提供的期望薪資上限，收齊後一次寫入
+    `job_search_criteria`（FR-33）與 `users` 的履歷/期望工作/年資/期望薪資欄位（FR-36）。"""
+    amount = _parse_amount(text)
+    if amount is None:
+        return "不好意思，我沒看懂，麻煩輸入一個數字喔（例如：80000）"
+
+    state = state_store.get(telegram_user_id)
+    expected_salary_min = state["expected_salary_min"]
+    expected_salary_max = int(amount)
+    if expected_salary_max < expected_salary_min:
+        return f"上限（{expected_salary_max}）比下限（{expected_salary_min}）還低耶，麻煩重新輸入上限："
+
+    target_user_id = state["target_user_id"]
+    state_store.clear(telegram_user_id)
+
+    job_search.save_search_criteria(
+        db, target_user_id, state["keyword"], state["region"], state["salary_min"], state["salary_max"],
+        state["industry"],
+    )
+    job_search.save_profile(
+        db, target_user_id, state["resume"], state["expectation"], state["years_of_experience"],
+        expected_salary_min, expected_salary_max,
+    )
+    return "好的，已經幫你記錄好求職資料了！等下週排程跑完，我就會把清單寄給你囉～"
