@@ -206,8 +206,14 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
   - [x] FR-38d：Robin 於 Excel 中標記「是否喜歡」（不喜歡填 1，喜歡維持空白＝`is_unliked = FALSE`）後，上傳到既有共用 Google Drive 資料夾（沿用 `GDRIVE_FOLDER_ID`），檔名不變
   - [x] FR-38e：Robin 上傳後於 Telegram 說「已上傳{YYYY-MM-DD}-104職缺推薦.xlsx」，Robinson 依檔名關鍵字（`.xlsx`／「職缺推薦」）與 FR-35e 的公司背景 CSV（`.csv`／「職缺公司」）區分為兩條**各自獨立**的回填流程，偵測到後至 Drive 下載解析，以「連結」（職缺 URL，天然唯一，不需要額外的比對欄位）為比對鍵值，把「是否喜歡」→ `is_unliked` 逐筆 `UPDATE` 回資料庫對應職缺；完成後回覆處理結果（成功筆數；比對不到對應職缺的列出來提醒人工處理，不可靜默略過，比照 FR-35e）。**實作**：`router.py` `_UPLOADED_FILE_PATTERN` 擴充 `104職缺推薦.xlsx` 分支、`commands.handle_job_recommendation_excel_uploaded()`、`job_search.parse_recommendation_excel()`／`apply_job_preferences()`
   - [ ] FR-38f：應徵成效追蹤——Robin 已預告未來會用「ID=XXX 職缺已應徵」／「ID=XXX 職缺已獲得面試」／「ID=XXX 職缺已拿到 Offer」這類 Telegram 訊息記錄狀態；本條屬於 FR-39（Step 4.3）範圍，本次僅記錄需求，細部設計（資料表欄位、狀態機、觸發語句 regex）留待 Step 4.3 開工時展開
-- [ ] FR-39：記錄應徵成效（投遞 / 面試邀約 / 實際面試 / Offer）
-- [ ] FR-40：LinkedIn、Cake 等其他管道以文字訊息方式手動記錄進資料庫，並納入評分考量
+- [ ] FR-39（**2026-08-09 規格定案，見 Step 4.3、ADR-27**）：記錄應徵成效（投遞 / 面試邀約 / 實際面試 / Offer），以 Telegram 文字訊息「ID=XXX 職缺已應徵」等語句觸發：
+  - [ ] FR-39a：**職缺 ID 來源**——FR-38b 的「所有職缺推薦」「最新職缺推薦」兩張工作表新增「104職缺ID」欄位（原本只有「技能缺口」工作表有），Robin 直接從推薦 Excel 抄 ID 打語句，不需要另外查
+  - [ ] FR-39b：**狀態機**——任何狀態都能直接設定，不強制依「已應徵→已獲得面試→已拿到 Offer」順序推進（例如公司沒發正式面試邀約就直接約時間面試，可以跳過中間狀態直接設定）；除 Robin 預告的三種狀態外，新增第四種結束狀態「未錄取／已婉拒」，供之後統計整體應徵成效（例如應徵 20 家、幾家有面試、幾家沒下文）
+  - [ ] FR-39c：**歷程記錄**——應徵狀態存成獨立歷程表（非直接覆蓋 `job_postings` 單一欄位），每次狀態變更新增一筆紀錄＋時間戳，保留完整歷程（例如「哪天投遞、哪天收到面試邀約、哪天拿到 Offer」都查得到），供未來統計「平均從投遞到收到回覆幾天」之類的成效指標
+- [ ] FR-40（**2026-08-09 規格定案，見 Step 4.3、ADR-27**）：LinkedIn、Cake 等其他管道的職缺以 Telegram 文字訊息方式手動記錄進資料庫，並納入 FR-37 契合度評分考量：
+  - [ ] FR-40a：**資料結構**——外部管道職缺不借用既有 `job_postings`／`job_companies`（語意上不是 104 的職缺與公司，硬塞進去會讓資料語意混亂），新增獨立資料表儲存（職稱／公司名／內容／連結／管道／Robin 手動輸入的公司背景，供評分使用）
+  - [ ] FR-40b：**評分**——外部管道職缺一樣送進 Gemini 契合度評分（比照 FR-37 邏輯，但走獨立的批次流程，不與 104 職缺混在同一次 Prompt），需要 Robin 在新增職缺時一併提供職缺內容與公司背景（沒有 104 API 可以自動抓，無法沿用 FR-35 的 Email 協作機制）
+  - [ ] FR-40c：**ID 命名空間**——外部管道職缺沒有 104 職缺 ID，Robin 新增後 Robinson 會回覆分配到的內部識別碼供之後應徵狀態追蹤（FR-39）使用，實際命名規則與觸發語句 regex 細節留待 Step 4.3 正式開工、呈現實作計畫時定案
 
 ### 功能性需求 — 記帳
 
@@ -965,6 +971,36 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 
 **狀態**：accepted
 
+### ADR-27：Step 4.3（應徵成效追蹤）開工前設計決策
+
+**背景**：Step 4.2 完工後，Robin 詢問「4.3 有需要確認的部分嗎」。FR-39／FR-40 原本只記錄 Robin 預告會用的三種狀態語句（已應徵／已獲得面試／已拿到 Offer），細部設計完全空白，開工前有幾個問題必須先確認：Robin 打「ID=XXX」語句時 ID 從哪來（FR-38b 的推薦 Excel 目前沒有列出 104 職缺 ID）、狀態機是否要嚴格照順序推進、FR-40 提到的「並納入評分考量」要不要真的把 LinkedIn／Cake 等外部管道職缺送進 Gemini 評分、應徵狀態要用什麼資料結構存。經 AskUserQuestion 兩輪確認（第一輪確認 ID 來源／狀態機／是否評分／歷程表 4 題，第二輪針對「外部職缺也要評分」這個選擇追問資料結構要怎麼設計）全部定案。
+
+**決策**：
+
+1. **推薦 Excel 兩張推薦表新增「104職缺ID」欄位**（FR-38b 原本只有「技能缺口」工作表列出 104 職缺 ID），Robin 直接從 Excel 抄 ID 打「ID=XXX」語句。
+2. **應徵狀態任何時候都能直接設定，不強制順序**；除 Robin 預告的三種狀態外，新增第四種結束狀態「未錄取／已婉拒」。
+3. **FR-40 外部管道（LinkedIn、Cake 等）職缺也要納入 Gemini 契合度評分**，不是純記錄用途。
+4. **應徵狀態存成獨立歷程表**（非直接覆蓋 `job_postings` 單一欄位），每次狀態變更新增一筆紀錄＋時間戳，保留完整歷程供未來統計成效指標。
+5. **外部管道職缺用獨立新表儲存**，不借用既有 `job_postings`／`job_companies`——這些公司/職缺本來就不是 104 資料庫的一部分，硬塞進去會讓 `company_id_104` 等欄位語意混亂；獨立表也讓外部職缺的評分批次可以跟 104 職缺的評分批次互不干擾。
+
+**理由**：
+- 決策 1：不加這欄，Robin 每次都要跳去「技能缺口」表對照 ID，多一道不必要的查找步驟。
+- 決策 2：真實求職情境中公司不一定照 Robin 預期的順序發通知（例如沒有正式「面試邀約」訊息就直接約時間面試），嚴格線性狀態機會逼 Robin 補打不存在的中間狀態；新增「未錄取／已婉拒」讓成效統計（例如「應徵 20 家、幾家有面試」）更完整，不只有「進行中」的三種正向狀態。
+- 決策 3：FR-40 原文明確寫「並納入評分考量」，不是單純記錄用途；Robin 選擇照字面意思落實，即使因此需要多一套資料結構。
+- 決策 4：單一狀態欄位只能看到「目前狀態」，看不到「哪天投遞、哪天收到面試邀約」的時間軸，之後想算「平均幾天收到回覆」之類的指標會沒有資料可用；獨立歷程表一次到位，不用等以後真的要做統計時回頭補資料結構。
+- 決策 5：外部管道職缺沒有 104 API 可以自動抓公司背景／職缺內容，資料取得方式（Robin 手動輸入）與資料語意都跟 104 職缺不同，借用既有表會讓 `company_id_104`／`job_id_104` 等原本代表「104 官方識別碼」的欄位被拿來塞非 104 資料，之後任何用到這兩個表的既有邏輯（爬蟲 upsert、公司背景協作）都要多加判斷式排除外部資料，維護成本比新建一張表更高。
+
+**替代方案**：
+- 決策 5 替代方案：借用 `job_postings`／`job_companies`，`company_id_104` 改存 Robin 自訂的識別碼——已考慮但否決，理由見上方決策 5。
+
+**後果**：
+- Step 4.3 開工時需要新增至少兩張表：應徵歷程表（狀態＋時間戳，關聯 104 職缺或外部職缺）、外部管道職缺表（職稱／公司名／內容／連結／管道／公司背景／評分結果），實際欄位與 migration SQL 依 ADR-10 流程於開工時提出核准。
+- 觸發語句 regex 需要能同時解析「ID=<104職缺ID>」與外部職缺的內部識別碼（Robin 新增外部職缺後由 Robinson 回覆分配到的 ID），命名空間如何區分兩者留待呈現實作計畫時定案。
+- FR-38b 的 Excel 需要新增「104職缺ID」欄位到兩張推薦工作表。
+- 外部職缺的評分批次何時觸發（新增當下立即評分、或併入既有週排程）尚未決定，留待呈現實作計畫時提出。
+
+**狀態**：accepted
+
 ## 實作計畫
 
 > 分期原則見 ADR-4；每個 Phase 完成後才進入下一個 Phase 的詳細 spec 與 TDD 循環。本 spec 僅列到模組層級，各模組進入實作前應個別建立 `docs/specs/<feature-slug>/SPEC.md` 展開 API 設計與資料表結構。
@@ -1018,7 +1054,7 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 
 - [x] Step 4.1（**2026-08-08 規格定案，見 FR-33～FR-36、ADR-24；2026-08-09 追加 FR-36 履歷/期望工作內容收集歸屬確認，見 ADR-26；2026-08-09 全數實作完成（FR-33～FR-36），詳見 PROGRESS.md 里程碑；2026-08-09 由 Robin 透過瀏覽器 DevTools 手動實測驗證 FR-34a 欄位對應，已修正並更新 `submodules/job104/client.py`；2026-08-09 依 Robin 回饋移除產業篩選、地區篩選改為爬蟲階段子字串比對，見 FR-33、FR-34a 註記**）：104 職缺爬蟲（FR-33 多組搜尋條件、FR-34a～FR-34d：無登入態直呼叫 AJAX API、兩階段列表+詳情頁、每週一次、UA/Referer + 2～4 秒隨機延遲、禁併發、ETL 去重、職缺內容解析）；FR-35 公司背景改採 Email＋CSV＋Drive 人力協作機制（詳見 ADR-24）；FR-36 個人履歷與期望工作內容收集（含新增的結構化年資／期望薪資欄位，見 ADR-26），與 FR-33 搜尋條件同一輪對話流程收集（見 FR-56f 情境範例），僅 Robin 可用（**2026-08-09 實作**：`src/bot/job_search.py`＋`src/bot/commands.py` 8 輪對話流程＋`router.py` 觸發詞僅放在 is_owner 分支＋`templates.py` `job_search.owner_only` 改為 `True`；DB migration `0053`～`0056` 見 `src/schema/db_schema.md`）
 - [x] Step 4.2（**2026-08-09 規格定案，見 FR-37、FR-38、ADR-26；2026-08-09 全數實作完成（FR-37、FR-38），詳見 PROGRESS.md 里程碑**）：Gemini 批次契合度評分（FR-37）與技能缺口分析（FR-38），完成後整理成 Excel 寄送 Robin、Robin 標記喜好後上傳回補資料庫（FR-38b～FR-38e，人力協作模式比照 FR-35；「是否關閉」已可自動判斷，見 FR-34d）。**實作**：`src/bot/job_search.py` `list_scorable_jobs()`／`score_jobs()`／`apply_scores()`（FR-37）、`build_ranked_jobs()`／`build_job_recommendation_excel()`／`send_job_recommendation_email()`（FR-38a～FR-38c）、`parse_recommendation_excel()`／`apply_job_preferences()`（FR-38e）；`src/bot/commands.py` `handle_job_recommendation_excel_uploaded()`；`router.py` 擴充 `.xlsx`／「職缺推薦」檔名分流；`main.py` `_check_job_search_weekly_crawl()` 新增 `GEMINI_API_JOB_SEARCH_KEY`；DB migration `0058` 見 `src/schema/db_schema.md`；新增依賴 `openpyxl`（見 `requirements.txt`）
-- [ ] Step 4.3（**2026-08-09 追加備忘，細部設計留待開工時展開，見 ADR-26 決策 7**）：應徵成效追蹤（FR-39、FR-40）；Robin 已預告會用「ID=XXX 職缺已應徵」／「已獲得面試」／「已拿到 Offer」這類 Telegram 訊息記錄狀態
+- [ ] Step 4.3（**2026-08-09 規格定案，見 FR-39、FR-40、ADR-27；尚未實作**）：應徵成效追蹤——Telegram 語句記錄應徵狀態（含新增「未錄取／已婉拒」狀態，任意狀態可直接設定，不強制順序，見 FR-39a～FR-39c）；LinkedIn／Cake 等外部管道職缺手動記錄並納入 Gemini 評分（獨立資料表，不借用既有 104 職缺表，見 FR-40a～FR-40c）
 - [ ] Step 4.4（Placeholder）：Mobile App 基礎建設與登入機制（FR-65）—— 建立 `mobile/` Expo 專案骨架、`users.app_access_token` 建表（依 ADR-10 流程）、登入頁與 `/api/app/*` 驗證中介層
 - [ ] Step 4.5（Placeholder）：BI Dashboard 圖表頁面（FR-64）—— 記帳/體態模組的圖表 API（消費圓餅圖、體重折線圖等）與對應的 App 頁面
 
