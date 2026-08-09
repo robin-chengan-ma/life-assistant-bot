@@ -3774,8 +3774,8 @@ def start_friend_chat(db: CloudSQLClient, llm_client, user_id: int) -> str:
 
 # --- Step 4.1（見 robinson SPEC.md FR-33、FR-36，ADR-24）：求職模組設定流程（僅 Robin 可用）---
 #
-# 收集流程共 8 輪，設計比照 FR-56f 情境範例：搜尋條件（FR-33，LLM 一次解析關鍵字/地區/薪資/
-# 產業別，關鍵字是唯一必要欄位，其餘沒提到一律視為「不限」）→ 說明每週排程限制＋準備確認
+# 收集流程共 8 輪，設計比照 FR-56f 情境範例：搜尋條件（FR-33，LLM 一次解析關鍵字/地區/薪資，
+# 關鍵字是唯一必要欄位，其餘沒提到一律視為「不限」）→ 說明每週排程限制＋準備確認
 # （CONFIRM 才繼續，CANCEL 直接結束不留下任何資料）→ 履歷全文（FR-36，含 PII 遮蔽＋確認/修正
 # 迴圈）→ 未來期望工作敘述（同上）→ 結構化年資 → 結構化期望薪資下限 → 上限（ADR-26 決策 1：
 # 這兩個結構化欄位刻意從自由文字拆出來明確詢問，不靠 LLM 從期望工作敘述猜測）。收集途中隨時
@@ -3783,21 +3783,23 @@ def start_friend_chat(db: CloudSQLClient, llm_client, user_id: int) -> str:
 # 反問到清楚為止，不會走到後面才需要回頭改。最後一步收齊才一次寫入資料庫（FR-33 的
 # `job_search_criteria` INSERT 一筆、FR-36 的 `users` 五個欄位一起 UPDATE），中途任何一步
 # 放棄都不會留下部分資料。FR-34（爬蟲）、FR-35（公司背景 Email 協作）留待後續 commit 擴充。
+#
+# 2026-08-09：依 Robin 指示移除產業篩選（實測 104 API 後確認這個維度不值得繼續猜參數名稱），
+# 這一輪不再詢問「產業類型」。
 
-_JOB_SEARCH_CRITERIA_PROMPT = "好的，你有什麼特別的需求嗎（找什麼類型的職缺？地區？薪資待遇區間？產業類型？）："
+_JOB_SEARCH_CRITERIA_PROMPT = "好的，你有什麼特別的需求嗎（找什麼類型的職缺？地區？薪資待遇區間？）："
 
 _JOB_SEARCH_CRITERIA_PARSE_PROMPT = (
-    "使用者想要設定 104 求職搜尋條件，這是使用者針對「有什麼特別的需求嗎（關鍵字/地區/薪資範圍/"
-    "產業別）」這句反問的回覆：「{text}」。\n"
+    "使用者想要設定 104 求職搜尋條件，這是使用者針對「有什麼特別的需求嗎（關鍵字/地區/薪資範圍）」"
+    "這句反問的回覆：「{text}」。\n"
     "請嚴格照下面格式輸出，每個欄位各自一行，不要輸出其他任何文字：\n"
     "STATUS: CLEAR 或 UNCLEAR。只要完全沒有提到任何職缺關鍵字（例如職稱、技能、產業方向）就填"
-    "UNCLEAR；只要有提到關鍵字，其餘欄位（地區/薪資/產業別）沒提到一律視為「不限」，不影響"
+    "UNCLEAR；只要有提到關鍵字，其餘欄位（地區/薪資）沒提到一律視為「不限」，不影響"
     "STATUS 判斷，一律填 CLEAR\n"
     "KEYWORD: 職缺關鍵字（STATUS 為 UNCLEAR 時可省略）\n"
     "REGION: 地區文字，沒有提到或使用者說不限就填 NONE\n"
     "SALARY_MIN: 薪資下限數字（純數字，不要千分位逗號或單位），沒有提到就填 NONE\n"
-    "SALARY_MAX: 薪資上限數字（純數字），沒有提到就填 NONE\n"
-    "INDUSTRY: 產業別文字，沒有提到或使用者說不限就填 NONE"
+    "SALARY_MAX: 薪資上限數字（純數字），沒有提到就填 NONE"
 )
 
 _JOB_SEARCH_WEEKLY_NOTICE = (
@@ -3862,7 +3864,7 @@ def handle_job_search_criteria_step(
 ) -> str:
     """處理 `pending_job_search_criteria` 狀態下使用者提供的搜尋條件（FR-33）。
 
-    只有完全沒提到任何關鍵字才視為 UNCLEAR、原地反問；地區/薪資/產業別沒提到一律視為「不限」，
+    只有完全沒提到任何關鍵字才視為 UNCLEAR、原地反問；地區/薪資沒提到一律視為「不限」，
     不會卡住整輪。解析成功後先存在 state 裡（尚未寫入資料庫），等
     `pending_job_search_ready_confirm` 這一輪使用者確認要繼續才真正呼叫
     `job_search.save_search_criteria()`（見 `handle_job_search_salary_max_step`）。
@@ -3882,7 +3884,6 @@ def handle_job_search_criteria_step(
             "region": _parse_optional_text(parsed.get("REGION", "")),
             "salary_min": _parse_optional_int(parsed.get("SALARY_MIN", "")),
             "salary_max": _parse_optional_int(parsed.get("SALARY_MAX", "")),
-            "industry": _parse_optional_text(parsed.get("INDUSTRY", "")),
         },
     )
     return _JOB_SEARCH_WEEKLY_NOTICE
@@ -4018,7 +4019,6 @@ def handle_job_search_salary_max_step(
 
     job_search.save_search_criteria(
         db, target_user_id, state["keyword"], state["region"], state["salary_min"], state["salary_max"],
-        state["industry"],
     )
     job_search.save_profile(
         db, target_user_id, state["resume"], state["expectation"], state["years_of_experience"],

@@ -17,10 +17,13 @@ Network 面板手動抓真實請求驗證，已確認：
 - 應徵人數（`applyCnt`）其實列表 API 那頁就有了，不需要等詳情頁——`fetch_job_detail()` 已把
   這個欄位移除，改由 `search_list()` 直接回傳。
 
-**仍未驗證**：這次 Robin 測試時沒有實際設定地區／產業篩選條件，所以 `area`／`indcat` 這兩個
-查詢參數名稱維持原先猜測，尚未確認是否正確；如果之後發現搜尋結果沒有依地區/產業正確過濾，
-需要另外再抓一次帶有這兩個條件的真實請求來確認參數名稱。薪資篩選則確認除了 `scmin`／`scmax`
-外還需要帶 `sctp="M"`（薪資類型：月薪）、`scstrict=1`、`scneg=1` 篩選才會真的套用。
+**地區／產業篩選（2026-08-09 追加澄清）**：Robin 後續補充實測過的地區篩選網址，確認 `area`
+參數名稱本身正確，但值是 104 自己的地區數字代碼（例如 `"6001008000"`），不是使用者輸入的地區
+文字；由於沒有可靠的代碼對照表，`search_list()` 已不再接受 `region` 參數，改由呼叫端用回傳
+結果的 `region`（`jobAddrNoDesc`）文字做子字串比對篩選（見 `search_list()` docstring）。產業
+篩選（`industry`）依 Robin 指示直接移除，`search_list()` 已不再接受這個參數。薪資篩選則確認
+除了 `scmin`／`scmax` 外還需要帶 `sctp="M"`（薪資類型：月薪）、`scstrict=1`、`scneg=1` 篩選
+才會真的套用。
 
 對外暴露 `search_list()`（職缺列表，一次一頁）與 `fetch_job_detail()`（單一職缺詳情，FR-34a
 兩階段架構的第二階段）。UA／Referer 標頭固定套用（模擬瀏覽器請求，降低被擋機率），但請求節奏
@@ -115,10 +118,8 @@ class Job104Client:
     def search_list(
         self,
         keyword: str,
-        region: str | None = None,
         salary_min: int | None = None,
         salary_max: int | None = None,
-        industry: str | None = None,
         page: int = 1,
     ) -> list[dict]:
         """查詢職缺搜尋列表第 `page` 頁（FR-34a 兩階段架構第一階段），回傳摘要清單：
@@ -126,6 +127,13 @@ class Job104Client:
         "applicant_count"}, ...]`；查無結果（含翻到最後一頁之後）回傳空清單，由呼叫端依此
         判斷分頁何時停止。`job_id`（`jobNo`）供資料庫去重鍵值使用；`job_slug` 才是
         `fetch_job_detail()` 要傳入的 ID，兩者不可混用。
+
+        **不接受 `region`／`industry` 參數**（2026-08-09 依 Robin 指示調整）：`area` 這個地區
+        篩選參數名稱本身已確認正確，但實際要傳 104 自己的地區數字代碼（例如 `"6001008000"`），
+        不是使用者輸入的地區文字（例如「台北市」），目前沒有可靠的代碼對照表，與其送出猜測的
+        代碼冒著篩選失效或篩選錯誤的風險，不如乾脆不送，改由呼叫端（`src/bot/job_search.py`
+        的 `crawl_and_upsert_jobs()`）用回傳結果的 `region` 文字做關鍵字比對篩選（見該函式
+        docstring）。產業篩選（`industry`）則依 Robin 指示直接移除，不再是這個模組的功能範圍。
         """
         params: dict = {
             "keyword": keyword,
@@ -135,12 +143,6 @@ class Job104Client:
             "jobsource": "joblist_search",
             "searchJobs": 1,
         }
-        # 地區／產業篩選參數名稱尚未經真實流量驗證（這次測試沒有實際設定這兩個條件），維持原先
-        # 猜測，見本檔案模組 docstring「仍未驗證」段落。
-        if region:
-            params["area"] = region
-        if industry:
-            params["indcat"] = industry
         # 薪資篩選確認除了 scmin/scmax 外，還需要 sctp（薪資類型，固定用月薪）＋
         # scstrict／scneg 這兩個旗標，篩選才會真的套用（2026-08-09 實測驗證）。
         if salary_min:

@@ -49,7 +49,7 @@ def test_is_years_of_experience_reasonable_negative():
 
 
 def test_save_search_criteria_inserts_row(fake_db):
-    criteria_id = job_search.save_search_criteria(fake_db, 1, "AI 工程師", None, 50000, None, None)
+    criteria_id = job_search.save_search_criteria(fake_db, 1, "AI 工程師", None, 50000, None)
 
     row = fake_db.select("job_search_criteria", where="id = %s", params=(criteria_id,), fetch_one=True)
     assert row["user_id"] == 1
@@ -57,12 +57,11 @@ def test_save_search_criteria_inserts_row(fake_db):
     assert row["region"] is None
     assert row["salary_min"] == 50000
     assert row["salary_max"] is None
-    assert row["industry"] is None
 
 
 def test_save_search_criteria_allows_multiple_rows_for_same_user(fake_db):
-    job_search.save_search_criteria(fake_db, 1, "AI 工程師", None, 50000, None, None)
-    job_search.save_search_criteria(fake_db, 1, "資料工程師", "台北", None, None, "軟體業")
+    job_search.save_search_criteria(fake_db, 1, "AI 工程師", None, 50000, None)
+    job_search.save_search_criteria(fake_db, 1, "資料工程師", "台北", None, None)
 
     rows = fake_db.select("job_search_criteria", where="user_id = %s", params=(1,))
     assert len(rows) == 2
@@ -89,8 +88,8 @@ def test_save_profile_updates_user_fields(fake_db):
 
 
 def test_list_search_criteria_returns_only_this_user(fake_db):
-    job_search.save_search_criteria(fake_db, 1, "AI 工程師", None, None, None, None)
-    job_search.save_search_criteria(fake_db, 2, "別人的條件", None, None, None, None)
+    job_search.save_search_criteria(fake_db, 1, "AI 工程師", None, None, None)
+    job_search.save_search_criteria(fake_db, 2, "別人的條件", None, None, None)
 
     rows = job_search.list_search_criteria(fake_db, 1)
 
@@ -198,7 +197,7 @@ class _FakeJob104Client:
         self.search_calls: list[tuple] = []
         self.detail_calls: list[str] = []
 
-    def search_list(self, keyword, region=None, salary_min=None, salary_max=None, industry=None, page=1):
+    def search_list(self, keyword, salary_min=None, salary_max=None, page=1):
         self.search_calls.append((keyword, page))
         return self._pages.get((keyword, page), [])
 
@@ -225,7 +224,7 @@ def test_crawl_and_upsert_jobs_no_criteria_makes_no_requests(fake_db):
 
 
 def test_crawl_and_upsert_jobs_single_criteria_single_page(fake_db):
-    job_search.save_search_criteria(fake_db, 1, "AI 工程師", "台北市", 50000, None, None)
+    job_search.save_search_criteria(fake_db, 1, "AI 工程師", "台北市", 50000, None)
     page1 = [
         {"job_id": "1", "job_slug": "slug1", "title": "AI 工程師 A", "company_id": "100",
          "company_name": "A 公司", "region": "台北市", "url": "https://www.104.com.tw/job/1",
@@ -250,8 +249,51 @@ def test_crawl_and_upsert_jobs_single_criteria_single_page(fake_db):
     assert len(companies) == 1
 
 
+def test_crawl_and_upsert_jobs_filters_by_region_substring(fake_db):
+    """2026-08-09 依 Robin 指示：地區篩選不送給 104 API（`area` 需要數字代碼，沒有可靠對照
+    表），改由呼叫端對回傳結果的 `region` 文字做子字串比對篩選（見 `crawl_and_upsert_jobs()`
+    docstring）。"""
+    job_search.save_search_criteria(fake_db, 1, "AI 工程師", "台北市", None, None)
+    page1 = [
+        {"job_id": "1", "job_slug": "slug1", "title": "符合地區", "company_id": "100",
+         "company_name": "A 公司", "region": "台北市信義區", "url": "https://www.104.com.tw/job/1",
+         "applicant_count": 1},
+        {"job_id": "2", "job_slug": "slug2", "title": "不符合地區", "company_id": "200",
+         "company_name": "B 公司", "region": "新竹市", "url": "https://www.104.com.tw/job/2",
+         "applicant_count": 2},
+    ]
+    client = _FakeJob104Client(
+        pages={("AI 工程師", 1): page1}, details={"slug1": {}, "slug2": {}},
+    )
+
+    result = job_search.crawl_and_upsert_jobs(fake_db, client, 1, sleep_func=_fake_sleep, random_func=_fake_random)
+
+    assert result["new_job_count"] == 1
+    assert client.detail_calls == ["slug1"]  # 不符合地區的 slug2 完全不會呼叫詳情頁
+    jobs = fake_db.select("job_postings")
+    assert [j["title"] for j in jobs] == ["符合地區"]
+
+
+def test_crawl_and_upsert_jobs_region_filter_does_not_stop_pagination_early(fake_db):
+    """單頁篩選後一筆都不剩，也不能誤判成「這組條件已經爬完」而提早停止翻頁——分頁停止判斷
+    要看 104 回傳的原始清單是否為空，不是篩選後的清單。"""
+    job_search.save_search_criteria(fake_db, 1, "AI 工程師", "台北市", None, None)
+    page1 = [
+        {"job_id": "1", "job_slug": "slug1", "title": "不符合地區", "company_id": "100",
+         "company_name": "A 公司", "region": "新竹市", "url": "https://www.104.com.tw/job/1",
+         "applicant_count": 1},
+    ]
+    client = _FakeJob104Client(pages={("AI 工程師", 1): page1, ("AI 工程師", 2): []}, details={})
+
+    result = job_search.crawl_and_upsert_jobs(fake_db, client, 1, sleep_func=_fake_sleep, random_func=_fake_random)
+
+    assert result == {"new_company_ids": [], "new_job_count": 0, "updated_job_count": 0}
+    assert client.search_calls == [("AI 工程師", 1), ("AI 工程師", 2)]
+    assert client.detail_calls == []
+
+
 def test_crawl_and_upsert_jobs_stops_pagination_on_empty_page(fake_db):
-    job_search.save_search_criteria(fake_db, 1, "AI 工程師", None, None, None, None)
+    job_search.save_search_criteria(fake_db, 1, "AI 工程師", None, None, None)
     client = _FakeJob104Client(pages={("AI 工程師", 1): []}, details={})
 
     result = job_search.crawl_and_upsert_jobs(fake_db, client, 1, sleep_func=_fake_sleep, random_func=_fake_random)
@@ -261,8 +303,8 @@ def test_crawl_and_upsert_jobs_stops_pagination_on_empty_page(fake_db):
 
 
 def test_crawl_and_upsert_jobs_multiple_criteria_each_queried(fake_db):
-    job_search.save_search_criteria(fake_db, 1, "AI 工程師", None, None, None, None)
-    job_search.save_search_criteria(fake_db, 1, "資料工程師", None, None, None, None)
+    job_search.save_search_criteria(fake_db, 1, "AI 工程師", None, None, None)
+    job_search.save_search_criteria(fake_db, 1, "資料工程師", None, None, None)
     client = _FakeJob104Client(
         pages={
             ("AI 工程師", 1): [{"job_id": "1", "job_slug": "slug1", "title": "A", "company_id": "100",
@@ -282,7 +324,7 @@ def test_crawl_and_upsert_jobs_multiple_criteria_each_queried(fake_db):
 
 
 def test_crawl_and_upsert_jobs_applies_delay_between_every_request(fake_db):
-    job_search.save_search_criteria(fake_db, 1, "AI 工程師", None, None, None, None)
+    job_search.save_search_criteria(fake_db, 1, "AI 工程師", None, None, None)
     client = _FakeJob104Client(
         pages={("AI 工程師", 1): [{"job_id": "1", "job_slug": "slug1", "title": "A", "company_id": "100",
                                  "company_name": "A 公司", "region": "台北市",
@@ -407,7 +449,7 @@ def _seed_owner(fake_db, job_search_last_run_on=None):
 
 def test_check_and_run_weekly_job_search_skips_when_not_monday_8am(fake_db):
     _seed_owner(fake_db)
-    job_search.save_search_criteria(fake_db, 1, "AI 工程師", None, None, None, None)
+    job_search.save_search_criteria(fake_db, 1, "AI 工程師", None, None, None)
     email_client = MagicMock()
     telegram_client = MagicMock()
     not_monday = datetime(2026, 8, 11, 8, 0, tzinfo=_TAIWAN_TZ)
@@ -462,7 +504,7 @@ def test_check_and_run_weekly_job_search_no_new_companies_skips_email(fake_db, m
     fake_db.insert(
         "job_companies", {"company_id_104": "100", "company_name": "A 公司", "region": "台北市", "background": "已知背景"}
     )
-    job_search.save_search_criteria(fake_db, owner_id, "AI 工程師", None, None, None, None)
+    job_search.save_search_criteria(fake_db, owner_id, "AI 工程師", None, None, None)
     client = _FakeJob104Client(
         pages={
             ("AI 工程師", 1): [
@@ -489,7 +531,7 @@ def test_check_and_run_weekly_job_search_no_new_companies_skips_email(fake_db, m
 def test_check_and_run_weekly_job_search_new_companies_sends_email_and_notifies(fake_db, monkeypatch):
     monkeypatch.setattr(job_search, "_polite_delay", lambda *a, **k: None)
     owner_id = _seed_owner(fake_db)
-    job_search.save_search_criteria(fake_db, owner_id, "AI 工程師", None, None, None, None)
+    job_search.save_search_criteria(fake_db, owner_id, "AI 工程師", None, None, None)
     client = _FakeJob104Client(
         pages={
             ("AI 工程師", 1): [

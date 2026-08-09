@@ -1001,6 +1001,7 @@ CREATE INDEX idx_job_search_criteria_user_id ON job_search_criteria (user_id);
 **設計理由**：
 - 不設 `UNIQUE (user_id, keyword)` 之類的唯一約束：ADR-24 決策 3 明確允許同時存多組條件，不比照記帳預算/證照目標「一人一份設定、重新設定即覆蓋」的既有慣例
 - `region`／`salary_min`／`salary_max`／`industry` 皆允許 `NULL`：對話收集時使用者可能表示「不限」，只有 `keyword` 是 104 搜尋 API 的必要參數
+- **`industry` 欄位 2026-08-09 起停用**：Robin 指示移除產業篩選（104 API 該參數名稱不值得繼續猜測），對話流程與 `job_search.save_search_criteria()` 皆已不再收集/寫入這個欄位；欄位本身保留在資料庫（允許 `NULL`），不做 migration 刪除，避免非必要的破壞性操作
 
 ---
 

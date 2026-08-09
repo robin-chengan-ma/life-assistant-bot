@@ -2,8 +2,9 @@
 
 不呼叫真正的 104 AJAX API，一律 mock `requests.get`（比照 `tests/submodules/newsfeed/test_client.py`
 的既有慣例）。回應格式依 Robin 2026-08-09 透過瀏覽器 DevTools 實測驗證過的真實資料整理而來
-（見 `submodules/job104/client.py` 模組 docstring「驗證狀態」段落），地區／產業篩選參數名稱
-仍未驗證，這裡的測試不涵蓋那兩個參數的正確性。
+（見 `submodules/job104/client.py` 模組 docstring）。`search_list()` 不接受 `region`／`industry`
+參數（地區篩選需要 104 自己的數字代碼、沒有可靠對照表；產業篩選依 Robin 指示直接移除），地區
+篩選改由呼叫端 `src/bot/job_search.py` 做子字串比對，見 `tests/bot/test_job_search.py`。
 """
 from unittest.mock import MagicMock
 
@@ -38,7 +39,7 @@ def test_search_list_calls_requests_get_with_expected_params(monkeypatch):
     monkeypatch.setattr(client_module.requests, "get", mock_get)
 
     client = Job104Client()
-    result = client.search_list("AI 工程師", region="台北市", salary_min=50000, salary_max=80000, industry="軟體業", page=2)
+    result = client.search_list("AI 工程師", salary_min=50000, salary_max=80000, page=2)
 
     assert result == []
     call_kwargs = mock_get.call_args.kwargs
@@ -49,8 +50,6 @@ def test_search_list_calls_requests_get_with_expected_params(monkeypatch):
         "mode": "s",
         "jobsource": "joblist_search",
         "searchJobs": 1,
-        "area": "台北市",
-        "indcat": "軟體業",
         "scmin": 50000,
         "scmax": 80000,
         "sctp": "M",

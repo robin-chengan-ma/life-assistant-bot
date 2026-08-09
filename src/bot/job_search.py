@@ -58,12 +58,15 @@ def save_search_criteria(
     region: str | None,
     salary_min: int | None,
     salary_max: int | None,
-    industry: str | None,
 ) -> int:
     """新增一組求職搜尋條件（FR-33），回傳新建列的 id。
 
     ADR-24 決策 3：允許同時存多組條件，不比照記帳預算/證照目標「一人一份、重新設定即覆蓋」的
     既有慣例，這裡固定用 INSERT 新增一筆，不會動到既有的其他組條件。
+
+    2026-08-09 依 Robin 指示移除產業篩選（`industry`）——104 實測驗證後發現這個維度不值得繼續
+    猜測參數名稱。`job_search_criteria.industry` 欄位保留在資料庫（不做 migration 刪除，避免
+    非必要的破壞性操作），只是往後一律不再寫入、也不再從對話流程收集。
     """
     return db.insert(
         "job_search_criteria",
@@ -73,7 +76,6 @@ def save_search_criteria(
             "region": region,
             "salary_min": salary_min,
             "salary_max": salary_max,
-            "industry": industry,
         },
     )
 
@@ -200,6 +202,12 @@ def crawl_and_upsert_jobs(
     列表 API 回傳空清單（含翻到最後一頁之後）視為這組條件已經爬完，換下一組條件；單組條件
     最多翻 `_MAX_PAGES_PER_CRITERIA` 頁（安全防呆，非 spec 硬性規定，見該常數說明）。
 
+    地區篩選（`criteria["region"]`）2026-08-09 起改為**呼叫端自行做子字串比對篩選**，不送給
+    104 API——104 的 `area` 參數要傳它自己的地區數字代碼，不是使用者輸入的地區文字，沒有可靠
+    對照表（見 `submodules/job104/client.py` 模組 docstring）。分頁停止判斷仍然依據**未篩選**
+    的原始清單是否為空（`jobs`），不是篩選後的 `matching_jobs`——避免某一頁剛好篩不到符合地區
+    的職缺，就誤判成「這組條件已經爬完」而提早停止翻頁。
+
     回傳這次爬蟲的統計摘要：`{"new_company_ids": [...], "new_job_count": int,
     "updated_job_count": int}`；`new_company_ids` 供 FR-35a 判斷這批職缺所屬公司是否需要
     走 Email/CSV/Drive 協作流程（見 `build_new_companies_csv()`）。
@@ -212,21 +220,21 @@ def crawl_and_upsert_jobs(
     updated_job_count = 0
 
     for criteria in criteria_list:
+        region_filter = criteria.get("region")
         page = 1
         while page <= _MAX_PAGES_PER_CRITERIA:
             jobs = job104_client.search_list(
                 criteria["keyword"],
-                region=criteria.get("region"),
                 salary_min=criteria.get("salary_min"),
                 salary_max=criteria.get("salary_max"),
-                industry=criteria.get("industry"),
                 page=page,
             )
             _polite_delay(sleep_func, random_func)
             if not jobs:
                 break
 
-            for job in jobs:
+            matching_jobs = [j for j in jobs if not region_filter or region_filter in (j.get("region") or "")]
+            for job in matching_jobs:
                 _, is_new_company = upsert_company(db, job["company_id"], job["company_name"], job["region"])
                 if is_new_company and job["company_id"] not in new_company_ids:
                     new_company_ids.append(job["company_id"])

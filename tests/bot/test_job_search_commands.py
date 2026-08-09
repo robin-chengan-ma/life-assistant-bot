@@ -38,9 +38,7 @@ class _FakeLLMClient:
         return self.response_text
 
 
-_CRITERIA_CLEAR = (
-    "STATUS: CLEAR\nKEYWORD: AI 工程師\nREGION: NONE\nSALARY_MIN: 50000\nSALARY_MAX: NONE\nINDUSTRY: NONE"
-)
+_CRITERIA_CLEAR = "STATUS: CLEAR\nKEYWORD: AI 工程師\nREGION: NONE\nSALARY_MIN: 50000\nSALARY_MAX: NONE"
 
 
 def _seed_owner(fake_db):
@@ -92,7 +90,6 @@ def test_handle_job_search_criteria_step_clear_moves_to_ready_confirm(fake_db):
     assert state["region"] is None
     assert state["salary_min"] == 50000
     assert state["salary_max"] is None
-    assert state["industry"] is None
 
 
 # --- handle_job_search_ready_confirm_step ---
