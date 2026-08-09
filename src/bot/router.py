@@ -3,7 +3,7 @@ import re
 
 from submodules.cloudsql.client import CloudSQLClient
 
-from src.bot import auth, chat, commands, image, templates, toggles, voice
+from src.bot import auth, chat, commands, image, job_search, templates, toggles, voice
 from src.bot.state import ConversationStateStore
 
 _NOT_BOUND_REPLY = "請輸入通關密碼才能開始使用羅賓森喔！"
@@ -93,6 +93,15 @@ _REMOVE_YOUTUBE_TOPIC_TRIGGERS = {"/remove_youtube_topic", "移除YouTube主題"
 # 2026-08-09（Step 4.1，見 robinson SPEC.md FR-33、FR-36、ADR-24 決策 2）：求職模組設定流程，
 # `job_search` 開關同步改為 owner_only=True，觸發詞只放在 is_owner 分支，家人完全看不到這個功能。
 _JOB_SEARCH_SETUP_TRIGGERS = {"/set_job_search", "我要找工作", "我最近想要找工作了"}
+# 2026-08-09（Step 4.3，見 robinson SPEC.md FR-40、ADR-27）：外部管道職缺新增流程與應徵紀錄
+# 查詢指令，觸發詞位置比照求職模組設定流程，只放在 is_owner 分支。
+_ADD_EXTERNAL_JOB_TRIGGERS = {"/add_external_job", "新增外部職缺"}
+_MY_APPLICATIONS_TRIGGERS = {"/my_applications", "我的應徵紀錄"}
+# 2026-08-09（Step 4.3，見 robinson SPEC.md FR-39b、ADR-27）：應徵狀態更新語句，比照
+# `_UPLOADED_FILE_PATTERN` 直接在這裡用 regex 一次解析，不走多輪對話狀態機。
+_APPLICATION_STATUS_PATTERN = re.compile(
+    r"^ID=(?P<job_id>[\w-]+)\s*職缺(?P<status_text>已應徵|已獲得面試|已拿到\s*Offer|已婉拒|未錄取)$"
+)
 # 2026-08-09（見 robinson SPEC.md FR-35e、FR-38e、ADR-24 後果、ADR-26）：帶動態檔名的觸發詞，
 # 設計比照 _CLEAN_TARGET_DIALOG_PATTERN 用 regex 擷取參數；依副檔名/檔名關鍵字分流成兩條各自
 # 獨立的回填流程——公司背景 CSV（檔名以「104職缺公司.csv」結尾）與職缺推薦 Excel（檔名以
@@ -224,6 +233,22 @@ def handle_message(
         if text in _JOB_SEARCH_SETUP_TRIGGERS:
             # 2026-08-09（Step 4.1，FR-33、FR-36）：開始求職模組設定流程，先問搜尋條件。
             return commands.start_job_search_setup(state_store, telegram_user_id, user_id)
+        if text in _ADD_EXTERNAL_JOB_TRIGGERS:
+            # 2026-08-09（Step 4.3，FR-40）：開始記錄 LinkedIn／Cake 等外部管道職缺，先問管道。
+            return commands.start_add_external_job(state_store, telegram_user_id, user_id)
+        if text in _MY_APPLICATIONS_TRIGGERS:
+            # 2026-08-09（Step 4.3，FR-39 追加）：查詢目前各職缺的最新應徵狀態（單次列表）。
+            return commands.handle_my_applications(db)
+        application_status_match = _APPLICATION_STATUS_PATTERN.match(text)
+        if application_status_match:
+            # 2026-08-09（Step 4.3，FR-39b）：應徵狀態更新語句，不走多輪對話，直接解析並寫入。
+            job_id = application_status_match.group("job_id")
+            status_text = application_status_match.group("status_text").replace(" ", "")
+            status = job_search.APPLICATION_STATUS_TEXT_TO_STATUS[status_text]
+            if job_search.record_application_status(db, job_id, status):
+                label = job_search.application_status_label(status)
+                return f"已經幫你把「{job_id}」的應徵狀態更新為「{label}」了！"
+            return f"找不到 ID={job_id} 對應的職缺，麻煩確認一下 ID 有沒有打對！"
         uploaded_match = _UPLOADED_FILE_PATTERN.match(text)
         if uploaded_match:
             filename = uploaded_match.group("filename").strip()
@@ -750,6 +775,25 @@ def _dispatch_active_flow(
         return commands.handle_job_search_salary_min_step(state_store, telegram_user_id, text)
     if flow == "pending_job_search_salary_max":
         return commands.handle_job_search_salary_max_step(db, state_store, telegram_user_id, text)
+    # 2026-08-09（Step 4.3，見 robinson SPEC.md FR-40、ADR-27）：外部管道職缺新增流程，六輪
+    # 依序收集管道／職稱／公司名／連結／內容／公司背景，結構比照求職模組設定流程但不經 LLM
+    # 解析（純自由文字直接記錄），只有內容/背景這兩輪需要 privacy_llm_client 做個資遮蔽。
+    if flow == "pending_external_job_channel":
+        return commands.handle_external_job_channel_step(state_store, telegram_user_id, text)
+    if flow == "pending_external_job_title":
+        return commands.handle_external_job_title_step(state_store, telegram_user_id, text)
+    if flow == "pending_external_job_company":
+        return commands.handle_external_job_company_step(state_store, telegram_user_id, text)
+    if flow == "pending_external_job_url":
+        return commands.handle_external_job_url_step(state_store, telegram_user_id, text)
+    if flow == "pending_external_job_content":
+        return commands.handle_external_job_content_step(
+            state_store, telegram_user_id, text, privacy_llm_client=privacy_llm_client
+        )
+    if flow == "pending_external_job_background":
+        return commands.handle_external_job_background_step(
+            db, state_store, telegram_user_id, text, privacy_llm_client=privacy_llm_client
+        )
     if flow == "pending_complaint_content":
         # 2026-08-02（Step 1.9，見 robinson SPEC.md FR-61、FR-62）：寫入客訴＋Gemini 分析私訊 Robin。
         return commands.handle_complaint_content_step(

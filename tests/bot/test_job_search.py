@@ -782,11 +782,11 @@ def test_build_job_recommendation_excel_has_three_sheets_with_expected_headers()
     all_sheet = workbook["所有職缺推薦"]
     header = [cell.value for cell in next(all_sheet.iter_rows(min_row=1, max_row=1))]
     assert header == [
-        "104公司ID", "公司全名", "地區", "產業類型", "職缺", "評分", "排名", "推薦原因", "連結", "是否喜歡",
+        "104職缺ID", "104公司ID", "公司全名", "地區", "產業類型", "職缺", "評分", "排名", "推薦原因", "連結", "是否喜歡",
     ]
     data_row = [cell.value for cell in next(all_sheet.iter_rows(min_row=2, max_row=2))]
     # openpyxl 讀回空字串儲存格時是 None（不是 ""），"是否喜歡" 欄位留給 Robin 手動標記。
-    assert data_row == ["100", "A 公司", "台北市", "軟體業", "AI 工程師", 90.0, 1, "很符合", "https://www.104.com.tw/job/1", None]
+    assert data_row == ["1", "100", "A 公司", "台北市", "軟體業", "AI 工程師", 90.0, 1, "很符合", "https://www.104.com.tw/job/1", None]
 
     new_sheet = workbook["最新職缺推薦"]
     assert new_sheet.max_row == 1  # 只有表頭，沒有資料列
@@ -843,8 +843,8 @@ def _build_test_recommendation_excel(rows):
 
 def test_parse_recommendation_excel_extracts_liked_flag_by_url():
     rows = [
-        ["100", "A 公司", "台北市", "軟體業", "AI 工程師", 90.0, 1, "很符合", "https://www.104.com.tw/job/1", "1"],
-        ["200", "B 公司", "新竹市", "硬體業", "後端工程師", 80.0, 2, "還不錯", "https://www.104.com.tw/job/2", ""],
+        ["1", "100", "A 公司", "台北市", "軟體業", "AI 工程師", 90.0, 1, "很符合", "https://www.104.com.tw/job/1", "1"],
+        ["2", "200", "B 公司", "新竹市", "硬體業", "後端工程師", 80.0, 2, "還不錯", "https://www.104.com.tw/job/2", ""],
     ]
     xlsx_bytes = _build_test_recommendation_excel(rows)
 
@@ -936,3 +936,142 @@ def test_check_and_run_weekly_job_search_no_scorable_jobs_skips_recommendation_e
 
     llm_client.generate_text.assert_not_called()
     email_client.send_text_with_attachment.assert_not_called()
+
+
+# --- add_external_job（FR-40a，Step 4.3，ADR-27）---
+
+
+def test_add_external_job_creates_company_and_job_with_source_and_synthetic_id(fake_db):
+    now = datetime(2026, 8, 10, 8, 0, tzinfo=_TAIWAN_TZ)
+
+    job_id_104 = job_search.add_external_job(
+        fake_db, "linkedin", "後端工程師", "某新創公司", "https://linkedin.com/jobs/1",
+        "職缺內容...", "公司背景...", now=now,
+    )
+
+    assert job_id_104.startswith("EXT-")
+    job = fake_db.select("job_postings", where="job_id_104 = %s", params=(job_id_104,), fetch_one=True)
+    assert job["title"] == "後端工程師"
+    assert job["content"] == "職缺內容..."
+    assert job["source"] == "linkedin"
+    assert job["is_closed"] is False
+    assert job["first_seen_at"] == now
+
+    company = fake_db.select("job_companies", where="company_id_104 = %s", params=(job["company_id_104"],), fetch_one=True)
+    assert company["company_name"] == "某新創公司"
+    assert company["background"] == "公司背景..."
+    assert company["source"] == "linkedin"
+    assert company["company_id_104"].startswith("EXT-")
+
+
+def test_add_external_job_ids_are_unique_across_multiple_jobs(fake_db):
+    id1 = job_search.add_external_job(fake_db, "cake", "職缺 A", "公司 A", "https://cake.me/jobs/1", "內容 A", "背景 A")
+    id2 = job_search.add_external_job(fake_db, "cake", "職缺 B", "公司 B", "https://cake.me/jobs/2", "內容 B", "背景 B")
+
+    assert id1 != id2
+    jobs = fake_db.select("job_postings")
+    assert len(jobs) == 2
+
+
+def test_add_external_job_is_scorable_and_rankable_like_104_jobs(fake_db):
+    """FR-40b：統一表設計下，外部職缺只要 background／content 已填，天然符合既有 FR-37
+    list_scorable_jobs() 的資料形狀，不需要另外開發一套獨立評分流程。"""
+    job_id_104 = job_search.add_external_job(
+        fake_db, "linkedin", "後端工程師", "某新創公司", "https://linkedin.com/jobs/1", "職缺內容", "公司背景",
+    )
+
+    scorable = job_search.list_scorable_jobs(fake_db)
+
+    assert [j["job_id_104"] for j in scorable] == [job_id_104]
+
+
+# --- record_application_status（FR-39b／FR-39c，Step 4.3，ADR-27）---
+
+
+def test_record_application_status_inserts_history_row(fake_db):
+    job_id_104 = job_search.add_external_job(
+        fake_db, "linkedin", "後端工程師", "某新創公司", "https://linkedin.com/jobs/1", "內容", "背景",
+    )
+    now = datetime(2026, 8, 10, 9, 0, tzinfo=_TAIWAN_TZ)
+
+    result = job_search.record_application_status(fake_db, job_id_104, "applied", now=now)
+
+    assert result is True
+    rows = fake_db.select("job_applications", where=None)
+    assert len(rows) == 1
+    assert rows[0]["job_id_104"] == job_id_104
+    assert rows[0]["status"] == "applied"
+    assert rows[0]["created_at"] == now
+
+
+def test_record_application_status_appends_multiple_history_rows_without_overwriting(fake_db):
+    job_id_104 = job_search.add_external_job(
+        fake_db, "linkedin", "後端工程師", "某新創公司", "https://linkedin.com/jobs/1", "內容", "背景",
+    )
+
+    job_search.record_application_status(fake_db, job_id_104, "applied")
+    job_search.record_application_status(fake_db, job_id_104, "interview")
+
+    rows = fake_db.select("job_applications", where=None)
+    assert len(rows) == 2
+    assert [r["status"] for r in rows] == ["applied", "interview"]
+
+
+def test_record_application_status_returns_false_when_job_not_found(fake_db):
+    result = job_search.record_application_status(fake_db, "not-exist", "applied")
+
+    assert result is False
+    assert fake_db.select("job_applications", where=None) == []
+
+
+# --- list_latest_application_statuses／format_application_statuses（FR-39 查詢指令）---
+
+
+def test_list_latest_application_statuses_returns_most_recent_status_per_job(fake_db):
+    job_id = job_search.add_external_job(
+        fake_db, "linkedin", "後端工程師", "某新創公司", "https://linkedin.com/jobs/1", "內容", "背景",
+    )
+    job_search.record_application_status(
+        fake_db, job_id, "applied", now=datetime(2026, 8, 1, 8, 0, tzinfo=_TAIWAN_TZ)
+    )
+    job_search.record_application_status(
+        fake_db, job_id, "interview", now=datetime(2026, 8, 5, 8, 0, tzinfo=_TAIWAN_TZ)
+    )
+
+    statuses = job_search.list_latest_application_statuses(fake_db)
+
+    assert len(statuses) == 1
+    assert statuses[0]["job_id_104"] == job_id
+    assert statuses[0]["status"] == "interview"
+    assert statuses[0]["title"] == "後端工程師"
+
+
+def test_list_latest_application_statuses_sorted_by_most_recently_updated_first(fake_db):
+    job1 = job_search.add_external_job(
+        fake_db, "linkedin", "職缺 A", "公司 A", "https://linkedin.com/jobs/1", "內容", "背景",
+    )
+    job2 = job_search.add_external_job(
+        fake_db, "cake", "職缺 B", "公司 B", "https://cake.me/jobs/2", "內容", "背景",
+    )
+    job_search.record_application_status(fake_db, job1, "applied", now=datetime(2026, 8, 1, 8, 0, tzinfo=_TAIWAN_TZ))
+    job_search.record_application_status(fake_db, job2, "applied", now=datetime(2026, 8, 5, 8, 0, tzinfo=_TAIWAN_TZ))
+
+    statuses = job_search.list_latest_application_statuses(fake_db)
+
+    assert [s["job_id_104"] for s in statuses] == [job2, job1]
+
+
+def test_format_application_statuses_empty():
+    assert "還沒有任何應徵紀錄" in job_search.format_application_statuses([])
+
+
+def test_format_application_statuses_formats_each_entry_with_chinese_label():
+    statuses = [
+        {"job_id_104": "EXT-1", "title": "後端工程師", "status": "interview", "updated_at": None},
+    ]
+
+    text = job_search.format_application_statuses(statuses)
+
+    assert "後端工程師" in text
+    assert "EXT-1" in text
+    assert "已獲得面試" in text

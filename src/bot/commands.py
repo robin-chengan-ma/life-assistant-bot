@@ -4072,3 +4072,103 @@ def handle_job_recommendation_excel_uploaded(db: CloudSQLClient, gdrive_client, 
         urls_text = "、".join(result["not_found_urls"])
         reply += f"\n找不到對應職缺的連結：{urls_text}，麻煩人工確認一下！"
     return reply
+
+
+# --- FR-40：外部管道職缺新增（Step 4.3，見 ADR-27）---
+
+_EXTERNAL_JOB_CHANNEL_PROMPT = "好的，這個職缺是從哪個管道找到的呢？（例如：LinkedIn、Cake）"
+_EXTERNAL_JOB_TITLE_PROMPT = "職缺名稱是？"
+_EXTERNAL_JOB_COMPANY_PROMPT = "公司名稱是？"
+_EXTERNAL_JOB_URL_PROMPT = "職缺連結是？"
+_EXTERNAL_JOB_CONTENT_PROMPT = "職缺內容是？（把完整說明貼給我，3500 字以內，供之後契合度評分使用）"
+_EXTERNAL_JOB_BACKGROUND_PROMPT = "這家公司的背景資料呢？（用你知道的資訊描述，3500 字以內，供之後契合度評分使用）"
+
+
+def start_add_external_job(state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
+    """「新增外部職缺」／`/add_external_job`：開始記錄 LinkedIn／Cake 等非 104 來源職缺的流程
+    （FR-40），先問管道。"""
+    state_store.set(telegram_user_id, {"flow": "pending_external_job_channel", "target_user_id": user_id})
+    return _EXTERNAL_JOB_CHANNEL_PROMPT
+
+
+def handle_external_job_channel_step(state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
+    """處理 `pending_external_job_channel` 狀態下使用者提供的管道名稱（自由文字，不限固定清單）。"""
+    state = state_store.get(telegram_user_id)
+    state_store.set(telegram_user_id, {**state, "flow": "pending_external_job_title", "channel": text.strip()})
+    return _EXTERNAL_JOB_TITLE_PROMPT
+
+
+def handle_external_job_title_step(state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
+    """處理 `pending_external_job_title` 狀態下使用者提供的職缺名稱。"""
+    state = state_store.get(telegram_user_id)
+    state_store.set(telegram_user_id, {**state, "flow": "pending_external_job_company", "title": text.strip()})
+    return _EXTERNAL_JOB_COMPANY_PROMPT
+
+
+def handle_external_job_company_step(state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
+    """處理 `pending_external_job_company` 狀態下使用者提供的公司名稱。"""
+    state = state_store.get(telegram_user_id)
+    state_store.set(telegram_user_id, {**state, "flow": "pending_external_job_url", "company_name": text.strip()})
+    return _EXTERNAL_JOB_URL_PROMPT
+
+
+def handle_external_job_url_step(state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
+    """處理 `pending_external_job_url` 狀態下使用者提供的職缺連結。"""
+    state = state_store.get(telegram_user_id)
+    state_store.set(telegram_user_id, {**state, "flow": "pending_external_job_content", "url": text.strip()})
+    return _EXTERNAL_JOB_CONTENT_PROMPT
+
+
+def handle_external_job_content_step(
+    state_store: ConversationStateStore, telegram_user_id: int, text: str, privacy_llm_client=None
+) -> str:
+    """處理 `pending_external_job_content` 狀態下使用者提供的職缺內容（FR-40a），套用既有 3500
+    字上限（比照 FR-36）＋ FR-13 個資遮蔽（貼上的職缺說明可能不小心含聯絡窗口等個資）。"""
+    if not job_search.is_text_length_valid(text):
+        return "不好意思，職缺內容超過 3500 字了，麻煩精簡一下再重新提供喔！"
+
+    state = state_store.get(telegram_user_id)
+    masked_content, pii_detected = privacy.mask_text(text, privacy_llm_client)
+    state_store.set(telegram_user_id, {**state, "flow": "pending_external_job_background", "content": masked_content})
+    reply = _EXTERNAL_JOB_BACKGROUND_PROMPT
+    if pii_detected:
+        reply += _PII_DETECTED_REMINDER
+    return reply
+
+
+def handle_external_job_background_step(
+    db: CloudSQLClient,
+    state_store: ConversationStateStore,
+    telegram_user_id: int,
+    text: str,
+    privacy_llm_client=None,
+) -> str:
+    """處理 `pending_external_job_background` 狀態下使用者提供的公司背景，收齊六個欄位後一次寫入
+    資料庫（`job_search.add_external_job()`），回覆分配到的職缺 ID 供之後查詢／更新應徵狀態
+    （FR-39）使用。"""
+    if not job_search.is_text_length_valid(text):
+        return "不好意思，公司背景超過 3500 字了，麻煩精簡一下再重新提供喔！"
+
+    state = state_store.get(telegram_user_id)
+    masked_background, pii_detected = privacy.mask_text(text, privacy_llm_client)
+    state_store.clear(telegram_user_id)
+
+    job_id_104 = job_search.add_external_job(
+        db, state["channel"], state["title"], state["company_name"], state["url"], state["content"], masked_background,
+    )
+    reply = (
+        f"已經幫你記錄好這筆職缺囉！職缺 ID 是 {job_id_104}，之後要更新應徵狀態可以打「ID={job_id_104} "
+        f"職缺已應徵」這類語句，下週排程也會自動幫你評分～"
+    )
+    if pii_detected:
+        reply += _PII_DETECTED_REMINDER
+    return reply
+
+
+# --- FR-39（追加）：我的應徵紀錄查詢指令 ---
+
+
+def handle_my_applications(db: CloudSQLClient) -> str:
+    """「我的應徵紀錄」／`/my_applications`：列出各職缺目前最新的應徵狀態（依最新更新時間排序）。"""
+    statuses = job_search.list_latest_application_statuses(db)
+    return job_search.format_application_statuses(statuses)

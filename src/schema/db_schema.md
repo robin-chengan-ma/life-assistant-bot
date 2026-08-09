@@ -1008,8 +1008,8 @@ CREATE INDEX idx_job_search_criteria_user_id ON job_search_criteria (user_id);
 ### job_companies
 
 **建立日期**：2026-08-09
-**用途**：Step 4.1 104 公司背景資料，對應 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) FR-35、ADR-24 決策 1。
-**Migration 檔案**：`src/migrations/0055_create_job_companies_table.sql`
+**用途**：Step 4.1 104 公司背景資料，對應 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) FR-35、ADR-24 決策 1；Step 4.3 外部管道公司資料共用見下方。
+**Migration 檔案**：`src/migrations/0055_create_job_companies_table.sql`、`0059_add_source_to_job_postings_and_companies.sql`
 
 ```sql
 CREATE TABLE job_companies (
@@ -1019,21 +1019,23 @@ CREATE TABLE job_companies (
     region TEXT,
     industry TEXT,
     background TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    source TEXT NOT NULL DEFAULT '104'  -- 0059 追加
 );
 ```
 
 **設計理由**：
 - `company_id_104 UNIQUE`：FR-35a 用「這批職缺所屬公司是否已存在」判斷是否為新公司，也作為 `job_postings` 的外鍵
 - `background` 允許 `NULL`：代表尚待 Robin 人工查詢回填（FR-35b～FR-35e Email/CSV/Drive 協作流程），`NULL` 與「已查過但沒查到」刻意不區分，Robin 若查無資料可自行填入「查無公開資訊」等文字，不強制系統分辨兩者
+- **`source`（2026-08-09 追加，migration `0059`，Step 4.3）**：FR-40a 外部管道（LinkedIn／Cake 等）公司與 104 公司共用同一張表，用這欄區分來源，預設 `'104'`；外部來源的 `company_id_104` 由系統配發合成 ID（格式 `EXT-<內部序號>`），不是 104 官方 ID，見 ADR-27 決策 5
 
 ---
 
 ### job_postings
 
 **建立日期**：2026-08-09
-**用途**：Step 4.1 104 職缺資料，對應 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) FR-34、ADR-24 決策 4；Step 4.2 評分欄位見下方。
-**Migration 檔案**：`src/migrations/0056_create_job_postings_table.sql`、`0057_add_is_closed_to_job_postings.sql`、`0058_add_scoring_fields_to_job_postings.sql`
+**用途**：Step 4.1 104 職缺資料，對應 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) FR-34、ADR-24 決策 4；Step 4.2 評分欄位、Step 4.3 外部管道職缺共用見下方。
+**Migration 檔案**：`src/migrations/0056_create_job_postings_table.sql`、`0057_add_is_closed_to_job_postings.sql`、`0058_add_scoring_fields_to_job_postings.sql`、`0059_add_source_to_job_postings_and_companies.sql`
 
 ```sql
 CREATE TABLE job_postings (
@@ -1055,7 +1057,8 @@ CREATE TABLE job_postings (
     score NUMERIC(5,2),  -- 0058 追加
     recommend_reason TEXT,  -- 0058 追加
     skill_gap_note TEXT,  -- 0058 追加
-    is_unliked BOOLEAN NOT NULL DEFAULT FALSE  -- 0058 追加
+    is_unliked BOOLEAN NOT NULL DEFAULT FALSE,  -- 0058 追加
+    source TEXT NOT NULL DEFAULT '104'  -- 0059 追加
 );
 
 CREATE INDEX idx_job_postings_company_id_104 ON job_postings (company_id_104);
@@ -1068,3 +1071,28 @@ CREATE INDEX idx_job_postings_company_id_104 ON job_postings (company_id_104);
 - **`score`／`recommend_reason`／`skill_gap_note`／`is_unliked`（2026-08-09 追加，migration `0058`，Step 4.2）**：`score`／`recommend_reason`／`skill_gap_note` 三欄由 FR-37 每週批次 Gemini 評分時一起寫入，允許 `NULL`（尚未評分，例如所屬公司背景還沒回填）；`is_unliked` 由 Robin 於 FR-38d 推薦 Excel 人工標記回填，預設 `FALSE`
 - **刻意不建立 `rank` 欄位**：FR-38a 要求「全庫排名」與「本週新職缺排名」兩種排名並存，同一職缺在兩種排名裡名次不同，存成單一欄位語意衝突；排名改在 FR-38b 產生 Excel 的當下依 `score` 動態計算（`job_search.build_ranked_jobs()`），不持久化存進資料庫（Robin 於 2026-08-09 確認此設計）
 - `first_seen_at` 供 FR-38a「本週新職缺排名」判斷依據；`last_crawled_at` 每次週排程重新爬到既有職缺時更新，供未來除錯/資料新鮮度判斷用
+- **`source`（2026-08-09 追加，migration `0059`，Step 4.3）**：FR-40a 外部管道職缺與 104 職缺共用同一張表，用這欄區分來源，預設 `'104'`；取代原提案的獨立表設計（Robin 指出應以擴充性為優先，見 ADR-27 決策 5）。統一表之後外部職缺天然沿用既有 FR-37／FR-38a 評分與排名邏輯，`crawl_and_upsert_jobs()`／`upsert_company()` 的比對鍵值直接取自 104 API 真實回應，不會誤動到 `source != '104'` 的列，不需要額外過濾條件。外部來源的 `job_id_104` 由系統配發合成 ID（格式 `EXT-<內部序號>`）
+
+---
+
+### job_applications
+
+**建立日期**：2026-08-09
+**用途**：Step 4.3 應徵狀態歷程記錄，對應 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) FR-39c、ADR-27。
+**Migration 檔案**：`src/migrations/0060_create_job_applications_table.sql`
+
+```sql
+CREATE TABLE job_applications (
+    id BIGSERIAL PRIMARY KEY,
+    job_id_104 TEXT NOT NULL REFERENCES job_postings (job_id_104),
+    status TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_job_applications_job_id_104 ON job_applications (job_id_104);
+```
+
+**設計理由**：
+- **append-only 設計**：每次應徵狀態變更（FR-39b：已應徵／已獲得面試／已拿到 Offer／未錄取或已婉拒，任意狀態可直接設定不強制順序）都 `INSERT` 新的一筆，不 `UPDATE` 既有紀錄，保留完整時間軸；同一 `job_id_104` 的「目前狀態」＝依 `created_at` 排序後最新一筆，查詢時在應用層取最新，不在資料庫層另外維護一個「目前狀態」欄位（避免兩份資料互相不同步）
+- `status` 用 `TEXT` 不加 `CHECK` 約束：比照專案既有慣例（`todos.status`、`mood_journals.mood_category` 等皆為應用層驗證，不靠 DB 約束限制列舉值）
+- `job_id_104` 不分 104 職缺或外部管道職缺，統一指向 `job_postings.job_id_104`（見上方 `job_postings.source` 設計理由），不需要為兩種來源分開建立關聯欄位

@@ -11,6 +11,7 @@ import logging
 import random
 import re
 import time
+import uuid
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
@@ -589,8 +590,10 @@ def build_ranked_jobs(
 # --- FR-38b：職缺推薦 Excel（三張工作表）---
 
 _RECOMMENDATION_EXCEL_FILENAME_SUFFIX = "-104職缺推薦.xlsx"
+# FR-39a（2026-08-09 追加，Step 4.3，見 ADR-27）：新增「104職缺ID」欄位，Robin 打「ID=XXX 職缺
+# 已應徵」這類語句時直接從這裡抄，不用另外跳去「技能缺口」工作表查。
 _RECOMMENDATION_SHEET_HEADER = [
-    "104公司ID", "公司全名", "地區", "產業類型", "職缺", "評分", "排名", "推薦原因", "連結", "是否喜歡",
+    "104職缺ID", "104公司ID", "公司全名", "地區", "產業類型", "職缺", "評分", "排名", "推薦原因", "連結", "是否喜歡",
 ]
 _SKILL_GAP_SHEET_HEADER = ["104職缺ID", "說明"]
 
@@ -605,7 +608,7 @@ def _write_recommendation_rows(sheet, ranked_jobs: list[dict]) -> None:
     for job in ranked_jobs:
         sheet.append(
             [
-                job["company_id_104"], job["company_name"], job["region"], job["industry"],
+                job["job_id_104"], job["company_id_104"], job["company_name"], job["region"], job["industry"],
                 job["title"], float(job["score"]), job["rank"], job["recommend_reason"], job["url"], "",
             ]
         )
@@ -806,3 +809,164 @@ def check_and_run_weekly_job_search(
         _run_weekly_scoring_and_recommendation(db, llm_client, email_client, gmail_user, telegram_client, owner, today)
 
     db.update("users", {"job_search_last_run_on": today}, where="id = %s", params=(owner["id"],))
+
+
+# --- FR-40：外部管道職缺（LinkedIn／Cake 等，見 ADR-27）---
+
+# FR-40a：外部職缺沒有 104 官方 ID，系統配發合成識別碼，格式 EXT-<內部序號>。
+_EXTERNAL_ID_PREFIX = "EXT"
+
+
+def _generate_external_id(internal_id: int) -> str:
+    return f"{_EXTERNAL_ID_PREFIX}-{internal_id}"
+
+
+def add_external_job(
+    db: CloudSQLClient,
+    source: str,
+    title: str,
+    company_name: str,
+    url: str,
+    content: str,
+    company_background: str,
+    now: datetime | None = None,
+) -> str:
+    """FR-40a：新增一筆非 104 來源（LinkedIn／Cake 等）的職缺，與 104 職缺共用
+    `job_postings`／`job_companies`，用 `source` 欄位區分來源，取代原提案的獨立表設計（見
+    ADR-27 決策 5）。統一表之後，這筆資料自動符合 FR-37／FR-38a 既有評分/排名邏輯的資料形狀
+    （只要 `content`／`background` 已填），下週排程會自然把它納入評分與推薦 Excel，不需要另外
+    開發一套獨立批次流程。
+
+    沒有 104 官方 ID，合成識別碼（`EXT-<內部序號>`）的值需要 `INSERT` 後才知道的內部序號，
+    採「先用暫時的唯一佔位值寫入 → 用回傳的序號組出真正的 ID → `UPDATE` 回填」兩步驟做法；
+    公司與職缺的合成 ID 各自獨立配發（序號來源不同），不會互相衝突。回傳分配到的
+    `job_id_104`，供 Robin 之後查詢／更新應徵狀態（FR-39）使用。
+    """
+    now = now or _now()
+
+    placeholder_company_id = f"_pending_company_{uuid.uuid4().hex}"
+    company_internal_id = db.insert(
+        "job_companies",
+        {
+            "company_id_104": placeholder_company_id,
+            "company_name": company_name,
+            "region": None,
+            "industry": None,
+            "background": company_background,
+            "source": source,
+        },
+    )
+    company_id_104 = _generate_external_id(company_internal_id)
+    db.update("job_companies", {"company_id_104": company_id_104}, where="id = %s", params=(company_internal_id,))
+
+    placeholder_job_id = f"_pending_job_{uuid.uuid4().hex}"
+    job_internal_id = db.insert(
+        "job_postings",
+        {
+            "job_id_104": placeholder_job_id,
+            "company_id_104": company_id_104,
+            "title": title,
+            "region": None,
+            "url": url,
+            "content": content,
+            "required_years_experience": None,
+            "applicant_count": None,
+            "source_updated_at": None,
+            "first_seen_at": now,
+            "last_crawled_at": now,
+            "is_closed": False,
+            "source": source,
+        },
+    )
+    job_id_104 = _generate_external_id(job_internal_id)
+    db.update("job_postings", {"job_id_104": job_id_104}, where="id = %s", params=(job_internal_id,))
+    return job_id_104
+
+
+# --- FR-39：應徵成效追蹤（見 ADR-27）---
+
+_APPLICATION_STATUS_APPLIED = "applied"
+_APPLICATION_STATUS_INTERVIEW = "interview"
+_APPLICATION_STATUS_OFFER = "offer"
+_APPLICATION_STATUS_REJECTED = "rejected"
+
+# FR-39b：任意狀態可直接設定，不強制順序；顯示用中文標籤。
+_APPLICATION_STATUS_LABELS = {
+    _APPLICATION_STATUS_APPLIED: "已應徵",
+    _APPLICATION_STATUS_INTERVIEW: "已獲得面試",
+    _APPLICATION_STATUS_OFFER: "已拿到 Offer",
+    _APPLICATION_STATUS_REJECTED: "未錄取／已婉拒",
+}
+
+# FR-39b：Robin 在 Telegram 打的中文語句關鍵字（已去除空白）→ 內部狀態值對照表；「未錄取」
+# 「已婉拒」語意相近，同時收兩種講法降低使用摩擦，不強迫 Robin 只能用固定字眼。呼叫端（見
+# router.py `_APPLICATION_STATUS_PATTERN`）比對前需先把擷取到的文字空白去除再查表（「已拿到
+# Offer」中間可能有 0～多個空白）。
+APPLICATION_STATUS_TEXT_TO_STATUS = {
+    "已應徵": _APPLICATION_STATUS_APPLIED,
+    "已獲得面試": _APPLICATION_STATUS_INTERVIEW,
+    "已拿到Offer": _APPLICATION_STATUS_OFFER,
+    "已婉拒": _APPLICATION_STATUS_REJECTED,
+    "未錄取": _APPLICATION_STATUS_REJECTED,
+}
+
+
+def application_status_label(status: str) -> str:
+    """把內部狀態值轉成中文標籤，供 `router.py` 組成功回覆訊息使用（不直接存取模組私有的
+    `_APPLICATION_STATUS_LABELS`）。"""
+    return _APPLICATION_STATUS_LABELS.get(status, status)
+
+
+def record_application_status(
+    db: CloudSQLClient, job_id_104: str, status: str, now: datetime | None = None
+) -> bool:
+    """FR-39b／FR-39c：把應徵狀態變化寫入 `job_applications` 歷程表（append-only，不覆蓋既有
+    紀錄，每次變更各自一筆＋時間戳）。寫入前先確認 `job_id_104` 存在於 `job_postings`——ID
+    打錯字不會憑空建立孤兒紀錄，回傳 `False` 讓呼叫端可以告知 Robin「找不到這個職缺 ID」。
+    """
+    job = db.select("job_postings", where="job_id_104 = %s", params=(job_id_104,), fetch_one=True)
+    if job is None:
+        return False
+    db.insert("job_applications", {"job_id_104": job_id_104, "status": status, "created_at": now or _now()})
+    return True
+
+
+def list_latest_application_statuses(db: CloudSQLClient) -> list[dict]:
+    """FR-39（追加，供「我的應徵紀錄」查詢指令使用）：撈出每個職缺目前最新的應徵狀態，依最新
+    更新時間由新到舊排序。`job_applications` 為 append-only 歷程表，同一 `job_id_104` 可能有
+    多筆歷史紀錄，這裡只取 `created_at` 最新的一筆視為「目前狀態」。
+    """
+    all_records = db.select("job_applications")
+    latest_by_job: dict[str, dict] = {}
+    for record in all_records:
+        job_id = record["job_id_104"]
+        if job_id not in latest_by_job or record["created_at"] > latest_by_job[job_id]["created_at"]:
+            latest_by_job[job_id] = record
+
+    jobs_by_id = {j["job_id_104"]: j for j in db.select("job_postings")}
+    results = []
+    for job_id, record in latest_by_job.items():
+        job = jobs_by_id.get(job_id, {})
+        results.append(
+            {
+                "job_id_104": job_id,
+                "title": job.get("title", "（職缺資料不存在）"),
+                "status": record["status"],
+                "updated_at": record["created_at"],
+            }
+        )
+    results.sort(key=lambda r: r["updated_at"], reverse=True)
+    return results
+
+
+def format_application_statuses(statuses: list[dict]) -> str:
+    """把 `list_latest_application_statuses()` 的結果組成文字清單，供「我的應徵紀錄」查詢指令
+    使用。"""
+    if not statuses:
+        return "目前還沒有任何應徵紀錄喔！用「ID=XXX 職缺已應徵」這類語句就可以開始記錄了。"
+
+    lines = ["📋 目前的應徵紀錄："]
+    for item in statuses:
+        label = _APPLICATION_STATUS_LABELS.get(item["status"], item["status"])
+        lines.append(f"・{item['title']}（ID={item['job_id_104']}）：{label}")
+    return "\n".join(lines)

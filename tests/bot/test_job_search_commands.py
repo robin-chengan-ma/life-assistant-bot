@@ -486,3 +486,104 @@ def test_handle_job_recommendation_excel_uploaded_reports_not_found_urls(fake_db
     assert "0 筆職缺" in reply
     assert "https://www.104.com.tw/job/999" in reply
     assert "人工確認" in reply
+
+
+# --- 外部管道職缺新增流程（Step 4.3，FR-40）---
+
+
+def test_start_add_external_job_asks_channel():
+    store = ConversationStateStore()
+
+    reply = commands.start_add_external_job(store, 1, 1)
+
+    assert "管道" in reply
+    assert store.get(1)["flow"] == "pending_external_job_channel"
+
+
+def test_external_job_full_flow_writes_record_and_replies_with_id(fake_db):
+    store = ConversationStateStore()
+    commands.start_add_external_job(store, 1, 1)
+
+    reply = commands.handle_external_job_channel_step(store, 1, "LinkedIn")
+    assert store.get(1)["flow"] == "pending_external_job_title"
+    assert "職缺名稱" in reply
+
+    reply = commands.handle_external_job_title_step(store, 1, "後端工程師")
+    assert store.get(1)["flow"] == "pending_external_job_company"
+    assert "公司名稱" in reply
+
+    reply = commands.handle_external_job_company_step(store, 1, "某新創公司")
+    assert store.get(1)["flow"] == "pending_external_job_url"
+    assert "連結" in reply
+
+    reply = commands.handle_external_job_url_step(store, 1, "https://linkedin.com/jobs/1")
+    assert store.get(1)["flow"] == "pending_external_job_content"
+    assert "職缺內容" in reply
+
+    reply = commands.handle_external_job_content_step(store, 1, "負責後端 API 開發")
+    assert store.get(1)["flow"] == "pending_external_job_background"
+    assert "背景資料" in reply
+
+    reply = commands.handle_external_job_background_step(fake_db, store, 1, "小型新創，做電商平台")
+
+    assert store.get(1) is None  # flow 結束，狀態已清除
+    assert "已經幫你記錄好這筆職缺" in reply
+    assert "EXT-" in reply
+
+    jobs = fake_db.select("job_postings")
+    assert len(jobs) == 1
+    assert jobs[0]["title"] == "後端工程師"
+    assert jobs[0]["source"] == "LinkedIn"
+    assert jobs[0]["content"] == "負責後端 API 開發"
+
+
+def test_handle_external_job_content_step_rejects_over_length_text(fake_db):
+    store = ConversationStateStore()
+    commands.start_add_external_job(store, 1, 1)
+    commands.handle_external_job_channel_step(store, 1, "LinkedIn")
+    commands.handle_external_job_title_step(store, 1, "後端工程師")
+    commands.handle_external_job_company_step(store, 1, "某新創公司")
+    commands.handle_external_job_url_step(store, 1, "https://linkedin.com/jobs/1")
+
+    reply = commands.handle_external_job_content_step(store, 1, "A" * 3501)
+
+    assert "超過 3500 字" in reply
+    assert store.get(1)["flow"] == "pending_external_job_content"  # 沒有前進
+
+
+def test_handle_external_job_background_step_rejects_over_length_text(fake_db):
+    store = ConversationStateStore()
+    commands.start_add_external_job(store, 1, 1)
+    commands.handle_external_job_channel_step(store, 1, "LinkedIn")
+    commands.handle_external_job_title_step(store, 1, "後端工程師")
+    commands.handle_external_job_company_step(store, 1, "某新創公司")
+    commands.handle_external_job_url_step(store, 1, "https://linkedin.com/jobs/1")
+    commands.handle_external_job_content_step(store, 1, "負責後端 API 開發")
+
+    reply = commands.handle_external_job_background_step(fake_db, store, 1, "A" * 3501)
+
+    assert "超過 3500 字" in reply
+    assert fake_db.select("job_postings") == []
+
+
+# --- 我的應徵紀錄查詢指令（Step 4.3，FR-39 追加）---
+
+
+def test_handle_my_applications_empty(fake_db):
+    reply = commands.handle_my_applications(fake_db)
+
+    assert "還沒有任何應徵紀錄" in reply
+
+
+def test_handle_my_applications_lists_latest_status(fake_db):
+    from src.bot import job_search
+
+    job_id = job_search.add_external_job(
+        fake_db, "linkedin", "後端工程師", "某新創公司", "https://linkedin.com/jobs/1", "內容", "背景",
+    )
+    job_search.record_application_status(fake_db, job_id, "applied")
+
+    reply = commands.handle_my_applications(fake_db)
+
+    assert "後端工程師" in reply
+    assert "已應徵" in reply

@@ -1971,4 +1971,73 @@ def test_job_search_setup_trigger_falls_through_to_chat_for_family_member(fake_d
     reply = router.handle_message(fake_db, store, FAMILY_ID, "我最近想要找工作了", llm_client=llm_client)
 
     assert reply == "我不太懂這個指令耶！"
+
+
+# --- 外部管道職缺與應徵成效追蹤（Step 4.3，見 robinson SPEC.md FR-39、FR-40、ADR-27） ---
+
+
+def test_add_external_job_trigger_dispatches_through_router_for_owner(fake_db, monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
+    fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
+    store = ConversationStateStore()
+
+    reply = router.handle_message(fake_db, store, ROBIN_ID, "新增外部職缺")
+
+    assert "管道" in reply
+    assert store.get(ROBIN_ID)["flow"] == "pending_external_job_channel"
+
+
+def test_my_applications_trigger_dispatches_for_owner(fake_db, monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
+    fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
+    store = ConversationStateStore()
+
+    reply = router.handle_message(fake_db, store, ROBIN_ID, "我的應徵紀錄")
+
+    assert "還沒有任何應徵紀錄" in reply
+
+
+def test_application_status_trigger_updates_status_and_replies(fake_db, monkeypatch):
+    from src.bot import job_search
+
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
+    fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
+    job_id = job_search.add_external_job(
+        fake_db, "linkedin", "後端工程師", "某新創公司", "https://linkedin.com/jobs/1", "內容", "背景",
+    )
+    store = ConversationStateStore()
+
+    reply = router.handle_message(fake_db, store, ROBIN_ID, f"ID={job_id} 職缺已應徵")
+
+    assert "已應徵" in reply
+    rows = fake_db.select("job_applications", where=None)
+    assert len(rows) == 1
+    assert rows[0]["status"] == "applied"
+
+
+def test_application_status_trigger_accepts_offer_with_space(fake_db, monkeypatch):
+    from src.bot import job_search
+
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
+    fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
+    job_id = job_search.add_external_job(
+        fake_db, "linkedin", "後端工程師", "某新創公司", "https://linkedin.com/jobs/1", "內容", "背景",
+    )
+    store = ConversationStateStore()
+
+    reply = router.handle_message(fake_db, store, ROBIN_ID, f"ID={job_id} 職缺已拿到 Offer")
+
+    assert "已拿到 Offer" in reply
+    rows = fake_db.select("job_applications", where=None)
+    assert rows[0]["status"] == "offer"
+
+
+def test_application_status_trigger_reports_not_found(fake_db, monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
+    fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
+    store = ConversationStateStore()
+
+    reply = router.handle_message(fake_db, store, ROBIN_ID, "ID=not-exist 職缺已應徵")
+
+    assert "找不到" in reply
     assert store.get(FAMILY_ID) is None
