@@ -169,6 +169,8 @@ updated: 2026-08-09
 
 | 2026-08-09 | **Step 4.3（應徵成效追蹤）開工前規格定案，新增 SPEC.md ADR-27，純規格文件更新、尚未動工**。Robin 詢問「4.3 有需要確認的部分嗎」，Claude 盤點 FR-39／FR-40 發現只有 Robin 預告的三種狀態語句、細部設計完全空白，經 AskUserQuestion 兩輪確認（第一輪：ID 來源／狀態機是否嚴格順序／外部管道職缺是否要評分／應徵狀態資料結構，共 4 題；第二輪針對「外部職缺也要評分」追問資料結構要獨立新表還是借用既有 104 職缺表）全部定案：① 推薦 Excel 兩張推薦表新增「104職缺ID」欄位，Robin 直接抄 ID 打語句 ② 應徵狀態任意可直接設定不強制順序，新增第四種「未錄取／已婉拒」結束狀態 ③ FR-40 外部管道職缺確實要納入 Gemini 評分（不只是記錄） ④ 應徵狀態存成獨立歷程表（非單一狀態欄位），保留完整時間軸 ⑤ 外部管道職缺用獨立新表儲存，不借用 `job_postings`／`job_companies`（語意混亂、既有爬蟲邏輯要多加判斷式排除）。已更新 SPEC.md：FR-39／FR-40 拆出 FR-39a～c、FR-40a～c 子項、新增 ADR-27、Step 4.3 實作計畫條目同步更新。**下一步**：SPEC 已更新完成，待 Robin 確認後依 AGENTS.md 中大型實作前的確認流程正式開工 Step 4.3（含實際 migration 欄位設計、觸發語句 regex 命名空間、外部職缺評分觸發時機三項留待呈現實作計畫時定案的細節） | Claude（依 Robin「4.3 有需要確認的部分嗎」提問，經兩輪 AskUserQuestion 確認設計決策後定案規格） |
 
+| 2026-08-09 | **Step 4.3 資料結構設計修正：外部管道職缺改用 `source` 欄位共用同一張表，不另建獨立表（ADR-27 決策 5／6 修正）**。Robin 對稍早定案的「外部管道職缺用獨立新表」提出異議：「職缺的表應該要放同一張表，這樣設計才有擴充性，用 source 區分（104、LinkedIn、Cake），沒必要多用一張表」。Claude 認同並指出額外好處：統一表之後，外部職缺只要資料形狀跟 104 職缺一致（`background`／`content` 已填），就會自動流經既有的 FR-37／FR-38a 評分與排名邏輯，不需要為 FR-40b 另外開發一套獨立批次流程；沒有 104 官方 ID 的外部職缺由系統配發合成識別碼（例如 `EXT-3`）寫入既有 `job_id_104`／`company_id_104` 欄位，欄位語意放寬但不重新命名。經 AskUserQuestion 追問一個隨之而來的行為後果：外部職缺會不會自然跟 104 職缺一起被排進每週推薦 Excel 前 30 名，Robin 確認「可以，混在一起排」。已更新 SPEC.md ADR-27（決策 5／6 改寫、理由/替代方案/後果同步更新）、FR-40a～c 三項子條文、Step 4.3 實作計畫條目。**下一步**：規格已修正完成，待 Robin 確認後依 AGENTS.md 流程正式開工 Step 4.3 | Claude（依 Robin 提出的資料結構異議修正設計，經 AskUserQuestion 確認後續行為決策） |
+
 ## 待決事項
 
 目前**沒有阻塞 Phase 1 開工的待決事項**。
@@ -189,7 +191,7 @@ updated: 2026-08-09
 
 1. ~~**Step 4.1：104 職缺爬蟲＋公司背景協作＋履歷收集**（FR-33～FR-36，見 ADR-24、ADR-26）~~ **已於 2026-08-09 全數實作完成並經真實 API 驗證，Step 4.1 完整收尾**：FR-33／FR-36 對話式收集流程（搜尋條件＋履歷＋期望工作＋結構化年資/期望薪資，地區篩選改子字串比對、產業篩選已移除）、FR-34 兩階段爬蟲（`submodules/job104` 公開 AJAX API＋2～4 秒隨機延遲＋ETL 去重，固定台灣時間週一 08:00，`is_closed` 自動判斷）、FR-35 公司背景 Email／CSV／Drive 人力協作機制，見上方里程碑紀錄。Robin 透過瀏覽器 DevTools 手動實測驗證，所有欄位假設已修正確認，無待辦事項
 2. ~~**Step 4.2：Gemini 契合度評分＋技能缺口分析**（FR-37、FR-38，見 ADR-26）~~ **已於 2026-08-09 全數實作完成，Step 4.2 完整收尾**：FR-37 批次契合度評分（`list_scorable_jobs()`／`score_jobs()`／`apply_scores()`）、FR-38a～FR-38c 雙重排名＋Excel 交付（`build_ranked_jobs()`／`build_job_recommendation_excel()`／`send_job_recommendation_email()`）、FR-38e Drive 回填協作（`parse_recommendation_excel()`／`apply_job_preferences()`／`commands.handle_job_recommendation_excel_uploaded()`），併入既有週排程整合入口，見上方里程碑紀錄。**Phase 4 求職模組主線（Step 4.1＋4.2）至此全數完成**
-3. **Step 4.3：應徵成效追蹤**（FR-39、FR-40，見 ADR-27）：規格已於 2026-08-09 定案（ID 來源、狀態機、外部職缺評分、資料結構皆已確認），可依 AGENTS.md 流程提出實作計畫正式開工；migration 欄位設計、觸發語句 regex 命名空間、外部職缺評分觸發時機三項細節留待呈現實作計畫時定案
+3. **Step 4.3：應徵成效追蹤**（FR-39、FR-40，見 ADR-27）：規格已於 2026-08-09 定案並修正（ID 來源、狀態機、外部職缺評分、資料結構皆已確認；外部管道職缺改為與 104 職缺共用同一張表、`source` 欄位區分來源，一起參與每週排名），可依 AGENTS.md 流程提出實作計畫正式開工；migration 欄位設計、觸發語句 regex、外部職缺評分觸發時機三項細節留待呈現實作計畫時定案
 4. **Step 4.4／4.5：Mobile App（BI Dashboard，React Native + Expo）**：Placeholder，詳細規劃留待開工時展開（見 SPEC.md ADR-14）
 
 每天對照「建議每日分配」檢查進度。
