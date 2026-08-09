@@ -26,7 +26,9 @@ Google 的既定機制，不是本模組可以繞過的限制。同一組 `GMAIL
 import imaplib
 import smtplib
 from datetime import date, timedelta, timezone
-from email import message_from_bytes
+from email import encoders, message_from_bytes
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import parseaddr, parsedate_to_datetime
 from zoneinfo import ZoneInfo
@@ -100,9 +102,11 @@ def _extract_plain_text(parsed_message) -> str:
 class EmailClient:
     """封裝 Gmail SMTP（SSL）寄信、Gmail IMAP（SSL）讀信的最小 Client。
 
-    寄信只支援純文字信件（`send_text`）；讀信只支援「依寄件者網域＋指定日期」篩選收件匣信件
-    （`fetch_emails_from_domain_on_date`），目前唯一呼叫端是 Step 3.1 每日技術摘要（FR-23）
-    讀取 TLDR 電子報，需要更多能力時再依實際需求擴充。
+    寄信支援純文字信件（`send_text`）與純文字＋單一附件信件（`send_text_with_attachment`，
+    2026-08-09 新增，見 robinson SPEC.md FR-35b、ADR-24 後果：Step 4.1 公司背景協作機制需要
+    寄送 CSV 附件，Step 4.2 職缺推薦交付機制需要寄送 Excel 附件，兩者共用同一個方法）；讀信只
+    支援「依寄件者網域＋指定日期」篩選收件匣信件（`fetch_emails_from_domain_on_date`），目前
+    唯一呼叫端是 Step 3.1 每日技術摘要（FR-23）讀取 TLDR 電子報，需要更多能力時再依實際需求擴充。
     """
 
     def __init__(self, username: str, password: str):
@@ -119,6 +123,38 @@ class EmailClient:
         message["Subject"] = subject
         message["From"] = self._username
         message["To"] = to
+
+        def _do_send():
+            with smtplib.SMTP_SSL(_SMTP_HOST, _SMTP_PORT) as server:
+                server.login(self._username, self._password)
+                server.sendmail(self._username, [to], message.as_string())
+
+        call_with_retry(_do_send, is_retryable=_is_retryable_smtp_error)
+
+    def send_text_with_attachment(
+        self, to: str, subject: str, body: str, attachment_filename: str, attachment_bytes: bytes
+    ) -> None:
+        """寄送一封純文字信件給 `to`，並附帶單一檔案附件。
+
+        附件一律用通用二進位型別 `application/octet-stream` 編碼（不特別分辨 CSV/Excel 等實際
+        格式）——收件端（Gmail 網頁/App）會依副檔名自行判斷開啟方式，寄件端不需要精確指定
+        MIME type，維持跟 `send_text()` 一樣「只用標準函式庫 `email.mime`，不額外安裝第三方
+        套件」的做法（見模組 docstring）。`attachment_filename` 可能含中文（例如
+        `2026-08-09-104職缺公司.csv`），用 `email.message.Message.add_header()` 官方支援的
+        `(charset, language, value)` 三元組寫法觸發 RFC 2231 編碼，避免中文檔名在部分信箱
+        客戶端顯示成亂碼或副檔名遺失。
+        """
+        message = MIMEMultipart()
+        message["Subject"] = subject
+        message["From"] = self._username
+        message["To"] = to
+        message.attach(MIMEText(body, "plain", "utf-8"))
+
+        part = MIMEBase("application", "octet-stream")
+        part.set_payload(attachment_bytes)
+        encoders.encode_base64(part)
+        part.add_header("Content-Disposition", "attachment", filename=("utf-8", "", attachment_filename))
+        message.attach(part)
 
         def _do_send():
             with smtplib.SMTP_SSL(_SMTP_HOST, _SMTP_PORT) as server:

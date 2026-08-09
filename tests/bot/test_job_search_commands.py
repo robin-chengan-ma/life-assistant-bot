@@ -4,6 +4,28 @@ from src.bot import commands
 from src.bot.state import ConversationStateStore
 
 
+class _FakeGDriveClient:
+    """模擬 submodules.gdrive.client.GDriveClient，只實作 handle_company_csv_uploaded 會用到的
+    list_files／download_file。"""
+
+    def __init__(self, files: dict):
+        # files: {filename: csv_bytes}
+        self._files = files
+
+    def list_files(self, name_contains=None):
+        return [
+            {"id": f"drive-id-{name}", "name": name, "mimeType": "text/csv"}
+            for name in self._files
+            if name_contains is None or name_contains in name
+        ]
+
+    def download_file(self, file_id):
+        for name, content in self._files.items():
+            if file_id == f"drive-id-{name}":
+                return content
+        raise FileNotFoundError(file_id)
+
+
 class _FakeLLMClient:
     """模擬 submodules.llm.client.LLMClient，只實作求職模組流程會用到的 generate_text。"""
 
@@ -365,3 +387,43 @@ def test_handle_job_search_salary_max_step_saves_criteria_and_profile(fake_db):
     assert user_row["years_of_experience"] == 3.5
     assert user_row["expected_salary_min"] == 50000
     assert user_row["expected_salary_max"] == 70000
+
+
+# --- handle_company_csv_uploaded（FR-35e）---
+
+
+def test_handle_company_csv_uploaded_file_not_found(fake_db):
+    gdrive_client = _FakeGDriveClient(files={})
+
+    reply = commands.handle_company_csv_uploaded(fake_db, gdrive_client, "2026-08-09-104職缺公司.csv")
+
+    assert "找不到" in reply
+
+
+def test_handle_company_csv_uploaded_applies_backgrounds_and_reports_success(fake_db):
+    fake_db.insert(
+        "job_companies", {"company_id_104": "100", "company_name": "A 公司", "region": "台北市", "background": None}
+    )
+    csv_bytes = "104公司ID,公司全名,地區,產業類型,背景\n100,A 公司,台北市,軟體業,做電商平台的新創\n".encode(
+        "utf-8-sig"
+    )
+    gdrive_client = _FakeGDriveClient(files={"2026-08-09-104職缺公司.csv": csv_bytes})
+
+    reply = commands.handle_company_csv_uploaded(fake_db, gdrive_client, "2026-08-09-104職缺公司.csv")
+
+    assert "1 家公司" in reply
+    row = fake_db.select("job_companies", where="company_id_104 = %s", params=("100",), fetch_one=True)
+    assert row["background"] == "做電商平台的新創"
+
+
+def test_handle_company_csv_uploaded_reports_not_found_ids(fake_db):
+    csv_bytes = "104公司ID,公司全名,地區,產業類型,背景\n999,不存在的公司,台北市,軟體業,某個背景\n".encode(
+        "utf-8-sig"
+    )
+    gdrive_client = _FakeGDriveClient(files={"2026-08-09-104職缺公司.csv": csv_bytes})
+
+    reply = commands.handle_company_csv_uploaded(fake_db, gdrive_client, "2026-08-09-104職缺公司.csv")
+
+    assert "0 家公司" in reply
+    assert "999" in reply
+    assert "人工確認" in reply

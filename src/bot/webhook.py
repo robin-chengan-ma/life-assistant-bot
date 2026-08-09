@@ -239,6 +239,25 @@ def _build_privacy_llm_client() -> LLMClient | None:
     return LLMClient(api_key=api_key)
 
 
+def _build_gdrive_client_optional() -> GDriveClient | None:
+    """建立文字訊息分支選配的 GDriveClient（見 robinson SPEC.md FR-35e）。
+
+    跟 `_build_calendar_client()` 一樣是選配的：目前文字訊息只有「已上傳 XXX」這個罕見分支
+    才需要 Drive 存取，絕大多數文字訊息（一般聊天、其他指令）完全用不到，所以刻意不比照
+    photo/voice 分支用 `os.environ[...]` 強制要求，改成環境變數不完整時優雅降級回傳 `None`，
+    不會讓整個文字訊息處理流程因為這組（其實已經在其他分支驗證過的）憑證缺漏而失敗。
+    """
+    refresh_token = os.environ.get("GDRIVE_OAUTH_REFRESH_TOKEN")
+    client_id = os.environ.get("GDRIVE_OAUTH_CLIENT_ID")
+    client_secret = os.environ.get("GDRIVE_OAUTH_CLIENT_SECRET")
+    folder_id = os.environ.get("GDRIVE_FOLDER_ID")
+    if not (refresh_token and client_id and client_secret and folder_id):
+        return None
+    return GDriveClient(
+        refresh_token=refresh_token, client_id=client_id, client_secret=client_secret, folder_id=folder_id,
+    )
+
+
 def _build_calendar_client() -> CalendarClient | None:
     """建立 Google Calendar 同步用的 CalendarClient（見 robinson SPEC.md FR-66、ADR-17）。
 
@@ -519,7 +538,7 @@ def telegram_webhook():
             reply = handle_message(
                 db, _state_store, telegram_user_id, text, llm_client=llm_client, text_llm_client=text_llm_client,
                 privacy_llm_client=_build_privacy_llm_client(), telegram_client=telegram_client,
-                calendar_client=_build_calendar_client(),
+                calendar_client=_build_calendar_client(), gdrive_client=_build_gdrive_client_optional(),
             )
     except Exception as exc:
         # 安全網：任何未預期例外都要在這裡吞掉，改回安全用語並仍然回 200——否則 Flask 會回

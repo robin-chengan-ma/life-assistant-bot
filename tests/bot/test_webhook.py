@@ -217,6 +217,7 @@ def test_webhook_routes_valid_message_and_sends_reply(client, monkeypatch):
         privacy_llm_client=None,
         telegram_client=mock_telegram_instance,
         calendar_client=None,
+        gdrive_client=None,
     )
     mock_db_instance.close.assert_called_once()
     mock_telegram_instance.send_text.assert_called_once_with(chat_id=123, text="哈囉！")
@@ -270,6 +271,38 @@ def test_build_calendar_client_builds_client_when_all_env_vars_set(monkeypatch):
         client_id="fake-client-id",
         client_secret="fake-client-secret",
         calendar_id="fake-calendar-id",
+    )
+    assert result is mock_instance
+
+
+# --- 文字訊息分支選配的 GDriveClient（2026-08-09，見 robinson SPEC.md FR-35e）---
+
+
+def test_build_gdrive_client_optional_returns_none_when_env_vars_missing(monkeypatch):
+    for key in (
+        "GDRIVE_OAUTH_REFRESH_TOKEN", "GDRIVE_OAUTH_CLIENT_ID", "GDRIVE_OAUTH_CLIENT_SECRET", "GDRIVE_FOLDER_ID",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    assert webhook._build_gdrive_client_optional() is None
+
+
+def test_build_gdrive_client_optional_builds_client_when_all_env_vars_set(monkeypatch):
+    monkeypatch.setenv("GDRIVE_OAUTH_REFRESH_TOKEN", "fake-refresh-token")
+    monkeypatch.setenv("GDRIVE_OAUTH_CLIENT_ID", "fake-client-id")
+    monkeypatch.setenv("GDRIVE_OAUTH_CLIENT_SECRET", "fake-client-secret")
+    monkeypatch.setenv("GDRIVE_FOLDER_ID", "fake-folder-id")
+    mock_instance = MagicMock()
+    mock_gdrive_client_cls = MagicMock(return_value=mock_instance)
+    monkeypatch.setattr(webhook, "GDriveClient", mock_gdrive_client_cls)
+
+    result = webhook._build_gdrive_client_optional()
+
+    mock_gdrive_client_cls.assert_called_once_with(
+        refresh_token="fake-refresh-token",
+        client_id="fake-client-id",
+        client_secret="fake-client-secret",
+        folder_id="fake-folder-id",
     )
     assert result is mock_instance
 

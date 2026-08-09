@@ -1865,6 +1865,44 @@ def test_job_search_setup_trigger_dispatches_through_router_for_owner(fake_db, m
     assert store.get(ROBIN_ID)["flow"] == "pending_job_search_criteria"
 
 
+def test_uploaded_company_csv_trigger_dispatches_for_owner(fake_db, monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
+    fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
+    fake_db.insert(
+        "job_companies", {"company_id_104": "100", "company_name": "A 公司", "region": "台北市", "background": None}
+    )
+    csv_bytes = "104公司ID,公司全名,地區,產業類型,背景\n100,A 公司,台北市,軟體業,做電商平台的新創\n".encode(
+        "utf-8-sig"
+    )
+
+    class _FakeGDriveClient:
+        def list_files(self, name_contains=None):
+            return [{"id": "drive-1", "name": "2026-08-09-104職缺公司.csv", "mimeType": "text/csv"}]
+
+        def download_file(self, file_id):
+            return csv_bytes
+
+    store = ConversationStateStore()
+
+    reply = router.handle_message(
+        fake_db, store, ROBIN_ID, "已上傳2026-08-09-104職缺公司.csv", gdrive_client=_FakeGDriveClient()
+    )
+
+    assert "1 家公司" in reply
+    row = fake_db.select("job_companies", where="company_id_104 = %s", params=("100",), fetch_one=True)
+    assert row["background"] == "做電商平台的新創"
+
+
+def test_uploaded_company_csv_trigger_gracefully_degrades_when_gdrive_client_none(fake_db, monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
+    fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
+    store = ConversationStateStore()
+
+    reply = router.handle_message(fake_db, store, ROBIN_ID, "已上傳2026-08-09-104職缺公司.csv")
+
+    assert "還沒設定好" in reply
+
+
 def test_job_search_setup_trigger_falls_through_to_chat_for_family_member(fake_db):
     """權限邊界測試：`job_search` 為 ADR-24 決策 2 的 owner_only 功能，家人的觸發詞應該落入
     一般聊天核心，而不是被授予求職模組設定流程的能力。"""

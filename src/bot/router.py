@@ -93,6 +93,11 @@ _REMOVE_YOUTUBE_TOPIC_TRIGGERS = {"/remove_youtube_topic", "移除YouTube主題"
 # 2026-08-09（Step 4.1，見 robinson SPEC.md FR-33、FR-36、ADR-24 決策 2）：求職模組設定流程，
 # `job_search` 開關同步改為 owner_only=True，觸發詞只放在 is_owner 分支，家人完全看不到這個功能。
 _JOB_SEARCH_SETUP_TRIGGERS = {"/set_job_search", "我要找工作", "我最近想要找工作了"}
+# 2026-08-09（見 robinson SPEC.md FR-35e、ADR-24 後果）：帶動態檔名的觸發詞，設計比照
+# _CLEAN_TARGET_DIALOG_PATTERN 用 regex 擷取參數；目前只處理公司背景 CSV（檔名以
+# 「104職缺公司.csv」結尾），Step 4.2 的職缺推薦 Excel 回填（FR-38e）留待該 Step 開工時再擴充
+# 這個 if 分支，不需要改動這個 regex 本身。
+_UPLOADED_FILE_PATTERN = re.compile(r"^已上傳\s*(?P<filename>.+)$")
 # 2026-08-02（Step 1.9，見 robinson SPEC.md FR-60）：任何身分皆可觸發客訴收集流程。
 _COMPLAINT_TRIGGERS = {"/complaint", "我要客訴你"}
 _CLEAN_ALL_DIALOG_TRIGGERS = {"/clean-all-dialog", "我想要刪除所有對話紀錄"}
@@ -123,6 +128,7 @@ def handle_message(
     privacy_llm_client=None,
     telegram_client=None,
     calendar_client=None,
+    gdrive_client=None,
 ) -> str:
     """處理一則來自 Telegram 的文字訊息，回傳要回覆的文字。
 
@@ -149,6 +155,11 @@ def handle_message(
     `calendar_client`（2026-08-05，見 robinson SPEC.md FR-66a、ADR-17）：`pending_todo_calendar_sync`
     （建立事件）與 `pending_todo_action_confirm`（標記完成/取消時刪除對應事件）這兩個分支會用到；
     `None` 時優雅降級成「待辦事項照常記錄，但不會出現在 Google Calendar 上」，不影響其餘分支。
+
+    `gdrive_client`（2026-08-09，見 robinson SPEC.md FR-35e）：`_UPLOADED_FILE_PATTERN`（「已上傳
+    XXX」）這個分支會用到，至 Drive 資料夾下載 Robin 回填好的公司背景 CSV；`None` 時這個分支
+    會因為呼叫端沒給 Client 而丟例外，屬於預期外狀況（正式環境一律由 webhook.py 注入），跟其餘
+    分支預設 `None` 可優雅降級的情況不同。
     """
     text = (text or "").strip()
     is_owner = auth.is_owner(telegram_user_id)
@@ -213,6 +224,16 @@ def handle_message(
         if text in _JOB_SEARCH_SETUP_TRIGGERS:
             # 2026-08-09（Step 4.1，FR-33、FR-36）：開始求職模組設定流程，先問搜尋條件。
             return commands.start_job_search_setup(state_store, telegram_user_id, user_id)
+        uploaded_match = _UPLOADED_FILE_PATTERN.match(text)
+        if uploaded_match:
+            filename = uploaded_match.group("filename").strip()
+            if filename.endswith("104職缺公司.csv"):
+                # 2026-08-09（FR-35e）：Robin 回填好公司背景 CSV 上傳 Drive 後的觸發詞。
+                # `gdrive_client` 為選配（見 webhook.py `_build_gdrive_client_optional()`），
+                # 環境變數還沒設定完整時優雅降級，不讓整個文字訊息處理流程失敗。
+                if gdrive_client is None:
+                    return "Drive 服務目前還沒設定好，沒辦法幫你回填公司背景，麻煩稍後再試一次！"
+                return commands.handle_company_csv_uploaded(db, gdrive_client, filename)
     else:
         user = auth.find_user_by_telegram_id(db, telegram_user_id)
         if user is None:

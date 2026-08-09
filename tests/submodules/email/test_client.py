@@ -124,6 +124,62 @@ def test_send_text_raises_after_exhausting_retries(monkeypatch):
     assert mock_sleep.call_args_list == [((1,),), ((2,),)]
 
 
+# --- send_text_with_attachment（2026-08-09，見 robinson SPEC.md FR-35b、ADR-24 後果）---
+
+
+def test_send_text_with_attachment_sends_envelope_body_and_filename(monkeypatch):
+    _, mock_server = _patch_smtp_ssl(monkeypatch)
+
+    client = EmailClient(username="you@gmail.com", password="app-password")
+    client.send_text_with_attachment(
+        to="you@gmail.com", subject="測試主旨", body="附件請參閱！",
+        attachment_filename="2026-08-09-104職缺公司.csv", attachment_bytes="104公司ID,背景\n999,\n".encode(),
+    )
+
+    mock_server.sendmail.assert_called_once()
+    from_addr, to_addrs, raw_message = mock_server.sendmail.call_args.args
+    assert from_addr == "you@gmail.com"
+    assert to_addrs == ["you@gmail.com"]
+
+    parsed = email_lib.message_from_string(raw_message)
+    assert parsed.is_multipart()
+    decoded_subject, encoding = decode_header(parsed["Subject"])[0]
+    assert decoded_subject.decode(encoding or "utf-8") == "測試主旨"
+
+    text_part, attachment_part = parsed.get_payload()
+    assert text_part.get_payload(decode=True).decode("utf-8") == "附件請參閱！"
+    assert attachment_part.get_filename() == "2026-08-09-104職缺公司.csv"
+    assert attachment_part.get_payload(decode=True) == "104公司ID,背景\n999,\n".encode()
+
+
+def test_send_text_with_attachment_propagates_smtp_exception(monkeypatch):
+    _, mock_server = _patch_smtp_ssl(monkeypatch)
+    mock_server.login.side_effect = RuntimeError("535 Authentication failed")
+
+    client = EmailClient(username="you@gmail.com", password="wrong-password")
+    with pytest.raises(RuntimeError):
+        client.send_text_with_attachment(
+            to="you@gmail.com", subject="主旨", body="內容",
+            attachment_filename="test.csv", attachment_bytes=b"a,b\n1,2\n",
+        )
+
+
+def test_send_text_with_attachment_retries_on_server_disconnected_then_succeeds(monkeypatch):
+    mock_sleep = MagicMock()
+    monkeypatch.setattr(retry_client_module.time, "sleep", mock_sleep)
+    _, mock_server = _patch_smtp_ssl(monkeypatch)
+    mock_server.login.side_effect = [smtplib.SMTPServerDisconnected("connection lost"), None]
+
+    client = EmailClient(username="you@gmail.com", password="app-password")
+    client.send_text_with_attachment(
+        to="you@gmail.com", subject="主旨", body="內容",
+        attachment_filename="test.csv", attachment_bytes=b"a,b\n1,2\n",
+    )
+
+    assert mock_server.login.call_count == 2
+    mock_sleep.assert_called_once_with(1)
+
+
 # --- fetch_emails_from_domain_on_date（FR-23，Step 3.1）---
 
 _TAIWAN_TZ = client_module._TAIWAN_TZ

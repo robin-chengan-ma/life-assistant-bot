@@ -440,6 +440,44 @@ def _check_youtube_weekly_push() -> None:
         db.close()
 
 
+def _check_job_search_weekly_crawl() -> None:
+    """在 /healthz 被呼叫時順便檢查求職模組週排程（Step 4.1，見 robinson SPEC.md FR-34b、
+    FR-35a～FR-35c、ADR-24）：固定台灣時間週一 08:00，依 Robin 設定的各組搜尋條件呼叫 104
+    公開 AJAX API 爬取職缺（FR-34a～FR-34d），若這批職缺涉及資料庫裡還沒有背景資料的新公司，
+    寄送公司背景 CSV 給 Robin 並私訊告知（FR-35a～FR-35c），詳見 src/bot/job_search.py
+    模組內 `check_and_run_weekly_job_search()` docstring。
+
+    需要 `DATABASE_URL`、`TELEGRAM_BOT_TOKEN`（私訊通知）、`GMAIL_USER`／`GMAIL_PASSWORD`
+    （FR-35b 寄信，沿用 FR-19b 既有備援信箱憑證，同一組帳密自寄自收）；104 搜尋/詳情 API
+    為公開端點，不需要額外金鑰（見 submodules/job104/client.py）。任一項未設定就直接跳過。
+    """
+    if not (
+        os.environ.get("DATABASE_URL")
+        and os.environ.get("TELEGRAM_BOT_TOKEN")
+        and os.environ.get("GMAIL_USER")
+        and os.environ.get("GMAIL_PASSWORD")
+    ):
+        return
+
+    from src.bot import job_search
+    from submodules.cloudsql.client import CloudSQLClient
+    from submodules.email.client import EmailClient
+    from submodules.job104.client import Job104Client
+    from submodules.telegram.client import TelegramClient
+
+    db = CloudSQLClient()
+    try:
+        job104_client = Job104Client()
+        gmail_user = os.environ["GMAIL_USER"]
+        email_client = EmailClient(username=gmail_user, password=os.environ["GMAIL_PASSWORD"])
+        telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
+        job_search.check_and_run_weekly_job_search(db, job104_client, email_client, gmail_user, telegram_client)
+    except Exception:
+        logger.exception("求職模組週排程（104 職缺爬蟲）失敗，不影響健康檢查端點本身")
+    finally:
+        db.close()
+
+
 def _run_startup_migrations() -> None:
     """開機自動套用尚未執行過的 DB migration（ADR-11）。
 
@@ -472,7 +510,7 @@ def root():
 
 
 def _run_background_checks() -> None:
-    """實際執行 `/healthz` 附掛的 13 個排程檢查，在背景執行緒跑，見 `health_check()`。
+    """實際執行 `/healthz` 附掛的 14 個排程檢查，在背景執行緒跑，見 `health_check()`。
 
     **2026-08-08 追加（production 事故修復）**：這些檢查原本是在 `/healthz` 的 HTTP
     request 裡依序同步執行，平常大部分檢查會因為「還沒到時間」提早 return、很快；但每天台灣
@@ -499,6 +537,7 @@ def _run_background_checks() -> None:
     _check_certificate_daily_quiz_push()
     _check_certificate_answer_reminder()
     _check_youtube_weekly_push()
+    _check_job_search_weekly_crawl()
 
 
 @app.route("/healthz")
@@ -509,8 +548,8 @@ def health_check():
 
     2026-08-02（Step 1.6，見 FR-21）起，陸續借用這個每 10 分鐘一次的呼叫頻率，順便觸發多項
     排程檢查（Neon 容量、待辦推播、記帳預警/提醒/月報、體態目標預警、重要通知、技術摘要收集/
-    推播、TOEIC pipeline、證照題庫每日推播出題／20:00 作答提醒、YouTube 技術情報週推播），實際
-    清單見 `_run_background_checks()`。
+    推播、TOEIC pipeline、證照題庫每日推播出題／20:00 作答提醒、YouTube 技術情報週推播、求職模組
+    週排程），實際清單見 `_run_background_checks()`。
 
     **2026-08-08 追加（production 事故修復）**：這些檢查改成丟進背景執行緒（daemon thread）
     執行，`/healthz` 本身立即回 200，不等待檢查跑完，避免 cron-job.org 因為單次 request 耗時

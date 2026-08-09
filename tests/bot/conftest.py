@@ -261,6 +261,11 @@ class FakeCloudSQLClient:
             return row.get("user_id") == params[0] and row.get("topic") == params[1]
         if where == "id = %s AND user_id = %s":
             return row.get("id") == params[0] and row.get("user_id") == params[1]
+        # 2026-08-09（Step 4.1，見 robinson SPEC.md FR-34、FR-35、ADR-24）：求職模組 ETL 去重查詢。
+        if where == "company_id_104 = %s":
+            return row.get("company_id_104") == params[0]
+        if where == "job_id_104 = %s":
+            return row.get("job_id_104") == params[0]
 
         raise NotImplementedError(f"FakeCloudSQLClient 尚未支援這個 where 條件：{where}")
 

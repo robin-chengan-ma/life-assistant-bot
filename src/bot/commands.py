@@ -4025,3 +4025,26 @@ def handle_job_search_salary_max_step(
         expected_salary_min, expected_salary_max,
     )
     return "好的，已經幫你記錄好求職資料了！等下週排程跑完，我就會把清單寄給你囉～"
+
+
+def handle_company_csv_uploaded(db: CloudSQLClient, gdrive_client, filename: str) -> str:
+    """處理「已上傳{filename}」觸發詞中，檔名符合公司背景 CSV 命名規則的情況（FR-35e）：至既有
+    共用 Google Drive 資料夾（沿用 `GDRIVE_FOLDER_ID`）以檔名找到該檔案、下載、解析 CSV，把
+    「背景」欄位逐筆 `UPDATE` 回填 `job_companies`（以 104 公司 ID 比對）。
+
+    找不到對應公司的 104 公司 ID 一律列出來提醒人工處理，不可靜默略過（比照 FR-38e）。
+    """
+    candidates = gdrive_client.list_files(name_contains=filename)
+    matched = next((f for f in candidates if f["name"] == filename), None)
+    if matched is None:
+        return f"我在 Drive 資料夾裡找不到「{filename}」耶，麻煩確認一下檔名或是不是真的上傳成功了！"
+
+    csv_text = gdrive_client.download_file(matched["id"]).decode("utf-8-sig")
+    entries = job_search.parse_companies_csv(csv_text)
+    result = job_search.apply_company_backgrounds(db, entries)
+
+    reply = f"已經幫你回填 {result['updated_count']} 家公司的背景資料囉！"
+    if result["not_found_ids"]:
+        ids_text = "、".join(result["not_found_ids"])
+        reply += f"\n找不到對應公司的 104 公司 ID：{ids_text}，麻煩人工確認一下！"
+    return reply
