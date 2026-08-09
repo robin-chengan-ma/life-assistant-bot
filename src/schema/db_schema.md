@@ -72,6 +72,7 @@ COMMENT ON COLUMN users.created_at IS '這筆使用者記錄建立的時間（�
 | 2026-08-08 | 新增 `waist_cm`（腰圍，初始設定、變動才修正，設計比照 `height_cm`） | 體態管理模組擴充 FR-46：Robin 要求新增腰圍設定，明確定位為「參考指標、非必要」，BMI 計算不使用此欄位；合理範圍 40~200 公分（比身高體重寬鬆，因為只是參考用途，不用像身高體重那麼嚴格） | `0046_add_waist_to_users.sql` |
 | 2026-08-08 | 新增 `certificate_answer_reminder_sent_on`（FR-28 20:00 作答提醒去重用） | Step 3.3 作答與批改流程，設計比照 `finance_reminder_sent_date`／`toeic_pipeline_last_run_on` 等既有「當日去重」欄位慣例，避免 `/healthz` 同一小時內多次觸發重複推播 | `0048_add_certificate_answer_reminder_field_to_users.sql` |
 | 2026-08-08 | 新增 `youtube_last_run_on`（FR-59a 週推播去重用） | Step 3.4 YouTube 技術情報模組，設計比照 `toeic_pipeline_last_run_on`，避免週四當天 `/healthz` 多次觸發重複推播 | `0051_add_youtube_last_run_on_to_users.sql` |
+| 2026-08-09 | 新增 `job_resume`／`job_expectation`（履歷/期望工作敘述）、`years_of_experience`／`expected_salary_min`／`expected_salary_max`（結構化年資/期望薪資）、`job_search_last_run_on`（週排程去重用） | Step 4.1 求職模組 FR-33／FR-34b／FR-36，見 SPEC.md ADR-24，詳見下方 `job_search_criteria`／`job_companies`／`job_postings` 表 | `0053_add_job_search_fields_to_users.sql` |
 
 ---
 
@@ -973,3 +974,89 @@ CREATE INDEX idx_youtube_pushed_videos_user_pushed_on ON youtube_pushed_videos (
 **設計理由**：
 - 不加 `video_id` `UNIQUE`：同一支影片理論上可能在 30 天後再次被推薦，不強制唯一，去重靠查詢邏輯本身（篩掉 `pushed_on` 在過去 30 天內的紀錄）
 - `topic` 允許 `NULL`：只是記錄推播當下對應的主題文字，供除錯與統計用，不影響去重邏輯（去重只看 `video_id` + `pushed_on`）
+
+---
+
+### job_search_criteria
+
+**建立日期**：2026-08-09
+**用途**：Step 4.1 求職搜尋條件，對應 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) FR-33、ADR-24 決策 3。
+**Migration 檔案**：`src/migrations/0054_create_job_search_criteria_table.sql`
+
+```sql
+CREATE TABLE job_search_criteria (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id),
+    keyword TEXT NOT NULL,
+    region TEXT,
+    salary_min INT,
+    salary_max INT,
+    industry TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_job_search_criteria_user_id ON job_search_criteria (user_id);
+```
+
+**設計理由**：
+- 不設 `UNIQUE (user_id, keyword)` 之類的唯一約束：ADR-24 決策 3 明確允許同時存多組條件，不比照記帳預算/證照目標「一人一份設定、重新設定即覆蓋」的既有慣例
+- `region`／`salary_min`／`salary_max`／`industry` 皆允許 `NULL`：對話收集時使用者可能表示「不限」，只有 `keyword` 是 104 搜尋 API 的必要參數
+
+---
+
+### job_companies
+
+**建立日期**：2026-08-09
+**用途**：Step 4.1 104 公司背景資料，對應 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) FR-35、ADR-24 決策 1。
+**Migration 檔案**：`src/migrations/0055_create_job_companies_table.sql`
+
+```sql
+CREATE TABLE job_companies (
+    id BIGSERIAL PRIMARY KEY,
+    company_id_104 TEXT NOT NULL UNIQUE,
+    company_name TEXT NOT NULL,
+    region TEXT,
+    industry TEXT,
+    background TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+**設計理由**：
+- `company_id_104 UNIQUE`：FR-35a 用「這批職缺所屬公司是否已存在」判斷是否為新公司，也作為 `job_postings` 的外鍵
+- `background` 允許 `NULL`：代表尚待 Robin 人工查詢回填（FR-35b～FR-35e Email/CSV/Drive 協作流程），`NULL` 與「已查過但沒查到」刻意不區分，Robin 若查無資料可自行填入「查無公開資訊」等文字，不強制系統分辨兩者
+
+---
+
+### job_postings
+
+**建立日期**：2026-08-09
+**用途**：Step 4.1 104 職缺資料，對應 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) FR-34、ADR-24 決策 4。
+**Migration 檔案**：`src/migrations/0056_create_job_postings_table.sql`
+
+```sql
+CREATE TABLE job_postings (
+    id BIGSERIAL PRIMARY KEY,
+    job_id_104 TEXT NOT NULL UNIQUE,
+    company_id_104 TEXT NOT NULL REFERENCES job_companies (company_id_104),
+    title TEXT NOT NULL,
+    region TEXT,
+    url TEXT NOT NULL,
+    salary_min INT,
+    salary_max INT,
+    content TEXT,
+    required_years_experience NUMERIC(4,1),
+    applicant_count INT,
+    source_updated_at TIMESTAMPTZ,
+    first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_crawled_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_job_postings_company_id_104 ON job_postings (company_id_104);
+```
+
+**設計理由**：
+- `job_id_104 UNIQUE` 作為 FR-34d ETL 去重鍵值：已存在的職缺 `UPDATE` 既有紀錄（例如薪資/內容變動），不重複新增
+- `applicant_count`／`source_updated_at` 允許 `NULL`：sandbox 無法連線 104 網路實測列表/詳情頁是否有這兩個欄位（ADR-24 決策 4），先保守開欄位，若確認抓不到就永遠是 `NULL`，FR-37b 契合度評分時會略過這兩個維度
+- `is_unliked`／`is_closed`／`score`／`rank`／`recommend_reason`／`skill_gap_note` 等 Step 4.2（FR-37／FR-38）欄位刻意不在本次建立，待 Step 4.2 開工時依實測結果另開 migration 新增，避免現在憑空猜欄位規格
+- `first_seen_at` 供 FR-38a「本週新職缺排名」判斷依據；`last_crawled_at` 每次週排程重新爬到既有職缺時更新，供未來除錯/資料新鮮度判斷用
