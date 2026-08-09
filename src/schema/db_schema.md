@@ -631,31 +631,35 @@ CREATE TABLE important_notifications_log (
 
 ### skill_growth_digests
 
-**建立日期**：2026-08-07
+**建立日期**：2026-08-07（2026-08-09 經 Robin 生產環境回饋修正為一天多筆、一筆一個來源管道的正規化設計，見 ADR-25）
 **用途**：個人技能成長模組的每日技術摘要收集與推播狀態，對應 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) FR-22、FR-23（Step 3.1）。
-**Migration 檔案**：`src/migrations/0033_add_skill_growth_pushed_on_to_users.sql`（檔名沿用最初規劃「加欄位」時取的，內容已改為建這張表，見檔案開頭註解說明；因尚未 push／套用過，直接修改檔案內容而非另開新檔）
+**Migration 檔案**：`src/migrations/0052_recreate_skill_growth_digests_per_source.sql`（`0033_add_skill_growth_pushed_on_to_users.sql` 建立的舊表直接 `DROP TABLE` 砍掉重建；經 Robin 確認舊表當時僅有 1 筆資料，重建成本可忽略，不需要額外寫資料搬遷邏輯）
 
 ```sql
 CREATE TABLE skill_growth_digests (
     id BIGSERIAL PRIMARY KEY,
-    digest_date DATE NOT NULL UNIQUE,
+    digest_date DATE NOT NULL,
+    source TEXT,
     summary_text TEXT,
     pushed_on DATE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (digest_date, source)
 );
 
-COMMENT ON TABLE skill_growth_digests IS '個人技能成長模組：每日技術摘要的收集與推播狀態（FR-22、FR-23）。固定台灣時間 23:00 收集當天 TLDR 電子報＋IThome／TechCrunch 新聞並經 Gemini 產出摘要，寫入一筆；隔天固定台灣時間 08:00 讀取「昨天」那筆資料推播給 Robin';
-COMMENT ON COLUMN skill_growth_digests.digest_date IS '收集內容所屬的日期（23:00 收集當下的「今天」）；UNIQUE 確保同一天只會收集一次，避免 23:00 那個小時內 /healthz 多次觸發重複收集與重複呼叫 Gemini';
-COMMENT ON COLUMN skill_growth_digests.summary_text IS 'Gemini 產出的中文重點摘要與總結分享；NULL 代表當天 TLDR 電子報／IThome／TechCrunch 三個來源皆無內容';
-COMMENT ON COLUMN skill_growth_digests.pushed_on IS '這筆摘要推播給 Robin 的日期（收集隔天的 08:00）；避免同一天 08:00 那個小時內 /healthz 多次觸發重複推播；NULL 代表尚未推播';
+COMMENT ON TABLE skill_growth_digests IS '個人技能成長模組：每日技術摘要的收集與推播狀態（FR-22、FR-23）。一天最多三筆，一筆對應一個來源管道（tldr／ithome／techcrunch）；固定台灣時間 23:00 各來源各自收集並產出精簡總結，隔天固定台灣時間 08:00 讀取「昨天」那幾筆資料組成三行式訊息推播給 Robin';
+COMMENT ON COLUMN skill_growth_digests.digest_date IS '收集內容所屬的日期（23:00 收集當下的「今天」）';
+COMMENT ON COLUMN skill_growth_digests.source IS '這筆摘要屬於哪個技術情報管道：tldr／ithome／techcrunch，未來新增管道只需要寫入新的 source 值，不需要改 schema；NULL 保留給「當天完全沒有任何一筆收集結果」時的去重標記列（見 pushed_on 說明）';
+COMMENT ON COLUMN skill_growth_digests.summary_text IS '這個管道當天的精簡總結（100 字內，只給重點結論）；「今日無內容」代表該來源當天確實沒有抓到任何內容（已完成收集但真的沒東西），跟「完全沒有這個 source 的列」（收集當下服務不可用）是兩種不同情境';
+COMMENT ON COLUMN skill_growth_digests.pushed_on IS '這筆摘要推播給 Robin 的日期（收集隔天的 08:00）；同一天收集到的幾筆一起標記，避免 08:00 那個小時內 /healthz 多次觸發重複推播；NULL 代表尚未推播';
 COMMENT ON COLUMN skill_growth_digests.created_at IS '這筆收集結果建立的時間';
 ```
 
 **設計理由**：
 - 2026-08-07 經 Robin 回饋修正：原規劃在 `check_and_push_daily_digest()` 執行當下（08:00）才即時抓取「昨天」的信件/新聞；Robin 改要求分成兩個獨立排程時間點——固定 23:00 收集「當天」的信件/新聞、隔天 08:00 才推播，讓收集與推播解耦，這樣資料需要跨時間點持久化，原本規劃在 `users` 表加一個 `skill_growth_pushed_on` 去重欄位已不夠用，改成獨立一張表存收集結果本身
-- `digest_date NOT NULL UNIQUE`：同一天只會有一筆收集結果，`UNIQUE` 約束直接防止 23:00 那個小時內 `/healthz` 被觸發多次時重複收集/重複呼叫 Gemini（不需要額外查詢判斷是否已收集過，`INSERT` 前查一次 `digest_date` 是否存在即可）
-- `summary_text` 允許 `NULL`：代表當天三個來源都沒有內容，此時不呼叫 Gemini（省 Token），隔天推播時看到 `NULL` 就回覆 Robin 指定的固定訊息「未獲得最新技術分享」
-- `pushed_on` 沿用 `todos.daily_pushed_on` 的慣例，記錄「這筆資料是否已經推播過」，避免 08:00 那個小時內重複推播；跟 `digest_date` 分開兩個欄位是因為推播時間點（隔天）跟收集時間點（當天）本來就不同一天
+- 2026-08-09 經 Robin 生產環境回饋修正（見 ADR-25）：原本三個來源合併寫入單一 `summary_text`，Robin 完全無法分辨當天到底是哪個來源沒抓到內容、還是收集本身出了問題；推播訊息也塞了太多原文內容，Robin 只需要三行結論。曾提案改成 3 個獨立欄位（`tldr_summary`／`ithome_summary`／`techcrunch_summary`），被 Robin 否決——理由是新增來源就要再 `ALTER TABLE` 加欄位，擴充性差；改成新增 `source` 欄位＋`UNIQUE (digest_date, source)`，`summary_text` 保留但只存單一來源的精簡總結，未來新增來源只需要多寫一個 `source` 值
+- `UNIQUE (digest_date, source)`：同一天同一來源只會有一筆收集結果，避免 23:00 那個小時內 `/healthz` 被觸發多次時重複收集/重複呼叫 Gemini；PostgreSQL 的 `UNIQUE` 約束不視 `NULL` 為相等，`source IS NULL` 的去重標記列因此不受此約束限制
+- `summary_text` 存固定文字「今日無內容」而非 `NULL`：代表該來源當天確實收集完成、只是沒有內容，此時不呼叫 Gemini（省 Token）；跟「完全沒有這個 source 的列」（收集當下服務不可用，例如整個小時 23:00 都連不上）是兩種不同情境，後者才用 `source IS NULL` 表示，隔天推播時一律回覆 Robin 指定的固定訊息「未獲得最新技術分享」
+- `pushed_on` 沿用 `todos.daily_pushed_on` 的慣例，記錄「這批（同一天最多三筆）是否已經推播過」，避免 08:00 那個小時內重複推播；跟 `digest_date` 分開兩個欄位是因為推播時間點（隔天）跟收集時間點（當天）本來就不同一天
 
 ---
 

@@ -142,8 +142,8 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 
 ### 功能性需求 — 個人技能成長（僅 Robin 可用）
 
-- [x] FR-22（**2026-08-07 完成並修正，見 Step 3.1**）：每日固定時間自動推播技能成長摘要——經 Robin 回饋修正為「收集」與「推播」兩個獨立排程時間點：固定台灣時間 23:00 收集當天的技術情報（`src/bot/skill_growth.collect_and_store_daily_digest()`），固定隔天台灣時間 08:00 推播前一晚收集到的摘要（`check_and_push_daily_digest()`），兩者都借用 `/healthz` 既有的 10 分鐘 cron 頻率、各自只在對應的小時內執行；去重靠新增的 `skill_growth_digests` 表（`digest_date` UNIQUE 約束收集去重、`pushed_on` 欄位比照 `todos.daily_pushed_on` 慣例做推播去重）
-- [x] FR-23（**2026-08-07 完成並修正，見 Step 3.1、submodules-core SPEC.md ADR-11 追記／ADR-14**）：每日重點技術分享（開關）：固定台灣時間 23:00 擷取 Gmail「當天」TLDR 電子報 + IThome / TechCrunch「當天」新聞，經 Gemini 產出中文重點摘要與總結分享，隔天 08:00 推播（依 NFR-11，以來源日期避免重複摘要已處理過的電子報/新聞）。實作細節：①TLDR 電子報寄件者固定為 `dan@tldrnewsletter.com`，用 `submodules/email` 新增的 `fetch_emails_from_domain_on_date(sender_domain, target_date)`（IMAP，寄件者網域比對 `tldrnewsletter.com`，經 AskUserQuestion 確認；呼叫端指定日期，不假設「今天」或「昨天」）②IThome／TechCrunch 用新增的 `submodules/newsfeed`（RSS Feed，`requests`＋標準函式庫 `xml.etree.ElementTree`，同樣以指定日期查詢）③三個來源任一失敗只記 log、視為當天無內容，不影響其他來源與整體收集④三個來源都沒內容時，收集階段不呼叫 Gemini（`summary_text` 寫入 `NULL`），推播階段一律回覆 Robin 指定的固定訊息「未獲得最新技術分享」，不靜默跳過（NFR-10）；找不到前一晚的收集結果（例如收集當下服務整小時都不可用）同樣回覆這則固定訊息⑤去重用「來源日期」（每天固定只收集「當天」）＋`skill_growth_digests.digest_date`（收集去重，UNIQUE 約束）／`pushed_on`（推播去重）機制，不需要額外的內容雜湊表⑥`tech_intel` 功能開關（`owner_only=True`；**2026-08-07 同日再修正**：原規劃的 `skill_growth` 拆成 `tech_intel`／`certificate`／`language` 三個獨立開關，見 feature-toggles SPEC.md FR-3 追記，本功能只用其中的 `tech_intel`，因為 Robin 認為證照準備〔TOEIC〕跟技術情報訂閱性質不同、不該共用同一把開關）關閉時，收集與推播兩階段都會跳過，不消耗 Gemini API 額度⑦Gemini 呼叫用獨立的 `GEMINI_API_SKILL_GROWTH_KEY`（Robin 已於 2026-08-07 申請並設定到 `.env`／Render 部署環境）
+- [x] FR-22（**2026-08-07 完成並修正，見 Step 3.1；2026-08-09 推播格式再修正，見 ADR-25**）：每日固定時間自動推播技能成長摘要——經 Robin 回饋修正為「收集」與「推播」兩個獨立排程時間點：固定台灣時間 23:00 收集當天的技術情報（`src/bot/skill_growth.collect_and_store_daily_digest()`），固定隔天台灣時間 08:00 推播前一晚收集到的摘要（`check_and_push_daily_digest()`），兩者都借用 `/healthz` 既有的 10 分鐘 cron 頻率、各自只在對應的小時內執行；去重靠 `skill_growth_digests` 表（`UNIQUE (digest_date, source)` 約束收集去重、`pushed_on` 欄位比照 `todos.daily_pushed_on` 慣例做推播去重，同一天的幾筆一起標記）。**2026-08-09 修正（見 ADR-25）**：推播內容改為 Robin 指定的三行式精簡格式（「1.TLDR 電子報總結分享：……」「2.ithome新聞總結分享：……」「3.TechCrunch新聞總結分享：……」），不再輸出原文條列內容，方便 Robin 一眼判斷哪個來源當天沒有內容或收集異常
+- [x] FR-23（**2026-08-07 完成並修正，見 Step 3.1、submodules-core SPEC.md ADR-11 追記／ADR-14；2026-08-09 改為三來源各自獨立摘要，見 ADR-25**）：每日重點技術分享（開關）：固定台灣時間 23:00 擷取 Gmail「當天」TLDR 電子報 + IThome / TechCrunch「當天」新聞，三個來源各自獨立經 Gemini 產出中文重點摘要，隔天 08:00 推播（依 NFR-11，以來源日期避免重複摘要已處理過的電子報/新聞）。實作細節：①TLDR 電子報寄件者固定為 `dan@tldrnewsletter.com`，用 `submodules/email` 新增的 `fetch_emails_from_domain_on_date(sender_domain, target_date)`（IMAP，寄件者網域比對 `tldrnewsletter.com`，經 AskUserQuestion 確認；呼叫端指定日期，不假設「今天」或「昨天」）②IThome／TechCrunch 用新增的 `submodules/newsfeed`（RSS Feed，`requests`＋標準函式庫 `xml.etree.ElementTree`，同樣以指定日期查詢）③三個來源任一失敗只記 log、視為當天無內容，不影響其他來源與整體收集④單一來源當天沒內容時，該來源不呼叫 Gemini（`summary_text` 寫入固定文字「今日無內容」，見 ADR-25），推播階段若完全查無前一晚的收集結果（例如收集當下服務整小時都不可用）一律回覆 Robin 指定的固定訊息「未獲得最新技術分享」，不靜默跳過（NFR-10）⑤去重用「來源日期」（每天固定只收集「當天」）＋`skill_growth_digests.(digest_date, source)`（收集去重，`UNIQUE` 約束）／`pushed_on`（推播去重）機制，不需要額外的內容雜湊表⑥`tech_intel` 功能開關（`owner_only=True`；**2026-08-07 同日再修正**：原規劃的 `skill_growth` 拆成 `tech_intel`／`certificate`／`language` 三個獨立開關，見 feature-toggles SPEC.md FR-3 追記，本功能只用其中的 `tech_intel`，因為 Robin 認為證照準備〔TOEIC〕跟技術情報訂閱性質不同、不該共用同一把開關）關閉時，收集與推播兩階段都會跳過，不消耗 Gemini API 額度⑦Gemini 呼叫用獨立的 `GEMINI_API_SKILL_GROWTH_KEY`（Robin 已於 2026-08-07 申請並設定到 `.env`／Render 部署環境）；**2026-08-09 修正（見 ADR-25）**：三個來源各自獨立呼叫 Gemini（一次收集最多 3 次 API 呼叫），`skill_growth_digests` 改為一天最多三筆、一筆一個來源，欄位新增 `source`（`tldr`／`ithome`／`techcrunch`），`summary_text` 只存單一來源的精簡總結，未來新增來源只需要多寫一個 `source` 值、不需要改 schema
 - [x] FR-24：證照題庫（`certificate` 開關，2026-08-07 起獨立於技術情報 `tech_intel` 之外，見 feature-toggles SPEC.md FR-3 追記）：使用者設定目標（時間、目標分數），Robinson 可在使用者不知如何準備時提供方向建議。**2026-08-07（Step 3.2）確認範圍**：這條「目標設定＋方向建議」的對話式功能與 FR-26（自訂每日題數/彈性排程）性質相近，一併留到 Step 3.3 展開；Step 3.2 只完成 FR-25a～FR-25f 的題庫建立 Pipeline。**2026-08-07（Step 3.3 設計定案，見 ADR-19）**：目標（考試時間、目標分數）依 `exam_type` 各自設定一筆，重新設定即覆蓋舊值；方向建議由 Robinson 依使用者近期 FR-29 統計出的成效（對錯趨勢、常出錯的 `question_type`）與距離目標時間長短，用 LLM 生成客製化建議文字，不走固定範本。**2026-08-08 實作完成**：新增 `src/bot/certificate_goals.py`（`get_goal()`／`set_goal()`〔UPSERT，寫入 `certificate_goals` 表，0041 migration 已存在〕／`list_goals()`／`build_advice_prompt()`）；`commands.py` 新增「設定證照目標」／`/set_certificate_goal`（選 exam_type → 目標考試時間，可回覆「跳過」→ 目標分數，可回覆「跳過」→ 覆蓋寫入並告知舊值）、「我的證照目標」／`/my_certificate_goals`（單次列表）、「給我讀書建議」／`/certificate_advice`（只有一個候選 exam_type 直接生成、多個則先反問；抓近 30 天 `certificate_stats.compute_daily_period_stats()` 成效＋目標，組 Prompt 交給 LLM 生成客製化建議文字，不走固定範本）；`router.py` 註冊三個觸發詞與四個新 `pending_*` 狀態分派
 - [x] FR-25：TOEIC 為第一個題庫，每次出題預設 1 題聽力 + 2 題填空 + 3 題單字英翻中，採「雙軌混合架構」產生題目；未來可套用同模板擴充 AWS / GCP 等其他證照（**2026-08-07 完成，見 Step 3.2**）：
   - [x] FR-25a：軌道一（高準確度題庫）來源 — Robin 將題目照片（圖檔）與聽力音檔（MP3）上傳至 Google Drive 指定資料夾。**2026-08-07 確認實際檔名規則**：`toeic_{測驗場次代號}_write_{題號}.{ext}`（填空/單字題，僅圖片）、`toeic_{測驗場次代號}_listen_{題號}.{ext}`（聽力題，Robin 已切好的單題圖片/音檔）、`toeic_{測驗場次代號}_listen.mp3`（聽力題整包音檔，尚未切割）。**2026-08-07 同日追記（見 ADR-18 決策 4）**：檔名格式泛用化為 `{exam_type}_{測驗場次代號}_write/listen_{題號}.{ext}`，`exam_type` 開放任意字串（不限 toeic），供 GCP／AWS 等未來證照類型直接沿用同一套 Pipeline
@@ -179,15 +179,20 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 - [x] FR-32：推播時機：使用者主動查詢時、每日 08:00 固定推播、預計處理時間前 30 分鐘提醒（提醒與否由使用者於記錄當下決定，見 FR-56e 情境範例）（**2026-08-02 實作**：主動查詢＝「我的待辦事項」／`/my_todos`；每日 08:00 固定推播與前 30 分鐘提醒兩者都沒有獨立排程系統，借用 `/healthz` 既有的 10 分鐘 cron 頻率，去重狀態存在 `todos` 資料列本身（`reminded_30min_sent_at`／`daily_pushed_on`），見 `src/schema/db_schema.md` todos 表設計理由）
 - [x] FR-31b：待辦事項除了單一時間點，也要能記錄一段時間區間（例如「2026-08-02 08:00 ～ 2026-08-05 17:00」的出差、旅行等跨天/跨時段任務）（**2026-08-02 實作**，Robin 詢問「待辦事項是不是只能存單一時間點」後新增，經 AskUserQuestion 確認三個設計決策：① `todos` 新增可選的 `start_at` 欄位而非把 `due_at` 整個改成必填的 start/end 兩欄，既有單一時間點待辦完全不受影響（`0016_add_start_at_to_todos.sql`，Robin 依 ADR-10 核准）② 前 30 分鐘提醒對區間待辦以 `start_at`（開始時間）為基準（提醒「準備要開始了」），單一時間點待辦仍以 `due_at` 為基準 ③ 每日 08:00 摘要對區間待辦只在「開始那天」與「結束那天」各出現一次，去重判斷從「曾經推播過就不再推播」改為「今天是否已經推播過」（`daily_pushed_on IS NULL OR daily_pushed_on != 今天`），讓同一筆待辦能在開始日、結束日分別各推播一次。`commands._TODO_TIME_PARSE_PROMPT` 新增選填的 `START_AT` 欄位，只有原始描述或回覆同時講出明確的開始與結束時間才判斷為區間，且開始/結束兩個時間點都要分別滿足「日期明確」「時段不歧義」才算 CLEAR；確認訊息與「我的待辦事項」清單都會依是否為區間顯示「開始 ～ 結束」或單一時間）
 
-### 功能性需求 — 求職
+### 功能性需求 — 求職（**2026-08-08 決議僅 Robin 可用，見 ADR-24**）
 
-- [ ] FR-33：使用者可設定查詢關鍵字、地區、薪資範圍、產業別
+- [ ] FR-33（**2026-08-08 修正，見 ADR-24 決策 3**）：使用者可同時設定多組查詢條件（各組各自包含關鍵字、地區、薪資範圍、產業別），不限單組覆蓋；每組條件各自獨立生效，每週排程各自送出查詢
 - [ ] FR-34：定期爬取 104 最新更新職缺，並深入爬取職缺內容、應徵條件、福利：
-  - [ ] FR-34a：抓取機制 — 不使用瀏覽器自動化工具（Playwright/Selenium）、無需登入態，直接分析並呼叫 104 前端 AJAX/JSON API（`https://www.104.com.tw/jobs/search/list`）解析資料，輕量且高執行效能
+  - [ ] FR-34a（**2026-08-08 補充，見 ADR-24 決策 4**）：抓取機制 — 不使用瀏覽器自動化工具（Playwright/Selenium）、無需登入態，直接分析並呼叫 104 前端 AJAX/JSON API（`https://www.104.com.tw/jobs/search/list`）解析資料，輕量且高執行效能。**採兩階段架構**：先呼叫列表 API 依 FR-33 各組條件取得職缺摘要清單，再對清單內每一筆職缺 ID 個別呼叫詳情頁補齊完整職缺內容／應徵條件／福利（列表 API 欄位是否已足夠涵蓋這些內容，目前沒有實測依據，先假設不夠、保守採兩階段；待 Robin 提供實測結果後可簡化為單階段）
   - [ ] FR-34b：執行頻率 — 每週僅執行一次（固定時間排程），不對 104 伺服器造成流量負擔（修正原「每日爬取」的規劃）
-  - [ ] FR-34c：反爬蟲友善機制 — Header 帶入標準 Browser User-Agent 與 Referer；若需分頁抓取，每頁請求之間強制加入 2～4 秒隨機延遲，嚴禁併發多執行緒請求
+  - [ ] FR-34c（**2026-08-08 補充**）：反爬蟲友善機制 — Header 帶入標準 Browser User-Agent 與 Referer；列表分頁請求之間、以及 FR-34a 每一筆詳情頁請求之間，皆強制加入 2～4 秒隨機延遲，嚴禁併發多執行緒請求
   - [ ] FR-34d：ETL 去重 — 以 104 職缺唯一 ID（或職缺 URL）作為去重鍵值，已存在資料庫的職缺應更新既有紀錄（如薪資/職缺狀態變動）而非重複新增，避免每週爬蟲造成資料庫重複資料膨脹（符合 NFR-11 ETL 去重原則）
-- [ ] FR-35：Gemini 以 Web Search 補充每個職缺公司的產業背景、願景與現有產品/服務
+- [ ] FR-35（**2026-08-08 全面改寫，見 ADR-24 決策 1，取代原「Gemini Web Search 補充公司背景」設計**）：職缺公司背景資訊改採「Email 協作」機制，不使用 Gemini Web Search（該能力已因 grounding 失效被移除，見 chat-core SPEC.md ADR-5）：
+  - [ ] FR-35a：每週排程爬完職缺後（FR-34），比對這批職缺所屬公司清單，找出資料庫裡尚未有背景資料的新公司（以 104 公司 ID 判斷是否已存在）；若這批公司全部都已有背景資料，FR-35b～FR-35e 整段流程完全跳過，不寄信也不通知
+  - [ ] FR-35b：有新公司時，先把新公司寫入資料庫（`background` 留空），組一份 CSV（欄位：104公司ID、公司全名、地區、產業類型、背景〔空〕），命名為 `{YYYY-MM-DD}-104職缺公司.csv`，透過 Email 寄給 Robin（沿用 `submodules/email`／`GMAIL_USER` 自寄自收），標題「{YYYY-MM-DD} 排程 - Robinson 104 職缺公司列表」，內容「附件為本週爬到的最新公司列表，請參閱！」
+  - [ ] FR-35c：寄信成功後，私訊 Robin Telegram：「已經寄送本週最新的104職缺公司信件給您了～」（FR-19h 決策執行狀態閉環回饋）
+  - [ ] FR-35d：Robin 自行上網查詢並填好 CSV 的「背景」欄位，上傳到既有共用 Google Drive 資料夾（沿用 `GDRIVE_FOLDER_ID`，比照 TOEIC 模組同一資料夾、靠檔名慣例區分），檔名不變
+  - [ ] FR-35e：Robin 上傳後在 Telegram 說「已上傳{YYYY-MM-DD}-104職缺公司.csv」，Robinson 偵測到此訊息格式後，至 Drive 資料夾以檔名找到該檔案、下載、解析 CSV，把「背景」欄位逐筆 UPDATE 回資料庫對應公司（以 104 公司 ID 比對），完成後回覆處理結果（成功筆數；找不到對應公司的列出來提醒人工處理，不可靜默略過）
 - [ ] FR-36：記錄使用者 3500 字內個人履歷與未來期望工作內容
 - [ ] FR-37：Gemini 交叉比對履歷與職缺，綜合應徵人數、更新時間、年資與期望薪資匹配度計算契合度評分
 - [ ] FR-38：依評分排序，針對前 30 名職缺整理出使用者目前的技能缺口
@@ -845,6 +850,76 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 
 **狀態**：accepted
 
+### ADR-23：`language`（語言學習）功能規劃暫時擱置，不排入目前 Roadmap
+
+**背景**：2026-08-08 Robin 詢問 Phase 4 之後的開發項目時，Claude 盤點發現功能開關清單裡的 `language`（語言學習：英文口說練習、其他語言學習）自 2026-08-07 `skill_growth` 拆分三個開關（`tech_intel`／`certificate`／`language`）以來，只建立了開關本身，從未展開任何功能性需求（FR），也沒有排進 Phase 0～4 任何一個 Step。
+
+**決策**：`language` 功能規劃正式擱置，不排入目前 Roadmap（Phase 0～4）。開關本身維持存在於 `feature_toggles`／`templates.FEATURE_LIST`，但功能上無作用（開/關都不影響任何實際行為，因為根本沒有對應功能）；何時展開、展開成什麼樣的內容，留待 Phase 4（求職模組＋Mobile App）全部完成後再另行討論定案。
+
+**理由**：Robin 明確表示「language 這個可以先擱置」，優先完成已經排定的 Phase 4；比起花時間展開一個還沒想清楚的新功能，先把既有 Roadmap 走完更符合專案一貫「先求穩、範圍蔓延風險留給下一個階段」的慣例。
+
+**替代方案**：現在就展開 `language` 功能規劃、插入 Phase 4 之前或之後——已否決，Robin 選擇先擱置。
+
+**後果**：往後任何「清點剩餘工作」的回答都不該把 `language` 算進 Phase 4 的範圍內；未來真的要展開時，需要重新走一次完整的 SDD 流程（先確認需求細節、AskUserQuestion 定案設計，再排進 Roadmap）。此決議純屬規劃層級調整，未異動任何程式碼或資料表。
+
+**狀態**：accepted
+
+### ADR-24：Step 4.1（104 職缺爬蟲）開工前四項設計決策
+
+**背景**：Step 4.1 開工前，Claude 盤點 FR-33～FR-36 原始規格，發現 FR-35「Gemini 以 Web Search 補充公司背景」與已經拿掉的 Google Search grounding（chat-core SPEC.md ADR-5）直接衝突，技術上走不通；同時 FR-33（搜尋條件數量）、FR-34a（列表 API 是否已含完整職缺內容）、求職模組使用範圍三點也需要在動工前定案。經與 Robin 多輪討論確認四項決策。
+
+**決策**：
+
+1. **FR-35 公司背景改採「Email 協作」機制，不用 Gemini Web Search**：每週爬完職缺後，Robinson 找出資料庫裡還沒有背景資料的新公司，先寫入資料庫（`background` 留空），組成 CSV（104公司ID／公司全名／地區／產業類型／背景）用 Email 寄給 Robin（自己的 `GMAIL_USER` 帳號自寄自收），寄信成功後私訊 Telegram 告知；Robin 自行上網查完背景、把 CSV 填好上傳到既有共用 Google Drive 資料夾（沿用 `GDRIVE_FOLDER_ID`），並在 Telegram 說「已上傳 XXX.csv」；Robinson 偵測到這句話後去 Drive 抓檔、解析、把背景欄位回填資料庫。當週若沒有任何新公司（都已有背景資料），整段流程完全跳過，不寄信不通知。
+2. **求職模組僅 Robin 一人可用**：不支援其他家人各自求職，`templates.FEATURE_LIST` 的 `job_search` 開關屬性於 Step 4.1 實作時改為 `owner_only=True`，本節標題同步加註「僅 Robin 可用」。
+3. **FR-33 允許同時存多組搜尋條件**：不是「一組、重新設定即覆蓋」的既有慣例（比照記帳預算／證照目標），而是可以同時儲存多組關鍵字/地區/薪資/產業別條件，各自獨立生效，每週排程對每組條件各自送出查詢。
+4. **FR-34a 深度爬取先採兩階段架構**：沒有現成的 104 API 實測資料可依循，先假設列表 API（`/jobs/search/list`）只回傳摘要欄位，保守設計成「列表 API 抓清單 → 對每筆職缺 ID 再打一次詳情頁補齊完整內容/應徵條件/福利」；FR-34c 的 2～4 秒隨機延遲同時套用在列表分頁與詳情頁請求之間。待 Robin 之後提供實際 API 回應格式，若列表 API 其實已經夠完整，再簡化拿掉詳情頁請求。
+
+**理由**：
+- 決策 1：完全比照專案既有的「知識庫查無答案時，誠實不知道＋請使用者查完提供」模式（chat-core FR-4、ADR-5），把「不知道」換成「查公司背景」，同樣不需要任何外部 Search API、零成本零新技術風險；Email＋Drive 上傳／下載也是專案既有子模組（`submodules/email`、`submodules/gdrive`）已經驗證過的管道，只需擴充 `submodules/email` 的附件寄送能力。
+- 決策 2：Robin 明確表示求職模組使用範圍先開給自己就好，架構單純很多，不需要處理多使用者各自履歷/條件/評分並行的複雜度。
+- 決策 3：Robin 明確要求允許同時存多組條件（例如同時想找兩種不同類型的職缺），這跟記帳預算/證照目標「一人一份設定」的性質不同——求職條件本質上就可能同時有多個方向。
+- 決策 4：sandbox 連不到 104 的網路，無法實測列表 API 實際回傳欄位，Robin 目前也沒有現成的 API 規格文件；「深入爬取」這個字面要求暗示列表 API 可能不夠，保守假設、之後視實測結果調整，比一開始就賭列表 API 已經夠用、上線後才發現內容缺漏更穩妥。
+
+**替代方案**：
+- 決策 1 替代方案：開通 Gemini grounding 計費額度、或串接第三方 Search API（如 SerpAPI）——已否決，會產生實際費用，違反 NFR-1「所有服務一律使用免費方案」；直接拿掉公司背景這個功能——Robin 選擇保留但用人力協作的方式取代自動化搜尋。
+- 決策 2 替代方案：一開始就設計成多使用者可用——已否決，Robin 選擇先簡化，之後真有需求再擴充（比照專案一貫「先求穩」慣例）。
+- 決策 4 替代方案：先當作列表 API 已經足夠、只做單階段——已否決，Robin 沒有反對兩階段的保守設計，且「深入爬取」字面上就暗示可能需要。
+
+**後果**：
+- `submodules/email` 需要新增支援附件的寄信方法（例如 `send_text_with_attachment()`），沿用標準函式庫 `email.mime`，不新增第三方套件。
+- 需要新增「已上傳 {檔名}」這種帶動態檔名的觸發詞規則（比照 `router._CLEAN_TARGET_DIALOG_PATTERN` 用 regex 擷取參數的既有慣例）。
+- 需要新增公司資料表（暫定 `job_companies`：104公司ID／公司全名／地區／產業類型／背景／建立時間）與搜尋條件表（暫定 `job_search_criteria`：支援多組，`user_id`／關鍵字／地區／薪資範圍／產業別），實際欄位與 migration SQL 於 Step 4.1 正式開工、依 ADR-10 流程提出時定案。
+- CSV 解析採標準函式庫 `csv` module，不裝第三方套件（比照 `submodules/newsfeed` 用標準函式庫解析 RSS 而不裝 `feedparser` 的既有慣例）。
+- `job_search` 開關屬性變更（`owner_only=True`）需要同步更新 `templates.py`／相關測試斷言。
+
+**狀態**：accepted
+
+### ADR-25：`skill_growth_digests` 改為「一天多筆、一筆一個來源管道」正規化設計（取代原單筆合併 `summary_text`）
+
+**背景**：Step 3.1 上線後，Robin 回報實際推播內容有兩個問題：①三個來源（TLDR 電子報／IThome／TechCrunch）合併成單一 `summary_text` 欄位，完全無法分辨當天到底是哪個來源沒抓到內容、還是收集本身出了問題，例如 TLDR 電子報信箱掛掉，Robin 從推播訊息看不出來；②推播訊息把每則新聞/電子報的原文整理成完整條列文章，內容太長，Robin 只需要三行式的重點結論。
+
+**決策**：
+1. `skill_growth_digests` 新增 `source` 欄位（值為 `tldr`／`ithome`／`techcrunch`），約束改為 `UNIQUE (digest_date, source)`，一天最多寫入三筆，一筆對應一個來源；`summary_text` 保留，但只存單一來源當天的精簡總結（≤100 字，只給結論，不條列原文）。收集階段（23:00）三個來源各自獨立呼叫 Gemini、各自寫入一筆，任一來源當天沒有內容則寫入固定文字「今日無內容」而不是 `NULL`，藉此跟「這個 source 完全沒有列」（收集當下服務不可用）區分開來。
+2. 推播訊息格式改為 Robin 指定的三行式：「1.TLDR 電子報總結分享：……」「2.ithome新聞總結分享：……」「3.TechCrunch新聞總結分享：……」，不再輸出原文條列內容。
+3. 舊表直接 `DROP TABLE` 砍掉重建（見 `src/migrations/0052_recreate_skill_growth_digests_per_source.sql`），不做資料搬遷；Robin 確認舊表當時僅有 1 筆資料，重建成本可忽略。
+
+**理由**：
+- 決策 1：Claude 原提案是新增 3 個獨立欄位（`tldr_summary`／`ithome_summary`／`techcrunch_summary`）取代 `summary_text`，被 Robin 否決——理由是未來每新增一個來源就要 `ALTER TABLE` 加欄位，擴充性差；改成 `source` 欄位＋正規化多筆列的設計，新增來源只需要多寫一個 `source` 值，完全不用改 schema，也更貼合 Robin 一貫要求的「可擴充」原則。
+- 決策 2：Robin 明確表示「不需要放那麼多字給我，我只需要技術總結」，並提供了具體的三行式格式範例。
+- 決策 3：只有 1 筆既有資料，保留舊資料（例如標記 `source = NULL` 當作 legacy 列）的複雜度完全不值得，Robin 直接授權砍掉重建。
+
+**替代方案**：
+- 3 個獨立欄位（`tldr_summary`／`ithome_summary`／`techcrunch_summary`）——已否決，見決策 1 理由，Robin 認為擴充性差。
+- 就地 `ALTER TABLE` 加 `source` 欄位、保留舊資料為 `source = NULL` 的 legacy 列——Claude 原提案，Robin 認為多此一舉（只有 1 筆資料），選擇直接砍掉重建。
+
+**後果**：
+- `src/bot/skill_growth.py` 全面重寫：`_get_digest()` → `_get_digests_for_date()`（回傳 list）；`build_summary_text()`／`_build_summary_prompt()` → `summarize_source()`／`_build_source_prompt()`（單一來源獨立摘要）；`collect_and_store_daily_digest()` 改為寫入三筆；`check_and_push_daily_digest()` 改為讀取三筆、用新增的 `_format_digest_message()` 組出三行式訊息，`source IS NULL` 的去重標記列邏輯沿用「完全查無資料」情境。
+- 三個來源各自獨立呼叫 Gemini（一次收集最多 3 次 API 呼叫，取代原本 1 次），仍在免費額度內（NFR-1），但需留意 Gemini 免費層級的 QPS/RPM 限制，未來若加入更多來源要留意額度。
+- `tests/bot/test_skill_growth.py` 全面重寫以配合新 schema 與函式簽名，重跑後 `src/bot/skill_growth.py` 維持 100% 覆蓋率。
+
+**狀態**：accepted
+
 ## 實作計畫
 
 > 分期原則見 ADR-4；每個 Phase 完成後才進入下一個 Phase 的詳細 spec 與 TDD 循環。本 spec 僅列到模組層級，各模組進入實作前應個別建立 `docs/specs/<feature-slug>/SPEC.md` 展開 API 設計與資料表結構。
@@ -896,11 +971,15 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 
 > **2026-08-04 更新**：原獨立拆出的 Phase 5「Notion 後台」已取消，Mobile App（React Native + Expo）併入本 Phase，見 ADR-14。Step 4.4／4.5 僅為 Placeholder，詳細規劃留待本 Phase 開工、對應 Step 展開獨立 spec（`docs/specs/mobile-app/SPEC.md`）時再確認。
 
-- [ ] Step 4.1：104 職缺爬蟲（FR-33、FR-34a～FR-34d：無登入態直呼叫 AJAX API、每週一次、UA/Referer + 2～4 秒隨機延遲、禁併發、ETL 去重）與職缺內容解析（FR-35、FR-36）
+- [ ] Step 4.1（**2026-08-08 規格定案，見 FR-33～FR-36、ADR-24；尚未實作**）：104 職缺爬蟲（FR-33 多組搜尋條件、FR-34a～FR-34d：無登入態直呼叫 AJAX API、兩階段列表+詳情頁、每週一次、UA/Referer + 2～4 秒隨機延遲、禁併發、ETL 去重）與職缺內容解析（FR-36）；FR-35 公司背景改採 Email＋CSV＋Drive 人力協作機制（詳見 ADR-24），僅 Robin 可用
 - [ ] Step 4.2：Gemini 契合度評分與技能缺口分析（FR-37、FR-38）
 - [ ] Step 4.3：應徵成效追蹤（FR-39、FR-40）
 - [ ] Step 4.4（Placeholder）：Mobile App 基礎建設與登入機制（FR-65）—— 建立 `mobile/` Expo 專案骨架、`users.app_access_token` 建表（依 ADR-10 流程）、登入頁與 `/api/app/*` 驗證中介層
 - [ ] Step 4.5（Placeholder）：BI Dashboard 圖表頁面（FR-64）—— 記帳/體態模組的圖表 API（消費圓餅圖、體重折線圖等）與對應的 App 頁面
+
+### 語言學習（`language` 功能開關，**2026-08-08 決議擱置，見 ADR-23**）
+
+> `language`（英文口說練習、其他語言學習）功能開關已於 2026-08-07 隨 `skill_growth` 拆分建立（見 feature-toggles SPEC.md FR-3 追記），但從未展開對應的功能性需求，也不在 Phase 0～4 任何 Step 內。**2026-08-08 Robin 明確決議「可以先擱置」**——目前規劃到 Phase 4（求職模組＋Mobile App）為止，`language` 何時展開、展開成什麼樣的功能，留待 Phase 4 完成後再另行討論定案，非目前 Roadmap 範圍，開關本身維持存在但功能上是無作用的（開/關都不影響任何行為）。
 
 ## 測試策略
 
