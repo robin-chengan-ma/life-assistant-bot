@@ -158,6 +158,10 @@ def upsert_job_posting(db: CloudSQLClient, job: dict, detail: dict, now: datetim
     真實流量驗證（見 `submodules/job104/client.py` 模組 docstring），與其現在用不確定的規則
     猜測解析成數字區間，不如先讓這兩欄維持 `NULL`，待實測結果出爐後再補上解析邏輯，符合 ADR-24
     決策 4「先保守假設、之後視實測結果調整」的一貫做法。
+
+    應徵人數（`applicant_count`）取自 `job`（列表階段的 `search_list()` 結果），不是
+    `detail`（詳情頁 API 已確認沒有這個欄位，2026-08-09 實測驗證，見 `submodules/job104/
+    client.py` 模組 docstring）。
     """
     existing = db.select("job_postings", where="job_id_104 = %s", params=(job["job_id"],), fetch_one=True)
     fields = {
@@ -167,7 +171,7 @@ def upsert_job_posting(db: CloudSQLClient, job: dict, detail: dict, now: datetim
         "url": job["url"],
         "content": detail.get("content"),
         "required_years_experience": detail.get("required_years_experience"),
-        "applicant_count": detail.get("applicant_count"),
+        "applicant_count": job.get("applicant_count"),
         "source_updated_at": detail.get("source_updated_at"),
         "last_crawled_at": now,
     }
@@ -227,7 +231,7 @@ def crawl_and_upsert_jobs(
                 if is_new_company and job["company_id"] not in new_company_ids:
                     new_company_ids.append(job["company_id"])
 
-                detail = job104_client.fetch_job_detail(job["job_id"])
+                detail = job104_client.fetch_job_detail(job["job_slug"])
                 _polite_delay(sleep_func, random_func)
 
                 if upsert_job_posting(db, job, detail, now):

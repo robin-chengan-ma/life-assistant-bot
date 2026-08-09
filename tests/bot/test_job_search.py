@@ -131,16 +131,17 @@ def test_upsert_company_existing_company_does_not_overwrite(fake_db):
 
 _JOB = {
     "job_id": "12345",
+    "job_slug": "abcde",
     "title": "AI 工程師",
     "company_id": "999",
     "company_name": "某某科技",
     "region": "台北市信義區",
     "url": "https://www.104.com.tw/job/12345",
+    "applicant_count": None,
 }
 _DETAIL = {
     "content": "負責 AI 模型開發",
     "required_years_experience": 3.0,
-    "applicant_count": None,
     "source_updated_at": None,
 }
 
@@ -187,7 +188,9 @@ def test_upsert_job_posting_updates_existing_job_without_changing_first_seen_at(
 
 class _FakeJob104Client:
     """模擬 submodules.job104.client.Job104Client，依 (keyword, page) 回傳預先設定好的清單，
-    依 job_id 回傳預先設定好的詳情，並記錄呼叫次數供測試驗證分頁/延遲行為。"""
+    依 job_slug（詳情頁 API 用的短代碼 ID，跟 job_id/jobNo 是不同識別碼，2026-08-09 實測驗證
+    確認，見 submodules/job104/client.py 模組 docstring）回傳預先設定好的詳情，並記錄呼叫
+    次數供測試驗證分頁/延遲行為。"""
 
     def __init__(self, pages: dict, details: dict):
         self._pages = pages
@@ -199,9 +202,9 @@ class _FakeJob104Client:
         self.search_calls.append((keyword, page))
         return self._pages.get((keyword, page), [])
 
-    def fetch_job_detail(self, job_id):
-        self.detail_calls.append(job_id)
-        return self._details.get(job_id, {})
+    def fetch_job_detail(self, job_slug):
+        self.detail_calls.append(job_slug)
+        return self._details.get(job_slug, {})
 
 
 def _fake_sleep(_seconds):
@@ -224,21 +227,23 @@ def test_crawl_and_upsert_jobs_no_criteria_makes_no_requests(fake_db):
 def test_crawl_and_upsert_jobs_single_criteria_single_page(fake_db):
     job_search.save_search_criteria(fake_db, 1, "AI 工程師", "台北市", 50000, None, None)
     page1 = [
-        {"job_id": "1", "title": "AI 工程師 A", "company_id": "100", "company_name": "A 公司",
-         "region": "台北市", "url": "https://www.104.com.tw/job/1"},
-        {"job_id": "2", "title": "AI 工程師 B", "company_id": "100", "company_name": "A 公司",
-         "region": "台北市", "url": "https://www.104.com.tw/job/2"},
+        {"job_id": "1", "job_slug": "slug1", "title": "AI 工程師 A", "company_id": "100",
+         "company_name": "A 公司", "region": "台北市", "url": "https://www.104.com.tw/job/1",
+         "applicant_count": 3},
+        {"job_id": "2", "job_slug": "slug2", "title": "AI 工程師 B", "company_id": "100",
+         "company_name": "A 公司", "region": "台北市", "url": "https://www.104.com.tw/job/2",
+         "applicant_count": 5},
     ]
     client = _FakeJob104Client(
         pages={("AI 工程師", 1): page1},
-        details={"1": {"content": "內容1"}, "2": {"content": "內容2"}},
+        details={"slug1": {"content": "內容1"}, "slug2": {"content": "內容2"}},
     )
 
     result = job_search.crawl_and_upsert_jobs(fake_db, client, 1, sleep_func=_fake_sleep, random_func=_fake_random)
 
     assert result == {"new_company_ids": ["100"], "new_job_count": 2, "updated_job_count": 0}
     assert client.search_calls == [("AI 工程師", 1), ("AI 工程師", 2)]  # 第 2 頁空清單才停止翻頁
-    assert sorted(client.detail_calls) == ["1", "2"]
+    assert sorted(client.detail_calls) == ["slug1", "slug2"]
     jobs = fake_db.select("job_postings")
     assert len(jobs) == 2
     companies = fake_db.select("job_companies")
@@ -260,12 +265,14 @@ def test_crawl_and_upsert_jobs_multiple_criteria_each_queried(fake_db):
     job_search.save_search_criteria(fake_db, 1, "資料工程師", None, None, None, None)
     client = _FakeJob104Client(
         pages={
-            ("AI 工程師", 1): [{"job_id": "1", "title": "A", "company_id": "100", "company_name": "A 公司",
-                              "region": "台北市", "url": "https://www.104.com.tw/job/1"}],
-            ("資料工程師", 1): [{"job_id": "2", "title": "B", "company_id": "200", "company_name": "B 公司",
-                             "region": "新竹市", "url": "https://www.104.com.tw/job/2"}],
+            ("AI 工程師", 1): [{"job_id": "1", "job_slug": "slug1", "title": "A", "company_id": "100",
+                              "company_name": "A 公司", "region": "台北市",
+                              "url": "https://www.104.com.tw/job/1", "applicant_count": 1}],
+            ("資料工程師", 1): [{"job_id": "2", "job_slug": "slug2", "title": "B", "company_id": "200",
+                             "company_name": "B 公司", "region": "新竹市",
+                             "url": "https://www.104.com.tw/job/2", "applicant_count": 2}],
         },
-        details={"1": {}, "2": {}},
+        details={"slug1": {}, "slug2": {}},
     )
 
     result = job_search.crawl_and_upsert_jobs(fake_db, client, 1, sleep_func=_fake_sleep, random_func=_fake_random)
@@ -277,9 +284,10 @@ def test_crawl_and_upsert_jobs_multiple_criteria_each_queried(fake_db):
 def test_crawl_and_upsert_jobs_applies_delay_between_every_request(fake_db):
     job_search.save_search_criteria(fake_db, 1, "AI 工程師", None, None, None, None)
     client = _FakeJob104Client(
-        pages={("AI 工程師", 1): [{"job_id": "1", "title": "A", "company_id": "100", "company_name": "A 公司",
-                                 "region": "台北市", "url": "https://www.104.com.tw/job/1"}]},
-        details={"1": {}},
+        pages={("AI 工程師", 1): [{"job_id": "1", "job_slug": "slug1", "title": "A", "company_id": "100",
+                                 "company_name": "A 公司", "region": "台北市",
+                                 "url": "https://www.104.com.tw/job/1", "applicant_count": 1}]},
+        details={"slug1": {}},
     )
     delay_calls = []
 
@@ -458,11 +466,12 @@ def test_check_and_run_weekly_job_search_no_new_companies_skips_email(fake_db, m
     client = _FakeJob104Client(
         pages={
             ("AI 工程師", 1): [
-                {"job_id": "1", "title": "A", "company_id": "100", "company_name": "A 公司",
-                 "region": "台北市", "url": "https://www.104.com.tw/job/1"}
+                {"job_id": "1", "job_slug": "slug1", "title": "A", "company_id": "100",
+                 "company_name": "A 公司", "region": "台北市", "url": "https://www.104.com.tw/job/1",
+                 "applicant_count": 1}
             ]
         },
-        details={"1": {}},
+        details={"slug1": {}},
     )
     email_client = MagicMock()
     telegram_client = MagicMock()
@@ -484,11 +493,12 @@ def test_check_and_run_weekly_job_search_new_companies_sends_email_and_notifies(
     client = _FakeJob104Client(
         pages={
             ("AI 工程師", 1): [
-                {"job_id": "1", "title": "A", "company_id": "100", "company_name": "A 公司",
-                 "region": "台北市", "url": "https://www.104.com.tw/job/1"}
+                {"job_id": "1", "job_slug": "slug1", "title": "A", "company_id": "100",
+                 "company_name": "A 公司", "region": "台北市", "url": "https://www.104.com.tw/job/1",
+                 "applicant_count": 1}
             ]
         },
-        details={"1": {}},
+        details={"slug1": {}},
     )
     email_client = MagicMock()
     telegram_client = MagicMock()

@@ -2,13 +2,25 @@
 JSON API，不使用瀏覽器自動化工具（Playwright/Selenium），輕量且高執行效能（見
 docs/specs/robinson/SPEC.md FR-34a、ADR-24 決策 4）。
 
-**重要限制（務必先讀）**：104 沒有公開正式文件化的 Open API，這裡呼叫的端點與欄位名稱是依公開
-可觀察的前端行為整理而來；Cowork sandbox 無法連線 104.com.tw（見專案 memory「Sandbox network
-limits」），所以這個模組目前只完成單元測試（mock HTTP response），**尚未經過正式部署後的真實
-流量驗證**。ADR-24 決策 4 已預告：若正式部署後第一次真實排程跑出來的結果跟這裡的欄位假設不符
-（例如欄位改名、詳情頁其實用不到、列表 API 已經夠完整），只需要調整這個檔案內部的解析邏輯
-（`search_list()`／`fetch_job_detail()` 的回傳 dict 結構盡量維持不變），呼叫端
-（`src/bot/job_search.py`）不需要跟著大改。
+**驗證狀態（2026-08-09 更新）**：104 沒有公開正式文件化的 Open API。Cowork sandbox 無法連線
+104.com.tw（見專案 memory「Sandbox network limits」），所以改由 Robin 透過瀏覽器 DevTools
+Network 面板手動抓真實請求驗證，已確認：
+- 列表 API 端點實際是 `https://www.104.com.tw/jobs/search/api/jobs`（不是先前猜測的
+  `/jobs/search/list`，那個網址現在回傳的是 SPA 頁面 HTML，不是 JSON）；回應結構是
+  `{"data": [...]}`，`data` 本身直接是職缺陣列（不是先前猜測的 `data.list`）。
+- 詳情 API 端點實際是 `https://www.104.com.tw/api/jobs/{短代碼}`，這個短代碼是職缺網址
+  （`link.job`）結尾那段（例如 `https://www.104.com.tw/job/94bow` → `94bow`），跟列表 API
+  另外給的 `jobNo`（數字型 ID，例如 `15318320`）是**兩個不同的識別碼**——`jobNo` 拿來當資料庫
+  去重鍵值（`job_id_104`），短代碼只用來組詳情 API 網址，不可混用。
+- `jobName`／`custNo`／`custName`／`jobAddrNoDesc`／`jobDetail.jobDescription`／
+  `condition.workExp`／`welfare.welfare` 這幾個欄位名稱原本的猜測全部正確。
+- 應徵人數（`applyCnt`）其實列表 API 那頁就有了，不需要等詳情頁——`fetch_job_detail()` 已把
+  這個欄位移除，改由 `search_list()` 直接回傳。
+
+**仍未驗證**：這次 Robin 測試時沒有實際設定地區／產業篩選條件，所以 `area`／`indcat` 這兩個
+查詢參數名稱維持原先猜測，尚未確認是否正確；如果之後發現搜尋結果沒有依地區/產業正確過濾，
+需要另外再抓一次帶有這兩個條件的真實請求來確認參數名稱。薪資篩選則確認除了 `scmin`／`scmax`
+外還需要帶 `sctp="M"`（薪資類型：月薪）、`scstrict=1`、`scneg=1` 篩選才會真的套用。
 
 對外暴露 `search_list()`（職缺列表，一次一頁）與 `fetch_job_detail()`（單一職缺詳情，FR-34a
 兩階段架構的第二階段）。UA／Referer 標頭固定套用（模擬瀏覽器請求，降低被擋機率），但請求節奏
@@ -22,8 +34,10 @@ import requests
 
 from submodules.retry.client import call_with_retry
 
-_LIST_API_URL = "https://www.104.com.tw/jobs/search/list"
-_DETAIL_API_URL_TEMPLATE = "https://www.104.com.tw/job/ajax/content/{job_id}"
+_LIST_API_URL = "https://www.104.com.tw/jobs/search/api/jobs"
+_DETAIL_API_URL_TEMPLATE = "https://www.104.com.tw/api/jobs/{job_slug}"
+_LIST_PAGE_SIZE = 20
+_SALARY_TYPE_MONTHLY = "M"
 _SEARCH_PAGE_REFERER = "https://www.104.com.tw/jobs/search/"
 _BASE_URL = "https://www.104.com.tw"
 _USER_AGENT = (
@@ -57,12 +71,31 @@ def _headers(referer: str) -> dict:
 
 
 def _normalize_url(raw_url: str) -> str:
-    """把可能是相對路徑的職缺連結換算成完整網址；已經是完整網址就原樣回傳。"""
+    """把可能是相對路徑的職缺連結換算成完整網址；已經是完整網址就原樣回傳。104 實測回應的
+    `link.job` 其實本來就是完整網址，這裡繼續保留只是當一層防呆，避免哪天格式又變回相對路徑。"""
     if not raw_url:
         return ""
     if raw_url.startswith("http://") or raw_url.startswith("https://"):
         return raw_url
     return _BASE_URL + (raw_url if raw_url.startswith("/") else f"/{raw_url}")
+
+
+def _extract_job_slug(url: str) -> str:
+    """從職缺網址擷取結尾短代碼（例如 `https://www.104.com.tw/job/94bow` → `"94bow"`），
+    這個短代碼才是 `fetch_job_detail()` 真正呼叫詳情頁 API 要用的 ID，跟 `jobNo`（列表 API
+    另一個數字型 ID，用於資料庫去重鍵值 `job_id_104`）是兩個不同的識別碼，不可混用（2026-08-09
+    依 Robin 實測驗證確認，見本檔案模組 docstring）。"""
+    if not url:
+        return ""
+    return url.rstrip("/").rsplit("/", 1)[-1]
+
+
+def _normalize_appear_date(raw: str | None) -> str | None:
+    """104 詳情頁 API 的 `appearDate` 是 `"YYYY/MM/DD"` 格式，統一轉成 ISO `"YYYY-MM-DD"`
+    格式方便寫入 `job_postings.source_updated_at`（`TIMESTAMPTZ` 欄位）。"""
+    if not raw:
+        return None
+    return raw.replace("/", "-")
 
 
 def _parse_years(raw: str | None) -> float | None:
@@ -89,18 +122,35 @@ class Job104Client:
         page: int = 1,
     ) -> list[dict]:
         """查詢職缺搜尋列表第 `page` 頁（FR-34a 兩階段架構第一階段），回傳摘要清單：
-        `[{"job_id", "title", "company_id", "company_name", "region", "url"}, ...]`；
-        查無結果（含翻到最後一頁之後）回傳空清單，由呼叫端依此判斷分頁何時停止。
+        `[{"job_id", "job_slug", "title", "company_id", "company_name", "region", "url",
+        "applicant_count"}, ...]`；查無結果（含翻到最後一頁之後）回傳空清單，由呼叫端依此
+        判斷分頁何時停止。`job_id`（`jobNo`）供資料庫去重鍵值使用；`job_slug` 才是
+        `fetch_job_detail()` 要傳入的 ID，兩者不可混用。
         """
-        params: dict = {"keyword": keyword, "page": page, "mode": "s", "jobsource": "joblist_search"}
+        params: dict = {
+            "keyword": keyword,
+            "page": page,
+            "pagesize": _LIST_PAGE_SIZE,
+            "mode": "s",
+            "jobsource": "joblist_search",
+            "searchJobs": 1,
+        }
+        # 地區／產業篩選參數名稱尚未經真實流量驗證（這次測試沒有實際設定這兩個條件），維持原先
+        # 猜測，見本檔案模組 docstring「仍未驗證」段落。
         if region:
             params["area"] = region
+        if industry:
+            params["indcat"] = industry
+        # 薪資篩選確認除了 scmin/scmax 外，還需要 sctp（薪資類型，固定用月薪）＋
+        # scstrict／scneg 這兩個旗標，篩選才會真的套用（2026-08-09 實測驗證）。
         if salary_min:
             params["scmin"] = salary_min
         if salary_max:
             params["scmax"] = salary_max
-        if industry:
-            params["indcat"] = industry
+        if salary_min or salary_max:
+            params["sctp"] = _SALARY_TYPE_MONTHLY
+            params["scstrict"] = 1
+            params["scneg"] = 1
 
         def _do_fetch() -> dict:
             response = requests.get(
@@ -111,7 +161,7 @@ class Job104Client:
             return response.json()
 
         payload = call_with_retry(_do_fetch, is_retryable=_is_retryable_requests_error)
-        raw_jobs = payload.get("data", {}).get("list", []) if isinstance(payload, dict) else []
+        raw_jobs = payload.get("data", []) if isinstance(payload, dict) else []
         if not isinstance(raw_jobs, list):
             return []
 
@@ -121,23 +171,31 @@ class Job104Client:
             if not job_id:
                 continue
             link = raw.get("link") if isinstance(raw.get("link"), dict) else {}
+            url = _normalize_url(link.get("job") or "")
             jobs.append({
                 "job_id": str(job_id),
+                "job_slug": _extract_job_slug(url),
                 "title": raw.get("jobName") or raw.get("jobname") or "",
                 "company_id": str(raw.get("custNo") or raw.get("custno") or ""),
                 "company_name": raw.get("custName") or raw.get("custname") or "",
                 "region": raw.get("jobAddrNoDesc") or raw.get("area") or "",
-                "url": _normalize_url(link.get("job") or ""),
+                "url": url,
+                "applicant_count": raw.get("applyCnt"),
             })
         return jobs
 
-    def fetch_job_detail(self, job_id: str) -> dict:
+    def fetch_job_detail(self, job_slug: str) -> dict:
         """查詢單一職缺詳情頁（FR-34a 兩階段架構第二階段），回傳：
-        `{"content", "required_years_experience", "applicant_count", "source_updated_at"}`；
-        104 這次回應沒有提供的欄位一律回傳 `None`（FR-37b 評分時據此略過對應維度，不強行湊資料）。
+        `{"content", "required_years_experience", "source_updated_at"}`；104 這次回應沒有
+        提供的欄位一律回傳 `None`（FR-37b 評分時據此略過對應維度，不強行湊資料）。
+
+        `job_slug` 必須是職缺網址結尾的短代碼（`search_list()` 回傳的 `job_slug`，例如
+        `"94bow"`），不是 `job_id`（`jobNo`）——兩者是不同的識別碼，實測驗證確認詳情 API
+        只接受短代碼（見本檔案模組 docstring）。應徵人數（`applicant_count`）已確認列表 API
+        就有提供，不在這裡回傳，改由 `search_list()` 的結果取得。
         """
-        detail_url = _DETAIL_API_URL_TEMPLATE.format(job_id=job_id)
-        job_page_referer = f"https://www.104.com.tw/job/{job_id}"
+        detail_url = _DETAIL_API_URL_TEMPLATE.format(job_slug=job_slug)
+        job_page_referer = f"https://www.104.com.tw/job/{job_slug}"
 
         def _do_fetch() -> dict:
             response = requests.get(
@@ -148,6 +206,7 @@ class Job104Client:
 
         payload = call_with_retry(_do_fetch, is_retryable=_is_retryable_requests_error)
         data = payload.get("data", {}) if isinstance(payload, dict) else {}
+        header = data.get("header") if isinstance(data.get("header"), dict) else {}
         job_detail = data.get("jobDetail") if isinstance(data.get("jobDetail"), dict) else {}
         condition = data.get("condition") if isinstance(data.get("condition"), dict) else {}
         welfare = data.get("welfare") if isinstance(data.get("welfare"), dict) else {}
@@ -161,6 +220,5 @@ class Job104Client:
         return {
             "content": content,
             "required_years_experience": _parse_years(condition.get("workExp")),
-            "applicant_count": data.get("applyCnt"),
-            "source_updated_at": data.get("appearDate") or None,
+            "source_updated_at": _normalize_appear_date(header.get("appearDate")),
         }

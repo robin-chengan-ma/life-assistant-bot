@@ -2,9 +2,14 @@
 
 104 人力銀行公開 AJAX API 通用 Client，無登入態直接呼叫 104 官網前端使用的職缺搜尋/詳情 JSON API，不使用瀏覽器自動化工具（Playwright/Selenium）。
 
-## ⚠️ 尚未經過真實流量驗證
+## 驗證狀態（2026-08-09 更新）
 
-104 沒有公開正式文件化的 Open API，這裡呼叫的端點與欄位名稱是依公開可觀察的前端行為整理而來。Cowork sandbox 無法連線 104.com.tw，這個模組目前只完成單元測試（mock HTTP response），**尚未經過正式部署後的真實流量驗證**。若正式部署後第一次真實排程跑出來的結果跟這裡的欄位假設不符，只需要調整 `client.py` 內部的解析邏輯，對外回傳的 dict 結構盡量維持不變。
+104 沒有公開正式文件化的 Open API。Cowork sandbox 無法連線 104.com.tw，所以改由 Robin 透過瀏覽器 DevTools Network 面板手動抓真實請求驗證，已確認：
+- 列表 API 端點是 `https://www.104.com.tw/jobs/search/api/jobs`，回應結構是 `{"data": [...]}`（`data` 本身直接是職缺陣列）。
+- 詳情 API 端點是 `https://www.104.com.tw/api/jobs/{短代碼}`，短代碼取自職缺網址（`link.job`）結尾那段，跟列表 API 的 `jobNo`（資料庫去重鍵值）是不同識別碼，不可混用。
+- 主要欄位名稱（`jobName`／`custNo`／`custName`／`jobAddrNoDesc`／`jobDetail.jobDescription`／`condition.workExp`／`welfare.welfare`）皆已確認正確；應徵人數（`applyCnt`）改由列表 API 直接取得，不在詳情頁。
+
+**仍未驗證**：地區（`area`）／產業（`indcat`）篩選查詢參數名稱這次測試沒有實際設定這兩個條件，維持原先猜測，尚未確認正確性。
 
 ## 環境變數
 
@@ -24,12 +29,12 @@ from submodules.job104.client import Job104Client
 client = Job104Client()
 
 jobs = client.search_list(keyword="AI 工程師", region="台北市", salary_min=50000, page=1)
-# [{"job_id": "...", "title": "...", "company_id": "...", "company_name": "...",
-#   "region": "...", "url": "https://www.104.com.tw/job/..."}, ...]
+# [{"job_id": "...", "job_slug": "...", "title": "...", "company_id": "...", "company_name": "...",
+#   "region": "...", "url": "https://www.104.com.tw/job/...", "applicant_count": 7}, ...]
 
-detail = client.fetch_job_detail(jobs[0]["job_id"])
-# {"content": "...", "required_years_experience": 3.0, "applicant_count": None,
-#  "source_updated_at": "2026-08-09"}
+# 注意：fetch_job_detail() 要傳 job_slug（短代碼），不是 job_id（jobNo）！
+detail = client.fetch_job_detail(jobs[0]["job_slug"])
+# {"content": "...", "required_years_experience": 3.0, "source_updated_at": "2026-08-09"}
 ```
 
 ## 設計限制（務必遵守）

@@ -1,8 +1,9 @@
 """submodules/job104/client.py 的單元測試（見 robinson SPEC.md FR-34a、ADR-24 決策 4）。
 
 不呼叫真正的 104 AJAX API，一律 mock `requests.get`（比照 `tests/submodules/newsfeed/test_client.py`
-的既有慣例）。JSON 欄位假設尚未經過真實流量驗證，這裡固定用假設的回應格式測試「解析邏輯本身」
-是否正確，而非驗證假設是否為真（那需要正式部署後才能確認，見 client.py 模組 docstring）。
+的既有慣例）。回應格式依 Robin 2026-08-09 透過瀏覽器 DevTools 實測驗證過的真實資料整理而來
+（見 `submodules/job104/client.py` 模組 docstring「驗證狀態」段落），地區／產業篩選參數名稱
+仍未驗證，這裡的測試不涵蓋那兩個參數的正確性。
 """
 from unittest.mock import MagicMock
 
@@ -11,7 +12,9 @@ import requests
 from submodules.job104 import client as client_module
 from submodules.job104.client import (
     Job104Client,
+    _extract_job_slug,
     _is_retryable_requests_error,
+    _normalize_appear_date,
     _normalize_url,
     _parse_years,
 )
@@ -31,7 +34,7 @@ def _fake_response(json_data, *, raise_exc: Exception | None = None):
 
 
 def test_search_list_calls_requests_get_with_expected_params(monkeypatch):
-    mock_get = MagicMock(return_value=_fake_response({"data": {"list": []}}))
+    mock_get = MagicMock(return_value=_fake_response({"data": []}))
     monkeypatch.setattr(client_module.requests, "get", mock_get)
 
     client = Job104Client()
@@ -42,42 +45,47 @@ def test_search_list_calls_requests_get_with_expected_params(monkeypatch):
     assert call_kwargs["params"] == {
         "keyword": "AI 工程師",
         "page": 2,
+        "pagesize": 20,
         "mode": "s",
         "jobsource": "joblist_search",
+        "searchJobs": 1,
         "area": "台北市",
+        "indcat": "軟體業",
         "scmin": 50000,
         "scmax": 80000,
-        "indcat": "軟體業",
+        "sctp": "M",
+        "scstrict": 1,
+        "scneg": 1,
     }
     assert call_kwargs["headers"]["User-Agent"]
     assert call_kwargs["headers"]["Referer"] == "https://www.104.com.tw/jobs/search/"
     assert call_kwargs["timeout"] == 10
+    assert mock_get.call_args.args[0] == "https://www.104.com.tw/jobs/search/api/jobs"
 
 
 def test_search_list_omits_optional_none_params(monkeypatch):
-    mock_get = MagicMock(return_value=_fake_response({"data": {"list": []}}))
+    mock_get = MagicMock(return_value=_fake_response({"data": []}))
     monkeypatch.setattr(client_module.requests, "get", mock_get)
 
     Job104Client().search_list("AI 工程師")
 
     params = mock_get.call_args.kwargs["params"]
-    assert set(params.keys()) == {"keyword", "page", "mode", "jobsource"}
+    assert set(params.keys()) == {"keyword", "page", "pagesize", "mode", "jobsource", "searchJobs"}
 
 
 def test_search_list_parses_jobs(monkeypatch):
     payload = {
-        "data": {
-            "list": [
-                {
-                    "jobNo": "12345",
-                    "jobName": "AI 工程師",
-                    "custNo": "999",
-                    "custName": "某某科技",
-                    "jobAddrNoDesc": "台北市信義區",
-                    "link": {"job": "/job/12345"},
-                }
-            ]
-        }
+        "data": [
+            {
+                "jobNo": "12345",
+                "jobName": "AI 工程師",
+                "custNo": "999",
+                "custName": "某某科技",
+                "jobAddrNoDesc": "台北市信義區",
+                "applyCnt": 7,
+                "link": {"job": "https://www.104.com.tw/job/94bow"},
+            }
+        ]
     }
     monkeypatch.setattr(client_module.requests, "get", MagicMock(return_value=_fake_response(payload)))
 
@@ -86,24 +94,26 @@ def test_search_list_parses_jobs(monkeypatch):
     assert result == [
         {
             "job_id": "12345",
+            "job_slug": "94bow",
             "title": "AI 工程師",
             "company_id": "999",
             "company_name": "某某科技",
             "region": "台北市信義區",
-            "url": "https://www.104.com.tw/job/12345",
+            "url": "https://www.104.com.tw/job/94bow",
+            "applicant_count": 7,
         }
     ]
 
 
 def test_search_list_skips_entries_without_job_id(monkeypatch):
-    payload = {"data": {"list": [{"jobName": "缺編號的職缺"}]}}
+    payload = {"data": [{"jobName": "缺編號的職缺"}]}
     monkeypatch.setattr(client_module.requests, "get", MagicMock(return_value=_fake_response(payload)))
 
     assert Job104Client().search_list("AI 工程師") == []
 
 
-def test_search_list_handles_missing_list_key(monkeypatch):
-    monkeypatch.setattr(client_module.requests, "get", MagicMock(return_value=_fake_response({"data": {}})))
+def test_search_list_handles_missing_data_key(monkeypatch):
+    monkeypatch.setattr(client_module.requests, "get", MagicMock(return_value=_fake_response({})))
 
     assert Job104Client().search_list("AI 工程師") == []
 
@@ -115,30 +125,28 @@ def test_fetch_job_detail_calls_requests_get_with_job_page_referer(monkeypatch):
     mock_get = MagicMock(return_value=_fake_response({"data": {}}))
     monkeypatch.setattr(client_module.requests, "get", mock_get)
 
-    Job104Client().fetch_job_detail("12345")
+    Job104Client().fetch_job_detail("94bow")
 
-    assert mock_get.call_args.args[0] == "https://www.104.com.tw/job/ajax/content/12345"
-    assert mock_get.call_args.kwargs["headers"]["Referer"] == "https://www.104.com.tw/job/12345"
+    assert mock_get.call_args.args[0] == "https://www.104.com.tw/api/jobs/94bow"
+    assert mock_get.call_args.kwargs["headers"]["Referer"] == "https://www.104.com.tw/job/94bow"
 
 
 def test_fetch_job_detail_parses_all_fields(monkeypatch):
     payload = {
         "data": {
+            "header": {"appearDate": "2026/08/09"},
             "jobDetail": {"jobDescription": "負責 AI 模型開發"},
             "welfare": {"welfare": "彈性上下班、年終獎金"},
             "condition": {"workExp": "3年以上"},
-            "applyCnt": "12人應徵",
-            "appearDate": "2026-08-09",
         }
     }
     monkeypatch.setattr(client_module.requests, "get", MagicMock(return_value=_fake_response(payload)))
 
-    result = Job104Client().fetch_job_detail("12345")
+    result = Job104Client().fetch_job_detail("94bow")
 
     assert result == {
         "content": "負責 AI 模型開發\n彈性上下班、年終獎金",
         "required_years_experience": 3.0,
-        "applicant_count": "12人應徵",
         "source_updated_at": "2026-08-09",
     }
 
@@ -146,12 +154,11 @@ def test_fetch_job_detail_parses_all_fields(monkeypatch):
 def test_fetch_job_detail_missing_fields_returns_none_for_unknown_dimensions(monkeypatch):
     monkeypatch.setattr(client_module.requests, "get", MagicMock(return_value=_fake_response({"data": {}})))
 
-    result = Job104Client().fetch_job_detail("12345")
+    result = Job104Client().fetch_job_detail("94bow")
 
     assert result == {
         "content": "",
         "required_years_experience": None,
-        "applicant_count": None,
         "source_updated_at": None,
     }
 
@@ -190,6 +197,36 @@ def test_normalize_url_already_absolute():
 
 def test_normalize_url_empty_string():
     assert _normalize_url("") == ""
+
+
+# --- _extract_job_slug ---
+
+
+def test_extract_job_slug_from_absolute_url():
+    assert _extract_job_slug("https://www.104.com.tw/job/94bow") == "94bow"
+
+
+def test_extract_job_slug_from_url_with_trailing_slash():
+    assert _extract_job_slug("https://www.104.com.tw/job/94bow/") == "94bow"
+
+
+def test_extract_job_slug_empty_string():
+    assert _extract_job_slug("") == ""
+
+
+# --- _normalize_appear_date ---
+
+
+def test_normalize_appear_date_converts_slashes_to_dashes():
+    assert _normalize_appear_date("2026/08/09") == "2026-08-09"
+
+
+def test_normalize_appear_date_none_returns_none():
+    assert _normalize_appear_date(None) is None
+
+
+def test_normalize_appear_date_empty_string_returns_none():
+    assert _normalize_appear_date("") is None
 
 
 # --- _is_retryable_requests_error ---
