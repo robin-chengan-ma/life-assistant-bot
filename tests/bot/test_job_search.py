@@ -137,6 +137,7 @@ _JOB = {
     "region": "台北市信義區",
     "url": "https://www.104.com.tw/job/12345",
     "applicant_count": None,
+    "is_closed": False,
 }
 _DETAIL = {
     "content": "負責 AI 模型開發",
@@ -157,6 +158,7 @@ def test_upsert_job_posting_inserts_new_job(fake_db):
     assert row["required_years_experience"] == 3.0
     assert row["first_seen_at"] == now
     assert row["last_crawled_at"] == now
+    assert row["is_closed"] is False
 
 
 def test_upsert_job_posting_updates_existing_job_without_changing_first_seen_at(fake_db):
@@ -167,7 +169,7 @@ def test_upsert_job_posting_updates_existing_job_without_changing_first_seen_at(
             "job_id_104": "12345", "company_id_104": "999", "title": "舊職缺名稱", "region": "台北市",
             "url": "https://www.104.com.tw/job/12345", "content": "舊內容",
             "required_years_experience": None, "applicant_count": None, "source_updated_at": None,
-            "first_seen_at": first_seen, "last_crawled_at": first_seen,
+            "first_seen_at": first_seen, "last_crawled_at": first_seen, "is_closed": False,
         },
     )
     second_crawl = datetime(2026, 8, 10, 8, 0, tzinfo=_TAIWAN_TZ)
@@ -180,6 +182,28 @@ def test_upsert_job_posting_updates_existing_job_without_changing_first_seen_at(
     assert row["content"] == "負責 AI 模型開發"
     assert row["first_seen_at"] == first_seen
     assert row["last_crawled_at"] == second_crawl
+
+
+def test_upsert_job_posting_updates_is_closed_status_on_recrawl(fake_db):
+    """職缺重新爬到時，`is_closed` 要跟著更新（例如原本開放的職缺後來關閉了），不能卡在第一次
+    爬到時的舊狀態（見 `upsert_job_posting()` docstring）。"""
+    first_seen = datetime(2026, 8, 3, 8, 0, tzinfo=_TAIWAN_TZ)
+    fake_db.insert(
+        "job_postings",
+        {
+            "job_id_104": "12345", "company_id_104": "999", "title": "AI 工程師", "region": "台北市",
+            "url": "https://www.104.com.tw/job/12345", "content": "舊內容",
+            "required_years_experience": None, "applicant_count": None, "source_updated_at": None,
+            "first_seen_at": first_seen, "last_crawled_at": first_seen, "is_closed": False,
+        },
+    )
+    closed_job = {**_JOB, "is_closed": True}
+    second_crawl = datetime(2026, 8, 10, 8, 0, tzinfo=_TAIWAN_TZ)
+
+    job_search.upsert_job_posting(fake_db, closed_job, _DETAIL, second_crawl)
+
+    row = fake_db.select("job_postings", where="job_id_104 = %s", params=("12345",), fetch_one=True)
+    assert row["is_closed"] is True
 
 
 # --- crawl_and_upsert_jobs（FR-34a～FR-34d）---

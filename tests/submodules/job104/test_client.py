@@ -14,6 +14,7 @@ from submodules.job104 import client as client_module
 from submodules.job104.client import (
     Job104Client,
     _extract_job_slug,
+    _is_job_closed,
     _is_retryable_requests_error,
     _normalize_appear_date,
     _normalize_url,
@@ -82,6 +83,7 @@ def test_search_list_parses_jobs(monkeypatch):
                 "custName": "某某科技",
                 "jobAddrNoDesc": "台北市信義區",
                 "applyCnt": 7,
+                "jobSwitch": "on",
                 "link": {"job": "https://www.104.com.tw/job/94bow"},
             }
         ]
@@ -100,8 +102,31 @@ def test_search_list_parses_jobs(monkeypatch):
             "region": "台北市信義區",
             "url": "https://www.104.com.tw/job/94bow",
             "applicant_count": 7,
+            "is_closed": False,
         }
     ]
+
+
+def test_search_list_parses_closed_job(monkeypatch):
+    payload = {
+        "data": [
+            {
+                "jobNo": "12345",
+                "jobName": "AI 工程師",
+                "custNo": "999",
+                "custName": "某某科技",
+                "jobAddrNoDesc": "台北市信義區",
+                "applyCnt": 0,
+                "jobSwitch": "off",
+                "link": {"job": "https://www.104.com.tw/job/94bow"},
+            }
+        ]
+    }
+    monkeypatch.setattr(client_module.requests, "get", MagicMock(return_value=_fake_response(payload)))
+
+    result = Job104Client().search_list("AI 工程師")
+
+    assert result[0]["is_closed"] is True
 
 
 def test_search_list_skips_entries_without_job_id(monkeypatch):
@@ -160,6 +185,22 @@ def test_fetch_job_detail_missing_fields_returns_none_for_unknown_dimensions(mon
         "required_years_experience": None,
         "source_updated_at": None,
     }
+
+
+# --- _is_job_closed ---
+
+
+def test_is_job_closed_on_means_not_closed():
+    assert _is_job_closed("on") is False
+
+
+def test_is_job_closed_other_value_means_closed():
+    assert _is_job_closed("off") is True
+
+
+def test_is_job_closed_missing_defaults_to_not_closed():
+    assert _is_job_closed(None) is False
+    assert _is_job_closed("") is False
 
 
 # --- _parse_years ---

@@ -16,6 +16,10 @@ Network 面板手動抓真實請求驗證，已確認：
   `condition.workExp`／`welfare.welfare` 這幾個欄位名稱原本的猜測全部正確。
 - 應徵人數（`applyCnt`）其實列表 API 那頁就有了，不需要等詳情頁——`fetch_job_detail()` 已把
   這個欄位移除，改由 `search_list()` 直接回傳。
+- 職缺是否已關閉可自動判斷：列表 API 每筆職缺物件都有 `jobSwitch` 欄位（`"on"` 代表開放中），
+  已解決 ADR-26 決策 5 原本懸而未決的問題（不需要如原訂備案走人工 Excel 標記），`search_list()`
+  已回傳 `is_closed`。目前樣本裡所有職缺都是 `"on"`，尚未見過「已關閉」實際會顯示的值，保守
+  採「非 `"on"` 才算關閉」的判斷邏輯（見 `_is_job_closed()`）。
 
 **地區／產業篩選（2026-08-09 追加澄清）**：Robin 後續補充實測過的地區篩選網址，確認 `area`
 參數名稱本身正確，但值是 104 自己的地區數字代碼（例如 `"6001008000"`），不是使用者輸入的地區
@@ -101,6 +105,17 @@ def _normalize_appear_date(raw: str | None) -> str | None:
     return raw.replace("/", "-")
 
 
+def _is_job_closed(raw_switch: str | None) -> bool:
+    """依 104 API 的 `jobSwitch`（列表）／`switch`（詳情）欄位判斷職缺是否已關閉（2026-08-09
+    實測驗證確認 `"on"` 代表開放中）。欄位缺失一律視為「未關閉」（回傳 `False`），避免因為
+    解析不到就誤判成已關閉——沒有實際樣本能確認「已關閉」時這個欄位真正的值是什麼，只確認
+    `"on"` 是「開放中」，所以用排除法（非 `"on"` 才算關閉），不是白名單比對「已知的關閉值」。
+    """
+    if not raw_switch:
+        return False
+    return raw_switch != "on"
+
+
 def _parse_years(raw: str | None) -> float | None:
     """從 104 常見的「N年以上」／「不拘」等年資要求文字擷取數字；擷取不到（含「不拘」這種
     沒有數字的情況）回傳 `None`，交由呼叫端視為「這個維度略過」（FR-37b）。"""
@@ -124,9 +139,10 @@ class Job104Client:
     ) -> list[dict]:
         """查詢職缺搜尋列表第 `page` 頁（FR-34a 兩階段架構第一階段），回傳摘要清單：
         `[{"job_id", "job_slug", "title", "company_id", "company_name", "region", "url",
-        "applicant_count"}, ...]`；查無結果（含翻到最後一頁之後）回傳空清單，由呼叫端依此
-        判斷分頁何時停止。`job_id`（`jobNo`）供資料庫去重鍵值使用；`job_slug` 才是
-        `fetch_job_detail()` 要傳入的 ID，兩者不可混用。
+        "applicant_count", "is_closed"}, ...]`；查無結果（含翻到最後一頁之後）回傳空清單，
+        由呼叫端依此判斷分頁何時停止。`job_id`（`jobNo`）供資料庫去重鍵值使用；`job_slug`
+        才是 `fetch_job_detail()` 要傳入的 ID，兩者不可混用。`is_closed` 依 `jobSwitch`
+        欄位判斷（見 `_is_job_closed()`，2026-08-09 實測驗證確認可自動判斷，見 ADR-26 決策 5）。
 
         **不接受 `region`／`industry` 參數**（2026-08-09 依 Robin 指示調整）：`area` 這個地區
         篩選參數名稱本身已確認正確，但實際要傳 104 自己的地區數字代碼（例如 `"6001008000"`），
@@ -183,6 +199,7 @@ class Job104Client:
                 "region": raw.get("jobAddrNoDesc") or raw.get("area") or "",
                 "url": url,
                 "applicant_count": raw.get("applyCnt"),
+                "is_closed": _is_job_closed(raw.get("jobSwitch")),
             })
         return jobs
 

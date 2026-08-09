@@ -164,6 +164,10 @@ def upsert_job_posting(db: CloudSQLClient, job: dict, detail: dict, now: datetim
     應徵人數（`applicant_count`）取自 `job`（列表階段的 `search_list()` 結果），不是
     `detail`（詳情頁 API 已確認沒有這個欄位，2026-08-09 實測驗證，見 `submodules/job104/
     client.py` 模組 docstring）。
+
+    是否已關閉（`is_closed`）同樣取自 `job`（`search_list()` 依 `jobSwitch` 欄位自動判斷，
+    2026-08-09 實測驗證確認可行，見 ADR-26 決策 5）；已存在的職缺重新爬到時一併更新這個
+    欄位，職缺重新開放/關閉的狀態變化才能反映到資料庫，不會卡在第一次爬到時的舊狀態。
     """
     existing = db.select("job_postings", where="job_id_104 = %s", params=(job["job_id"],), fetch_one=True)
     fields = {
@@ -175,6 +179,7 @@ def upsert_job_posting(db: CloudSQLClient, job: dict, detail: dict, now: datetim
         "required_years_experience": detail.get("required_years_experience"),
         "applicant_count": job.get("applicant_count"),
         "source_updated_at": detail.get("source_updated_at"),
+        "is_closed": job.get("is_closed", False),
         "last_crawled_at": now,
     }
     if existing is not None:
