@@ -1903,6 +1903,64 @@ def test_uploaded_company_csv_trigger_gracefully_degrades_when_gdrive_client_non
     assert "還沒設定好" in reply
 
 
+# --- 職缺推薦 Excel 回填（Step 4.2，見 robinson SPEC.md FR-38e、ADR-26） ---
+
+
+def test_uploaded_recommendation_excel_trigger_dispatches_for_owner(fake_db, monkeypatch):
+    import io as _io
+
+    import openpyxl as _openpyxl
+
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
+    fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
+    fake_db.insert(
+        "job_postings",
+        {
+            "job_id_104": "1", "company_id_104": "100", "title": "AI 工程師", "region": "台北市",
+            "url": "https://www.104.com.tw/job/1", "is_unliked": False,
+        },
+    )
+    workbook = _openpyxl.Workbook()
+    workbook.active.title = "所有職缺推薦"
+    workbook.active.append(
+        ["104公司ID", "公司全名", "地區", "產業類型", "職缺", "評分", "排名", "推薦原因", "連結", "是否喜歡"]
+    )
+    workbook.active.append(["100", "A 公司", "台北市", "軟體業", "AI 工程師", 90.0, 1, "很符合", "https://www.104.com.tw/job/1", "1"])
+    workbook.create_sheet("最新職缺推薦").append(
+        ["104公司ID", "公司全名", "地區", "產業類型", "職缺", "評分", "排名", "推薦原因", "連結", "是否喜歡"]
+    )
+    buffer = _io.BytesIO()
+    workbook.save(buffer)
+    xlsx_bytes = buffer.getvalue()
+
+    class _FakeGDriveClient:
+        def list_files(self, name_contains=None):
+            return [{"id": "drive-2", "name": "2026-08-09-104職缺推薦.xlsx", "mimeType": "application/octet-stream"}]
+
+        def download_file(self, file_id):
+            return xlsx_bytes
+
+    store = ConversationStateStore()
+
+    reply = router.handle_message(
+        fake_db, store, ROBIN_ID, "已上傳2026-08-09-104職缺推薦.xlsx", gdrive_client=_FakeGDriveClient()
+    )
+
+    assert "1 筆職缺" in reply
+    row = fake_db.select("job_postings", where="job_id_104 = %s", params=("1",), fetch_one=True)
+    assert row["is_unliked"] is True
+
+
+def test_uploaded_recommendation_excel_trigger_gracefully_degrades_when_gdrive_client_none(fake_db, monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
+    fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
+    store = ConversationStateStore()
+
+    reply = router.handle_message(fake_db, store, ROBIN_ID, "已上傳2026-08-09-104職缺推薦.xlsx")
+
+    assert "還沒設定好" in reply
+
+
 def test_job_search_setup_trigger_falls_through_to_chat_for_family_member(fake_db):
     """權限邊界測試：`job_search` 為 ADR-24 決策 2 的 owner_only 功能，家人的觸發詞應該落入
     一般聊天核心，而不是被授予求職模組設定流程的能力。"""

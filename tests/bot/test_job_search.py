@@ -1,7 +1,10 @@
-"""src/bot/job_search.py 單元測試（對應 robinson SPEC.md FR-33～FR-36，Step 4.1，ADR-24）。"""
+"""src/bot/job_search.py 單元測試（對應 robinson SPEC.md FR-33～FR-38，Step 4.1／4.2，ADR-24／ADR-26）。"""
+import io
 from datetime import date, datetime
 from unittest.mock import MagicMock
 from zoneinfo import ZoneInfo
+
+import openpyxl
 
 from src.bot import job_search
 
@@ -582,3 +585,354 @@ def test_check_and_run_weekly_job_search_new_companies_sends_email_and_notifies(
     )
     owner_row = fake_db.select("users", where="id = %s", params=(owner_id,), fetch_one=True)
     assert owner_row["job_search_last_run_on"] == _MONDAY_8AM.date()
+
+
+# --- list_scorable_jobs（FR-37a）---
+
+
+def _insert_company(fake_db, company_id_104, background="已回填的背景", **overrides):
+    row = {
+        "company_id_104": company_id_104, "company_name": f"{company_id_104} 公司", "region": "台北市",
+        "industry": "軟體業", "background": background,
+    }
+    row.update(overrides)
+    return fake_db.insert("job_companies", row)
+
+
+def _insert_job(fake_db, job_id_104, company_id_104, **overrides):
+    row = {
+        "job_id_104": job_id_104, "company_id_104": company_id_104, "title": f"職缺 {job_id_104}",
+        "region": "台北市", "url": f"https://www.104.com.tw/job/{job_id_104}", "content": "職缺內容",
+        "required_years_experience": 3.0, "applicant_count": 5, "source_updated_at": "2026-08-01",
+        "salary_min": None, "salary_max": None,
+        "first_seen_at": datetime(2026, 8, 9, 8, 0, tzinfo=_TAIWAN_TZ),
+        "last_crawled_at": datetime(2026, 8, 9, 8, 0, tzinfo=_TAIWAN_TZ),
+        "is_closed": False, "score": None, "recommend_reason": None, "skill_gap_note": None, "is_unliked": False,
+    }
+    row.update(overrides)
+    return fake_db.insert("job_postings", row)
+
+
+def test_list_scorable_jobs_only_includes_jobs_whose_company_has_background(fake_db):
+    _insert_company(fake_db, "100", background="已回填的背景")
+    _insert_company(fake_db, "200", background=None)
+    _insert_job(fake_db, "1", "100")
+    _insert_job(fake_db, "2", "200")
+
+    jobs = job_search.list_scorable_jobs(fake_db)
+
+    assert [j["job_id_104"] for j in jobs] == ["1"]
+
+
+def test_list_scorable_jobs_returns_empty_when_no_company_has_background(fake_db):
+    _insert_company(fake_db, "100", background=None)
+    _insert_job(fake_db, "1", "100")
+
+    assert job_search.list_scorable_jobs(fake_db) == []
+
+
+# --- score_jobs／apply_scores（FR-37b～FR-37c）---
+
+
+_PROFILE = {
+    "resume": "五年後端工程師經驗", "years_of_experience": 5, "expected_salary_min": 60000,
+    "expected_salary_max": 80000, "expectation": "想找後端或 AI 相關職缺",
+}
+
+
+def test_score_jobs_parses_batch_response_and_maps_to_job_id(fake_db):
+    _insert_company(fake_db, "100")
+    job = _insert_job(fake_db, "1", "100")
+    jobs = fake_db.select("job_postings", where="id = %s", params=(job,))
+    companies_by_id = {"100": {"company_name": "100 公司", "background": "已回填的背景", "industry": "軟體業"}}
+    llm_client = MagicMock()
+    llm_client.generate_text.return_value = "===JOB 1===\nSCORE: 88.5\nREASON: 職缺與履歷高度相符\nGAP: 缺乏雲端經驗"
+
+    scores = job_search.score_jobs(llm_client, _PROFILE, jobs, companies_by_id)
+
+    assert scores == {
+        "1": {"score": 88.5, "recommend_reason": "職缺與履歷高度相符", "skill_gap_note": "缺乏雲端經驗"}
+    }
+
+
+def test_score_jobs_skips_job_when_llm_response_missing_that_block(fake_db):
+    _insert_company(fake_db, "100")
+    job1 = _insert_job(fake_db, "1", "100")
+    job2 = _insert_job(fake_db, "2", "100")
+    jobs = [
+        j for j in fake_db.select("job_postings")
+        if j["id"] in (job1, job2)
+    ]
+    companies_by_id = {"100": {"company_name": "100 公司", "background": "已回填的背景", "industry": "軟體業"}}
+    llm_client = MagicMock()
+    # 只回傳職缺 1 的區塊，職缺 2 完全沒出現在回應裡（模擬格式跑掉的情況）。
+    llm_client.generate_text.return_value = "===JOB 1===\nSCORE: 70\nREASON: 尚可\nGAP: 無明顯落差"
+
+    scores = job_search.score_jobs(llm_client, _PROFILE, jobs, companies_by_id)
+
+    assert set(scores.keys()) == {"1"}
+
+
+def test_score_jobs_batches_requests_when_exceeding_batch_size(fake_db):
+    _insert_company(fake_db, "100")
+    for i in range(1, 17):  # 16 筆，超過 _SCORING_BATCH_SIZE=15，應分兩批
+        _insert_job(fake_db, str(i), "100")
+    jobs = fake_db.select("job_postings")
+    companies_by_id = {"100": {"company_name": "100 公司", "background": "已回填的背景", "industry": "軟體業"}}
+    llm_client = MagicMock()
+    llm_client.generate_text.return_value = "===JOB 1===\nSCORE: 50\nREASON: r\nGAP: g"
+
+    job_search.score_jobs(llm_client, _PROFILE, jobs, companies_by_id)
+
+    assert llm_client.generate_text.call_count == 2
+
+
+def test_apply_scores_updates_matching_rows(fake_db):
+    _insert_company(fake_db, "100")
+    _insert_job(fake_db, "1", "100")
+    scores = {"1": {"score": 92.0, "recommend_reason": "很符合", "skill_gap_note": "無明顯落差"}}
+
+    updated = job_search.apply_scores(fake_db, scores)
+
+    assert updated == 1
+    row = fake_db.select("job_postings", where="job_id_104 = %s", params=("1",), fetch_one=True)
+    assert row["score"] == 92.0
+    assert row["recommend_reason"] == "很符合"
+    assert row["skill_gap_note"] == "無明顯落差"
+
+
+# --- build_ranked_jobs（FR-38a）---
+
+
+def test_build_ranked_jobs_all_scope_excludes_unscored_unliked_and_closed(fake_db):
+    _insert_company(fake_db, "100")
+    _insert_job(fake_db, "1", "100", score=90.0)
+    _insert_job(fake_db, "2", "100", score=None)  # 尚未評分
+    _insert_job(fake_db, "3", "100", score=80.0, is_unliked=True)  # 已標記不喜歡
+    _insert_job(fake_db, "4", "100", score=70.0, is_closed=True)  # 已關閉
+
+    ranked = job_search.build_ranked_jobs(fake_db, "all")
+
+    assert [j["job_id_104"] for j in ranked] == ["1"]
+    assert ranked[0]["rank"] == 1
+
+
+def test_build_ranked_jobs_sorted_by_score_descending(fake_db):
+    _insert_company(fake_db, "100")
+    _insert_job(fake_db, "1", "100", score=70.0)
+    _insert_job(fake_db, "2", "100", score=95.0)
+    _insert_job(fake_db, "3", "100", score=85.0)
+
+    ranked = job_search.build_ranked_jobs(fake_db, "all")
+
+    assert [j["job_id_104"] for j in ranked] == ["2", "3", "1"]
+    assert [j["rank"] for j in ranked] == [1, 2, 3]
+
+
+def test_build_ranked_jobs_limits_to_top_30(fake_db):
+    _insert_company(fake_db, "100")
+    for i in range(1, 35):
+        _insert_job(fake_db, str(i), "100", score=float(i))
+
+    ranked = job_search.build_ranked_jobs(fake_db, "all")
+
+    assert len(ranked) == 30
+    assert ranked[0]["job_id_104"] == "34"  # 分數最高
+
+
+def test_build_ranked_jobs_new_this_week_scope_filters_by_first_seen_today(fake_db):
+    _insert_company(fake_db, "100")
+    today = date(2026, 8, 10)
+    _insert_job(
+        fake_db, "1", "100", score=90.0,
+        first_seen_at=datetime(2026, 8, 10, 8, 0, tzinfo=_TAIWAN_TZ),
+    )
+    _insert_job(
+        fake_db, "2", "100", score=95.0,
+        first_seen_at=datetime(2026, 8, 3, 8, 0, tzinfo=_TAIWAN_TZ),
+    )
+
+    ranked = job_search.build_ranked_jobs(fake_db, "new_this_week", today=today)
+
+    assert [j["job_id_104"] for j in ranked] == ["1"]
+
+
+# --- build_job_recommendation_excel（FR-38b）---
+
+
+def test_job_recommendation_excel_filename():
+    assert job_search.job_recommendation_excel_filename(date(2026, 8, 9)) == "2026-08-09-104職缺推薦.xlsx"
+
+
+def test_build_job_recommendation_excel_has_three_sheets_with_expected_headers():
+    all_ranked = [
+        {
+            "rank": 1, "job_id_104": "1", "company_id_104": "100", "company_name": "A 公司",
+            "region": "台北市", "industry": "軟體業", "title": "AI 工程師", "score": 90.0,
+            "recommend_reason": "很符合", "skill_gap_note": "缺乏雲端經驗", "url": "https://www.104.com.tw/job/1",
+        }
+    ]
+    new_ranked = []
+
+    xlsx_bytes = job_search.build_job_recommendation_excel(all_ranked, new_ranked)
+
+    workbook = openpyxl.load_workbook(io.BytesIO(xlsx_bytes))
+    assert workbook.sheetnames == ["所有職缺推薦", "最新職缺推薦", "技能缺口"]
+
+    all_sheet = workbook["所有職缺推薦"]
+    header = [cell.value for cell in next(all_sheet.iter_rows(min_row=1, max_row=1))]
+    assert header == [
+        "104公司ID", "公司全名", "地區", "產業類型", "職缺", "評分", "排名", "推薦原因", "連結", "是否喜歡",
+    ]
+    data_row = [cell.value for cell in next(all_sheet.iter_rows(min_row=2, max_row=2))]
+    # openpyxl 讀回空字串儲存格時是 None（不是 ""），"是否喜歡" 欄位留給 Robin 手動標記。
+    assert data_row == ["100", "A 公司", "台北市", "軟體業", "AI 工程師", 90.0, 1, "很符合", "https://www.104.com.tw/job/1", None]
+
+    new_sheet = workbook["最新職缺推薦"]
+    assert new_sheet.max_row == 1  # 只有表頭，沒有資料列
+
+    gap_sheet = workbook["技能缺口"]
+    gap_header = [cell.value for cell in next(gap_sheet.iter_rows(min_row=1, max_row=1))]
+    assert gap_header == ["104職缺ID", "說明"]
+    gap_row = [cell.value for cell in next(gap_sheet.iter_rows(min_row=2, max_row=2))]
+    assert gap_row == ["1", "缺乏雲端經驗"]
+
+
+def test_build_job_recommendation_excel_dedupes_skill_gap_rows_across_sheets():
+    job = {
+        "rank": 1, "job_id_104": "1", "company_id_104": "100", "company_name": "A 公司",
+        "region": "台北市", "industry": "軟體業", "title": "AI 工程師", "score": 90.0,
+        "recommend_reason": "很符合", "skill_gap_note": "缺乏雲端經驗", "url": "https://www.104.com.tw/job/1",
+    }
+
+    xlsx_bytes = job_search.build_job_recommendation_excel([job], [job])
+
+    workbook = openpyxl.load_workbook(io.BytesIO(xlsx_bytes))
+    gap_sheet = workbook["技能缺口"]
+    assert gap_sheet.max_row == 2  # 表頭 + 1 筆（同一職缺出現在兩張表也只記一次）
+
+
+def test_send_job_recommendation_email_calls_client_with_expected_args():
+    email_client = MagicMock()
+
+    job_search.send_job_recommendation_email(email_client, "robin@gmail.com", date(2026, 8, 9), b"fake-xlsx-bytes")
+
+    call_kwargs = email_client.send_text_with_attachment.call_args.kwargs
+    assert call_kwargs["to"] == "robin@gmail.com"
+    assert call_kwargs["subject"] == "2026-08-09 排程 - Robinson 104 職缺推薦"
+    assert call_kwargs["body"] == "附件為本週整理的職缺推薦列表，以及技能缺口分析，請參閱！"
+    assert call_kwargs["attachment_filename"] == "2026-08-09-104職缺推薦.xlsx"
+    assert call_kwargs["attachment_bytes"] == b"fake-xlsx-bytes"
+
+
+# --- parse_recommendation_excel／apply_job_preferences（FR-38e）---
+
+
+def _build_test_recommendation_excel(rows):
+    workbook = openpyxl.Workbook()
+    for sheet_name in ("所有職缺推薦", "最新職缺推薦"):
+        sheet = workbook.active if sheet_name == "所有職缺推薦" else workbook.create_sheet(sheet_name)
+        sheet.title = sheet_name
+        sheet.append(job_search._RECOMMENDATION_SHEET_HEADER)
+        for row in rows:
+            sheet.append(row)
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
+def test_parse_recommendation_excel_extracts_liked_flag_by_url():
+    rows = [
+        ["100", "A 公司", "台北市", "軟體業", "AI 工程師", 90.0, 1, "很符合", "https://www.104.com.tw/job/1", "1"],
+        ["200", "B 公司", "新竹市", "硬體業", "後端工程師", 80.0, 2, "還不錯", "https://www.104.com.tw/job/2", ""],
+    ]
+    xlsx_bytes = _build_test_recommendation_excel(rows)
+
+    entries = job_search.parse_recommendation_excel(xlsx_bytes)
+
+    assert {"url": "https://www.104.com.tw/job/1", "is_unliked": True} in entries
+    assert {"url": "https://www.104.com.tw/job/2", "is_unliked": False} in entries
+    assert len(entries) == 2  # 兩張表同樣的連結去重後只留一筆
+
+
+def test_apply_job_preferences_updates_matching_and_reports_not_found(fake_db):
+    _insert_company(fake_db, "100")
+    _insert_job(fake_db, "1", "100")
+    entries = [
+        {"url": "https://www.104.com.tw/job/1", "is_unliked": True},
+        {"url": "https://www.104.com.tw/job/999", "is_unliked": False},
+    ]
+
+    result = job_search.apply_job_preferences(fake_db, entries)
+
+    assert result == {"updated_count": 1, "not_found_urls": ["https://www.104.com.tw/job/999"]}
+    row = fake_db.select("job_postings", where="job_id_104 = %s", params=("1",), fetch_one=True)
+    assert row["is_unliked"] is True
+
+
+# --- check_and_run_weekly_job_search 併入 FR-37/FR-38（FR-37d）---
+
+
+def test_check_and_run_weekly_job_search_skips_scoring_when_llm_client_none(fake_db, monkeypatch):
+    monkeypatch.setattr(job_search, "_polite_delay", lambda *a, **k: None)
+    _seed_owner(fake_db)
+    _insert_company(fake_db, "100", background="已回填的背景")
+    email_client = MagicMock()
+    telegram_client = MagicMock()
+
+    job_search.check_and_run_weekly_job_search(
+        fake_db, _FakeJob104Client(pages={}, details={}), email_client, "robin@gmail.com", telegram_client,
+        llm_client=None, now=_MONDAY_8AM,
+    )
+
+    # llm_client 未提供時，評分/推薦信整段跳過，但不影響公司背景流程本身已跑過（此案例沒有新公司）。
+    assert email_client.send_text_with_attachment.call_count == 0
+
+
+def test_check_and_run_weekly_job_search_runs_scoring_and_sends_recommendation_email(fake_db, monkeypatch):
+    monkeypatch.setattr(job_search, "_polite_delay", lambda *a, **k: None)
+    owner_id = _seed_owner(fake_db)
+    fake_db.update(
+        "users",
+        {
+            "job_resume": "五年後端經驗", "job_expectation": "想找後端職缺",
+            "years_of_experience": 5, "expected_salary_min": 60000, "expected_salary_max": 80000,
+        },
+        where="id = %s", params=(owner_id,),
+    )
+    _insert_company(fake_db, "100", background="已回填的背景")
+    _insert_job(fake_db, "1", "100")  # 已存在資料庫、背景已回填，屬於這次評分範圍
+    client = _FakeJob104Client(pages={}, details={})
+    email_client = MagicMock()
+    telegram_client = MagicMock()
+    llm_client = MagicMock()
+    llm_client.generate_text.return_value = "===JOB 1===\nSCORE: 90\nREASON: 很符合\nGAP: 無明顯落差"
+
+    job_search.check_and_run_weekly_job_search(
+        fake_db, client, email_client, "robin@gmail.com", telegram_client, llm_client=llm_client, now=_MONDAY_8AM
+    )
+
+    row = fake_db.select("job_postings", where="job_id_104 = %s", params=("1",), fetch_one=True)
+    assert row["score"] == 90.0
+    email_client.send_text_with_attachment.assert_called_once()
+    call_kwargs = email_client.send_text_with_attachment.call_args.kwargs
+    assert call_kwargs["attachment_filename"] == "2026-08-10-104職缺推薦.xlsx"
+    telegram_client.send_text.assert_called_once_with(
+        chat_id=8263904025, text=job_search.RECOMMENDATION_EMAIL_SENT_NOTIFICATION_TEXT
+    )
+
+
+def test_check_and_run_weekly_job_search_no_scorable_jobs_skips_recommendation_email(fake_db, monkeypatch):
+    monkeypatch.setattr(job_search, "_polite_delay", lambda *a, **k: None)
+    _seed_owner(fake_db)
+    client = _FakeJob104Client(pages={}, details={})
+    email_client = MagicMock()
+    telegram_client = MagicMock()
+    llm_client = MagicMock()
+
+    job_search.check_and_run_weekly_job_search(
+        fake_db, client, email_client, "robin@gmail.com", telegram_client, llm_client=llm_client, now=_MONDAY_8AM
+    )
+
+    llm_client.generate_text.assert_not_called()
+    email_client.send_text_with_attachment.assert_not_called()

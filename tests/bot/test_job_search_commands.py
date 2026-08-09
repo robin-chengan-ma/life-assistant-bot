@@ -424,3 +424,65 @@ def test_handle_company_csv_uploaded_reports_not_found_ids(fake_db):
     assert "0 家公司" in reply
     assert "999" in reply
     assert "人工確認" in reply
+
+
+# --- handle_job_recommendation_excel_uploaded（Step 4.2，FR-38e）---
+
+
+def _build_recommendation_xlsx(rows):
+    import io
+
+    import openpyxl
+
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "所有職缺推薦"
+    header = ["104公司ID", "公司全名", "地區", "產業類型", "職缺", "評分", "排名", "推薦原因", "連結", "是否喜歡"]
+    workbook.active.append(header)
+    for row in rows:
+        workbook.active.append(row)
+    workbook.create_sheet("最新職缺推薦").append(header)
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
+def test_handle_job_recommendation_excel_uploaded_file_not_found(fake_db):
+    gdrive_client = _FakeGDriveClient(files={})
+
+    reply = commands.handle_job_recommendation_excel_uploaded(fake_db, gdrive_client, "2026-08-09-104職缺推薦.xlsx")
+
+    assert "找不到" in reply
+
+
+def test_handle_job_recommendation_excel_uploaded_applies_preferences_and_reports_success(fake_db):
+    fake_db.insert(
+        "job_postings",
+        {
+            "job_id_104": "1", "company_id_104": "100", "title": "AI 工程師", "region": "台北市",
+            "url": "https://www.104.com.tw/job/1", "is_unliked": False,
+        },
+    )
+    xlsx_bytes = _build_recommendation_xlsx(
+        [["100", "A 公司", "台北市", "軟體業", "AI 工程師", 90.0, 1, "很符合", "https://www.104.com.tw/job/1", "1"]]
+    )
+    gdrive_client = _FakeGDriveClient(files={"2026-08-09-104職缺推薦.xlsx": xlsx_bytes})
+
+    reply = commands.handle_job_recommendation_excel_uploaded(fake_db, gdrive_client, "2026-08-09-104職缺推薦.xlsx")
+
+    assert "1 筆職缺" in reply
+    row = fake_db.select("job_postings", where="job_id_104 = %s", params=("1",), fetch_one=True)
+    assert row["is_unliked"] is True
+
+
+def test_handle_job_recommendation_excel_uploaded_reports_not_found_urls(fake_db):
+    xlsx_bytes = _build_recommendation_xlsx(
+        [["999", "不存在的公司", "台北市", "軟體業", "不存在的職缺", 50.0, 1, "原因",
+          "https://www.104.com.tw/job/999", "1"]]
+    )
+    gdrive_client = _FakeGDriveClient(files={"2026-08-09-104職缺推薦.xlsx": xlsx_bytes})
+
+    reply = commands.handle_job_recommendation_excel_uploaded(fake_db, gdrive_client, "2026-08-09-104職缺推薦.xlsx")
+
+    assert "0 筆職缺" in reply
+    assert "https://www.104.com.tw/job/999" in reply
+    assert "人工確認" in reply

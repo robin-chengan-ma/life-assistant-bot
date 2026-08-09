@@ -4048,3 +4048,27 @@ def handle_company_csv_uploaded(db: CloudSQLClient, gdrive_client, filename: str
         ids_text = "、".join(result["not_found_ids"])
         reply += f"\n找不到對應公司的 104 公司 ID：{ids_text}，麻煩人工確認一下！"
     return reply
+
+
+def handle_job_recommendation_excel_uploaded(db: CloudSQLClient, gdrive_client, filename: str) -> str:
+    """處理「已上傳{filename}」觸發詞中，檔名符合職缺推薦 Excel 命名規則的情況（FR-38e）：至既有
+    共用 Google Drive 資料夾（沿用 `GDRIVE_FOLDER_ID`）以檔名找到該檔案、下載、解析 Excel，把
+    「是否喜歡」欄位（填 1 代表不喜歡）逐筆 `UPDATE` 回填 `job_postings.is_unliked`（以職缺 URL
+    比對，設計完全比照 `handle_company_csv_uploaded()`）。
+
+    找不到對應職缺的連結一律列出來提醒人工處理，不可靜默略過（比照 FR-35e）。
+    """
+    candidates = gdrive_client.list_files(name_contains=filename)
+    matched = next((f for f in candidates if f["name"] == filename), None)
+    if matched is None:
+        return f"我在 Drive 資料夾裡找不到「{filename}」耶，麻煩確認一下檔名或是不是真的上傳成功了！"
+
+    xlsx_bytes = gdrive_client.download_file(matched["id"])
+    entries = job_search.parse_recommendation_excel(xlsx_bytes)
+    result = job_search.apply_job_preferences(db, entries)
+
+    reply = f"已經幫你回填 {result['updated_count']} 筆職缺的喜好標記囉！"
+    if result["not_found_urls"]:
+        urls_text = "、".join(result["not_found_urls"])
+        reply += f"\n找不到對應職缺的連結：{urls_text}，麻煩人工確認一下！"
+    return reply

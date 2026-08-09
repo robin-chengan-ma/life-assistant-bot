@@ -441,15 +441,21 @@ def _check_youtube_weekly_push() -> None:
 
 
 def _check_job_search_weekly_crawl() -> None:
-    """在 /healthz 被呼叫時順便檢查求職模組週排程（Step 4.1，見 robinson SPEC.md FR-34b、
-    FR-35a～FR-35c、ADR-24）：固定台灣時間週一 08:00，依 Robin 設定的各組搜尋條件呼叫 104
-    公開 AJAX API 爬取職缺（FR-34a～FR-34d），若這批職缺涉及資料庫裡還沒有背景資料的新公司，
-    寄送公司背景 CSV 給 Robin 並私訊告知（FR-35a～FR-35c），詳見 src/bot/job_search.py
-    模組內 `check_and_run_weekly_job_search()` docstring。
+    """在 /healthz 被呼叫時順便檢查求職模組週排程（Step 4.1／4.2，見 robinson SPEC.md
+    FR-34b、FR-35a～FR-35c、FR-37、FR-38、ADR-24、ADR-26）：固定台灣時間週一 08:00，依 Robin
+    設定的各組搜尋條件呼叫 104 公開 AJAX API 爬取職缺（FR-34a～FR-34d），若這批職缺涉及資料庫
+    裡還沒有背景資料的新公司，寄送公司背景 CSV 給 Robin 並私訊告知（FR-35a～FR-35c），緊接著跑
+    Gemini 批次契合度評分＋技能缺口分析（FR-37）與雙重排名 Excel 寄送（FR-38a～FR-38c），詳見
+    src/bot/job_search.py 模組內 `check_and_run_weekly_job_search()` docstring。
 
     需要 `DATABASE_URL`、`TELEGRAM_BOT_TOKEN`（私訊通知）、`GMAIL_USER`／`GMAIL_PASSWORD`
-    （FR-35b 寄信，沿用 FR-19b 既有備援信箱憑證，同一組帳密自寄自收）；104 搜尋/詳情 API
-    為公開端點，不需要額外金鑰（見 submodules/job104/client.py）。任一項未設定就直接跳過。
+    （FR-35b／FR-38b 寄信，沿用 FR-19b 既有備援信箱憑證，同一組帳密自寄自收）；104 搜尋/詳情
+    API 為公開端點，不需要額外金鑰（見 submodules/job104/client.py）。任一項未設定就直接跳過。
+
+    `GEMINI_API_JOB_SEARCH_KEY`（2026-08-09 新增，Step 4.2 專用，比照 `GEMINI_API_SKILL_GROWTH_KEY`
+    「每個功能領域獨立一把 Key，避免佔用其他功能既有配額」的既有慣例）未設定時，
+    `check_and_run_weekly_job_search()` 的 `llm_client` 傳 `None`，FR-37/FR-38 評分與推薦信
+    整段優雅跳過，但不影響 FR-34／FR-35 爬蟲與公司背景協作流程本身照常執行。
     """
     if not (
         os.environ.get("DATABASE_URL")
@@ -463,6 +469,7 @@ def _check_job_search_weekly_crawl() -> None:
     from submodules.cloudsql.client import CloudSQLClient
     from submodules.email.client import EmailClient
     from submodules.job104.client import Job104Client
+    from submodules.llm.client import LLMClient
     from submodules.telegram.client import TelegramClient
 
     db = CloudSQLClient()
@@ -471,9 +478,16 @@ def _check_job_search_weekly_crawl() -> None:
         gmail_user = os.environ["GMAIL_USER"]
         email_client = EmailClient(username=gmail_user, password=os.environ["GMAIL_PASSWORD"])
         telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
-        job_search.check_and_run_weekly_job_search(db, job104_client, email_client, gmail_user, telegram_client)
+        llm_client = (
+            LLMClient(api_key=os.environ["GEMINI_API_JOB_SEARCH_KEY"])
+            if os.environ.get("GEMINI_API_JOB_SEARCH_KEY")
+            else None
+        )
+        job_search.check_and_run_weekly_job_search(
+            db, job104_client, email_client, gmail_user, telegram_client, llm_client=llm_client
+        )
     except Exception:
-        logger.exception("求職模組週排程（104 職缺爬蟲）失敗，不影響健康檢查端點本身")
+        logger.exception("求職模組週排程（104 職缺爬蟲／FR-37 評分）失敗，不影響健康檢查端點本身")
     finally:
         db.close()
 

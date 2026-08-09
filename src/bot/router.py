@@ -93,10 +93,10 @@ _REMOVE_YOUTUBE_TOPIC_TRIGGERS = {"/remove_youtube_topic", "移除YouTube主題"
 # 2026-08-09（Step 4.1，見 robinson SPEC.md FR-33、FR-36、ADR-24 決策 2）：求職模組設定流程，
 # `job_search` 開關同步改為 owner_only=True，觸發詞只放在 is_owner 分支，家人完全看不到這個功能。
 _JOB_SEARCH_SETUP_TRIGGERS = {"/set_job_search", "我要找工作", "我最近想要找工作了"}
-# 2026-08-09（見 robinson SPEC.md FR-35e、ADR-24 後果）：帶動態檔名的觸發詞，設計比照
-# _CLEAN_TARGET_DIALOG_PATTERN 用 regex 擷取參數；目前只處理公司背景 CSV（檔名以
-# 「104職缺公司.csv」結尾），Step 4.2 的職缺推薦 Excel 回填（FR-38e）留待該 Step 開工時再擴充
-# 這個 if 分支，不需要改動這個 regex 本身。
+# 2026-08-09（見 robinson SPEC.md FR-35e、FR-38e、ADR-24 後果、ADR-26）：帶動態檔名的觸發詞，
+# 設計比照 _CLEAN_TARGET_DIALOG_PATTERN 用 regex 擷取參數；依副檔名/檔名關鍵字分流成兩條各自
+# 獨立的回填流程——公司背景 CSV（檔名以「104職缺公司.csv」結尾）與職缺推薦 Excel（檔名以
+# 「104職缺推薦.xlsx」結尾），不需要改動這個 regex 本身，只需要在下方 if/elif 各自擴充。
 _UPLOADED_FILE_PATTERN = re.compile(r"^已上傳\s*(?P<filename>.+)$")
 # 2026-08-02（Step 1.9，見 robinson SPEC.md FR-60）：任何身分皆可觸發客訴收集流程。
 _COMPLAINT_TRIGGERS = {"/complaint", "我要客訴你"}
@@ -234,6 +234,12 @@ def handle_message(
                 if gdrive_client is None:
                     return "Drive 服務目前還沒設定好，沒辦法幫你回填公司背景，麻煩稍後再試一次！"
                 return commands.handle_company_csv_uploaded(db, gdrive_client, filename)
+            if filename.endswith("104職缺推薦.xlsx"):
+                # 2026-08-09（Step 4.2，FR-38e）：Robin 回填好「是否喜歡」的職缺推薦 Excel 上傳
+                # Drive 後的觸發詞，跟公司背景 CSV 是各自獨立的分流，設計完全對稱。
+                if gdrive_client is None:
+                    return "Drive 服務目前還沒設定好，沒辦法幫你回填職缺喜好，麻煩稍後再試一次！"
+                return commands.handle_job_recommendation_excel_uploaded(db, gdrive_client, filename)
     else:
         user = auth.find_user_by_telegram_id(db, telegram_user_id)
         if user is None:

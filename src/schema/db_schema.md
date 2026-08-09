@@ -1032,8 +1032,8 @@ CREATE TABLE job_companies (
 ### job_postings
 
 **建立日期**：2026-08-09
-**用途**：Step 4.1 104 職缺資料，對應 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) FR-34、ADR-24 決策 4。
-**Migration 檔案**：`src/migrations/0056_create_job_postings_table.sql`、`0057_add_is_closed_to_job_postings.sql`
+**用途**：Step 4.1 104 職缺資料，對應 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) FR-34、ADR-24 決策 4；Step 4.2 評分欄位見下方。
+**Migration 檔案**：`src/migrations/0056_create_job_postings_table.sql`、`0057_add_is_closed_to_job_postings.sql`、`0058_add_scoring_fields_to_job_postings.sql`
 
 ```sql
 CREATE TABLE job_postings (
@@ -1051,7 +1051,11 @@ CREATE TABLE job_postings (
     source_updated_at TIMESTAMPTZ,
     first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_crawled_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    is_closed BOOLEAN NOT NULL DEFAULT FALSE  -- 0057 追加
+    is_closed BOOLEAN NOT NULL DEFAULT FALSE,  -- 0057 追加
+    score NUMERIC(5,2),  -- 0058 追加
+    recommend_reason TEXT,  -- 0058 追加
+    skill_gap_note TEXT,  -- 0058 追加
+    is_unliked BOOLEAN NOT NULL DEFAULT FALSE  -- 0058 追加
 );
 
 CREATE INDEX idx_job_postings_company_id_104 ON job_postings (company_id_104);
@@ -1059,7 +1063,8 @@ CREATE INDEX idx_job_postings_company_id_104 ON job_postings (company_id_104);
 
 **設計理由**：
 - `job_id_104 UNIQUE` 作為 FR-34d ETL 去重鍵值：已存在的職缺 `UPDATE` 既有紀錄（例如薪資/內容變動），不重複新增
-- `applicant_count`／`source_updated_at` 允許 `NULL`：sandbox 無法連線 104 網路實測列表/詳情頁是否有這兩個欄位（ADR-24 決策 4），先保守開欄位，若確認抓不到就永遠是 `NULL`，FR-37b 契合度評分時會略過這兩個維度
+- `applicant_count`／`source_updated_at` 允許 `NULL`：**（2026-08-09 更新）**Robin 透過瀏覽器 DevTools 手動實測 104 真實 API 後確認兩者皆可正常取得（`applicant_count` 取自列表 API 的 `applyCnt`，`source_updated_at` 取自詳情 API 的 `header.appearDate`），FR-37b 契合度評分已將兩者納入必要比對維度；個別職缺這兩欄剛好是 `NULL`（理論上少數情況）時評分照樣略過該維度，不強行湊資料
 - **`is_closed`（2026-08-09 追加，migration `0057`）**：Robin 實測確認 104 API 列表／詳情回應皆含 `jobSwitch`／`switch` 欄位（`"on"` 代表仍開放），可自動判斷職缺是否已關閉，不需要如 ADR-26 決策 5 原訂備案走人工 Excel 標記；`submodules/job104/client.py` `search_list()` 直接解析，`upsert_job_posting()` 每次爬蟲重新爬到既有職缺時同步更新，FR-38a 排名時排除 `is_closed = TRUE` 的職缺
-- `is_unliked`／`score`／`rank`／`recommend_reason`／`skill_gap_note` 等 Step 4.2（FR-37／FR-38）欄位仍不在本次建立——`is_unliked` 是 Robin 主觀偏好判斷，沒有自動化替代方案，留待 Step 4.2 開工時另開 migration，避免現在憑空猜欄位規格
+- **`score`／`recommend_reason`／`skill_gap_note`／`is_unliked`（2026-08-09 追加，migration `0058`，Step 4.2）**：`score`／`recommend_reason`／`skill_gap_note` 三欄由 FR-37 每週批次 Gemini 評分時一起寫入，允許 `NULL`（尚未評分，例如所屬公司背景還沒回填）；`is_unliked` 由 Robin 於 FR-38d 推薦 Excel 人工標記回填，預設 `FALSE`
+- **刻意不建立 `rank` 欄位**：FR-38a 要求「全庫排名」與「本週新職缺排名」兩種排名並存，同一職缺在兩種排名裡名次不同，存成單一欄位語意衝突；排名改在 FR-38b 產生 Excel 的當下依 `score` 動態計算（`job_search.build_ranked_jobs()`），不持久化存進資料庫（Robin 於 2026-08-09 確認此設計）
 - `first_seen_at` 供 FR-38a「本週新職缺排名」判斷依據；`last_crawled_at` 每次週排程重新爬到既有職缺時更新，供未來除錯/資料新鮮度判斷用

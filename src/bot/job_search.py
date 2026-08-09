@@ -7,13 +7,19 @@ FR-34（兩階段爬蟲＋ETL 去重，呼叫 `submodules/job104` 拿資料）�
 """
 import csv
 import io
+import logging
 import random
+import re
 import time
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
+import openpyxl
+
 from src.bot import toggles
 from submodules.cloudsql.client import CloudSQLClient
+
+_logger = logging.getLogger(__name__)
 
 _TAIWAN_TZ = ZoneInfo("Asia/Taipei")
 
@@ -365,7 +371,386 @@ def apply_company_backgrounds(db: CloudSQLClient, entries: list[dict]) -> dict:
     return {"updated_count": updated_count, "not_found_ids": not_found_ids}
 
 
-# --- 每週排程整合入口（FR-34b、FR-35a～FR-35c）---
+# --- FR-37：Gemini 批次契合度評分（見 ADR-26 決策 2～4）---
+
+# FR-37c：職缺數量過多超出單次 Prompt 負荷時分批送出，比照 youtube.py 批次評分的做法，每批
+# 獨立呼叫一次 Gemini；15 筆是保守估計值（每筆職缺內容含完整 content/welfare 文字，單批太大
+# 容易讓 LLM 輸出格式跑掉或超出 token 上限）。
+_SCORING_BATCH_SIZE = 15
+
+_SCORING_PROMPT_TEMPLATE = (
+    "你是一位職涯顧問，請根據使用者的履歷、年資、期望薪資，針對下面每一筆待評分職缺，計算一個"
+    "0～100 的整體契合度分數（分數越高代表越推薦，需綜合考量職缺內容、年資落差、期望薪資落差、"
+    "應徵熱門程度、更新時間新舊），並各自給出簡短的推薦原因與技能缺口說明。若某項資訊標示"
+    "「未提供」，評分時直接略過該項比對維度，不要用未提供的資訊臆測。\n\n"
+    "【使用者履歷】\n{resume}\n\n"
+    "【使用者年資】{years_of_experience} 年\n"
+    "【使用者期望薪資】{expected_salary_min}～{expected_salary_max} 元\n"
+    "【使用者期望工作內容】\n{expectation}\n\n"
+    "【待評分職缺清單】\n{jobs_text}\n\n"
+    "請針對每一筆職缺，嚴格依照下面格式各自輸出一個區塊，區塊之間不要有其他文字：\n"
+    "===JOB <職缺編號>===\n"
+    "SCORE: <0~100 的分數，可為小數>\n"
+    "REASON: <推薦原因，50 字以內，限一行>\n"
+    "GAP: <技能缺口說明，100 字以內，限一行，沒有明顯缺口可寫「無明顯落差」>"
+)
+
+_SCORE_BLOCK_PATTERN = re.compile(r"===\s*JOB\s+(\d+)\s*===")
+_SCORE_FIELD_PATTERN = re.compile(r"SCORE:\s*(\d+(?:\.\d+)?)")
+_REASON_FIELD_PATTERN = re.compile(r"REASON:\s*(.+)")
+_GAP_FIELD_PATTERN = re.compile(r"GAP:\s*(.+)")
+
+
+def list_scorable_jobs(db: CloudSQLClient) -> list[dict]:
+    """FR-37a：撈出「所屬公司背景資料已回填完成」的職缺，供每週批次評分使用；背景仍空白的職缺
+    這次跳過，之後背景補齊會在下次排程自然被納入，不會卡住整批評分。
+
+    `CloudSQLClient` 介面沒有 JOIN 查詢（`FakeCloudSQLClient` 測試替身也不支援），改成先查出
+    背景已回填的公司 ID 集合，再用集合過濾職缺，於 Python 端完成等效的過濾邏輯。
+    """
+    companies_with_background = db.select("job_companies", where="background IS NOT NULL")
+    company_ids = {c["company_id_104"] for c in companies_with_background}
+    if not company_ids:
+        return []
+    return [job for job in db.select("job_postings") if job["company_id_104"] in company_ids]
+
+
+def _format_job_for_prompt(index: int, job: dict, company: dict) -> str:
+    required_years = job.get("required_years_experience")
+    salary_min = job.get("salary_min")
+    salary_max = job.get("salary_max")
+    salary_text = f"{salary_min}～{salary_max} 元" if salary_min is not None or salary_max is not None else "未提供"
+    return (
+        f"{index}. 職缺：{job['title']}\n"
+        f"   公司：{company.get('company_name', '未知')}（{company.get('industry') or '未提供'}）\n"
+        f"   地區：{job.get('region') or '未提供'}\n"
+        f"   要求年資：{required_years if required_years is not None else '未提供'} 年\n"
+        f"   薪資範圍：{salary_text}\n"
+        f"   應徵人數：{job.get('applicant_count') if job.get('applicant_count') is not None else '未提供'}　"
+        f"更新時間：{job.get('source_updated_at') or '未提供'}\n"
+        f"   公司背景：{company.get('background') or '未提供'}\n"
+        f"   職缺內容：{job.get('content') or '未提供'}"
+    )
+
+
+def _build_scoring_prompt(profile: dict, jobs: list[dict], companies_by_id: dict) -> str:
+    jobs_text = "\n".join(
+        _format_job_for_prompt(index, job, companies_by_id.get(job["company_id_104"], {}))
+        for index, job in enumerate(jobs, start=1)
+    )
+    return _SCORING_PROMPT_TEMPLATE.format(
+        resume=profile.get("resume") or "未提供",
+        years_of_experience=profile.get("years_of_experience"),
+        expected_salary_min=profile.get("expected_salary_min"),
+        expected_salary_max=profile.get("expected_salary_max"),
+        expectation=profile.get("expectation") or "未提供",
+        jobs_text=jobs_text,
+    )
+
+
+def _parse_scoring_response(raw: str, count: int) -> dict[int, dict]:
+    """解析 Gemini 依 `_SCORING_PROMPT_TEMPLATE` 格式輸出的批次評分回應，回傳
+    `{批次內編號: {"score", "reason", "gap"}}`；單一區塊缺少 SCORE 欄位（格式跑掉）直接跳過這筆，
+    不強行湊資料，也不讓整批解析失敗（見 `score_jobs()` 的略過邏輯）。
+    """
+    segments = _SCORE_BLOCK_PATTERN.split(raw)
+    # re.split 搭配 capture group 回傳：[分隔前綴, 編號1, 區塊1, 編號2, 區塊2, ...]
+    results: dict[int, dict] = {}
+    for i in range(1, len(segments), 2):
+        try:
+            index = int(segments[i])
+        except ValueError:
+            continue
+        if not (1 <= index <= count):
+            continue
+        block = segments[i + 1]
+        score_match = _SCORE_FIELD_PATTERN.search(block)
+        if not score_match:
+            continue
+        reason_match = _REASON_FIELD_PATTERN.search(block)
+        gap_match = _GAP_FIELD_PATTERN.search(block)
+        results[index] = {
+            "score": float(score_match.group(1)),
+            "reason": reason_match.group(1).strip() if reason_match else "",
+            "gap": gap_match.group(1).strip() if gap_match else "",
+        }
+    return results
+
+
+def score_jobs(llm_client, profile: dict, jobs: list[dict], companies_by_id: dict) -> dict[str, dict]:
+    """FR-37：把 `list_scorable_jobs()` 範圍內的職缺整批（而非逐筆）交給 Gemini 計算契合度分數、
+    推薦原因、技能缺口說明（FR-37b～FR-37c，比照 youtube.py `score_candidates_for_topic()` 的
+    批次評分模式，見模組上方 `_SCORING_BATCH_SIZE` 說明）。單一職缺解析不出有效分數時（LLM 輸出
+    格式跑掉），這筆職缺這次直接跳過（`score` 維持 `NULL`），下週排程會重新嘗試，不強行湊資料也
+    不讓整個評分流程卡住。
+
+    回傳 `{job_id_104: {"score", "recommend_reason", "skill_gap_note"}}`，供 `apply_scores()`
+    批次寫回資料庫。
+    """
+    results: dict[str, dict] = {}
+    for start in range(0, len(jobs), _SCORING_BATCH_SIZE):
+        batch = jobs[start : start + _SCORING_BATCH_SIZE]
+        prompt = _build_scoring_prompt(profile, batch, companies_by_id)
+        raw = llm_client.generate_text(prompt)
+        parsed = _parse_scoring_response(raw, len(batch))
+        for index, job in enumerate(batch, start=1):
+            if index not in parsed:
+                _logger.warning("職缺評分 LLM 回應解析失敗，略過這筆（job_id_104=%s）", job["job_id_104"])
+                continue
+            entry = parsed[index]
+            results[job["job_id_104"]] = {
+                "score": entry["score"],
+                "recommend_reason": entry["reason"],
+                "skill_gap_note": entry["gap"],
+            }
+    return results
+
+
+def apply_scores(db: CloudSQLClient, scores: dict) -> int:
+    """把 `score_jobs()` 的結果批次 `UPDATE` 回 `job_postings`，回傳實際更新筆數。"""
+    updated = 0
+    for job_id_104, fields in scores.items():
+        affected = db.update(
+            "job_postings",
+            {
+                "score": fields["score"],
+                "recommend_reason": fields["recommend_reason"],
+                "skill_gap_note": fields["skill_gap_note"],
+            },
+            where="job_id_104 = %s",
+            params=(job_id_104,),
+        )
+        updated += affected
+    return updated
+
+
+# --- FR-38a：雙重排名（全庫／本週新職缺，動態計算不持久化，見 migration 0058 設計理由）---
+
+_RANKING_LIMIT = 30
+
+
+def _companies_by_id(db: CloudSQLClient) -> dict[str, dict]:
+    return {c["company_id_104"]: c for c in db.select("job_companies")}
+
+
+def _to_taiwan_date(value) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.astimezone(_TAIWAN_TZ).date()
+    return value
+
+
+def build_ranked_jobs(
+    db: CloudSQLClient,
+    scope: str,
+    companies_by_id: dict | None = None,
+    today: date | None = None,
+    limit: int = _RANKING_LIMIT,
+) -> list[dict]:
+    """FR-38a：依 `score` 由高到低排出前 `limit` 名職缺（預設 30）。`scope="all"` 為全庫排名，
+    `scope="new_this_week"` 僅計入 `first_seen_at`（換算台灣時間）等於 `today` 的職缺，也就是
+    本次排程新爬到的職缺。排除 `score IS NULL`（尚未評分）、`is_unliked = TRUE`、
+    `is_closed = TRUE` 的職缺；`rank` 在這裡動態計算，不持久化存進資料庫。
+    """
+    companies_by_id = companies_by_id if companies_by_id is not None else _companies_by_id(db)
+    today = today or _now().date()
+
+    eligible = [
+        job
+        for job in db.select("job_postings")
+        if job.get("score") is not None and not job.get("is_unliked") and not job.get("is_closed")
+    ]
+    if scope == "new_this_week":
+        eligible = [job for job in eligible if _to_taiwan_date(job.get("first_seen_at")) == today]
+    eligible.sort(key=lambda job: float(job["score"]), reverse=True)
+
+    ranked = []
+    for rank, job in enumerate(eligible[:limit], start=1):
+        company = companies_by_id.get(job["company_id_104"], {})
+        ranked.append(
+            {
+                "rank": rank,
+                "job_id_104": job["job_id_104"],
+                "company_id_104": job["company_id_104"],
+                "company_name": company.get("company_name", ""),
+                "region": job.get("region") or company.get("region") or "",
+                "industry": company.get("industry") or "",
+                "title": job["title"],
+                "score": job["score"],
+                "recommend_reason": job.get("recommend_reason") or "",
+                "skill_gap_note": job.get("skill_gap_note") or "",
+                "url": job["url"],
+            }
+        )
+    return ranked
+
+
+# --- FR-38b：職缺推薦 Excel（三張工作表）---
+
+_RECOMMENDATION_EXCEL_FILENAME_SUFFIX = "-104職缺推薦.xlsx"
+_RECOMMENDATION_SHEET_HEADER = [
+    "104公司ID", "公司全名", "地區", "產業類型", "職缺", "評分", "排名", "推薦原因", "連結", "是否喜歡",
+]
+_SKILL_GAP_SHEET_HEADER = ["104職缺ID", "說明"]
+
+
+def job_recommendation_excel_filename(target_date: date) -> str:
+    """FR-38b：組出職缺推薦 Excel 的固定檔名格式 `{YYYY-MM-DD}-104職缺推薦.xlsx`。"""
+    return f"{target_date.isoformat()}{_RECOMMENDATION_EXCEL_FILENAME_SUFFIX}"
+
+
+def _write_recommendation_rows(sheet, ranked_jobs: list[dict]) -> None:
+    sheet.append(_RECOMMENDATION_SHEET_HEADER)
+    for job in ranked_jobs:
+        sheet.append(
+            [
+                job["company_id_104"], job["company_name"], job["region"], job["industry"],
+                job["title"], float(job["score"]), job["rank"], job["recommend_reason"], job["url"], "",
+            ]
+        )
+
+
+def _write_skill_gap_rows(sheet, all_ranked: list[dict], new_ranked: list[dict]) -> None:
+    sheet.append(_SKILL_GAP_SHEET_HEADER)
+    seen: set[str] = set()
+    for job in [*all_ranked, *new_ranked]:
+        if job["job_id_104"] in seen:
+            continue
+        seen.add(job["job_id_104"])
+        sheet.append([job["job_id_104"], job["skill_gap_note"]])
+
+
+def build_job_recommendation_excel(all_ranked: list[dict], new_ranked: list[dict]) -> bytes:
+    """FR-38b：組出職缺推薦 Excel（三張工作表：所有職缺推薦／最新職缺推薦／技能缺口），用
+    `openpyxl`（全專案第一次需要真的讀寫 .xlsx，2026-08-09 新增依賴，見 `requirements.txt`）。
+
+    「是否喜歡」欄位固定留空字串讓 Robin 標記（FR-38d：填 1 代表不喜歡）；「是否關閉」已於
+    Step 4.1 確認可用 `job_postings.is_closed` 自動判斷（見 FR-38b 2026-08-09 更新），這裡不
+    出現這欄。
+    """
+    workbook = openpyxl.Workbook()
+    all_sheet = workbook.active
+    all_sheet.title = "所有職缺推薦"
+    _write_recommendation_rows(all_sheet, all_ranked)
+
+    new_sheet = workbook.create_sheet("最新職缺推薦")
+    _write_recommendation_rows(new_sheet, new_ranked)
+
+    gap_sheet = workbook.create_sheet("技能缺口")
+    _write_skill_gap_rows(gap_sheet, all_ranked, new_ranked)
+
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
+# FR-38b：固定信件標題／內文文案（Robin 已核准的措辭，比照 EMAIL_SUBJECT_TEMPLATE／EMAIL_BODY_TEXT）。
+RECOMMENDATION_EMAIL_SUBJECT_TEMPLATE = "{date} 排程 - Robinson 104 職缺推薦"
+RECOMMENDATION_EMAIL_BODY_TEXT = "附件為本週整理的職缺推薦列表，以及技能缺口分析，請參閱！"
+
+# FR-38c：寄信成功後私訊 Robin 的固定文案。
+RECOMMENDATION_EMAIL_SENT_NOTIFICATION_TEXT = "已寄送本週 104 職缺推薦檔案給您～"
+
+
+def send_job_recommendation_email(email_client, to: str, target_date: date, xlsx_bytes: bytes) -> None:
+    """FR-38b：把職缺推薦 Excel 當附件寄給 Robin 自己（`GMAIL_USER` 自寄自收）。"""
+    email_client.send_text_with_attachment(
+        to=to,
+        subject=RECOMMENDATION_EMAIL_SUBJECT_TEMPLATE.format(date=target_date.isoformat()),
+        body=RECOMMENDATION_EMAIL_BODY_TEXT,
+        attachment_filename=job_recommendation_excel_filename(target_date),
+        attachment_bytes=xlsx_bytes,
+    )
+
+
+# --- FR-38e：Robin 回填「是否喜歡」後回寫資料庫 ---
+
+
+def parse_recommendation_excel(xlsx_bytes: bytes) -> list[dict]:
+    """FR-38e：解析 Robin 回填好「是否喜歡」欄位的推薦 Excel，回傳 `[{"url", "is_unliked"}, ...]`。
+
+    以「連結」（職缺 URL）為比對鍵值——天然唯一，不需要額外的比對欄位。「所有職缺推薦」／
+    「最新職缺推薦」兩張工作表都要讀，同一個連結可能同時出現在兩張表，用 dict 依連結去重
+    （後讀到的覆蓋前面的；實務上同一職缺兩張表的標記內容應該一致，不特別處理衝突）。
+    """
+    workbook = openpyxl.load_workbook(io.BytesIO(xlsx_bytes), data_only=True)
+    entries: dict[str, bool] = {}
+    for sheet_name in ("所有職缺推薦", "最新職缺推薦"):
+        if sheet_name not in workbook.sheetnames:
+            continue
+        sheet = workbook[sheet_name]
+        header = [cell.value for cell in next(sheet.iter_rows(min_row=1, max_row=1))]
+        if "連結" not in header or "是否喜歡" not in header:
+            continue
+        url_index = header.index("連結")
+        liked_index = header.index("是否喜歡")
+        for row in sheet.iter_rows(min_row=2, values_only=True):
+            url = row[url_index]
+            if not url:
+                continue
+            entries[url] = str(row[liked_index]).strip() == "1"
+    return [{"url": url, "is_unliked": is_unliked} for url, is_unliked in entries.items()]
+
+
+def apply_job_preferences(db: CloudSQLClient, entries: list[dict]) -> dict:
+    """FR-38e：把解析出的「是否喜歡」標記逐筆 `UPDATE` 回 `job_postings`（以 url 比對）。
+
+    回傳 `{"updated_count": int, "not_found_urls": [...]}`；比對不到對應職缺的一律列出來提醒
+    人工處理，不可靜默略過（比照 FR-35e）。
+    """
+    updated_count = 0
+    not_found_urls: list[str] = []
+    for entry in entries:
+        affected = db.update(
+            "job_postings", {"is_unliked": entry["is_unliked"]}, where="url = %s", params=(entry["url"],)
+        )
+        if affected:
+            updated_count += 1
+        else:
+            not_found_urls.append(entry["url"])
+    return {"updated_count": updated_count, "not_found_urls": not_found_urls}
+
+
+# --- 每週排程整合入口（FR-34b、FR-35a～FR-35c、FR-37d、FR-38a～FR-38c）---
+
+
+def _run_weekly_scoring_and_recommendation(
+    db: CloudSQLClient, llm_client, email_client, gmail_user: str, telegram_client, owner: dict, today: date
+) -> None:
+    """FR-37d：緊接在該週爬蟲與公司背景協作流程之後執行——不因為「這週沒有新公司背景可用」而
+    跳過整次評分，只要資料庫裡已有背景資料的職缺，都會被重新納入這次評分範圍。
+
+    比照 FR-35a「沒有新公司就整段跳過、不寄信」的既有慣例：`list_scorable_jobs()` 目前完全沒有
+    可評分職缺、或評分完後兩種排名（全庫／本週新職缺）都是空清單時，直接跳過寄信與通知，避免
+    寄出一封完全空白的推薦信。
+    """
+    scorable_jobs = list_scorable_jobs(db)
+    if not scorable_jobs:
+        return
+
+    companies_by_id = _companies_by_id(db)
+    profile = {
+        "resume": owner.get("job_resume"),
+        "years_of_experience": owner.get("years_of_experience"),
+        "expected_salary_min": owner.get("expected_salary_min"),
+        "expected_salary_max": owner.get("expected_salary_max"),
+        "expectation": owner.get("job_expectation"),
+    }
+    scores = score_jobs(llm_client, profile, scorable_jobs, companies_by_id)
+    if scores:
+        apply_scores(db, scores)
+
+    all_ranked = build_ranked_jobs(db, "all", companies_by_id=companies_by_id, today=today)
+    new_ranked = build_ranked_jobs(db, "new_this_week", companies_by_id=companies_by_id, today=today)
+    if not all_ranked and not new_ranked:
+        return
+
+    xlsx_bytes = build_job_recommendation_excel(all_ranked, new_ranked)
+    send_job_recommendation_email(email_client, gmail_user, today, xlsx_bytes)
+    telegram_client.send_text(
+        chat_id=owner["telegram_user_id"], text=RECOMMENDATION_EMAIL_SENT_NOTIFICATION_TEXT
+    )
 
 
 def check_and_run_weekly_job_search(
@@ -374,6 +759,7 @@ def check_and_run_weekly_job_search(
     email_client,
     gmail_user: str,
     telegram_client,
+    llm_client=None,
     now: datetime | None = None,
 ) -> None:
     """`/healthz` 每 10 分鐘觸發一次的其中一項排程檢查，固定台灣時間週一 08:00 這個小時內執行，
@@ -385,7 +771,10 @@ def check_and_run_weekly_job_search(
     2. FR-35a：若這批職缺涉及資料庫裡還沒有背景資料的新公司（`new_company_ids` 非空），
        組 CSV 寄信給 Robin（FR-35b）、寄信成功後私訊告知（FR-35c）；若沒有新公司，
        這一步整段跳過，不寄信也不通知
-    3. 更新 `job_search_last_run_on` 去重欄位
+    3. FR-37d：緊接著跑 Gemini 批次契合度評分（FR-37）＋雙重排名（FR-38a）＋Excel 寄送
+       （FR-38b～FR-38c），見 `_run_weekly_scoring_and_recommendation()`；`llm_client` 為
+       `None`（例如環境變數未設定完整）時整段跳過，不影響本函式其餘流程
+    4. 更新 `job_search_last_run_on` 去重欄位
 
     執行過程若拋出例外，記錄警告日誌並優雅結束，不影響 `/healthz`（呼叫端 `main.py` 已經包了
     一層 try/except，這裡不重複再包，維持跟其餘 `check_and_push_*` 函式一致的分工：本函式只
@@ -412,5 +801,8 @@ def check_and_run_weekly_job_search(
         csv_text = build_new_companies_csv(companies)
         send_new_companies_email(email_client, gmail_user, today, csv_text)
         telegram_client.send_text(chat_id=owner["telegram_user_id"], text=EMAIL_SENT_NOTIFICATION_TEXT)
+
+    if llm_client is not None:
+        _run_weekly_scoring_and_recommendation(db, llm_client, email_client, gmail_user, telegram_client, owner, today)
 
     db.update("users", {"job_search_last_run_on": today}, where="id = %s", params=(owner["id"],))

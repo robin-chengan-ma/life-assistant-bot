@@ -266,6 +266,12 @@ class FakeCloudSQLClient:
             return row.get("company_id_104") == params[0]
         if where == "job_id_104 = %s":
             return row.get("job_id_104") == params[0]
+        # 2026-08-09（Step 4.2，見 robinson SPEC.md FR-37a、FR-38e、ADR-26）：契合度評分範圍
+        # 過濾／推薦 Excel 回填「是否喜歡」查詢條件。
+        if where == "background IS NOT NULL":
+            return row.get("background") is not None
+        if where == "url = %s":
+            return row.get("url") == params[0]
 
         raise NotImplementedError(f"FakeCloudSQLClient 尚未支援這個 where 條件：{where}")
 

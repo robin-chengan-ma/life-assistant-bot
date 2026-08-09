@@ -464,6 +464,7 @@ def test_check_job_search_weekly_crawl_calls_job_search_module_when_env_vars_set
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
     monkeypatch.setenv("GMAIL_USER", "you@gmail.com")
     monkeypatch.setenv("GMAIL_PASSWORD", "fake-app-password")
+    monkeypatch.delenv("GEMINI_API_JOB_SEARCH_KEY", raising=False)
 
     fake_db = MagicMock()
     monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", MagicMock(return_value=fake_db))
@@ -479,8 +480,37 @@ def test_check_job_search_weekly_crawl_calls_job_search_module_when_env_vars_set
 
     main._check_job_search_weekly_crawl()
 
-    fake_check.assert_called_once_with(fake_db, fake_job104_client, fake_email_client, "you@gmail.com", fake_telegram)
+    # GEMINI_API_JOB_SEARCH_KEY 未設定時，llm_client 傳 None，FR-37/FR-38 評分整段優雅跳過
+    # （見 job_search.check_and_run_weekly_job_search() docstring），不影響爬蟲本身照常執行。
+    fake_check.assert_called_once_with(
+        fake_db, fake_job104_client, fake_email_client, "you@gmail.com", fake_telegram, llm_client=None
+    )
     fake_db.close.assert_called_once()
+
+
+def test_check_job_search_weekly_crawl_builds_llm_client_when_gemini_key_set(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("GMAIL_USER", "you@gmail.com")
+    monkeypatch.setenv("GMAIL_PASSWORD", "fake-app-password")
+    monkeypatch.setenv("GEMINI_API_JOB_SEARCH_KEY", "fake-gemini-key")
+
+    fake_db = MagicMock()
+    monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", MagicMock(return_value=fake_db))
+    monkeypatch.setattr("submodules.job104.client.Job104Client", MagicMock(return_value=MagicMock()))
+    monkeypatch.setattr("submodules.email.client.EmailClient", MagicMock(return_value=MagicMock()))
+    monkeypatch.setattr("submodules.telegram.client.TelegramClient", MagicMock(return_value=MagicMock()))
+    fake_llm_client = MagicMock()
+    fake_llm_client_cls = MagicMock(return_value=fake_llm_client)
+    monkeypatch.setattr("submodules.llm.client.LLMClient", fake_llm_client_cls)
+
+    fake_check = MagicMock()
+    monkeypatch.setattr("src.bot.job_search.check_and_run_weekly_job_search", fake_check)
+
+    main._check_job_search_weekly_crawl()
+
+    fake_llm_client_cls.assert_called_once_with(api_key="fake-gemini-key")
+    assert fake_check.call_args.kwargs["llm_client"] is fake_llm_client
 
 
 def test_check_job_search_weekly_crawl_swallows_exception(monkeypatch):
