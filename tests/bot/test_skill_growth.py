@@ -1,5 +1,5 @@
 """src/bot/skill_growth.py 的單元測試（對應 robinson SPEC.md FR-22、FR-23，Step 3.1；
-2026-08-09 生產環境回饋修正，見 ADR-25）。"""
+2026-08-09 生產環境回饋修正，見 ADR-25、ADR-27）。"""
 from datetime import date, datetime, timezone
 from unittest.mock import MagicMock
 
@@ -17,6 +17,7 @@ def _make_clients(*, newsletter_texts=None, ithome_articles=None, techcrunch_art
     newsfeed_client.fetch_articles_published_on.side_effect = lambda feed_url, target_date: (
         ithome_articles or [] if "ithome" in feed_url else techcrunch_articles or []
     )
+    newsfeed_client.fetch_article_content.return_value = "抓到的文章全文內容"
     llm_client = MagicMock()
     llm_client.generate_text.return_value = summary
     return email_client, newsfeed_client, llm_client
@@ -96,7 +97,8 @@ def test_collect_skips_when_already_collected_today(fake_db):
     llm_client.generate_text.assert_not_called()
 
 
-def test_collect_stores_one_row_per_source_when_all_have_content(fake_db):
+def test_collect_stores_one_row_per_source_when_all_have_content(fake_db, monkeypatch):
+    monkeypatch.setattr(skill_growth.time, "sleep", MagicMock())
     _seed_owner(fake_db)
     email_client, newsfeed_client, llm_client = _make_clients(
         newsletter_texts=["電子報內容"],
@@ -114,10 +116,13 @@ def test_collect_stores_one_row_per_source_when_all_have_content(fake_db):
     by_source = {row["source"]: row["summary_text"] for row in rows}
     assert by_source == {"tldr": "這是重點摘要", "ithome": "這是重點摘要", "techcrunch": "這是重點摘要"}
     email_client.fetch_emails_from_domain_on_date.assert_called_once_with("tldrnewsletter.com", date(2026, 8, 7))
+    newsfeed_client.fetch_article_content.assert_any_call("https://ithome.com.tw/1")
+    newsfeed_client.fetch_article_content.assert_any_call("https://techcrunch.com/1")
     assert llm_client.generate_text.call_count == 3
 
 
-def test_collect_stores_no_content_text_for_sources_without_content(fake_db):
+def test_collect_stores_no_content_text_for_sources_without_content(fake_db, monkeypatch):
+    monkeypatch.setattr(skill_growth.time, "sleep", MagicMock())
     _seed_owner(fake_db)
     email_client, newsfeed_client, llm_client = _make_clients(newsletter_texts=["電子報內容"])
 
@@ -148,7 +153,8 @@ def test_collect_stores_no_content_text_for_all_sources_when_all_empty(fake_db):
     llm_client.generate_text.assert_not_called()
 
 
-def test_collect_degrades_gracefully_when_email_source_fails(fake_db):
+def test_collect_degrades_gracefully_when_email_source_fails(fake_db, monkeypatch):
+    monkeypatch.setattr(skill_growth.time, "sleep", MagicMock())
     _seed_owner(fake_db)
     email_client, newsfeed_client, llm_client = _make_clients(
         ithome_articles=[{"title": "IThome 新聞", "link": "https://ithome.com.tw/1"}]
@@ -167,7 +173,8 @@ def test_collect_degrades_gracefully_when_email_source_fails(fake_db):
     assert rows["ithome"] != skill_growth._NO_CONTENT_TEXT
 
 
-def test_collect_degrades_gracefully_when_rss_source_fails(fake_db):
+def test_collect_degrades_gracefully_when_rss_source_fails(fake_db, monkeypatch):
+    monkeypatch.setattr(skill_growth.time, "sleep", MagicMock())
     _seed_owner(fake_db)
     email_client, newsfeed_client, llm_client = _make_clients(newsletter_texts=["電子報內容"])
     newsfeed_client.fetch_articles_published_on.side_effect = RuntimeError("RSS 掛了")
@@ -183,6 +190,49 @@ def test_collect_degrades_gracefully_when_rss_source_fails(fake_db):
     assert rows["tldr"] != skill_growth._NO_CONTENT_TEXT
     assert rows["ithome"] == skill_growth._NO_CONTENT_TEXT
     assert rows["techcrunch"] == skill_growth._NO_CONTENT_TEXT
+
+
+def test_collect_degrades_gracefully_when_single_article_content_fetch_fails(fake_db, monkeypatch):
+    monkeypatch.setattr(skill_growth.time, "sleep", MagicMock())
+    _seed_owner(fake_db)
+    email_client, newsfeed_client, llm_client = _make_clients(
+        ithome_articles=[
+            {"title": "文章一", "link": "https://ithome.com.tw/1"},
+            {"title": "文章二", "link": "https://ithome.com.tw/2"},
+        ]
+    )
+    newsfeed_client.fetch_article_content.side_effect = RuntimeError("網路掛了")
+
+    skill_growth.collect_and_store_daily_digest(
+        fake_db, email_client, newsfeed_client, llm_client, now=_utc(2026, 8, 7, 15, 0)
+    )
+
+    # 單篇全文抓取失敗不應中斷整個收集流程，該來源仍會呼叫 Gemini 產生摘要（含「僅有標題」註記）
+    rows = {
+        row["source"]: row["summary_text"]
+        for row in fake_db.select("skill_growth_digests", where="digest_date = %s", params=(date(2026, 8, 7),))
+    }
+    assert rows["ithome"] != skill_growth._NO_CONTENT_TEXT
+
+
+def test_collect_adds_delay_between_article_content_fetches(fake_db, monkeypatch):
+    mock_sleep = MagicMock()
+    monkeypatch.setattr(skill_growth.time, "sleep", mock_sleep)
+    monkeypatch.setattr(skill_growth.random, "uniform", MagicMock(return_value=1.5))
+    _seed_owner(fake_db)
+    email_client, newsfeed_client, llm_client = _make_clients(
+        ithome_articles=[
+            {"title": "文章一", "link": "https://ithome.com.tw/1"},
+            {"title": "文章二", "link": "https://ithome.com.tw/2"},
+        ]
+    )
+
+    skill_growth.collect_and_store_daily_digest(
+        fake_db, email_client, newsfeed_client, llm_client, now=_utc(2026, 8, 7, 15, 0)
+    )
+
+    # 兩篇文章之間應該有一次延遲（第一篇抓取前不需要延遲）
+    mock_sleep.assert_called_once_with(1.5)
 
 
 # --- check_and_push_daily_digest ---
@@ -246,38 +296,54 @@ def test_push_does_not_repeat_within_same_hour_when_nothing_collected(fake_db):
     assert len(rows) == 1
 
 
-def test_push_sends_three_line_summary_and_marks_all_rows_pushed(fake_db):
+def test_push_sends_three_separate_messages_when_all_sources_have_content(fake_db):
     _seed_owner(fake_db)
     _seed_full_digest_day(fake_db)
     telegram_client = MagicMock()
 
     skill_growth.check_and_push_daily_digest(fake_db, telegram_client, now=_utc(2026, 8, 7, 0, 0))
 
-    telegram_client.send_text.assert_called_once()
-    call_kwargs = telegram_client.send_text.call_args.kwargs
-    assert call_kwargs["chat_id"] == 999
-    text = call_kwargs["text"]
-    assert "1.TLDR 電子報總結分享：tldr 的重點摘要" in text
-    assert "2.ithome新聞總結分享：ithome 的重點摘要" in text
-    assert "3.TechCrunch新聞總結分享：techcrunch 的重點摘要" in text
+    assert telegram_client.send_text.call_count == 3
+    texts = [c.kwargs["text"] for c in telegram_client.send_text.call_args_list]
+    assert texts[0].startswith("「每日技術成長摘要-TLDR」")
+    assert "tldr 的重點摘要" in texts[0]
+    assert texts[1].startswith("「每日技術成長摘要-IThome」")
+    assert "ithome 的重點摘要" in texts[1]
+    assert texts[2].startswith("「每日技術成長摘要-TechCrunch」")
+    assert "techcrunch 的重點摘要" in texts[2]
+    for c in telegram_client.send_text.call_args_list:
+        assert c.kwargs["chat_id"] == 999
 
     rows = fake_db.select("skill_growth_digests", where="digest_date = %s", params=(date(2026, 8, 6),))
     assert all(row["pushed_on"] == date(2026, 8, 7) for row in rows)
 
 
-def test_push_uses_no_content_text_for_source_with_no_content(fake_db):
+def test_push_skips_sources_without_content_entirely(fake_db):
     _seed_owner(fake_db)
-    _seed_digest(fake_db, source="tldr", summary_text="tldr 摘要")
+    _seed_digest(fake_db, source="tldr", summary_text=skill_growth._NO_CONTENT_TEXT)
+    _seed_digest(fake_db, source="ithome", summary_text=skill_growth._NO_CONTENT_TEXT)
+    _seed_digest(fake_db, source="techcrunch", summary_text="techcrunch 有內容")
+    telegram_client = MagicMock()
+
+    skill_growth.check_and_push_daily_digest(fake_db, telegram_client, now=_utc(2026, 8, 7, 0, 0))
+
+    telegram_client.send_text.assert_called_once()
+    text = telegram_client.send_text.call_args.kwargs["text"]
+    assert text.startswith("「每日技術成長摘要-TechCrunch」")
+    assert "今日無內容" not in text
+
+
+def test_push_sends_no_content_message_when_all_sources_have_no_content(fake_db):
+    _seed_owner(fake_db)
+    _seed_digest(fake_db, source="tldr", summary_text=skill_growth._NO_CONTENT_TEXT)
     _seed_digest(fake_db, source="ithome", summary_text=skill_growth._NO_CONTENT_TEXT)
     _seed_digest(fake_db, source="techcrunch", summary_text=skill_growth._NO_CONTENT_TEXT)
     telegram_client = MagicMock()
 
     skill_growth.check_and_push_daily_digest(fake_db, telegram_client, now=_utc(2026, 8, 7, 0, 0))
 
-    text = telegram_client.send_text.call_args.kwargs["text"]
-    assert "1.TLDR 電子報總結分享：tldr 摘要" in text
-    assert f"2.ithome新聞總結分享：{skill_growth._NO_CONTENT_TEXT}" in text
-    assert f"3.TechCrunch新聞總結分享：{skill_growth._NO_CONTENT_TEXT}" in text
+    telegram_client.send_text.assert_called_once()
+    assert telegram_client.send_text.call_args.kwargs["text"] == skill_growth._NO_CONTENT_MESSAGE
 
 
 def test_push_skips_when_digest_already_pushed_today(fake_db):
@@ -298,7 +364,7 @@ def test_push_does_not_repeat_within_same_hour_when_digest_has_content(fake_db):
     skill_growth.check_and_push_daily_digest(fake_db, telegram_client, now=_utc(2026, 8, 7, 0, 0))
     skill_growth.check_and_push_daily_digest(fake_db, telegram_client, now=_utc(2026, 8, 7, 0, 15))
 
-    telegram_client.send_text.assert_called_once()
+    assert telegram_client.send_text.call_count == 3
 
 
 # --- _fetch_newsletter_texts_safely / _fetch_rss_articles_safely ---
@@ -340,10 +406,48 @@ def test_fetch_rss_articles_safely_returns_empty_list_on_exception():
     assert result == []
 
 
+# --- _enrich_articles_with_content ---
+
+
+def test_enrich_articles_with_content_attaches_content(monkeypatch):
+    monkeypatch.setattr(skill_growth.time, "sleep", MagicMock())
+    newsfeed_client = MagicMock()
+    newsfeed_client.fetch_article_content.return_value = "文章全文"
+
+    result = skill_growth._enrich_articles_with_content(
+        newsfeed_client, [{"title": "標題", "link": "https://example.com/1"}]
+    )
+
+    assert result == [{"title": "標題", "link": "https://example.com/1", "content": "文章全文"}]
+
+
+def test_enrich_articles_with_content_keeps_none_when_fetch_fails(monkeypatch):
+    monkeypatch.setattr(skill_growth.time, "sleep", MagicMock())
+    newsfeed_client = MagicMock()
+    newsfeed_client.fetch_article_content.side_effect = RuntimeError("網路掛了")
+
+    result = skill_growth._enrich_articles_with_content(
+        newsfeed_client, [{"title": "標題", "link": "https://example.com/1"}]
+    )
+
+    assert result == [{"title": "標題", "link": "https://example.com/1", "content": None}]
+
+
+def test_enrich_articles_with_content_does_not_sleep_before_first_article(monkeypatch):
+    mock_sleep = MagicMock()
+    monkeypatch.setattr(skill_growth.time, "sleep", mock_sleep)
+    newsfeed_client = MagicMock()
+    newsfeed_client.fetch_article_content.return_value = "內容"
+
+    skill_growth._enrich_articles_with_content(newsfeed_client, [{"title": "標題", "link": "https://example.com/1"}])
+
+    mock_sleep.assert_not_called()
+
+
 # --- summarize_source / _build_source_prompt ---
 
 
-def test_summarize_source_returns_no_content_text_when_texts_empty():
+def test_summarize_source_returns_no_content_text_when_content_empty():
     llm_client = MagicMock()
 
     result = skill_growth.summarize_source("tldr", [], llm_client)
@@ -362,47 +466,47 @@ def test_summarize_source_calls_llm_and_returns_stripped_summary():
     assert result == "重點摘要文字"
 
 
-def test_build_source_prompt_includes_label_and_body():
-    prompt = skill_growth._build_source_prompt("ithome", ["- IThome 標題（https://ithome.com.tw/1）"])
+def test_build_source_prompt_tldr_includes_newsletter_text():
+    prompt = skill_growth._build_source_prompt("tldr", ["電子報內容"])
 
-    assert "ithome新聞總結分享" in prompt
+    assert "TLDR" in prompt
+    assert "電子報內容" in prompt
+    assert "至少要有 5 句話" in prompt
+    assert "總結" in prompt
+
+
+def test_build_source_prompt_rss_source_includes_article_content():
+    prompt = skill_growth._build_source_prompt(
+        "ithome", [{"title": "IThome 標題", "link": "https://ithome.com.tw/1", "content": "文章全文內容"}]
+    )
+
+    assert "IThome" in prompt
     assert "IThome 標題" in prompt
+    assert "文章全文內容" in prompt
 
 
-# --- _format_digest_message ---
+def test_build_source_prompt_rss_source_notes_missing_content():
+    prompt = skill_growth._build_source_prompt(
+        "ithome", [{"title": "只有標題", "link": "https://ithome.com.tw/1", "content": None}]
+    )
+
+    assert "只有標題" in prompt
+    assert "無法取得全文" in prompt
 
 
-def test_format_digest_message_orders_by_fixed_source_sequence():
-    rows = [
-        {"source": "techcrunch", "summary_text": "tc 摘要"},
-        {"source": "tldr", "summary_text": "tldr 摘要"},
-        {"source": "ithome", "summary_text": "ithome 摘要"},
-    ]
-
-    message = skill_growth._format_digest_message(rows)
-
-    lines = message.splitlines()
-    assert lines[0] == "「每日技術成長摘要」"
-    assert any(line.startswith("1.TLDR 電子報總結分享：") for line in lines)
-    assert any(line.startswith("2.ithome新聞總結分享：") for line in lines)
-    assert any(line.startswith("3.TechCrunch新聞總結分享：") for line in lines)
+# --- _format_source_message ---
 
 
-def test_format_digest_message_falls_back_to_no_content_text_when_source_missing():
-    rows = [{"source": "tldr", "summary_text": "tldr 摘要"}]
+def test_format_source_message_includes_title_and_summary():
+    message = skill_growth._format_source_message("tldr", "這是摘要內容")
 
-    message = skill_growth._format_digest_message(rows)
-
-    assert f"2.ithome新聞總結分享：{skill_growth._NO_CONTENT_TEXT}" in message
-    assert f"3.TechCrunch新聞總結分享：{skill_growth._NO_CONTENT_TEXT}" in message
+    assert message.startswith("「每日技術成長摘要-TLDR」")
+    assert "這是摘要內容" in message
 
 
-def test_format_digest_message_falls_back_when_summary_text_is_null():
-    rows = [{"source": "tldr", "summary_text": None}]
-
-    message = skill_growth._format_digest_message(rows)
-
-    assert f"1.TLDR 電子報總結分享：{skill_growth._NO_CONTENT_TEXT}" in message
+def test_format_source_message_uses_correct_display_name_per_source():
+    assert "IThome" in skill_growth._format_source_message("ithome", "摘要")
+    assert "TechCrunch" in skill_growth._format_source_message("techcrunch", "摘要")
 
 
 # --- _get_owner / _get_digests_for_date ---

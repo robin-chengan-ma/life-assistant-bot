@@ -3,7 +3,7 @@ title: Robinson — Robin 與家人們的生活小助手
 slug: robinson
 status: draft
 created: 2026-07-29
-updated: 2026-08-08
+updated: 2026-08-09
 owner: Robin
 ---
 
@@ -142,8 +142,8 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 
 ### 功能性需求 — 個人技能成長（僅 Robin 可用）
 
-- [x] FR-22（**2026-08-07 完成並修正，見 Step 3.1；2026-08-09 推播格式再修正，見 ADR-25**）：每日固定時間自動推播技能成長摘要——經 Robin 回饋修正為「收集」與「推播」兩個獨立排程時間點：固定台灣時間 23:00 收集當天的技術情報（`src/bot/skill_growth.collect_and_store_daily_digest()`），固定隔天台灣時間 08:00 推播前一晚收集到的摘要（`check_and_push_daily_digest()`），兩者都借用 `/healthz` 既有的 10 分鐘 cron 頻率、各自只在對應的小時內執行；去重靠 `skill_growth_digests` 表（`UNIQUE (digest_date, source)` 約束收集去重、`pushed_on` 欄位比照 `todos.daily_pushed_on` 慣例做推播去重，同一天的幾筆一起標記）。**2026-08-09 修正（見 ADR-25）**：推播內容改為 Robin 指定的三行式精簡格式（「1.TLDR 電子報總結分享：……」「2.ithome新聞總結分享：……」「3.TechCrunch新聞總結分享：……」），不再輸出原文條列內容，方便 Robin 一眼判斷哪個來源當天沒有內容或收集異常
-- [x] FR-23（**2026-08-07 完成並修正，見 Step 3.1、submodules-core SPEC.md ADR-11 追記／ADR-14；2026-08-09 改為三來源各自獨立摘要，見 ADR-25**）：每日重點技術分享（開關）：固定台灣時間 23:00 擷取 Gmail「當天」TLDR 電子報 + IThome / TechCrunch「當天」新聞，三個來源各自獨立經 Gemini 產出中文重點摘要，隔天 08:00 推播（依 NFR-11，以來源日期避免重複摘要已處理過的電子報/新聞）。實作細節：①TLDR 電子報寄件者固定為 `dan@tldrnewsletter.com`，用 `submodules/email` 新增的 `fetch_emails_from_domain_on_date(sender_domain, target_date)`（IMAP，寄件者網域比對 `tldrnewsletter.com`，經 AskUserQuestion 確認；呼叫端指定日期，不假設「今天」或「昨天」）②IThome／TechCrunch 用新增的 `submodules/newsfeed`（RSS Feed，`requests`＋標準函式庫 `xml.etree.ElementTree`，同樣以指定日期查詢）③三個來源任一失敗只記 log、視為當天無內容，不影響其他來源與整體收集④單一來源當天沒內容時，該來源不呼叫 Gemini（`summary_text` 寫入固定文字「今日無內容」，見 ADR-25），推播階段若完全查無前一晚的收集結果（例如收集當下服務整小時都不可用）一律回覆 Robin 指定的固定訊息「未獲得最新技術分享」，不靜默跳過（NFR-10）⑤去重用「來源日期」（每天固定只收集「當天」）＋`skill_growth_digests.(digest_date, source)`（收集去重，`UNIQUE` 約束）／`pushed_on`（推播去重）機制，不需要額外的內容雜湊表⑥`tech_intel` 功能開關（`owner_only=True`；**2026-08-07 同日再修正**：原規劃的 `skill_growth` 拆成 `tech_intel`／`certificate`／`language` 三個獨立開關，見 feature-toggles SPEC.md FR-3 追記，本功能只用其中的 `tech_intel`，因為 Robin 認為證照準備〔TOEIC〕跟技術情報訂閱性質不同、不該共用同一把開關）關閉時，收集與推播兩階段都會跳過，不消耗 Gemini API 額度⑦Gemini 呼叫用獨立的 `GEMINI_API_SKILL_GROWTH_KEY`（Robin 已於 2026-08-07 申請並設定到 `.env`／Render 部署環境）；**2026-08-09 修正（見 ADR-25）**：三個來源各自獨立呼叫 Gemini（一次收集最多 3 次 API 呼叫），`skill_growth_digests` 改為一天最多三筆、一筆一個來源，欄位新增 `source`（`tldr`／`ithome`／`techcrunch`），`summary_text` 只存單一來源的精簡總結，未來新增來源只需要多寫一個 `source` 值、不需要改 schema
+- [x] FR-22（**2026-08-07 完成並修正，見 Step 3.1；2026-08-09 推播格式再修正，見 ADR-25；2026-08-09 同日再修正，見 ADR-29**）：每日固定時間自動推播技能成長摘要——經 Robin 回饋修正為「收集」與「推播」兩個獨立排程時間點：固定台灣時間 23:00 收集當天的技術情報（`src/bot/skill_growth.collect_and_store_daily_digest()`），固定隔天台灣時間 08:00 推播前一晚收集到的摘要（`check_and_push_daily_digest()`），兩者都借用 `/healthz` 既有的 10 分鐘 cron 頻率、各自只在對應的小時內執行；去重靠 `skill_growth_digests` 表（`UNIQUE (digest_date, source)` 約束收集去重、`pushed_on` 欄位比照 `todos.daily_pushed_on` 慣例做推播去重，同一天的幾筆一起標記）。**2026-08-09 修正（見 ADR-25）**：推播內容一度改為三行式精簡格式，但 Robin 實測後回饋「寫得太淺，學不到東西」。**2026-08-09 同日再修正（見 ADR-29）**：推播改回深入內容，但拆成三則各自獨立的 Telegram 訊息（不再合併成一則），每則標題「每日技術成長摘要-{來源}」；當天沒有內容的來源直接不推播那則訊息（連「今日無內容」都不用講），三個來源當天全部都沒有內容才維持既有的「未獲得最新技術分享」固定訊息，避免完全靜默
+- [x] FR-23（**2026-08-07 完成並修正，見 Step 3.1、submodules-core SPEC.md ADR-11 追記／ADR-14；2026-08-09 改為三來源各自獨立摘要，見 ADR-25；2026-08-09 同日再修正，見 ADR-29**）：每日重點技術分享（開關）：固定台灣時間 23:00 擷取 Gmail「當天」TLDR 電子報 + IThome / TechCrunch「當天」新聞，三個來源各自獨立經 Gemini 產出中文深入摘要，隔天 08:00 推播（依 NFR-11，以來源日期避免重複摘要已處理過的電子報/新聞）。實作細節：①TLDR 電子報寄件者固定為 `dan@tldrnewsletter.com`，用 `submodules/email` 新增的 `fetch_emails_from_domain_on_date(sender_domain, target_date)`（IMAP，寄件者網域比對 `tldrnewsletter.com`，經 AskUserQuestion 確認；呼叫端指定日期，不假設「今天」或「昨天」）②IThome／TechCrunch 用新增的 `submodules/newsfeed`（RSS Feed，`requests`＋標準函式庫 `xml.etree.ElementTree`，同樣以指定日期查詢；**2026-08-09 修正，見 ADR-29**：修正 IThome `<pubDate>` 非 RFC 822 格式導致每篇文章都被誤判跳過的 bug，並新增 `fetch_article_content()` 抓取每篇文章網頁正文全文，供深入摘要使用，不再只憑標題／連結生成摘要）③三個來源任一失敗只記 log、視為當天無內容，不影響其他來源與整體收集，單篇文章全文抓取失敗同樣只記 log、不影響同一來源其他篇④單一來源當天沒內容時，該來源不呼叫 Gemini（`summary_text` 寫入固定文字「今日無內容」，見 ADR-25），推播階段若完全查無前一晚的收集結果（例如收集當下服務整小時都不可用）一律回覆 Robin 指定的固定訊息「未獲得最新技術分享」，不靜默跳過（NFR-10）⑤去重用「來源日期」（每天固定只收集「當天」）＋`skill_growth_digests.(digest_date, source)`（收集去重，`UNIQUE` 約束）／`pushed_on`（推播去重）機制，不需要額外的內容雜湊表⑥`tech_intel` 功能開關（`owner_only=True`；**2026-08-07 同日再修正**：原規劃的 `skill_growth` 拆成 `tech_intel`／`certificate`／`language` 三個獨立開關，見 feature-toggles SPEC.md FR-3 追記，本功能只用其中的 `tech_intel`，因為 Robin 認為證照準備〔TOEIC〕跟技術情報訂閱性質不同、不該共用同一把開關）關閉時，收集與推播兩階段都會跳過，不消耗 Gemini API 額度⑦Gemini 呼叫用獨立的 `GEMINI_API_SKILL_GROWTH_KEY`（Robin 已於 2026-08-07 申請並設定到 `.env`／Render 部署環境）；**2026-08-09 修正（見 ADR-25／ADR-29）**：三個來源各自獨立呼叫 Gemini（一次收集最多 3 次 API 呼叫），`skill_growth_digests` 改為一天最多三筆、一筆一個來源，欄位新增 `source`（`tldr`／`ithome`／`techcrunch`），`summary_text` 只存單一來源的摘要（2026-08-09 兩度調整詳細程度，見 ADR-25／ADR-29），未來新增來源只需要多寫一個 `source` 值、不需要改 schema
 - [x] FR-24：證照題庫（`certificate` 開關，2026-08-07 起獨立於技術情報 `tech_intel` 之外，見 feature-toggles SPEC.md FR-3 追記）：使用者設定目標（時間、目標分數），Robinson 可在使用者不知如何準備時提供方向建議。**2026-08-07（Step 3.2）確認範圍**：這條「目標設定＋方向建議」的對話式功能與 FR-26（自訂每日題數/彈性排程）性質相近，一併留到 Step 3.3 展開；Step 3.2 只完成 FR-25a～FR-25f 的題庫建立 Pipeline。**2026-08-07（Step 3.3 設計定案，見 ADR-19）**：目標（考試時間、目標分數）依 `exam_type` 各自設定一筆，重新設定即覆蓋舊值；方向建議由 Robinson 依使用者近期 FR-29 統計出的成效（對錯趨勢、常出錯的 `question_type`）與距離目標時間長短，用 LLM 生成客製化建議文字，不走固定範本。**2026-08-08 實作完成**：新增 `src/bot/certificate_goals.py`（`get_goal()`／`set_goal()`〔UPSERT，寫入 `certificate_goals` 表，0041 migration 已存在〕／`list_goals()`／`build_advice_prompt()`）；`commands.py` 新增「設定證照目標」／`/set_certificate_goal`（選 exam_type → 目標考試時間，可回覆「跳過」→ 目標分數，可回覆「跳過」→ 覆蓋寫入並告知舊值）、「我的證照目標」／`/my_certificate_goals`（單次列表）、「給我讀書建議」／`/certificate_advice`（只有一個候選 exam_type 直接生成、多個則先反問；抓近 30 天 `certificate_stats.compute_daily_period_stats()` 成效＋目標，組 Prompt 交給 LLM 生成客製化建議文字，不走固定範本）；`router.py` 註冊三個觸發詞與四個新 `pending_*` 狀態分派
 - [x] FR-25：TOEIC 為第一個題庫，每次出題預設 1 題聽力 + 2 題填空 + 3 題單字英翻中，採「雙軌混合架構」產生題目；未來可套用同模板擴充 AWS / GCP 等其他證照（**2026-08-07 完成，見 Step 3.2**）：
   - [x] FR-25a：軌道一（高準確度題庫）來源 — Robin 將題目照片（圖檔）與聽力音檔（MP3）上傳至 Google Drive 指定資料夾。**2026-08-07 確認實際檔名規則**：`toeic_{測驗場次代號}_write_{題號}.{ext}`（填空/單字題，僅圖片）、`toeic_{測驗場次代號}_listen_{題號}.{ext}`（聽力題，Robin 已切好的單題圖片/音檔）、`toeic_{測驗場次代號}_listen.mp3`（聽力題整包音檔，尚未切割）。**2026-08-07 同日追記（見 ADR-18 決策 4）**：檔名格式泛用化為 `{exam_type}_{測驗場次代號}_write/listen_{題號}.{ext}`，`exam_type` 開放任意字串（不限 toeic），供 GCP／AWS 等未來證照類型直接沿用同一套 Pipeline
@@ -257,12 +257,12 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
   - [x] FR-66c：體態管理目標期限同步 — 設定 FR-46～FR-48 的 `body_goals` 目標時，比照 FR-66a 同樣新增一題「要不要同步到 Google 行事曆？」（**2026-08-05 新增，見 ADR-17 補充決策**：體重/運動/飲食目標對某些人來說也是不想公開的隱私，跟待辦事項同等對待，每次明確詢問；沒有期限的目標不會問這一題，因為沒有日期可以建事件）；選擇同步的目標，後續更新期限/達成/使用者手動取消時，同步更新/刪除對應事件；選擇不同步則只存資料庫，MVP 同樣不支援事後補同步
   - [ ] FR-66d（明確排除，非本次範圍）：讀取行事曆做空檔查詢（例如「我這週三下午有沒有空」「全家人這週末誰有空」）——這需要 Calendar 讀取權限與跨使用者行事曆比對，複雜度與隱私考量都高出一個量級，待前三項基礎功能上線、有實際使用回饋後再評估是否要做
 
-### 功能性需求 — Mobile App（BI Dashboard，Phase 4，2026-08-04 取代原 Notion 後台，見 ADR-14）
+### 功能性需求 — Mobile App「羅賓森」（全功能個人化入口，Phase 4，2026-08-04 取代原 Notion 後台，見 ADR-14；2026-08-09 App 範疇由「唯讀 BI Dashboard」擴大為「唯讀分析＋可編輯設定管理」並定名「羅賓森」，見 ADR-28）
 
-> 本節僅先定調架構、技術棧與資料模型方向；登入流程與 App 各頁面的詳細互動邏輯留待 Phase 4 對應 Step 開工時展開獨立 spec（`docs/specs/mobile-app/SPEC.md`，屆時建立），此處視為 **Placeholder**。
+> 本節僅先定調架構、技術棧、資料模型方向與各頁面的整體結構；各頁面的像素級 UI 細節與 API 詳細規格留待 Phase 4 對應 Step 開工時展開獨立 spec（`docs/specs/mobile-app/SPEC.md`，屆時建立），此處視為 **Placeholder**。
 
-- [ ] FR-64：唯讀 BI Dashboard 視覺化——將記帳、體態管理等模組的資料計算為圖表（消費圓餅圖、體重/運動趨勢折線圖等）與篩選介面，呈現於 Mobile App；App 端原則上不提供新增/修改/刪除資料的操作入口，寫入操作以 Telegram Bot 為主（取代原 FR-54 的 Notion 方案）。**2026-08-08 追加例外（見 FR-64a）**：藍牙體重計量測是唯一的例外，因為量測動作天生發生在手機上（App 端做藍牙掃描），不透過 Telegram 硬做反而會脫離使用情境；除此之外的資料異動仍一律透過 Telegram Bot
-- [ ] FR-64a（2026-08-08 新增，Placeholder）：藍牙體重計整合——Robin 已購入支援藍牙廣播（BLE Advertisement）的體重計，並用 nRF Connect for Mobile 實測確認可從掃描結果的 Manufacturer Data（廠商資料）取得量測後的體重值。App 端新增「開始測量」按鈕，點擊後啟動藍牙掃描，10 秒內偵測到體重值則顯示並記錄；10 秒內未偵測到則顯示「未取得您的體重值」，不記錄任何資料。**體重紀錄維持雙入口**：人不在家、沒帶體重計時，同樣可以直接在 Telegram 手動輸入體重值（既有 FR-46 `/log_weight` 流程不變）；兩種入口最終都寫入同一張 `body_weight_logs`，App 端這支寫入 API 是 FR-64「App 不寫資料」原則的唯一例外，但仍遵循「後端算好結果、App 只負責渲染/呼叫」的既有分層原則，實際寫入邏輯復用現有 `body.create_weight_log()` 等既有服務層函式，不另外複製一份業務邏輯。
+- [ ] FR-64（**2026-08-09 範疇修正，見 ADR-28，supersede 原「唯讀 BI Dashboard」定位**）：App 採「唯讀分析頁面＋可編輯設定頁面」雙軌設計。唯讀分析頁面：將記帳、體態管理等模組的資料計算為圖表（消費圓餅圖、體重/運動趨勢折線圖等）與篩選介面呈現（取代原 FR-54 的 Notion 方案）。可編輯設定頁面（**2026-08-09 新增範疇**）：目標與指標設定（FR-69）、功能開關（FR-70）、排程設定（FR-71，僅 Robin）、APP設定（FR-72），開放使用者直接在 App 端調整自己的目標/開關/排程，不必再透過 Telegram 對話流程逐步反問設定。**寫入分工原則**：App 端的所有寫入操作一律複用既有 service 層函式（例如體態目標寫入直接呼叫 `body.py` 既有的目標建立/更新函式），不重複開發第二套業務邏輯；App 與 Telegram 兩個入口最終寫入同一批資料表，互為對等入口而非誰取代誰。**維持不變的部分**：日常「記一筆」性質的高頻操作（記一筆支出、記一次體重、新增一則待辦）語意上更適合 Telegram 的自然語言對話（一句話講完，不用切換 App 填表單），本次範疇擴大僅開放「目標/開關/排程」這類低頻率、結構化的設定類操作進 App，不是把所有 CRUD 都搬進 App。
+- [ ] FR-64a（2026-08-08 新增，Placeholder；**2026-08-09 因 FR-64 範疇擴大微調最後一句措辭**）：藍牙體重計整合——Robin 已購入支援藍牙廣播（BLE Advertisement）的體重計，並用 nRF Connect for Mobile 實測確認可從掃描結果的 Manufacturer Data（廠商資料）取得量測後的體重值。App 端新增「開始測量」按鈕，點擊後啟動藍牙掃描，10 秒內偵測到體重值則顯示並記錄；10 秒內未偵測到則顯示「未取得您的體重值」，不記錄任何資料。**體重紀錄維持雙入口**：人不在家、沒帶體重計時，同樣可以直接在 Telegram 手動輸入體重值（既有 FR-46 `/log_weight` 流程不變）；兩種入口最終都寫入同一張 `body_weight_logs`，App 端這支寫入 API 沿用「後端算好結果、App 只負責渲染/呼叫」的既有分層原則，實際寫入邏輯復用現有 `body.create_weight_log()` 等既有服務層函式，不另外複製一份業務邏輯（**2026-08-09 更新**：FR-64 範疇擴大後，此例外不再是唯一的 App 寫入入口，但「複用既有 service 層、不重複開發業務邏輯」的分工原則不變，見 FR-64／ADR-28）。
 
   **藍牙資料解析規格**（Robin 已用 nRF Connect for Mobile 實測驗證，Phase 4 開工時 App 端直接依此規格解析）：掃描到裝置後讀取廣播封包中的 Manufacturer Data 欄位，取一個 16 位元（2 bytes）的十六進位整數；取出整包 hex 資料中索引 2、3 的位元組（big-endian），組成體重原始值後除以 100 得到公斤數。Python 對照範例（Robin 提供，供未來 App 端 TypeScript/原生藍牙 SDK 實作時對照）：
 
@@ -275,30 +275,66 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
   weight_kg = weight_raw / 100.0  # 94.3 kg
   ```
 
-  未涵蓋（留待 Phase 4 開工展開獨立 spec 時細部設計）：如何辨識/篩選出「這台特定體重計」的廣播封包（避免掃到附近其他藍牙裝置）、掃描逾時之外的例外處理（藍牙未開啟、權限未授權等）、App 端寫入 API 的路由設計與身分驗證細節（沿用 FR-65 的 `APP Access Token`）。
-- [ ] FR-65：多用戶登入機制——App 面向所有使用者（Multi-user，不僅限於 Robin）：
-  - [ ] FR-65a：一般使用者登入需輸入 `user_name`、稱謂、`APP Access Token` 三項完成驗證
-  - [ ] FR-65b：Robin（Owner）登入僅需輸入 `user_name`、`APP Access Token` 兩項（比照 Telegram 免通關密碼的管理者身分簡化）
-  - [ ] FR-65c：Token 的產生、過期、刷新機制與各頁面詳細互動流程，留待 Phase 4 深入討論（見上方 Placeholder 說明）
+  未涵蓋（留待 Phase 4 開工展開獨立 spec 時細部設計）：如何辨識/篩選出「這台特定體重計」的廣播封包（避免掃到附近其他藍牙裝置）、掃描逾時之外的例外處理（藍牙未開啟、權限未授權等）、App 端寫入 API 的路由設計與身分驗證細節（沿用 FR-65 的登入機制）。
+- [ ] FR-65（**2026-08-09 全面改寫，見 ADR-28，取代原「Token-based」登入設計**）：App 登入頁面欄位為「使用者ID」與「密碼」（各自可用眼睛圖示切換顯示/隱藏），取代原本規劃的 `APP Access Token` 免密碼機制；App 名稱為「羅賓森」，App icon 使用 `docs/profile/Robinson.png`（Robin 大頭貼，**永久禁止刪除**，見 SPEC.md「重要資產」章節）：
+  - [ ] FR-65a：登入互動與提示文案 —— 使用者ID 辨識失敗跳出「未成功辨識您的身份」；密碼錯誤跳出「密碼錯誤」；登入成功跳出「驗證成功，請稍候！」後導向首頁（**取代原 FR-65a／FR-65b 的「Robin 少填一項」設計**：密碼機制下沒有可比照「稱謂」省略的欄位，Robin 與一般使用者登入欄位數量一致，身分差異改由 FR-67a 的選單可見性處理，不在登入階段區分）
+  - [ ] FR-65b（**技術決策，見 ADR-28，2026-08-09 Robin 確認採納**）：忘記密碼 —— 點擊「忘記密碼」後，系統產生一組新的隨機密碼、覆蓋原密碼並透過 Telegram 私訊發送給該使用者（是「重設」為新密碼，不是「找回」原密碼）；使用者登入後可在 FR-72 APP設定自行改成想要的密碼。**理由**：忘記密碼流程要求系統能把可用密碼交給使用者，代表系統必須存有可用的密碼值；業界標準是密碼只存單向雜湊（見 FR-65d），系統本身也無法還原明碼，因此只能重設為新密碼，這是資安最佳實踐與「透過 Telegram 拿到能登入的密碼」原始需求之間風險最低的折衷做法。
+  - [ ] FR-65c（**技術決策，見 ADR-28，2026-08-09 Robin 確認採納 30 天效期**）：保持登入 —— 勾選後，裝置本機以 Expo SecureStore 儲存一組長效 Refresh Token（有效期 30 天，超過需重新登入），下次開啟 App 免登入直接進首頁；Refresh Token 到期前，App 背景自動用它換發新的 Access Token 與 Refresh Token（Rolling Refresh）。**已知限制（MVP 不做，留待未來有需要再展開）**：不提供「登出所有裝置」／「查看目前登入裝置清單」等進階裝置管理功能；裝置遺失時暫時只能靠 Robin 手動於資料庫端撤銷該使用者的 Refresh Token 補救。
+  - [ ] FR-65d（**技術決策，見 ADR-28**）：密碼儲存安全性 —— 密碼一律以 bcrypt（或同等強度的 argon2）單向雜湊後存入 `users.password_hash`，資料庫與程式碼任何地方都不保留明碼；FR-68 個人基本資訊頁面因此不顯示密碼明碼，改顯示「密碼最後修改時間」，並提供「修改密碼」按鈕導向 FR-72 的修改密碼流程。
+- [ ] FR-67（2026-08-09 新增，見 ADR-28）：App 首頁佈局左上角為選單（漢堡）圖示，用以導覽各功能分析頁面，右上角為個人頭像圖示（無需個人化客製，僅提供男/女兩種通用樣式依 `users` 既有角色欄位挑選即可），點擊後展開下拉選單：
+  - [ ] FR-67a：權限矩陣與選單顯示順序 —— 一般使用者（所有已綁定家人）可見：待辦事項、體態分析、記帳分析、心情趨勢；Robin 額外可見：求職分析、考試成績、技術分享、客訴回饋（其餘使用者看不到這四項，比照既有 Telegram 端 `owner_only` 功能開關慣例，見 FR-2）。左上角選單固定顯示順序：待辦事項、體態分析、記帳分析、心情趨勢、求職分析（Robin only）、考試成績（Robin only）、技術分享（Robin only）、客訴回饋（Robin only）；使用者關閉中的功能（FR-2 功能開關為關）該項目不顯示於選單，與 Telegram 端「功能關閉時不回應該類對話」的既有原則一致。
+  - [ ] FR-67b：右上角頭像下拉選單結構 —— 依序為「個人基本資訊」（FR-68，唯讀）、「目標與指標設定」（FR-69，可編輯）、「功能開關」（FR-70，可編輯）、「排程設定」（FR-71，可編輯，**僅 Robin 可見**）、「APP設定」（FR-72，可編輯）、「登出」。
+- [ ] FR-68（2026-08-09 新增，見 ADR-28）：個人基本資訊頁面（唯讀）—— 顯示「暱稱」、「使用者ID」、「密碼最後修改時間」（**2026-08-09 修正**：不顯示密碼明碼，理由見 FR-65d）、「角色」；一併顯示既有的體態量測基準值「身高」／「腰圍」（`users.height_cm`／`waist_cm`，**2026-08-09 缺口盤點新增**：這兩者是量測基準值而非目標，性質上更適合放在個人基本資訊而非 FR-69 目標與指標設定，Robin 原描述遺漏）。
+- [ ] FR-69（2026-08-09 新增，見 ADR-28；**缺口盤點見下方子項 FR-69a～FR-69e，補齊 Robin 原描述遺漏的項目**）：目標與指標設定頁面（可編輯），依模組拆分：
+  - [ ] FR-69a：記帳目標 —— 對應 `users.monthly_budget`（預設每月支出上限）與 `budget_overrides`（特定年月覆蓋值）；頁面需同時支援「設定/修改預設月預算」與「針對特定月份填入不同數字」兩種操作，不是單一數字欄位。
+  - [ ] FR-69b：體態目標 —— 對應 `body_goals` 三種 `goal_type`（體重／運動／飲食），需分別呈現三種目標各自的設定表單（體重額外有起始體重 `baseline_value` 用於判斷增減方向、目標日期；運動為累積分鐘數目標；飲食目前無數值目標，僅記錄提醒開關）；不是單一表單。
+  - [ ] FR-69c（**僅 Robin 可見**）：求職關鍵字/地區等條件設定 —— 除 Robin 原描述的 `job_search_criteria`（關鍵字、地區、期望薪資範圍，支援多筆同時存在，見 ADR-24 決策 3）外，**2026-08-09 缺口盤點新增**「履歷全文」「期望工作敘述」「年資」「期望薪資」（`users.job_resume`／`job_expectation`／`years_of_experience`／`expected_salary_min`／`expected_salary_max`）一併納入本頁面——這幾項才是 FR-37 契合度評分實際比對的核心輸入，重要性不亞於搜尋條件本身，Robin 原描述僅提到「求職關鍵字、地區等條件設定」容易誤以為只有搜尋條件，故本頁面拆成「求職搜尋條件」與「履歷與期望工作」兩個子區塊。
+  - [ ] FR-69d（**僅 Robin 可見**）：證照考試類型設定 —— 除 Robin 原描述的 `certificate_goals`（考試類型可複選、各自的目標日期/目標分數，設定後跳出目標設定畫面）外，**2026-08-09 缺口盤點新增**「每日出題設定」（`certificate_daily_settings`：每日出題數量、新題/複習題比例、TOEIC 專屬的聽力/填空/單字三軌比例）一併納入，這是決定「每天實際被推播幾題、練什麼」的關鍵設定，跟目標日期同等重要，Robin 原描述完全沒提到。**已知限制（MVP 不搬進 App，維持現況）**：`certificate_daily_schedule_overrides`（特定日期區間調整當天題數，支援 MOVE／CANCEL／RANGE／SPREAD 四種語意）因為互動邏輯複雜，MVP 階段維持只能透過 Telegram 文字指令「調整出題排程」設定，不搬進 App，留待未來有實際需求再評估。
+  - [ ] FR-69e（**僅 Robin 可見，2026-08-09 缺口盤點新增，Robin 原描述完全未提及**）：技術情報主題訂閱管理 —— 對應 `youtube_topics`，開放新增/移除想追蹤的技術主題（決定 YouTube 技術情報週推播要關注哪些主題），目前僅能透過 Telegram 對話設定，本次缺口盤點發現這也屬於「指標設定」的一種，一併納入本頁面。
 
-**技術細節補充（Robin 對 App 開發較不熟悉，由 Claude 主動提出以下標準做法供 Phase 4 展開時參考）**：
+  **本次盤點確認不需要處理的項目**：心情小記、待辦事項兩個模組沒有「目標」概念，不需要對應設定頁面；家人生日（`users.birthday`）目前由 Robin 統一透過 Telegram `/set_family_birthday` 代為設定全體家人生日（涉及生日隱私與資料一致性，不適合開放每人自行修改自己以外的生日資料），本次不開放到 App「目標與指標設定」頁面，維持現況由 Robin 於 Telegram 端統一管理。
+- [ ] FR-70（2026-08-09 新增，見 ADR-28）：功能開關頁面（可編輯）—— 對應既有 `feature_toggles`（見 feature-toggles SPEC.md），列出該使用者可見的所有功能模組（依 FR-67a 權限矩陣），逐一切換開關；行為與既有 Telegram `/my_toggles` 完全一致（複用同一套 service 層函式），只是換一個 UI 入口，不新增/改變開關語意。
+- [ ] FR-71（**僅 Robin 可見，2026-08-09 新增，見 ADR-28，範疇界定見下方**）：排程設定頁面（可編輯）—— 開放 Robin 調整目前寫死在程式碼常數的 6 項 Robin 專屬排程功能的觸發時間/星期：
+  - 104 求職週爬蟲＋評分（現況：每週一 08:00，`job_search.py` `_WEEKLY_CRAWL_WEEKDAY`／`_WEEKLY_CRAWL_HOUR`）
+  - 每日技術分享收集／推播（現況：23:00 收集／08:00 推播，`skill_growth.py` `_COLLECT_HOUR`／`_PUSH_HOUR`）
+  - YouTube 技術情報週推播（現況：每週四 08:00，`youtube.py` `_PUSH_WEEKDAY_THURSDAY`／`_PUSH_HOUR`）
+  - 證照每日出題推播（現況：08:00，`certificate_quiz.py` `_PUSH_HOUR`）
+  - 證照作答提醒（現況：20:00，`certificate_answer.py` `_REMINDER_HOUR`）
+  - TOEIC 雙軌題庫週 Pipeline（現況：每週日 22:00，`toeic.py` `_PIPELINE_WEEKDAY`／`_PIPELINE_HOUR`）
 
-1. **API 設計原則**：後端（沿用現有 `src/` Flask 分層，未來若獨立拆分則遵循 AGENTS.md 的 `backend/` 樣板）新增獨立的 `/api/app/*` 路由群組，與既有 Telegram webhook 路由區隔；每個圖表對應一支 API，後端算好「圖表就緒」的 JSON 結構（例如 `{"type": "pie", "labels": [...], "values": [...]}`）後直接回傳，App 端不做任何二次聚合運算，只負責渲染——確保同一份計算邏輯只維護一處，未來若要多加一個前端（例如 Web Dashboard）也能直接複用；所有 `/api/app/*` 路由需在 `Authorization` header 帶入 `APP Access Token` 驗證身分。
-2. **React Native + Expo 基礎路由結構**（Expo Router，file-based routing，實際建立時機為 Phase 4 開工時）：
+  **範疇界定（技術決策，見 ADR-28）**：僅涵蓋以上 6 項 Robin 專屬（`owner_only`）排程功能，不涵蓋記帳/體態/待辦/重要通知等全體使用者共用的排程（例如每日 08:00 待辦摘要、23:00 記帳提醒）——這些排程目前是全域固定給所有人一致的時間，語意上不需要個人化調整，開放的話需要額外設計「多使用者各自不同排程」的資料模型與比對邏輯，複雜度不成比例，故本次不開放。實作上需要把上述 6 項寫死的 Python 常數改為每個使用者一筆的資料庫欄位，並改寫各自的 `check_and_*()` 函式從常數比對改為讀取資料庫值比對，實際欄位設計依 ADR-10 流程於 Phase 4 開工時提出核准。
+- [ ] FR-72（2026-08-09 新增，見 ADR-28）：APP設定頁面（可編輯）—— 深色／淺色模式切換、字體大小（小／中／大）、隱私數字遮罩（選擇性，開啟後金額/體重等敏感數字於畫面上以 `***` 等方式遮蔽，需要時再點擊顯示）；此頁面同時作為 FR-65d「修改密碼」功能的入口（輸入舊密碼＋新密碼＋確認新密碼）。上述設定值皆為裝置本機/使用者個人偏好，不影響其他使用者，儲存方式（本機或後端 `users` 表新增偏好欄位）留待 Phase 4 開工展開時決定。
+
+**技術細節補充（Robin 對 App 開發較不熟悉，由 Claude 主動提出以下標準做法供 Phase 4 展開時參考；2026-08-09 因 App 範疇擴大新增讀寫兩用設計要點，見 ADR-28）**：
+
+1. **API 設計原則**：後端（沿用現有 `src/` Flask 分層，未來若獨立拆分則遵循 AGENTS.md 的 `backend/` 樣板）新增獨立的 `/api/app/*` 路由群組，與既有 Telegram webhook 路由區隔。唯讀分析類 API：每個圖表對應一支 API，後端算好「圖表就緒」的 JSON 結構（例如 `{"type": "pie", "labels": [...], "values": [...]}`）後直接回傳，App 端不做任何二次聚合運算，只負責渲染——確保同一份計算邏輯只維護一處，未來若要多加一個前端（例如 Web Dashboard）也能直接複用。**可編輯設定類 API（2026-08-09 新增）**：一律複用既有 service 層函式，不重複開發第二套業務邏輯。認證方式改為標準 JWT（取代原 `APP Access Token` 單一 header 驗證）：登入成功回傳 Access Token（短效，例如 30 分鐘）＋ Refresh Token（長效，見 FR-65c），後續 `/api/app/*` 路由統一在 `Authorization: Bearer <access_token>` 驗證身分，並依 FR-67a 權限矩陣在後端（不只前端）二次檢查該使用者是否有權限存取該路由，避免單純依賴前端選單隱藏造成的越權風險。
+2. **React Native + Expo 基礎路由結構**（Expo Router，file-based routing，實際建立時機為 Phase 4 開工時）。**2026-08-09 修正**：導覽模式改採「左上角 Drawer（漢堡選單）導覽模組頁面＋右上角 Header 按鈕彈出下拉選單」（FR-67），取代原本規劃的底部 Tab Navigation——Robin 明確要求的是左上選單/右上頭像佈局，不是底部分頁籤：
 
    ```
    mobile/                    # 新增頂層目錄，與 src/ 平級獨立（比照 AGENTS.md 職責分離原則）
    └── app/
-       ├── _layout.tsx        # 根 Layout，處理登入態導轉
-       ├── login.tsx          # 登入頁（user_name／稱謂／APP Access Token）
-       └── (tabs)/
-           ├── _layout.tsx    # 底部 Tab 導覽
-           ├── dashboard.tsx  # 總覽（各模組摘要卡片）
-           ├── finance.tsx    # 記帳圖表（消費圓餅圖、月趨勢折線圖）
-           └── body.tsx       # 體態圖表（體重折線圖、運動/飲食統計）
+       ├── _layout.tsx        # 根 Layout：登入態導轉（含 FR-65c 保持登入 Refresh Token 自動換發）＋全域 Header（左上 Drawer 開關、右上頭像下拉選單，FR-67b）
+       ├── login.tsx          # 登入頁（使用者ID／密碼，FR-65）
+       ├── index.tsx          # 首頁（各模組摘要卡片，Dashboard）
+       ├── (drawer)/          # 左上選單導覽的模組頁面群組，依 FR-67a 權限矩陣動態決定選單項目與可存取路由
+       │   ├── todos.tsx        # 待辦事項
+       │   ├── body.tsx         # 體態分析
+       │   ├── finance.tsx      # 記帳分析
+       │   ├── mood.tsx         # 心情趨勢
+       │   ├── jobs.tsx         # 求職分析（Robin only）
+       │   ├── exams.tsx        # 考試成績（Robin only）
+       │   ├── skills.tsx       # 技術分享（Robin only）
+       │   └── complaints.tsx   # 客訴回饋（Robin only）
+       └── settings/          # 右上頭像下拉選單導覽的可編輯設定頁面群組（FR-67b）
+           ├── profile.tsx      # 個人基本資訊（FR-68，唯讀）
+           ├── goals.tsx        # 目標與指標設定（FR-69）
+           ├── toggles.tsx      # 功能開關（FR-70）
+           ├── schedule.tsx     # 排程設定（FR-71，僅 Robin 可見）
+           └── preferences.tsx  # APP設定（FR-72）
    ```
 
-3. **資料模型補充**：`users` 表新增 `app_access_token`（`TEXT UNIQUE`，供 App 登入驗證，與 Telegram 的 `invite_codes` 機制彼此獨立、互不取代）；圖表本身不另建資料表儲存，一律即時從既有業務表（`transactions`／`body_weight_logs`／`exercise_logs`／`diet_logs` 等）聚合運算後回傳，避免資料重複與不同步。實際建表 SQL 仍依 ADR-10「先審核後執行」流程，於 Phase 4 開工、Robin 核准後才建立，此處僅為方向性的欄位規劃。
+3. **資料模型補充（2026-08-09 更新）**：`users` 表新增 `password_hash`（`TEXT`，bcrypt 雜湊，**取代原規劃的 `app_access_token`**）、`refresh_token_hash`（`TEXT`，同樣雜湊儲存，支援 Robin 手動撤銷）、`refresh_token_expires_at`；新增排程設定相關欄位/資料表供 FR-71 六項 Robin 專屬排程讀取，取代目前寫死的 Python 常數。圖表本身仍不另建資料表儲存，一律即時從既有業務表（`transactions`／`body_weight_logs`／`exercise_logs`／`diet_logs` 等）聚合運算後回傳，避免資料重複與不同步。實際建表 SQL 仍依 ADR-10「先審核後執行」流程，於 Phase 4 開工、Robin 核准後才建立，此處僅為方向性的欄位規劃。
+4. **技術可行性總評（2026-08-09 新增，回應 Robin「評估一下技術可行性」）**：整體設計技術上可行，沒有做不到的地方，但比原本「唯讀 BI Dashboard」的範疇大了不少——新增帳密登入＋Token 機制、5 個可編輯設定頁面各自的讀寫 API，以及排程設定需要把 6 項現在寫死的排程常數改造成資料庫可調整。建議 Step 4.4／4.5 開工時依風險與相依順序拆成更細的子 Step 逐一推進（例如：① 登入與 Token 機制 → ② 唯讀分析頁面 → ③ 個人基本資訊＋目標與指標設定 → ④ 功能開關＋APP設定 → ⑤ 排程設定，因為排程設定牽動最多既有排程程式碼，適合放最後），不建議一次性全部展開，降低單次改動範圍與風險，符合 AGENTS.md SDD 分階段開工的既有慣例。
 
 ### 非功能性需求
 
@@ -1003,6 +1039,67 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 - FR-38b 的 Excel 需要新增「104職缺ID」欄位到兩張推薦工作表；表頭文字沿用「104職缺ID」（既有慣例），但實際值可能是合成識別碼，不強求所有值都是真正的 104 官方 ID。
 - 現有 FR-34（爬蟲 upsert）邏輯只處理 `source = '104'` 的資料列，新增外部職缺的對話流程需要確保寫入時正確標記 `source`，避免爬蟲下次執行時誤動到外部職缺資料（`crawl_and_upsert_jobs()`／`upsert_job_posting()` 的 `WHERE` 條件需要一併檢視，留待呈現實作計畫時確認）。
 - `is_closed` 對外部職缺沒有自動判斷依據（沒有 104 API 可以查詢開放/關閉狀態），預設 `FALSE`，若之後真的關閉需要 Robin 手動處理，細節留待呈現實作計畫時定案。
+
+**狀態**：accepted
+
+### ADR-28：Mobile App 範疇由「唯讀 BI Dashboard」擴大為「唯讀分析＋可編輯設定管理」，並改採帳密登入（supersede ADR-14 相關部分、FR-64、FR-65）
+
+**背景**：Phase 4 主線（Step 4.1～4.3，求職模組）全數完成後，僅剩 Step 4.4／4.5（Mobile App）尚未開工。Robin 先要求盤點 Robinson 現有所有功能模組，再決定 App 要放哪些功能。盤點呈現後，Robin 提出一份詳細的 App UI/UX 規格，明確要求「APP 也可以設定目標和指標，以及各功能開關，不是只有 Telegram 可以設定而已」——這與 ADR-14／FR-64 原本「App 端原則上不提供新增/修改/刪除資料的操作入口，寫入以 Telegram Bot 為主」的唯讀 BI Dashboard 定位直接牴觸，需要一份新 ADR 明確記錄這次範疇擴大，而非直接靜默覆寫已 accepted 的 ADR-14。Robin 同時提出具體的登入頁互動細節（使用者ID＋密碼、忘記密碼、保持登入），與原 FR-65 規劃的「`user_name`＋稱謂＋`APP Access Token`」免密碼機制不同；其中「忘記密碼→立刻寄出密碼到 Telegram」與「個人基本資訊頁面顯示密碼」隱含系統需要能取得使用者的密碼明碼，這與密碼安全最佳實踐（單向雜湊、不可逆）有衝突，屬於 Claude 需要主動指出並提出替代方案的技術判斷，而非 Robin 自己決定的產品需求。
+
+**決策**：
+
+1. **App 定位由「唯讀 BI Dashboard」改為「唯讀分析頁面＋可編輯設定頁面」雙軌設計**（FR-64）：新增目標與指標設定（FR-69）、功能開關（FR-70）、排程設定（FR-71，僅 Robin）、APP設定（FR-72）四類可編輯頁面；「記一筆」性質的高頻日常操作（記帳、記錄體重、新增待辦）仍以 Telegram 自然語言對話為主，App 只承接「目標/開關/排程」這類低頻率、結構化的設定類操作，不是全面開放所有 CRUD。
+2. **登入機制由 `APP Access Token` 改為帳密登入**（FR-65）：使用者ID＋密碼，取代原本 FR-65a／FR-65b 的 Token 機制。
+3. **密碼儲存採單向雜湊（bcrypt/argon2），不儲存明碼、不使用可逆加密**（FR-65d）；「忘記密碼」改為「系統產生新隨機密碼覆蓋舊密碼並透過 Telegram 發送」（重設，非復原），個人基本資訊頁面相應地不顯示密碼明碼，改顯示「密碼最後修改時間」。
+4. **保持登入採 Refresh Token 機制**（FR-65c），有效期 30 天，存於裝置本機 Expo SecureStore；MVP 不做「登出所有裝置」等進階裝置管理功能。
+5. **排程設定（FR-71）範疇限縮為 Robin 專屬的 6 項既有排程功能**（104 求職週爬蟲評分、技術分享收集/推播、YouTube 週推播、證照每日出題、證照作答提醒、TOEIC 週 Pipeline），不涵蓋全體使用者共用的固定排程（待辦/記帳/體態/重要通知）。
+6. **目標與指標設定頁面（FR-69）在 Robin 原描述基礎上，補上盤點發現的 3 處遺漏**：求職模組要一併涵蓋履歷/期望工作/年資/期望薪資（不只搜尋條件）、證照模組要一併涵蓋每日出題設定（不只考試類型與目標日期）、新增技術情報主題訂閱管理（Robin 原描述完全未提及）；另外「身高/腰圍」判定為量測基準值，移至個人基本資訊頁面（FR-68）而非目標頁面。
+
+**理由**：
+- 決策 1：Robin 明確要求，且 App 端目前已經是「使用者最常拿在手上的介面」，比起每次都要組織自然語言在 Telegram 對話裡完成的多輪反問設定流程，結構化表單類設定（目標數值、開關、排程時間）用 App 表單操作體感更好；但高頻的「記一筆」操作留在 Telegram 是因為語音/文字輸入一句話就能講完，切到 App 填表單反而更慢，兩個入口分工並非誰取代誰。
+- 決策 2／3／4：Robin 自己也在訊息裡標註「保持登入⋯這個我沒做過，需要討論一下」，代表這部分預期需要 Claude 主動提出技術方案；忘記密碼流程要求系統能把可用密碼交給使用者，若採單向雜湊，系統本身也無法還原明碼，只能重設為新密碼——這是資安最佳實踐（避免資料庫外洩導致所有密碼明碼曝光）與 Robin 原始需求（透過 Telegram 拿到能登入的密碼）之間最直接、風險最低的折衷做法，Claude 判斷不需要為此另外詢問 Robin，因為「可逆加密存密碼」在任何情境下都不是應該被採用的方案。
+- 決策 5：這 6 項排程目前是全域寫死的 Python 常數，若要開放使用者調整，需要改成資料庫欄位並改寫比對邏輯；範圍限縮到 Robin 專屬排程是因為 Robin 描述的「排程設定」選單本來就標注「只有 Robin 能看到此選項」，語意上跟 Robin-only 的功能模組（求職/證照/技術分享，含 YouTube/TOEIC 兩個附屬排程）自然對應，全體共用排程目前也沒有個人化調整的實際需求，先不做可以大幅降低這個子功能的實作複雜度。
+- 決策 6：三處遺漏都是 Robin 原描述提到的功能背後、實際資料庫已存在但描述時漏講的既有欄位——履歷/期望工作是 FR-37 契合度評分的核心比對輸入、每日出題設定決定「今天實際出幾題」、YouTube 主題訂閱決定「該關注什麼主題」，重要性都不亞於 Robin 明確列出的項目，Claude 依 Robin 要求「仔細想一下是否有遺漏」逐一比對現有資料表欄位後發現。
+
+**替代方案**：
+- 決策 3 替代方案：密碼採可逆加密儲存，系統可直接解密回傳原密碼——已考慮但不採用，理由是一旦加密金鑰或資料庫外洩，所有使用者的密碼會同時明碼曝光，風險遠高於「忘記密碼」情境本身的使用者體驗損失（多一個字：從「找回密碼」變成「取得新密碼」）。
+- 決策 5 替代方案：排程設定開放給所有使用者、所有排程功能（包含記帳/體態/待辦等全體共用排程）——已考慮但不採用，理由是這需要額外設計「每個使用者各自獨立排程」的資料模型與比對邏輯（目前是全域比對），複雜度與目前實際需求不成比例，且 Robin 描述的選單本來就限定僅 Robin 可見，範圍限縮更貼近實際需求。
+
+**後果**：
+- FR-64／FR-64a／FR-65 已重新編寫（見 SPEC.md 對應章節），並新增 FR-67～FR-72；FR-65a／FR-65b 的原「Robin 少填一項」設計因為密碼機制下沒有可省略的欄位而移除，改由 FR-67a 選單可見性處理身分差異。
+- `users` 表新增欄位規劃（`password_hash`、`refresh_token_hash`、`refresh_token_expires_at`）取代原本規劃的 `app_access_token`；NFR-5 提及 `users.app_access_token` 的敘述需要於 Phase 4 開工展開時同步修正。
+- Phase 4 開工時的實作規模比原規劃大：新增帳密登入＋Token 機制、5 個可編輯設定頁面的讀寫 API、以及排程設定需要把 6 項寫死常數改造成資料庫可調整欄位；建議依技術細節補充第 4 點的順序拆成更細的子 Step 逐一推進，不建議一次性展開。
+- 實際 migration SQL（`password_hash` 等欄位、排程設定表）依 ADR-10 流程於 Phase 4 開工、Robin 核准後才建立，本次僅完成方向性規劃。
+
+**2026-08-09 追加確認**：Robin 逐項確認上述決策——忘記密碼＝重設新密碼（決策 3）OK；保持登入 Refresh Token 30 天效期（決策 4）OK，並確認理解「30 天一到需要重新登入」；排程設定範圍限縮為 6 項 Robin 專屬排程（決策 5）OK；技術可行性評估建議的分階段開工順序 OK。同時確認 App 命名為「羅賓森」（見 FR-65、FR-67），已補上對應 App icon／名稱敘述。視覺化（唯讀分析頁面）的呈現方式留待下一輪討論，Robin 表示會先看過使用者體驗方向規劃後再給意見。
+
+**狀態**：accepted
+
+### ADR-29：每日技術分享改回深入摘要、拆成三則獨立訊息，並修正 IThome RSS 解析 bug（supersede ADR-25 訊息格式部分）
+
+**背景**：ADR-25（2026-08-09 稍早）把每日技術分享從「三個來源合併的完整條列原文」改成「三行式精簡結論」，是為了讓 Robin 能分辨哪個來源異常。但 Robin 實測後回饋「現在這樣寫說實話我也學不到什麼，因為寫得太淺了」，並附上實際推播內容——IThome／TLDR 兩則都顯示「今日無內容」，只有 TechCrunch 有內容。Robin 同時指出「iThome 在 8/8 有發表一篇 CVSS 9.8 重大漏洞的文章，為什麼沒抓到？」。Claude 因 sandbox 網路白名單連不到 `ithome.com.tw`，請 Robin 直接貼出該 Feed 的實際 RSS 原始內容，比對後發現：IThome 的 `<pubDate>` 格式是 `"2026-08-08  10:08:51"`（純日期時間、無時區、日期時間中間兩個空白），根本不是 RSS 2.0 規格慣用的 RFC 822 格式；`submodules/newsfeed/client.py` 原本只用 `email.utils.parsedate_to_datetime` 解析，對這種格式一律拋出 `ValueError`，導致 IThome **每一篇**文章都在解析日期這一步被跳過——這才是 IThome 每天都顯示「今日無內容」的真正原因，不是真的沒有新聞。同一輪，Robin 也指出 IThome／TechCrunch 過去只用 RSS 的標題／連結生成摘要，這樣 Gemini 等於在編造沒看過的文章內容（「只看標題我也會啊？」），要求真的抓全文。
+
+**決策**：
+
+1. **修正 IThome `<pubDate>` 解析 bug**：`_parse_pub_date()` 新增 fallback，RFC 822 解析失敗時改嘗試 `"%Y-%m-%d %H:%M:%S"` 格式，視為台灣當地時間；兩種格式都失敗才真的視為無法解析。
+2. **IThome／TechCrunch 改為抓取文章全文**：`submodules/newsfeed` 新增 `fetch_article_content(url)`，用 `requests` + `beautifulsoup4` 解析文章網頁正文（優先抓 `<article>` 底下的 `<p>`，找不到才退而求其次抓整個 `<body>`，刻意不寫死站台專屬 selector）；每篇文章之間加入 1～2 秒隨機延遲（禮貌性延遲，比照 FR-34c 104 爬蟲的做法）。單篇抓取失敗只記 log、該篇在 Prompt 裡註記「僅有標題」，不影響同一來源其他篇。
+3. **摘要深度改回「列點＋總結」格式**：針對每篇文章／電子報 story 各自寫至少 5 句話的重點摘要（列點呈現），最後加一段「總結」；拿掉 ADR-25 的「100 字內」長度上限。
+4. **推播拆成三則獨立 Telegram 訊息**：不再合併成一則，每則標題「每日技術成長摘要-{來源}」（TLDR／IThome／TechCrunch）；當天沒有內容的來源直接不推播那則訊息（連「今日無內容」都不用講）；三個來源當天全部都沒有內容，或完全查無收集結果，才維持既有的「未獲得最新技術分享」固定訊息（NFR-10：不允許完全靜默）。
+
+**理由**：
+- 決策 1：這是一個確切驗證到的 bug（Robin 提供的真實 RSS 內容明確包含 8/8 那篇文章，但程式邏輯必然會把它跳過），不是設計取捨，修正沒有替代方案。
+- 決策 2：Robin 明確指出「只看標題我也會」，要求真材實料的深入摘要；只給標題會逼 Gemini 編造內容，違反專案一貫「不可幻覺」原則（見 chat-core SPEC.md FR-4 誠實回答不知道的精神）。刻意不寫死站台專屬 CSS selector，換取「兩個來源都能抓、未來加新來源也不用逐站客製」的通用性，代價是遇到版面複雜的站台可能抓到雜訊，這個取捨由 Claude 判斷後直接採用（技術實作細節，不影響 Robin 關心的最終產出品質）。
+- 決策 3：跟 ADR-25 的方向直接相反，但這是 Robin 實測後的第一手回饋——ADR-25 解決的是「分不清哪個來源異常」，這次要解決的是「內容太淺學不到東西」，兩個問題本質不同，資料庫的 per-source 正規化設計（ADR-25 的核心）仍然有效、不需要更動，只是「這一格要放什麼」再次調整。
+- 決策 4：Robin 明確要求分成三則訊息、當天沒內容的來源完全不推播，這樣訊息量更精簡、Robin 一眼就能看出「今天有哪些來源真的有新東西」。
+
+**替代方案**：
+- 決策 2 替代方案：改用讀者可讀性演算法（如 `readability-lxml`／`trafilatura`）取代手動 `<article>`/`<body>` 啟發式抓取——已考慮但未採用，多一個較重的第三方依賴，且目前只有兩個已知來源，手動啟發式規則足以應付，之後真的常常抓不到內容再考慮換函式庫。
+
+**後果**：
+- `requirements.txt`／`submodules/newsfeed/requirements.txt` 新增 `beautifulsoup4`。
+- Gemini Token 用量增加（全文比標題長很多），仍在免費額度內（NFR-1），但若未來額度吃緊需要重新評估。
+- 收集階段（23:00）執行時間變長（每篇文章多一次 HTTP 請求＋1～2 秒延遲），仍在 `/healthz` 單一小時窗口內可接受。
+- `tests/bot/test_skill_growth.py`、`tests/submodules/newsfeed/test_client.py` 全面更新以反映新行為，兩個模組皆維持 100% 覆蓋率。
 
 **狀態**：accepted
 
