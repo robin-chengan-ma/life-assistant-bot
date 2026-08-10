@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from flask import Blueprint, jsonify, request
 from google.genai import errors as genai_errors
 
+from src.bot import system_errors
 from src.bot.router import handle_message, handle_photo_message, handle_voice_message
 from src.bot.state import ConversationStateStore
 from submodules.calendar.client import CalendarClient
@@ -74,6 +75,7 @@ _processed_update_ids: "OrderedDict[int, None]" = OrderedDict()
 # （`{log_link_line}`，上傳失敗時這行會是空字串，優雅降級不影響訊息本身送出）。
 _ROBIN_ERROR_NOTIFY_TEMPLATE = (
     "🐛 系統發生未預期例外\n"
+    "{error_id_line}"
     "時間：{timestamp}\n"
     "觸發功能：{feature}\n"
     "使用者 Telegram ID：{telegram_user_id}\n"
@@ -156,7 +158,7 @@ def _send_email_fallback(subject: str, body: str) -> None:
 
 
 def _notify_robin_of_error(
-    feature: str, telegram_user_id: int, input_summary: str, *, severity: str = "general"
+    feature: str, telegram_user_id: int, input_summary: str, *, severity: str = "general", db=None
 ) -> None:
     """FR-19a／FR-19b：例外發生時，除了 log（見呼叫端的 `_logger.exception`），額外私訊 Robin
     完整原始 Traceback，並把完整錯誤 log 上傳 Google Drive、附上專屬連結（見 ADR-15，
@@ -178,6 +180,11 @@ def _notify_robin_of_error(
     email 備援——這樣才能準確分辨「是 Telegram 本身送不出去」還是「連內容都組不出來」兩種
     不同的失敗情境。整段任何失敗都絕對不能反過來讓這個「錯誤通知」本身變成另一個未被捕捉的
     例外，那樣就本末倒置了；沒設定必要環境變數時直接跳過，不視為錯誤。
+
+    `db`（2026-08-09，見 FR-19j）：選配，提供時額外把這次錯誤寫入 `system_error_reports`
+    （見 `src/bot/system_errors.py`），並在私訊內容前面附上「錯誤ID=N」，讓 Robin 之後可以用
+    Telegram 指令「錯誤ID=N 已處理：{解法內容}」記錄解法；`db` 為 `None` 或寫入本身失敗時，
+    優雅降級成不附這行、其餘通知流程完全不受影響（比照 FR-19b 既有的 Drive 上傳優雅降級精神）。
     """
     owner_chat_id = os.environ.get("ROBIN_TELEGRAM_TOKEN")
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -200,7 +207,23 @@ def _notify_robin_of_error(
         log_link = _upload_error_log(log_filename, log_content)
         log_link_line = f"\n\n📄 完整 log（含未截斷 Traceback）：{log_link}" if log_link else ""
 
+        error_id_line = ""
+        if db is not None:
+            try:
+                error_summary = traceback_text.strip().splitlines()[-1] if traceback_text.strip() else feature
+                report_id = system_errors.record_error_report(
+                    db,
+                    severity=severity,
+                    triggering_feature=feature,
+                    error_summary=error_summary,
+                    drive_log_url=log_link,
+                )
+                error_id_line = f"🔖 錯誤ID={report_id}（可用「錯誤ID={report_id} 已處理：...」記錄解法）\n"
+            except Exception:
+                _logger.exception("寫入 system_error_reports 失敗，私訊 Robin 的訊息將略過錯誤 ID")
+
         message = _ROBIN_ERROR_NOTIFY_TEMPLATE.format(
+            error_id_line=error_id_line,
             timestamp=timestamp,
             feature=feature,
             telegram_user_id=telegram_user_id,
@@ -562,11 +585,11 @@ def telegram_webhook():
         )
         if _is_llm_failure(exc):
             reply = _MAJOR_ILLNESS_REPLY
-            _notify_robin_of_error(error_feature, telegram_user_id, error_input_summary, severity="critical")
+            _notify_robin_of_error(error_feature, telegram_user_id, error_input_summary, severity="critical", db=db)
             _broadcast_major_illness_to_family(db, telegram_user_id)
         else:
             reply = _GENERAL_COLD_REPLY
-            _notify_robin_of_error(error_feature, telegram_user_id, error_input_summary, severity="general")
+            _notify_robin_of_error(error_feature, telegram_user_id, error_input_summary, severity="general", db=db)
     finally:
         if db is not None:
             db.close()

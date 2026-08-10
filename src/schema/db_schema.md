@@ -1096,3 +1096,31 @@ CREATE INDEX idx_job_applications_job_id_104 ON job_applications (job_id_104);
 - **append-only 設計**：每次應徵狀態變更（FR-39b：已應徵／已獲得面試／已拿到 Offer／未錄取或已婉拒，任意狀態可直接設定不強制順序）都 `INSERT` 新的一筆，不 `UPDATE` 既有紀錄，保留完整時間軸；同一 `job_id_104` 的「目前狀態」＝依 `created_at` 排序後最新一筆，查詢時在應用層取最新，不在資料庫層另外維護一個「目前狀態」欄位（避免兩份資料互相不同步）
 - `status` 用 `TEXT` 不加 `CHECK` 約束：比照專案既有慣例（`todos.status`、`mood_journals.mood_category` 等皆為應用層驗證，不靠 DB 約束限制列舉值）
 - `job_id_104` 不分 104 職缺或外部管道職缺，統一指向 `job_postings.job_id_104`（見上方 `job_postings.source` 設計理由），不需要為兩種來源分開建立關聯欄位
+
+---
+
+### system_error_reports
+
+**建立日期**：2026-08-09
+**用途**：系統例外自動記錄與解法追蹤，對應 [robinson SPEC.md](../../docs/specs/robinson/SPEC.md) FR-19j。
+**Migration 檔案**：`src/migrations/0061_create_system_error_reports_table.sql`
+
+```sql
+CREATE TABLE system_error_reports (
+    id BIGSERIAL PRIMARY KEY,
+    occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    severity TEXT NOT NULL,
+    triggering_feature TEXT,
+    error_summary TEXT NOT NULL,
+    drive_log_url TEXT,
+    resolution TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+**設計理由**：
+- 讓 FR-19b 既有的「私訊 Robin＋Drive log 連結」錯誤通知機制額外落地一份可查詢紀錄，不動既有通知邏輯本身，只是多一步 `INSERT`
+- `error_summary` 寫入前先經過 `system_errors.sanitize_error_summary()` 去除 URL 查詢字串，避免例外訊息裡若帶金鑰的 URL 直接落地到資料庫（比照專案既有的敏感資訊處理慣例）；完整未經處理的 Traceback 仍只透過 `drive_log_url` 取得，不重複落地
+- `severity` 用 `TEXT` 不加 `CHECK`，比照 `job_applications.status`／`todos.status` 等既有慣例，交由應用層驗證
+- `resolution` 允許 `NULL` 代表尚未處理；與 `complaints` 表刻意分開——使用者主動送出的客訴（FR-60～FR-63）不需要解法欄位，只有系統主動推送的錯誤回報才需要追蹤處理進度，兩者性質不同、不共用同一張表
+- 不建額外索引：預期資料量小（例外應該是少數情況），單一 `id` 主鍵查詢與全表依時間排序已足夠

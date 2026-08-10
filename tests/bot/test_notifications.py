@@ -48,11 +48,21 @@ def test_fixed_notifications_list_has_eight_entries_with_expected_keys():
     }
 
 
-def test_fathers_day_and_mothers_day_exclude_roles():
+def test_fathers_day_and_mothers_day_have_subject_role_and_message():
+    # 2026-08-09（FR-53f，見 ADR-30）：主角不再被排除，改為收到不同版本的祝福文案。
     by_key = {entry["key"]: entry for entry in notifications.FIXED_NOTIFICATIONS}
-    assert by_key["fathers_day"]["exclude_role"] == "爸爸"
-    assert by_key["mothers_day"]["exclude_role"] == "媽媽"
-    assert by_key["new_year"]["exclude_role"] is None
+    assert by_key["fathers_day"]["subject_role"] == "爸爸"
+    assert by_key["fathers_day"]["subject_message"]
+    assert by_key["mothers_day"]["subject_role"] == "媽媽"
+    assert by_key["mothers_day"]["subject_message"]
+    assert by_key["new_year"]["subject_role"] is None
+
+
+def test_tomb_sweeping_has_restricted_allowed_roles():
+    # 2026-08-09（FR-53f）：掃墓提醒改為固定名單，不再是「大家都收到」。
+    by_key = {entry["key"]: entry for entry in notifications.FIXED_NOTIFICATIONS}
+    assert by_key["tomb_sweeping"]["allowed_roles"] == ["Robin", "爸爸", "媽媽", "弟弟", "弟媳", "阿姨"]
+    assert by_key["new_year"]["allowed_roles"] is None
 
 
 def test_fixed_notifications_all_have_calendar_summary():
@@ -136,7 +146,8 @@ def test_check_and_push_does_not_duplicate_within_same_year(fake_db):
     assert telegram_client.send_text.call_count == 1
 
 
-def test_check_and_push_fathers_day_excludes_father(fake_db):
+def test_check_and_push_fathers_day_sends_subject_message_to_father(fake_db):
+    # 2026-08-09（FR-53f）：爸爸本人也收到通知，但文案跟其他人不同。
     _bind_user(fake_db, 1, "Robin", is_owner=True)
     father_id = _bind_user(fake_db, 2, "爸爸")
     now = datetime(2026, 8, 8, 0, 5, tzinfo=timezone.utc)
@@ -144,13 +155,14 @@ def test_check_and_push_fathers_day_excludes_father(fake_db):
 
     notifications.check_and_push_important_notifications(fake_db, telegram_client, now=now)
 
-    sent_chat_ids = [call.kwargs["chat_id"] for call in telegram_client.send_text.call_args_list]
-    assert 1 in sent_chat_ids
-    assert 2 not in sent_chat_ids
+    messages_by_chat_id = {call.kwargs["chat_id"]: call.kwargs["text"] for call in telegram_client.send_text.call_args_list}
     assert father_id is not None
+    assert 1 in messages_by_chat_id and 2 in messages_by_chat_id
+    assert "父親節快樂" in messages_by_chat_id[2]
+    assert "提醒你" in messages_by_chat_id[1]
 
 
-def test_check_and_push_mothers_day_excludes_mother(fake_db):
+def test_check_and_push_mothers_day_sends_subject_message_to_mother(fake_db):
     _bind_user(fake_db, 1, "Robin", is_owner=True)
     _bind_user(fake_db, 2, "媽媽")
     now = datetime(2026, 5, 10, 0, 5, tzinfo=timezone.utc)
@@ -158,12 +170,31 @@ def test_check_and_push_mothers_day_excludes_mother(fake_db):
 
     notifications.check_and_push_important_notifications(fake_db, telegram_client, now=now)
 
+    messages_by_chat_id = {call.kwargs["chat_id"]: call.kwargs["text"] for call in telegram_client.send_text.call_args_list}
+    assert 1 in messages_by_chat_id and 2 in messages_by_chat_id
+    assert "母親節快樂" in messages_by_chat_id[2]
+    assert "提醒你" in messages_by_chat_id[1]
+
+
+def test_check_and_push_tomb_sweeping_only_sends_to_allowed_roles(fake_db):
+    # 2026-08-09（FR-53f）：只有固定名單裡的角色收到掃墓提醒。
+    _bind_user(fake_db, 1, "Robin", is_owner=True)
+    _bind_user(fake_db, 2, "爸爸")
+    outsider_id = _bind_user(fake_db, 3, "大妹")
+    now = datetime(2026, 3, 1, 0, 5, tzinfo=timezone.utc)
+    telegram_client = Mock()
+
+    notifications.check_and_push_important_notifications(fake_db, telegram_client, now=now)
+
     sent_chat_ids = [call.kwargs["chat_id"] for call in telegram_client.send_text.call_args_list]
     assert 1 in sent_chat_ids
-    assert 2 not in sent_chat_ids
+    assert 2 in sent_chat_ids
+    assert 3 not in sent_chat_ids
+    assert outsider_id is not None
 
 
-def test_check_and_push_birthday_excludes_birthday_person(fake_db):
+def test_check_and_push_birthday_includes_birthday_person_with_different_message(fake_db):
+    # 2026-08-09（FR-53f）：壽星本人也收到通知（祝福版），其他人收到提醒版。
     _bind_user(fake_db, 1, "Robin", is_owner=True)
     birthday_user_id = _bind_user(fake_db, 2, "弟弟", birthday=date(1999, 4, 22))
     now = datetime(2026, 4, 22, 0, 5, tzinfo=timezone.utc)
@@ -171,9 +202,10 @@ def test_check_and_push_birthday_excludes_birthday_person(fake_db):
 
     notifications.check_and_push_important_notifications(fake_db, telegram_client, now=now)
 
-    sent_chat_ids = [call.kwargs["chat_id"] for call in telegram_client.send_text.call_args_list]
-    assert 1 in sent_chat_ids
-    assert 2 not in sent_chat_ids
+    messages_by_chat_id = {call.kwargs["chat_id"]: call.kwargs["text"] for call in telegram_client.send_text.call_args_list}
+    assert 1 in messages_by_chat_id and 2 in messages_by_chat_id
+    assert "生日快樂！今天是你的生日" in messages_by_chat_id[2]
+    assert "提醒你，今天是 弟弟 的生日" in messages_by_chat_id[1]
 
     log_rows = fake_db.select(
         "important_notifications_log",
@@ -192,7 +224,9 @@ def test_check_and_push_birthday_does_not_duplicate_within_same_year(fake_db):
     notifications.check_and_push_important_notifications(fake_db, telegram_client, now=now)
     notifications.check_and_push_important_notifications(fake_db, telegram_client, now=now)
 
-    assert telegram_client.send_text.call_count == 1
+    # 2026-08-09（FR-53f）：壽星本人現在也會收到通知，2 位已綁定使用者都收到一次；
+    # 第二次呼叫因為去重機制被擋下，不會重複發送。
+    assert telegram_client.send_text.call_count == 2
 
 
 def test_check_and_push_no_notification_on_ordinary_day(fake_db):

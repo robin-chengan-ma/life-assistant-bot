@@ -45,6 +45,8 @@ class FakeCloudSQLClient:
             "job_postings": [],
             # 2026-08-09（Step 4.3，見 robinson SPEC.md FR-39、ADR-27）：應徵狀態歷程記錄。
             "job_applications": [],
+            # 2026-08-09（見 robinson SPEC.md FR-19j）：系統錯誤記錄與解法追蹤。
+            "system_error_reports": [],
         }
         self._id_counter = itertools.count(1)
 

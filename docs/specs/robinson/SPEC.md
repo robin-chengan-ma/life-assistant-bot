@@ -3,7 +3,7 @@ title: Robinson — Robin 與家人們的生活小助手
 slug: robinson
 status: draft
 created: 2026-07-29
-updated: 2026-08-09
+updated: 2026-08-10
 owner: Robin
 ---
 
@@ -137,6 +137,13 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
   - [x] FR-19g（**2026-08-07 完成，見 Step 2.6**）：例外分級降級 —「重大疾病級」：當 Try 區塊執行到呼叫 LLM API（如 `call_llm_api()`）本身直接拋出例外（Gemini 伺服器 500、API Key 失效、額度用罄、網路斷線等，且已用盡 FR-19i 重試機制），代表 LLM 已完全無法處理任何請求或推送訊息。此時必須完全繞過 LLM，直接由 Telegram Bot 底層讀取寫死在後端的靜態字串範本：① 向 Robin 推播最高等級的 StackTrace 告警 ② 同時向所有已綁定的家人帳號廣播重大疾病通知。範本：「🚨 主人與各位家人非常抱歉，我最近患上了重大的疾病（AI 核心服務暫時無法運作），目前無法回答任何問題。Robin 已收到緊急通知並正在全力搶救中！」（**實作**：`webhook.py` 新增 `_MAJOR_ILLNESS_REPLY` 固定範本；`_is_llm_failure(exc)` 用 `LLMQuotaGuardError`（本地端節流保護，見 submodules-core SPEC.md ADR-5）與 `google.genai.errors.APIError`（涵蓋 Gemini 官方回傳的 `ServerError`／`ClientError`）兩種「唯獨呼叫 LLM 才會拋出」的例外型別判斷是否為 LLM 本身失敗，不會跟其他元件的例外混淆；`_notify_robin_of_error(..., severity="critical")` 在通知內容前加上 `_CRITICAL_SEVERITY_BANNER` 最高等級告警橫幅；新增 `_broadcast_major_illness_to_family()` 廣播給所有已綁定家人（排除 Robin 自己——他走告警橫幅；排除觸發當下的使用者——他已經透過主流程的 `reply` 收到同一句話，避免重複發送），單一使用者傳送失敗不影響其他人）
   - [x] FR-19h（**2026-08-07 完成，見 Step 2.6**）：決策執行狀態閉環回饋 — 所有涉及資料異動的操作（寫入 DB、記帳、體態/心情紀錄、新增待辦等），在使用者做出最終「確認」指令後，不論成功或失敗都必須明確回覆結果，嚴禁靜默或無明確狀態反饋：① 成功 — 明確告知操作已成功落實（例：「好的！已成功為您紀錄今日晚餐開銷 $150 元囉！」）② 失敗（一般感冒級）— 依 FR-19f 語句告知未成功並已通知 Robin 處理中 ③ 失敗（重大疾病級）— 依 FR-19g 底層寫死範本回覆（**稽核結果**：本條屬於架構層級已滿足、不需要逐一修改每個功能模組的驗證型任務——`src/bot/finance.py`／`todo.py`／`mood.py`／`router.py` 皆確認沒有任何 `except` 包住 DB 寫入呼叫（`body.py` 唯二的 `except` 只包住「選配的 LLM 卡路里/營養估算」，估算失敗刻意優雅降級不擋下紀錄本身，不影響 DB 寫入的例外傳遞），代表任何資料異動操作失敗時，例外會一路往外傳到 `webhook.py` 單一進入點的 `try/except`，被 Step 2.6 新增的分級邏輯接住、絕不會靜默；成功路徑則從 Phase 1/Phase 2 各模組實作起就已經內建明確的確認文案（例如「已經幫你記錄好了！」「已經刪除這筆心情紀錄了！」，見 `src/bot/commands.py` 各 flow 的 `return` 文字），本條無需新增額外程式碼，僅為驗證與記錄）
   - [x] FR-19i（**2026-08-07 完成，見 docs/specs/submodules-core/SPEC.md FR-13、ADR-13**）：外部 API 呼叫重試機制 — 所有外部 API 呼叫（Gemini/OpenAI API、Telegram Bot API、104 AJAX API 等）皆須內建自動重試：最多重試 3 次（Max Retries = 3），採 Exponential Backoff 搭配 Time Sleep（第 1 次失敗等 1 秒、第 2 次失敗等 2 秒、第 3 次失敗等 4 秒），避免連續轟炸外部 API 觸發封鎖或 Rate Limit；3 次全部失敗才正式判定該次 Request 失敗，並依錯誤來源進入 FR-19f 或 FR-19g 的分級流程。**實作範圍**：新增共用工具 `submodules/retry`（`call_with_retry()`），`llm`／`telegram`／`voice`／`gdrive`／`calendar`／`email` 六個既有子模組皆已套用，只重試「暫時性錯誤」（連線失敗、逾時、HTTP 429／5xx），永久性錯誤（401/403/404 等）直接往外拋不浪費重試次數；104 求職爬蟲 API 屬於 Phase 4 才會存在的程式碼，留待那時比照辦理；本條只完成「重試機制本身」，3 次全部失敗後把最後一次的原始例外原封不動往外拋出，讓呼叫端既有的 `except` 邏輯不需要改動——「依錯誤來源進入 FR-19f 或 FR-19g 的分級流程」這段留待 Step 2.6 在這個基礎上建立
+- [x] FR-19j（**2026-08-09 新增並完成，見 [mobile-app SPEC.md ADR-1](../mobile-app/SPEC.md)**）：系統錯誤記錄持久化＋解法追蹤，讓 FR-19b 現有的「私訊 Robin＋Drive log 連結」機制額外落地一份可查詢、可補記解法的資料紀錄，供 Mobile App 客訴回饋頁的「系統錯誤回報」區塊呈現：
+  - 新增 `system_error_reports` 表（`0061_create_system_error_reports_table.sql`）：`occurred_at`（發生時間）、`severity`（`general`／`critical`，對應 FR-19f／FR-19g 分級，TEXT 不加 CHECK，比照專案既有慣例）、`triggering_feature`（觸發功能）、`error_summary`（簡短錯誤描述，寫入前先經 `src/bot/system_errors.sanitize_error_summary()` 去除 URL 查詢字串並截斷長度，避免金鑰外洩；完整原始 Traceback 仍只透過 FR-19b 既有的 Drive log 連結取得）、`drive_log_url`（可為 NULL，優雅降級情境同 FR-19b）、`resolution`（可為 NULL，尚未處理則留白）、`created_at`
+  - **實作**：新增 `src/bot/system_errors.py`（`sanitize_error_summary()`／`record_error_report()`／`update_resolution()`／`list_error_reports()`）；`webhook.py` 的 `_notify_robin_of_error()` 新增 `db` 參數（預設 `None`，優雅降級不寫入也不影響私訊本身送出），成功寫入時取得內部序號，在私訊 Robin 的訊息裡附上「🔖 錯誤ID=N」
+  - **Telegram 新增 Owner 專屬指令**（`router.py` 的 `_ERROR_RESOLUTION_PATTERN`，單行觸發，比照 FR-39b 應徵狀態的設計）：「錯誤ID=N 已處理：{解法內容}」——刻意用「錯誤ID=」而非單純「ID=」，避免跟 FR-39b「ID=<104職缺ID> 職缺已應徵」等既有 regex 撞在一起；找不到對應 ID 時回覆提示訊息，僅 Robin 可觸發
+  - App 端「客訴回饋」頁的「系統錯誤回報」區塊共用同一支 `system_errors.update_resolution()`，Telegram 與 App 共用同一套邏輯，不重複開發（App 端程式碼留待 Phase 4 開工時才會有）
+  - **與 FR-60～FR-63（使用者客訴）的區隔**（2026-08-09 Robin 釐清）：使用者主動送出的客訴內容不需要解法欄位，Robin 只是查看；只有系統主動推送的錯誤回報才需要追蹤處理進度，兩者在 App 客訴回饋頁分成兩個區塊呈現，資料表也各自獨立（`complaints` 不新增 `resolution` 欄位，之前規劃有誤，已修正）
+  - 測試：`tests/bot/test_system_errors.py`（10 個）、`tests/bot/test_webhook.py` 新增 3 個（`db` 寫入成功附上錯誤ID／未提供 `db` 優雅降級／寫入失敗不影響私訊送出）、`tests/bot/test_router.py` 新增 3 個（指令成功記錄／ID 不存在／非 Owner 不觸發），全專案 1483 個測試全過
 - [x] FR-20（2026-08-02 完成，Step 1.6）：問題修復後（Robin 手動修復），Robinson 需主動回訊息告知所有使用者「我康復了」；此廣播主要對應 FR-19g（重大疾病級）的全員影響情境，FR-19f（一般感冒級）僅私訊 Robin、未廣播全員，修復後是否額外告知該次受影響的使用者由 Robin 自行決定。**Phase 1 實作範圍**：「有沒有修好」完全由 Robin 自己判斷（**2026-08-05 更新，見 ADR-15**：FR-19b 已改為輕量的雲端 log 連結設計，不再有 AI 自主修復／GitHub PR 機制，本條「Robin 自己判斷」為長期定案，非過渡狀態），新增 Owner 專屬指令 `/recovered`（`commands.handle_recovered()`），手動觸發時廣播固定文案給所有已綁定家人（排除 Robin 自己）
 - [x] FR-21（2026-08-02 完成，Step 1.6，僅 Neon 容量部分）：監控 Neon 容量（達 80% 告警）、Gemini 免費額度用量等異常指標，超過門檻時主動通知 Robin。**Phase 1 實作範圍**：只做 Neon 容量監控（`src/bot/monitoring.py`，`NeonCapacityMonitor`），借用 `/healthz` 既有的 cron-job.org 每 10 分鐘呼叫頻率順便檢查，容量達 80% 私訊 Robin、回落後重置告警狀態避免重複轟炸；Gemini 免費額度用量監控刻意暫緩——官方沒有查詢即時用量的 API，本地端節流計數器（ADR-5）只能粗略估算「每分鐘呼叫次數」，無法真的得知「今天/這個月還剩多少免費額度」，準確度有限，且既有的 429 例外已經會走 FR-19a 私訊機制當作事後告警，留待未來有更好方案或官方 API 支援時再補上主動式監控
 
@@ -245,7 +252,8 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 
 ### 功能性需求 — 重要通知
 
-- [x] FR-53：特殊節日/生日自動發送提醒給相關成員（例如父親節不發給父親本人）（**2026-08-04 Step 2.3 實作**：分成「超級重要通知（主角不能收到）」與「重要通知（大家都收到）」兩類，固定台灣時間 08:00 推播，借用 `/healthz` 既有的 10 分鐘 cron 頻率（比照 `body.check_and_push_goal_deadline_reminders()` 等既有慣例），不需要獨立排程系統，詳見 `src/bot/notifications.py` 模組 docstring。固定節日清單：1/1 元旦（大家都收到）、除夕/初一（大家都收到，提醒包紅包）、3/1 固定提醒選一天掃墓（大家都收到）、中秋節（大家都收到，提醒烤肉/月餅）、端午節（大家都收到，提醒粽子）、父親節（西曆固定 8/8，排除 `users.role = "爸爸"` 本人）、母親節（西曆 5 月第二個星期日，排除 `users.role = "媽媽"` 本人）；農曆節日（除夕/初一/中秋/端午）改用 `lunarcalendar` 套件即時計算西曆日期（純 Python、不需要網路），不維護每年日期對照表。家人生日則用新增的 `users.birthday`（`0028_add_birthday_to_users.sql`，只比對月/日不比對年份）比對，當天排除生日當事人自己、其餘所有已綁定使用者（含 Robin）都算「大家」；已知的 5 位家人生日已由 Robin 提供並寫入 `0030_seed_family_birthdays.sql`，其餘家人（弟媳/大妹婿/小妹婿/阿姨）的生日透過新增的 Owner 專屬指令「設定家人生日」／`/set_family_birthday` 自行補上（先列出所有已綁定使用者選編號，再輸入生日，格式接受「YYYY-MM-DD」或不確定年份時的「M/D」）。年度推播去重靠新增的 `important_notifications_log` 表（`0029_create_important_notifications_log_table.sql`，`UNIQUE(notification_key, year)`），固定節日用節日代碼、生日用 `birthday_<user_id>` 各自獨立去重。詳見 `src/bot/notifications.py`、`src/bot/commands.py`、`src/bot/router.py`、`src/schema/db_schema.md`）
+- [x] FR-53：特殊節日/生日自動發送提醒給相關成員（**2026-08-04 Step 2.3 實作**：分成「超級重要通知（主角不能收到）」與「重要通知（大家都收到）」兩類，固定台灣時間 08:00 推播，借用 `/healthz` 既有的 10 分鐘 cron 頻率（比照 `body.check_and_push_goal_deadline_reminders()` 等既有慣例），不需要獨立排程系統，詳見 `src/bot/notifications.py` 模組 docstring。固定節日清單：1/1 元旦（大家都收到）、除夕/初一（大家都收到，提醒包紅包）、3/1 固定提醒選一天掃墓（**2026-08-09 修正對象範圍，見 FR-53f／ADR-30**）、中秋節（大家都收到，提醒烤肉/月餅）、端午節（大家都收到，提醒粽子）、父親節（西曆固定 8/8）、母親節（西曆 5 月第二個星期日）；農曆節日（除夕/初一/中秋/端午）改用 `lunarcalendar` 套件即時計算西曆日期（純 Python、不需要網路），不維護每年日期對照表。家人生日則用新增的 `users.birthday`（`0028_add_birthday_to_users.sql`，只比對月/日不比對年份）比對；已知的 5 位家人生日已由 Robin 提供並寫入 `0030_seed_family_birthdays.sql`，其餘家人（弟媳/大妹婿/小妹婿/阿姨）的生日透過新增的 Owner 專屬指令「設定家人生日」／`/set_family_birthday` 自行補上（先列出所有已綁定使用者選編號，再輸入生日，格式接受「YYYY-MM-DD」或不確定年份時的「M/D」）。年度推播去重靠新增的 `important_notifications_log` 表（`0029_create_important_notifications_log_table.sql`，`UNIQUE(notification_key, year)`），固定節日用節日代碼、生日用 `birthday_<user_id>` 各自獨立去重。詳見 `src/bot/notifications.py`、`src/bot/commands.py`、`src/bot/router.py`、`src/schema/db_schema.md`。**2026-08-09 邏輯修正（見 FR-53f／ADR-30）**：原「主角本人排除、不收到通知」的設計已改為「主角本人與其他人都收到通知，只是文案不同」，本條文字敘述中原本的「排除本人」描述已同步移除，實際程式碼調整見下方 FR-53f）
+  - [x] FR-53f（**2026-08-09 新增並完成，見 ADR-30**）：重要通知邏輯修正，涵蓋兩項變更：① 生日／父親節／母親節這三種「有主角」的通知，改為主角本人與其他人都收到推播，但文案依身份不同（主角收到祝福版、其他人收到提醒去祝福版，見 ADR-30 決策 1 的文案草案）；元旦/除夕初一/掃墓/中秋/端午這五種沒有主角概念的節日不受影響，維持全體同一份文案。② 掃墓提醒的收件對象改為固定名單（`users.role` IN `Robin`／`爸爸`／`媽媽`／`弟弟`／`弟媳`／`阿姨`），不再是「大家都收到」，其餘家人（大妹／大妹婿／小妹／小妹婿）不收到掃墓提醒。**實作**：`src/bot/notifications.py` 的 `FIXED_NOTIFICATIONS` 每筆改為 `allowed_roles`（收件人限制，`None`＝全員）＋`subject_role`／`subject_message`（主角文案差異化）兩個獨立欄位取代舊的單一 `exclude_role`；新增 `_broadcast_pairs()` 支援「每個收件人各自不同訊息」的送達，`_broadcast()` 改為委派呼叫；生日迴圈（獨立於 `FIXED_NOTIFICATIONS` 之外）同步改寫為主角收祝福文案、其他人收提醒文案。不需要新增資料表，`important_notifications_log` 的去重機制不變。`tests/bot/test_notifications.py` 同步修正斷言（原「主角被排除」的測試改為「主角與其他人都收到、文案不同」），全部 34 個測試通過。此修正同時影響 Mobile App 首頁「重要通知」卡片的顯示文字（見 [docs/specs/mobile-app/SPEC.md](../mobile-app/SPEC.md)），App 卡片直接顯示當天推播給該使用者的那句話
 
 ### 功能性需求 — Google Calendar 整合（2026-08-05 新增，見 ADR-17）
 
@@ -259,9 +267,9 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 
 ### 功能性需求 — Mobile App「羅賓森」（全功能個人化入口，Phase 4，2026-08-04 取代原 Notion 後台，見 ADR-14；2026-08-09 App 範疇由「唯讀 BI Dashboard」擴大為「唯讀分析＋可編輯設定管理」並定名「羅賓森」，見 ADR-28）
 
-> 本節僅先定調架構、技術棧、資料模型方向與各頁面的整體結構；各頁面的像素級 UI 細節與 API 詳細規格留待 Phase 4 對應 Step 開工時展開獨立 spec（`docs/specs/mobile-app/SPEC.md`，屆時建立），此處視為 **Placeholder**。
+> 本節僅定調架構、技術棧、資料模型方向、登入機制與各頁面的整體結構／權限矩陣。**2026-08-09 新增**：各頁面詳細的內容規劃（首頁卡片邏輯、各模組圖表/清單呈現方式、全域 UX 規則）已展開為獨立 [docs/specs/mobile-app/SPEC.md](../mobile-app/SPEC.md)；實際開發（元件、API 詳細規格、像素級 UI）仍留待 Step 4.4／4.5 開工時進行，此處與 mobile-app/SPEC.md 皆視為 **Placeholder**（僅規劃階段，尚未開工實作）。
 
-- [ ] FR-64（**2026-08-09 範疇修正，見 ADR-28，supersede 原「唯讀 BI Dashboard」定位**）：App 採「唯讀分析頁面＋可編輯設定頁面」雙軌設計。唯讀分析頁面：將記帳、體態管理等模組的資料計算為圖表（消費圓餅圖、體重/運動趨勢折線圖等）與篩選介面呈現（取代原 FR-54 的 Notion 方案）。可編輯設定頁面（**2026-08-09 新增範疇**）：目標與指標設定（FR-69）、功能開關（FR-70）、排程設定（FR-71，僅 Robin）、APP設定（FR-72），開放使用者直接在 App 端調整自己的目標/開關/排程，不必再透過 Telegram 對話流程逐步反問設定。**寫入分工原則**：App 端的所有寫入操作一律複用既有 service 層函式（例如體態目標寫入直接呼叫 `body.py` 既有的目標建立/更新函式），不重複開發第二套業務邏輯；App 與 Telegram 兩個入口最終寫入同一批資料表，互為對等入口而非誰取代誰。**維持不變的部分**：日常「記一筆」性質的高頻操作（記一筆支出、記一次體重、新增一則待辦）語意上更適合 Telegram 的自然語言對話（一句話講完，不用切換 App 填表單），本次範疇擴大僅開放「目標/開關/排程」這類低頻率、結構化的設定類操作進 App，不是把所有 CRUD 都搬進 App。
+- [ ] FR-64（**2026-08-09 範疇修正，見 ADR-28，supersede 原「唯讀 BI Dashboard」定位**）：App 採「唯讀分析頁面＋可編輯設定頁面」雙軌設計。唯讀分析頁面：將記帳、體態管理等模組的資料計算為圖表（消費圓餅圖、體重/運動趨勢折線圖等）與篩選介面呈現（取代原 FR-54 的 Notion 方案）。可編輯設定頁面（**2026-08-09 新增範疇**）：目標與指標設定（FR-69）、功能開關（FR-70）、排程設定（FR-71，僅 Robin）、APP設定（FR-72），開放使用者直接在 App 端調整自己的目標/開關/排程，不必再透過 Telegram 對話流程逐步反問設定。**寫入分工原則**：App 端的所有寫入操作一律複用既有 service 層函式（例如體態目標寫入直接呼叫 `body.py` 既有的目標建立/更新函式），不重複開發第二套業務邏輯；App 與 Telegram 兩個入口最終寫入同一批資料表，互為對等入口而非誰取代誰。**維持不變的部分**：日常「記一筆」性質的高頻操作（記一筆支出、記一次體重、新增一則待辦）語意上更適合 Telegram 的自然語言對話（一句話講完，不用切換 App 填表單），本次範疇擴大僅開放「目標/開關/排程」這類低頻率、結構化的設定類操作進 App，不是把所有 CRUD 都搬進 App。**唯一已知例外（2026-08-09，見 [mobile-app SPEC.md ADR-1](../mobile-app/SPEC.md)）**：客訴回饋頁面裡的「系統錯誤回報」區塊（FR-19j）破例支援「解法」單一欄位可編輯，其餘欄位仍唯讀；同一頁的「使用者客訴」區塊（FR-60～FR-63）維持完全唯讀，不受此例外影響，範圍極小、不影響本條整體分工原則。
 - [ ] FR-64a（2026-08-08 新增，Placeholder；**2026-08-09 因 FR-64 範疇擴大微調最後一句措辭**）：藍牙體重計整合——Robin 已購入支援藍牙廣播（BLE Advertisement）的體重計，並用 nRF Connect for Mobile 實測確認可從掃描結果的 Manufacturer Data（廠商資料）取得量測後的體重值。App 端新增「開始測量」按鈕，點擊後啟動藍牙掃描，10 秒內偵測到體重值則顯示並記錄；10 秒內未偵測到則顯示「未取得您的體重值」，不記錄任何資料。**體重紀錄維持雙入口**：人不在家、沒帶體重計時，同樣可以直接在 Telegram 手動輸入體重值（既有 FR-46 `/log_weight` 流程不變）；兩種入口最終都寫入同一張 `body_weight_logs`，App 端這支寫入 API 沿用「後端算好結果、App 只負責渲染/呼叫」的既有分層原則，實際寫入邏輯復用現有 `body.create_weight_log()` 等既有服務層函式，不另外複製一份業務邏輯（**2026-08-09 更新**：FR-64 範疇擴大後，此例外不再是唯一的 App 寫入入口，但「複用既有 service 層、不重複開發業務邏輯」的分工原則不變，見 FR-64／ADR-28）。
 
   **藍牙資料解析規格**（Robin 已用 nRF Connect for Mobile 實測驗證，Phase 4 開工時 App 端直接依此規格解析）：掃描到裝置後讀取廣播封包中的 Manufacturer Data 欄位，取一個 16 位元（2 bytes）的十六進位整數；取出整包 hex 資料中索引 2、3 的位元組（big-endian），組成體重原始值後除以 100 得到公斤數。Python 對照範例（Robin 提供，供未來 App 端 TypeScript/原生藍牙 SDK 實作時對照）：
@@ -1100,6 +1108,39 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 作為 
 - Gemini Token 用量增加（全文比標題長很多），仍在免費額度內（NFR-1），但若未來額度吃緊需要重新評估。
 - 收集階段（23:00）執行時間變長（每篇文章多一次 HTTP 請求＋1～2 秒延遲），仍在 `/healthz` 單一小時窗口內可接受。
 - `tests/bot/test_skill_growth.py`、`tests/submodules/newsfeed/test_client.py` 全面更新以反映新行為，兩個模組皆維持 100% 覆蓋率。
+
+**狀態**：accepted
+
+### ADR-30：重要通知邏輯修正——生日/父親節/母親節改為「全員皆收到、依身份給不同文案」，掃墓提醒改為固定名單（見 FR-53f）
+
+**背景**：Robin 在討論 Mobile App 首頁「重要通知」卡片內容時，順帶提出要修正已上線的 FR-53（Step 2.3 完成）邏輯——原設計是生日/父親節/母親節這三種「有主角」的通知，主角本人會被排除、不會收到（避免系統提醒自己要祝賀自己這種怪異情境）。Robin 認為不管是不是主角，都應該收到通知，只是內容要不一樣：主角收到「被祝福」的版本，其他人收到「提醒去祝福」的版本；Telegram 與 App 兩邊都要套用同一套邏輯。Robin 同時追加一項掃墓提醒的範圍修正：目前掃墓提醒是「大家都收到」，但實際上只有 Robin、爸爸、媽媽、弟弟、弟媳、阿姨會去掃墓，其餘家人（大妹、大妹婿、小妹、小妹婿）不需要收到這則提醒。
+
+**決策**：
+
+1. **生日／父親節／母親節改為「全員皆收到，文案依身份分兩種版本」**，取代原本「主角本人被排除」的設計：
+
+   | 情境 | 主角本人收到 | 其他人收到 |
+   |---|---|---|
+   | 生日 | 🎂 生日快樂！今天是你的生日，祝你新的一歲順心如意！ | 🎂 提醒你，今天是 {暱稱} 的生日，記得跟他/她說聲生日快樂！ |
+   | 父親節 | 👨‍👧‍👦 父親節快樂！ | 👨‍👧‍👦 提醒你，今天是父親節，記得跟爸爸說聲節日快樂！ |
+   | 母親節 | 👩‍👧‍👦 母親節快樂！ | 👩‍👧‍👦 提醒你，今天是母親節，記得跟媽媽說聲節日快樂！ |
+
+   元旦、除夕/初一、掃墓、中秋、端午這五種沒有「主角」概念的節日不受本決策影響，維持全體收到同一份文案。
+2. **掃墓提醒收件對象改為固定名單**：`users.role` 為 `Robin`／`爸爸`／`媽媽`／`弟弟`／`弟媳`／`阿姨` 這 6 種身份才收到，其餘家人（大妹／大妹婿／小妹／小妹婿）不收到，取代原「大家都收到」的設計。
+3. **Telegram 與 Mobile App 兩端都套用新邏輯**：App 首頁「重要通知」卡片直接顯示當天推播給該使用者的那句文案（沒有通知則顯示「今日無重要通知」），不需要為 App 另外設計一套獨立文案。
+
+**理由**：
+- 決策 1：Robin 認為「排除主角」的原始設計反而讓主角本人完全不知道今天是自己的生日/父親節/母親節（除非有人另外講），改成「全員都收到、但依身份給不同內容」讓主角本人也能感受到節日氣氛，同時保留原本「提醒其他人去祝福」的核心目的，兩者並不衝突。
+- 決策 2：掃墓提醒本質上是「提醒『會去掃墓的人』確認掃墓時間」，跟其他全體共通的節日（例如中秋、端午單純是「祝賀」性質）不同，「大家都收到」對不會去掃墓的家人是無意義的通知噪音。
+- 決策 3：Robin 明確要求「Telegram 和 App 都要改成這種方式」，且 App 卡片本來就是直接呈現 Telegram 端算好的推播內容，不需要重複開發判斷邏輯。
+
+**替代方案**：
+- 決策 1 替代方案：維持原「主角排除」設計，只在 App 端額外做一張「今天有誰的生日/節日」卡片給主角自己看——已考慮但不採用，因為這樣 Telegram 端還是不會通知主角本人，沒有真正解決 Robin 提出的問題，且等於同一份邏輯要維護兩份（Telegram 排除版＋App 不排除版），複雜度更高。
+
+**後果**：
+- `src/bot/notifications.py` 需要改寫節日/生日的收件人判斷與文案組裝邏輯（依「是否為主角」分流成兩種文案，掃墓改為固定角色名單過濾），既有測試中斷言「主角被排除」的部分需要同步修正；不需要新增資料表或欄位，`important_notifications_log` 的去重機制不受影響。
+- 本次僅完成邏輯與文案定案（見 FR-53f），實際程式碼修改與測試調整留待後續一個獨立 Step 展開，不與 Mobile App Placeholder 混在一起處理，避免在同一個 Step 裡同時處理「已上線功能的行為變更」與「全新 Placeholder 功能」兩種性質不同的工作。
+- Mobile App 首頁「重要通知」卡片（見 [docs/specs/mobile-app/SPEC.md](../mobile-app/SPEC.md)）直接沿用這裡算好的文案，不另外維護一份。
 
 **狀態**：accepted
 

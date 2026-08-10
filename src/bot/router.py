@@ -3,7 +3,7 @@ import re
 
 from submodules.cloudsql.client import CloudSQLClient
 
-from src.bot import auth, chat, commands, image, job_search, templates, toggles, voice
+from src.bot import auth, chat, commands, image, job_search, system_errors, templates, toggles, voice
 from src.bot.state import ConversationStateStore
 
 _NOT_BOUND_REPLY = "請輸入通關密碼才能開始使用羅賓森喔！"
@@ -102,6 +102,10 @@ _MY_APPLICATIONS_TRIGGERS = {"/my_applications", "我的應徵紀錄"}
 _APPLICATION_STATUS_PATTERN = re.compile(
     r"^ID=(?P<job_id>[\w-]+)\s*職缺(?P<status_text>已應徵|已獲得面試|已拿到\s*Offer|已婉拒|未錄取)$"
 )
+# 2026-08-09（見 robinson SPEC.md FR-19j）：系統錯誤解法記錄，Owner 專屬單行指令，比照
+# `_APPLICATION_STATUS_PATTERN` 直接 regex 解析、不走多輪對話狀態機。刻意用「錯誤ID=」
+# 而非單純「ID=」開頭，避免跟 `_APPLICATION_STATUS_PATTERN` 的 `ID=<job_id>` 撞在一起。
+_ERROR_RESOLUTION_PATTERN = re.compile(r"^錯誤ID=(?P<report_id>\d+)\s*已處理[:：]\s*(?P<resolution>.+)$")
 # 2026-08-09（見 robinson SPEC.md FR-35e、FR-38e、ADR-24 後果、ADR-26）：帶動態檔名的觸發詞，
 # 設計比照 _CLEAN_TARGET_DIALOG_PATTERN 用 regex 擷取參數；依副檔名/檔名關鍵字分流成兩條各自
 # 獨立的回填流程——公司背景 CSV（檔名以「104職缺公司.csv」結尾）與職缺推薦 Excel（檔名以
@@ -249,6 +253,15 @@ def handle_message(
                 label = job_search.application_status_label(status)
                 return f"已經幫你把「{job_id}」的應徵狀態更新為「{label}」了！"
             return f"找不到 ID={job_id} 對應的職缺，麻煩確認一下 ID 有沒有打對！"
+        error_resolution_match = _ERROR_RESOLUTION_PATTERN.match(text)
+        if error_resolution_match:
+            # 2026-08-09（見 robinson SPEC.md FR-19j）：系統錯誤解法記錄語句，不走多輪對話，
+            # 直接解析並寫入 system_error_reports.resolution。
+            report_id = int(error_resolution_match.group("report_id"))
+            resolution = error_resolution_match.group("resolution").strip()
+            if system_errors.update_resolution(db, report_id, resolution):
+                return f"已經幫你把「錯誤ID={report_id}」的解法記錄好了！"
+            return f"找不到 錯誤ID={report_id} 對應的紀錄，麻煩確認一下 ID 有沒有打對！"
         uploaded_match = _UPLOADED_FILE_PATTERN.match(text)
         if uploaded_match:
             filename = uploaded_match.group("filename").strip()

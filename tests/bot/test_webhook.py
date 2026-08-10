@@ -543,6 +543,58 @@ def test_notify_robin_of_error_omits_link_when_gdrive_env_vars_missing(monkeypat
     assert "完整 log" not in sent_text
 
 
+# --- FR-19j：系統錯誤記錄持久化＋附上「錯誤ID=N」---
+
+
+def test_notify_robin_of_error_records_report_and_appends_error_id(monkeypatch, fake_db):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", "999")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+    mock_telegram_instance = MagicMock()
+    monkeypatch.setattr(webhook, "TelegramClient", MagicMock(return_value=mock_telegram_instance))
+
+    try:
+        raise ValueError("模擬錯誤")
+    except ValueError:
+        webhook._notify_robin_of_error("finance", 123, "摘要", db=fake_db)
+
+    rows = fake_db.select("system_error_reports")
+    assert len(rows) == 1
+    assert rows[0]["severity"] == "general"
+    assert rows[0]["triggering_feature"] == "finance"
+
+    sent_text = mock_telegram_instance.send_text.call_args.kwargs["text"]
+    assert f"錯誤ID={rows[0]['id']}" in sent_text
+
+
+def test_notify_robin_of_error_without_db_omits_error_id(monkeypatch):
+    # db 沒提供時（例如 DB 連線失敗），優雅降級成不附錯誤 ID，其餘通知照常送出。
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", "999")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+    mock_telegram_instance = MagicMock()
+    monkeypatch.setattr(webhook, "TelegramClient", MagicMock(return_value=mock_telegram_instance))
+
+    webhook._notify_robin_of_error("text", 123, "摘要")
+
+    sent_text = mock_telegram_instance.send_text.call_args.kwargs["text"]
+    assert "錯誤ID=" not in sent_text
+
+
+def test_notify_robin_of_error_swallows_record_failure(monkeypatch):
+    # system_error_reports 寫入失敗不能影響「私訊 Robin」這件事本身正常送出。
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", "999")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+    mock_telegram_instance = MagicMock()
+    monkeypatch.setattr(webhook, "TelegramClient", MagicMock(return_value=mock_telegram_instance))
+    broken_db = MagicMock()
+    broken_db.insert.side_effect = RuntimeError("DB 暫時性錯誤")
+
+    webhook._notify_robin_of_error("text", 123, "摘要", db=broken_db)
+
+    mock_telegram_instance.send_text.assert_called_once()
+    sent_text = mock_telegram_instance.send_text.call_args.kwargs["text"]
+    assert "錯誤ID=" not in sent_text
+
+
 # --- ADR-16：Telegram 送達失敗時的 email 備援通知 ---
 
 

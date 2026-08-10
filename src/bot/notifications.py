@@ -1,9 +1,9 @@
-"""重要通知純邏輯（對應 docs/specs/robinson/SPEC.md FR-53，Step 2.3）。
+"""重要通知純邏輯（對應 docs/specs/robinson/SPEC.md FR-53，Step 2.3；2026-08-09 邏輯修正見
+FR-53f、ADR-30）。
 
 負責：固定節日（元旦/父親節/母親節/掃墓提醒/中秋/端午/除夕/初一）的西曆日期計算、生日比對、
-收件人排除邏輯（家人生日/父親節/母親節「主角不能收到」）、年度推播去重判斷與推播。不處理任何
-Telegram 對話流程，那是 src/bot/commands.py 的責任（本模組只有「設定家人生日」用到的資料操作
-函式跟 commands.py 共用）。
+收件人範圍與文案分流、年度推播去重判斷與推播。不處理任何 Telegram 對話流程，那是
+src/bot/commands.py 的責任（本模組只有「設定家人生日」用到的資料操作函式跟 commands.py 共用）。
 
 2026-08-04 經 AskUserQuestion 確認的設計決策：
 ① 農曆節日（除夕/初一/中秋/端午）改用 `lunarcalendar` 套件即時計算西曆日期（純 Python 計算、
@@ -11,9 +11,14 @@ Telegram 對話流程，那是 src/bot/commands.py 的責任（本模組只有�
    同樣是計算得出，不需要對照表。
 ② 這些通知固定在台灣時間 08:00 推播（比照待辦事項每日摘要 `todo.check_and_push_daily_digest()`
    的慣例），借用 `/healthz` 既有的 10 分鐘 cron 頻率。
-③ 父親節/母親節「主角不能收到」的排除邏輯，用 `users.role` 字串完全比對「爸爸」／「媽媽」；
-   家人生日「主角不能收到」則用 `user_id` 排除生日當事人自己，其餘所有已綁定使用者（含 Robin）
-   都算「大家」。
+
+2026-08-09（FR-53f，見 ADR-30）邏輯修正，取代原決策③：
+③ 生日／父親節／母親節這三種「有主角」的通知，改為**全員都收到，但文案依身份分兩種版本**——
+   主角本人收到 `subject_message`（祝福版），其他人收到 `message`（提醒去祝福版）；不再有任何
+   人被排除。掃墓提醒改為**固定收件名單**（`allowed_roles`），只有 `users.role` 屬於
+   `Robin`／`爸爸`／`媽媽`／`弟弟`／`弟媳`／`阿姨` 六種身份的人會收到，其餘家人（大妹／大妹婿／
+   小妹／小妹婿）不收到；元旦/除夕初一/中秋/端午這四種沒有主角、也沒有名單限制的節日不受影響，
+   維持全體同一份文案。
 
 家人生日資料來源：`users.birthday`（`0028_add_birthday_to_users.sql`），只比對月/日，不比對年份
 （`_matches_month_day()`）；已知的 5 位家人生日已由 Robin 提供並寫入 `0030_seed_family_birthdays.sql`，
@@ -81,8 +86,12 @@ def get_tomb_sweeping_reminder(year: int) -> date:
     return date(year, 3, 1)
 
 
-# FR-53「重要通知（大家都收到）」與「超級重要通知（主角不能收到）」的固定節日清單。
-# `exclude_role`：None 代表大家都收到；否則排除 `users.role` 等於這個字串的人（決策③）。
+# FR-53 固定節日清單（2026-08-09 邏輯修正，見 FR-53f、ADR-30）：
+#   `allowed_roles`：None 代表大家都收到；否則只有 `users.role` 落在這個清單裡的人會收到
+#     （目前只有 tomb_sweeping 使用，取代原本的 `exclude_role` 排除設計）。
+#   `subject_role`／`subject_message`：None 代表沒有「主角」概念，一律用 `message`；否則
+#     `users.role` 等於 `subject_role` 的人收到 `subject_message`（祝福版），其餘人收到
+#     `message`（提醒去祝福版）——取代原本「主角被排除、完全收不到」的設計。
 #   `calendar_summary`（2026-08-05，見 robinson SPEC.md FR-66b、ADR-17）：Google Calendar 全天
 #   事件的標題，刻意跟 `message`（Telegram 推播用，含表情符號與口語化語氣）分開，事件標題保持
 #   簡短中性。
@@ -91,56 +100,75 @@ FIXED_NOTIFICATIONS: list[dict] = [
         "key": "new_year",
         "compute_date": get_new_year,
         "message": "🎉 新年快樂！祝大家新的一年順利！",
-        "exclude_role": None,
+        "allowed_roles": None,
+        "subject_role": None,
+        "subject_message": None,
         "calendar_summary": "元旦",
     },
     {
         "key": "lunar_new_year_eve",
         "compute_date": get_lunar_new_year_eve,
         "message": "🧧 除夕快樂！祝大家新年快樂，要包紅包了喔！",
-        "exclude_role": None,
+        "allowed_roles": None,
+        "subject_role": None,
+        "subject_message": None,
         "calendar_summary": "除夕",
     },
     {
         "key": "lunar_new_year_day1",
         "compute_date": get_lunar_new_year_day1,
         "message": "🧧 新年快樂！恭喜發財，記得包紅包喔！",
-        "exclude_role": None,
+        "allowed_roles": None,
+        "subject_role": None,
+        "subject_message": None,
         "calendar_summary": "初一",
     },
     {
         "key": "tomb_sweeping",
         "compute_date": get_tomb_sweeping_reminder,
         "message": "⛰️ 提醒大家，記得找一天回去掃墓喔！",
-        "exclude_role": None,
+        # 2026-08-09（FR-53f）：只有實際會去掃墓的家人收到，取代原本「大家都收到」。
+        "allowed_roles": ["Robin", "爸爸", "媽媽", "弟弟", "弟媳", "阿姨"],
+        "subject_role": None,
+        "subject_message": None,
         "calendar_summary": "清明掃墓提醒",
     },
     {
         "key": "mid_autumn",
         "compute_date": get_mid_autumn,
         "message": "🌕 中秋節快樂！記得關心家人中秋有沒有要一起烤肉/吃月餅喔！",
-        "exclude_role": None,
+        "allowed_roles": None,
+        "subject_role": None,
+        "subject_message": None,
         "calendar_summary": "中秋節",
     },
     {
         "key": "dragon_boat",
         "compute_date": get_dragon_boat,
         "message": "🐉 端午節快樂！記得關心家裡有沒有包粽子/吃粽子喔！",
-        "exclude_role": None,
+        "allowed_roles": None,
+        "subject_role": None,
+        "subject_message": None,
         "calendar_summary": "端午節",
     },
     {
         "key": "fathers_day",
         "compute_date": get_fathers_day,
-        "message": "👨 今天是父親節，記得跟爸爸表達感謝喔！",
-        "exclude_role": "爸爸",
+        # 2026-08-09（FR-53f）：其他人收到提醒版，爸爸本人改收 subject_message 的祝福版，
+        # 不再被排除、完全收不到通知。
+        "message": "👨‍👧‍👦 提醒你，今天是父親節，記得跟爸爸說聲節日快樂！",
+        "allowed_roles": None,
+        "subject_role": "爸爸",
+        "subject_message": "👨‍👧‍👦 父親節快樂！",
         "calendar_summary": "父親節",
     },
     {
         "key": "mothers_day",
         "compute_date": get_mothers_day,
-        "message": "👩 今天是母親節，記得跟媽媽表達感謝喔！",
-        "exclude_role": "媽媽",
+        "message": "👩‍👧‍👦 提醒你，今天是母親節，記得跟媽媽說聲節日快樂！",
+        "allowed_roles": None,
+        "subject_role": "媽媽",
+        "subject_message": "👩‍👧‍👦 母親節快樂！",
         "calendar_summary": "母親節",
     },
 ]
@@ -172,8 +200,17 @@ def _mark_sent(db: CloudSQLClient, notification_key: str, year: int) -> None:
 
 
 def _broadcast(telegram_client, recipients: list[dict], message: str) -> None:
-    """推播給每一位收件人，單一使用者傳送失敗不影響其他人（比照 `commands.handle_recovered()`）。"""
-    for user in recipients:
+    """推播「同一份訊息」給每一位收件人，單一使用者傳送失敗不影響其他人
+    （比照 `commands.handle_recovered()`）。
+    """
+    _broadcast_pairs(telegram_client, [(user, message) for user in recipients])
+
+
+def _broadcast_pairs(telegram_client, recipient_messages: list[tuple[dict, str]]) -> None:
+    """2026-08-09（FR-53f）：推播「每人可能不同文案」給每一位收件人（例如生日/父親節/母親節的
+    主角祝福版 vs 其他人提醒版），單一使用者傳送失敗不影響其他人。
+    """
+    for user, message in recipient_messages:
         try:
             telegram_client.send_text(chat_id=user["telegram_user_id"], text=message)
         except Exception:
@@ -227,12 +264,23 @@ def check_and_push_important_notifications(
         if _is_already_sent(db, entry["key"], year):
             continue
 
+        # 2026-08-09（FR-53f）：先依 allowed_roles 縮小收件範圍（None 代表大家都收到，
+        # 目前只有 tomb_sweeping 使用），再依 subject_role 決定每個人收到哪個版本的文案。
         recipients = all_bound_users
-        exclude_role = entry["exclude_role"]
-        if exclude_role is not None:
-            recipients = [user for user in recipients if user.get("role") != exclude_role]
+        allowed_roles = entry["allowed_roles"]
+        if allowed_roles is not None:
+            recipients = [user for user in recipients if user.get("role") in allowed_roles]
 
-        _broadcast(telegram_client, recipients, entry["message"])
+        subject_role = entry["subject_role"]
+        if subject_role is not None:
+            recipient_messages = [
+                (user, entry["subject_message"] if user.get("role") == subject_role else entry["message"])
+                for user in recipients
+            ]
+        else:
+            recipient_messages = [(user, entry["message"]) for user in recipients]
+
+        _broadcast_pairs(telegram_client, recipient_messages)
         _mark_sent(db, entry["key"], year)
         if calendar_client is not None:
             _create_all_day_calendar_event(calendar_client, entry["calendar_summary"], target_date)
@@ -242,9 +290,14 @@ def check_and_push_important_notifications(
         if _is_already_sent(db, notification_key, year):
             continue
 
-        recipients = [user for user in all_bound_users if user["id"] != birthday_user["id"]]
-        message = f"🎂 今天是 {birthday_user['role']} 的生日，記得跟他/她說聲生日快樂喔！"
-        _broadcast(telegram_client, recipients, message)
+        # 2026-08-09（FR-53f）：壽星本人也收到通知（祝福版），不再被排除；其他人收到提醒版。
+        subject_message = "🎂 生日快樂！今天是你的生日，祝你新的一歲順心如意！"
+        other_message = f"🎂 提醒你，今天是 {birthday_user['role']} 的生日，記得跟他/她說聲生日快樂！"
+        recipient_messages = [
+            (user, subject_message if user["id"] == birthday_user["id"] else other_message)
+            for user in all_bound_users
+        ]
+        _broadcast_pairs(telegram_client, recipient_messages)
         _mark_sent(db, notification_key, year)
         if calendar_client is not None:
             _create_all_day_calendar_event(calendar_client, f"{birthday_user['role']} 生日", today)
