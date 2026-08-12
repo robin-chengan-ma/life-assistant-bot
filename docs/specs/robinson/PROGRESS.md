@@ -189,6 +189,8 @@ updated: 2026-08-10
 
 | 2026-08-10～2026-08-12 | **Step 4.4／4.5 Mobile App「羅賓森」由 Placeholder 大幅推進為實作中（本輪由 Codex Desktop 開發並記錄於 `codex.md`，PROGRESS.md／SPEC.md 於 2026-08-12 由 Claude 依 `codex.md` 逐輪異動回填同步；程式碼本身尚未 `git commit`）**。**已完成**：FR-65 登入與 Token 機制（bcrypt＋JWT Access Token／opaque Refresh Token rolling refresh／Telegram 忘記密碼通知，見 `src/services/app_auth.py`、`src/api/app_auth.py`、migration `0062`）；FR-67／FR-67a／FR-67b 左上選單＋右上頭像下拉選單與權限矩陣；FR-68 個人基本資訊唯讀頁；FR-72 APP 設定（深色模式／字體大小／隱私遮罩／修改密碼，migration `0067`）；FR-64 全部 8 個模組唯讀分析頁面＋首頁卡片＋圖表預覽區；FR-64a 體態與飲食記錄——**其中藍牙體重計設計已推翻**：實機與 PWA／Bluefy 相容性 POC 確認 Yoda1 被動廣播無法穩定被行動裝置接收，Robin 決定全面移除藍牙、改為「記錄一下」手動輸入（`40.0～150.0kg` 範圍驗證，前後端雙重把關），另新增飲食拍照／相簿 Gemini 辨識流程。**規格範疇之外新確認的產品邏輯**：待辦事項與重要日子改為日期區間設計（migration `0070`，非原規劃單日事件）；全站分析頁日期選擇器統一改用共用待辦行事曆的中華民國政府行事曆資料。**尚未開工**：FR-69（目標與指標設定）、FR-70（功能開關頁）、FR-71（排程設定頁，僅 Robin）。**規格範圍外的新方向（僅完成技術 POC，未定案）**：收藏清單首頁入口與資料結構、探索地圖（Leaflet＋OpenStreetMap，已建立 `mobile/app/map-poc.tsx` 假資料驗證）、成果展示——已新增 robinson SPEC.md FR-73（Placeholder）追蹤。**未同步事項**：`_test_rm_me.txt`（2026-08-07 建立的空測試殘留檔）未記錄於 `codex.md`，也尚未清除，待 Robin 自行刪除。詳細逐輪程式碼異動、驗證紀錄與工具限制見 `codex.md`（`mobile/`、`src/api/`、`src/services/` 等目前皆為未 commit 的 working tree 變更） | Claude（依 Robin 要求盤點 `codex.md` 與既有規格書／進度紀錄的落差，回填 Step 4.4／4.5 里程碑並同步 SPEC.md 對應 FR 條目狀態） |
 
+| 2026-08-12 | **Step 4.4/4.5 大量未 commit 的程式碼已正式 commit＋push，並完成正式上線部署（後端 Render＋前端 Vercel）**。程式碼（`mobile/`、`src/api/`、`src/services/`、migration `0062～0077` 等，`codex.md` 本身不進版控）已 commit 並 push 到 GitHub main；過程中發現並修正 `.gitignore` 的 `*.json` 規則過於寬泛，誤擋了 `mobile/tsconfig.json` 等必要設定檔，已改為只擋真正的金鑰檔案（`google_service_account.json` 等），修正後補 commit。**新增部署架構**：後端沿用既有 Render（push 到 GitHub main 自動重新部署，`main.py` 啟動時自動套用未套用的 migration，見 ADR-10）；Mobile App **新增 Web 版正式部署於 Vercel**（免費 Hobby 方案），固定網址 `https://life-assistant-bot.vercel.app`，Root Directory 設為 `mobile`、Build Command `pnpm run build:web`、Output Directory `dist`；新增 `mobile/vercel.json`，以 Vercel rewrites 把 `/api/*` 請求代理到 Render 後端（`https://life-assistant-bot-yhkm.onrender.com`），瀏覽器端視為同源請求，不需要額外設定 CORS 即可運作。Render 端新增環境變數 `APP_JWT_SECRET`（32+ 字元安全亂數）與 `APP_CORS_ORIGINS`（`http://localhost:8081,http://127.0.0.1:8081,https://life-assistant-bot.vercel.app`，作為保險）；`mobile/.env` 的 `EXPO_PUBLIC_API_BASE_URL` 已設定為 Render 網址，供未來原生 App 打包使用（目前 Web 版仍以 `window.location.origin` 為準，不受此變數影響）。已實測 `user01` 登入成功，Web 版正式可用 | Claude（協助排除 git lock／`.gitignore` 誤擋問題，並引導 Robin 完成 Render＋Vercel 部署與登入驗證） |
+
 ## 待決事項
 
 目前**沒有阻塞 Phase 1 開工的待決事項**。
@@ -200,8 +202,11 @@ updated: 2026-08-10
 - [x] Step 0.4：Robin 已完成 cron-job.org 設定，確認 API 正常
 - [x] Step 4.1 FR-34a：`submodules/job104/client.py` 的 104 AJAX API 欄位解析已於 2026-08-09 由 Robin 透過瀏覽器 DevTools 手動實測驗證並修正（詳見上方里程碑），主要欄位對應／API 路徑皆已確認正確
 - [x] Step 4.1 FR-34a 殘留項已解決（2026-08-09）：Robin 補充實測確認地區篩選 `area` 參數名稱正確，但值是 104 自己的地區數字代碼、沒有可靠對照表，改為爬蟲階段對回傳結果做子字串比對篩選，不再送給 104 API；產業篩選依 Robin 指示直接移除（`job_search_criteria.industry` 欄位保留但不再收集/使用）。**Step 4.2 開工前置依賴（ADR-26 決策 3）已解除**
-- [ ] **（2026-08-12 新增）Step 4.4／4.5 大量已完成程式碼尚未 `git commit`**：`mobile/`、`src/api/`、`src/services/`、16 個新 migration（`0062`～`0077`）等目前皆為 working tree 未追蹤／未提交變更，且 `main.py`／`requirements.txt`／`.env.example`／`.gitignore`／`src/bot/youtube.py`／`tests/bot/conftest.py` 亦有未 commit 的修改；建議 Robin 確認驗證無誤後盡快分批 commit，避免長時間停留在未版控狀態
-- [ ] **（2026-08-12 新增）**`_test_rm_me.txt`（2026-08-07 建立的空測試殘留檔，未記錄於 `codex.md`）待 Robin 自行刪除；`device_bash` 工具本身無法代為刪除使用者本機檔案
+- [x] **（2026-08-12 新增，已於同日解決）**Step 4.4／4.5 大量已完成程式碼已 commit＋push 到 GitHub main（`mobile/`、`src/api/`、`src/services/`、16 個新 migration `0062～0077` 等）；過程中發現 `.gitignore` 的 `*.json` 規則誤擋 `mobile/tsconfig.json` 等必要設定檔，已修正並補 commit
+- [x] **（2026-08-12 新增，已於同日解決）**`_test_rm_me.txt`（2026-08-07 建立的空測試殘留檔）Robin 已自行刪除
+- [x] **（2026-08-12 新增，已於同日完成）**Mobile App 正式上線：後端沿用 Render（push main 自動部署＋自動套用 migration），前端新增 Vercel Web 版部署（`https://life-assistant-bot.vercel.app`，透過 `mobile/vercel.json` rewrites 代理 `/api/*` 到 Render，免 CORS 設定），已補上 Render 環境變數 `APP_JWT_SECRET`，實測 `user01` 登入成功
+- [x] **（2026-08-12 新增，已於同日解決）**`APP_CORS_ORIGINS`（Render 環境變數）已補上 Vercel 網址：`http://localhost:8081,http://127.0.0.1:8081,https://life-assistant-bot.vercel.app`
+- [x] **（2026-08-12 新增，已於同日解決）**`EXPO_PUBLIC_API_BASE_URL`（`mobile/.env`，本機未進版控）已設定為 Render 後端網址，供未來原生 App（iOS/Android）打包使用；目前 Web 版仍以 `window.location.origin` 為準，不受此變數影響
 
 ## 下一步
 
