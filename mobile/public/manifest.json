@@ -1,0 +1,12 @@
+{
+  "name": "羅賓森",
+  "short_name": "羅賓森",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#E8F5F1",
+  "theme_color": "#0F766E",
+  "icons": [
+    { "src": "/icon.png", "sizes": "1024x1024", "type": "image/png", "purpose": "any" },
+    { "src": "/icon.png", "sizes": "1024x1024", "type": "image/png", "purpose": "maskable" }
+  ]
+}
