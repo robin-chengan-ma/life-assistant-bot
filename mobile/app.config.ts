@@ -24,7 +24,10 @@ const config: ExpoConfig = {
   },
   web: {
     bundler: "metro",
-    output: "single",
+    // 2026-08-12 修正：改為 "static"，因為 `app/+html.tsx`（自訂 <head> 的 App icon、
+    // manifest、viewport 設定）只有在 "static" 輸出模式下才會被套用；先前用 "single"
+    // 時，實測發現 +html.tsx 完全沒有生效，正式部署的 HTML 仍是 Expo 預設樣板。
+    output: "static",
     favicon: "./assets/Robinson.png",
   },
   plugins: [
