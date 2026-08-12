@@ -201,13 +201,13 @@ def test_collect_degrades_gracefully_when_single_article_content_fetch_fails(fak
             {"title": "文章二", "link": "https://ithome.com.tw/2"},
         ]
     )
-    newsfeed_client.fetch_article_content.side_effect = RuntimeError("網路掛了")
+    newsfeed_client.fetch_article_content.side_effect = [RuntimeError("網路掛了"), "文章二全文"]
 
     skill_growth.collect_and_store_daily_digest(
         fake_db, email_client, newsfeed_client, llm_client, now=_utc(2026, 8, 7, 15, 0)
     )
 
-    # 單篇全文抓取失敗不應中斷整個收集流程，該來源仍會呼叫 Gemini 產生摘要（含「僅有標題」註記）
+    # 單篇全文抓取失敗不應中斷整個收集流程；失敗的那篇直接捨棄，成功的那篇仍會被拿去生成摘要
     rows = {
         row["source"]: row["summary_text"]
         for row in fake_db.select("skill_growth_digests", where="digest_date = %s", params=(date(2026, 8, 7),))
@@ -421,7 +421,7 @@ def test_enrich_articles_with_content_attaches_content(monkeypatch):
     assert result == [{"title": "標題", "link": "https://example.com/1", "content": "文章全文"}]
 
 
-def test_enrich_articles_with_content_keeps_none_when_fetch_fails(monkeypatch):
+def test_enrich_articles_with_content_skips_article_when_fetch_fails(monkeypatch):
     monkeypatch.setattr(skill_growth.time, "sleep", MagicMock())
     newsfeed_client = MagicMock()
     newsfeed_client.fetch_article_content.side_effect = RuntimeError("網路掛了")
@@ -430,7 +430,23 @@ def test_enrich_articles_with_content_keeps_none_when_fetch_fails(monkeypatch):
         newsfeed_client, [{"title": "標題", "link": "https://example.com/1"}]
     )
 
-    assert result == [{"title": "標題", "link": "https://example.com/1", "content": None}]
+    assert result == []
+
+
+def test_enrich_articles_with_content_keeps_successful_and_drops_failed(monkeypatch):
+    monkeypatch.setattr(skill_growth.time, "sleep", MagicMock())
+    newsfeed_client = MagicMock()
+    newsfeed_client.fetch_article_content.side_effect = ["文章一全文", RuntimeError("網路掛了")]
+
+    result = skill_growth._enrich_articles_with_content(
+        newsfeed_client,
+        [
+            {"title": "標題一", "link": "https://example.com/1"},
+            {"title": "標題二", "link": "https://example.com/2"},
+        ],
+    )
+
+    assert result == [{"title": "標題一", "link": "https://example.com/1", "content": "文章一全文"}]
 
 
 def test_enrich_articles_with_content_does_not_sleep_before_first_article(monkeypatch):
@@ -466,13 +482,24 @@ def test_summarize_source_calls_llm_and_returns_stripped_summary():
     assert result == "重點摘要文字"
 
 
+def test_summarize_source_does_not_truncate_when_llm_exceeds_max_chars():
+    """2026-08-12 依 Robin 回饋移除硬截斷保險：字數上限只透過 Prompt 要求，不在程式端強制截斷。"""
+    llm_client = MagicMock()
+    llm_client.generate_text.return_value = "字" * 250
+
+    result = skill_growth.summarize_source("tldr", ["電子報內容"], llm_client)
+
+    assert len(result) == 250
+    assert not result.endswith("…")
+
+
 def test_build_source_prompt_tldr_includes_newsletter_text():
     prompt = skill_growth._build_source_prompt("tldr", ["電子報內容"])
 
     assert "TLDR" in prompt
     assert "電子報內容" in prompt
-    assert "至少要有 5 句話" in prompt
-    assert "總結" in prompt
+    assert "200" in prompt
+    assert "至少要有 5 句話" not in prompt
 
 
 def test_build_source_prompt_rss_source_includes_article_content():
@@ -483,15 +510,6 @@ def test_build_source_prompt_rss_source_includes_article_content():
     assert "IThome" in prompt
     assert "IThome 標題" in prompt
     assert "文章全文內容" in prompt
-
-
-def test_build_source_prompt_rss_source_notes_missing_content():
-    prompt = skill_growth._build_source_prompt(
-        "ithome", [{"title": "只有標題", "link": "https://ithome.com.tw/1", "content": None}]
-    )
-
-    assert "只有標題" in prompt
-    assert "無法取得全文" in prompt
 
 
 # --- _format_source_message ---

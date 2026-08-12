@@ -4,6 +4,10 @@ import threading
 
 from flask import Flask, jsonify
 
+from src.api.app_analytics import app_analytics_bp
+from src.api.app_auth import app_bp
+from src.api.app_collections import app_collections_bp
+from src.api.app_important_days import app_important_days_bp
 from src.bot import monitoring
 from src.bot.webhook import bot_bp
 
@@ -13,6 +17,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logger = logging.getLogger("robinson.main")
 
 app = Flask(__name__)
+app.register_blueprint(app_analytics_bp)
+app.register_blueprint(app_bp)
+app.register_blueprint(app_collections_bp)
+app.register_blueprint(app_important_days_bp)
 app.register_blueprint(bot_bp)
 
 # 2026-08-02（Step 1.6，見 robinson SPEC.md FR-21）：Neon 容量監控狀態，process 生命週期內

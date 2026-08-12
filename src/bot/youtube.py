@@ -219,6 +219,13 @@ def _topics_by_priority(topics: list[dict]) -> list[dict]:
     return sorted(topics, key=lambda t: (t["last_recommended_on"] is not None, t["last_recommended_on"]))
 
 
+def _build_recommend_reason(pick: dict) -> str:
+    """保存 App 可直接呈現的簡短推薦理由，不需要在讀取頁面時再次呼叫 LLM。"""
+    if pick.get("score") is None:
+        return f"符合「{pick['topic']}」追蹤主題，依影片觀看熱度排序推薦"
+    return f"符合「{pick['topic']}」追蹤主題，綜合推薦分數 {float(pick['score']):.1f}／10"
+
+
 def select_weekly_recommendations(
     db: CloudSQLClient, youtube_client, llm_client, user_id: int, today: date,
     total: int = _DEFAULT_TOTAL_RECOMMENDATIONS,
@@ -273,9 +280,18 @@ def select_weekly_recommendations(
     for topic_name in {p["topic"] for p in picks}:
         _mark_topic_recommended(db, user_id, topic_name, today)
     for pick in picks:
+        recommend_reason = _build_recommend_reason(pick)
+        pick["recommend_reason"] = recommend_reason
         db.insert(
             "youtube_pushed_videos",
-            {"user_id": user_id, "video_id": pick["video_id"], "topic": pick["topic"], "pushed_on": today},
+            {
+                "user_id": user_id,
+                "video_id": pick["video_id"],
+                "topic": pick["topic"],
+                "pushed_on": today,
+                "title": pick["title"],
+                "recommend_reason": recommend_reason,
+            },
         )
 
     return picks

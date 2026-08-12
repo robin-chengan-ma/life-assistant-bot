@@ -12,6 +12,7 @@ class FakeCloudSQLClient:
     def __init__(self):
         self._tables: dict[str, list[dict]] = {
             "users": [],
+            "user_password_history": [],
             "invite_codes": [],
             "feature_toggles": [],
             "knowledge_base": [],

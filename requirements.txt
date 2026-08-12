@@ -10,3 +10,5 @@ lunarcalendar
 pydub
 openpyxl
 beautifulsoup4
+bcrypt
+PyJWT

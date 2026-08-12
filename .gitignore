@@ -13,6 +13,9 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+node_modules/
+.expo/
+.pnpm-store/
 *.log
 
 # 測試與 Lint 產物

@@ -30,6 +30,16 @@ Robin 提供了 IThome 實際 RSS 原始內容，讓 Claude 發現一個既有 b
 `newsfeed_client.fetch_article_content()` 抓取每篇文章的網頁正文全文，每篇文章之間加入 1～2 秒
 隨機延遲（禮貌性延遲，比照 FR-34c 104 爬蟲的做法，避免對來源網站造成流量負擔）。
 
+2026-08-12 生產環境回饋修正兩個問題：① ADR-27 的「深入摘要」版本，單則訊息實際長度常超過
+Telegram `sendMessage` 的 4096 字元上限，Telegram 直接回 400 Bad Request、整則訊息完全送不出
+去，Robin 每天都收不到技術分享推播。因此改回精簡摘要：三個來源（平台）各自的摘要改成「200 字
+以內的重點總結」單一段落，不再要求每篇文章各自列點寫 5 句話；仍維持一天最多三則獨立訊息、一則
+一個來源，只是每則內容大幅縮短，確保不會再撞到 Telegram 字數上限。② 只成功抓到標題、網頁正文
+抓取失敗的文章，過去會帶著「（原文擷取失敗，僅有標題）」餵給 Gemini，讓摘要內容摻雜沒有實際
+依據的文章；改為直接捨棄該篇（不放進 Gemini prompt，也不佔用當天摘要的篇幅），確保
+`skill_growth_digests` 存下的摘要只根據「有完整標題＋正文」的文章生成。若捨棄後該來源當天已無
+任何可用文章，視為「今日無內容」（`_NO_CONTENT_TEXT`），不呼叫 Gemini。
+
 去重：`skill_growth_digests` 有 `UNIQUE (digest_date, source)` 約束，同一天同一來源只會收集一次；
 `pushed_on` 記錄「這批（同一天最多三筆）是否已推播過」，避免 08:00 那個小時內 `/healthz` 多次觸發
 重複推播。NFR-11「以來源日期避免重複摘要」由 `digest_date` + `source` 天然涵蓋，不需要額外的內容
@@ -76,6 +86,11 @@ _SOURCE_DISPLAY_NAMES = {"tldr": "TLDR", "ithome": "IThome", "techcrunch": "Tech
 _NO_CONTENT_TEXT = "今日無內容"
 _NO_CONTENT_MESSAGE = "📭 主任，未獲得最新技術分享。"
 
+# 2026-08-12 新增（見模組 docstring 生產環境回饋修正①）：每則訊息只保留 200 字以內的重點總結，
+# 避免超過 Telegram sendMessage 4096 字元上限；只透過下方 Prompt 要求 Gemini 自行控制字數，
+# 不在程式端強制截斷（2026-08-12 依 Robin 回饋移除硬截斷保險，避免內容被硬生生切斷）。
+_SUMMARY_MAX_CHARS = 200
+
 # 2026-08-09 新增（見 ADR-27）：抓取每篇文章全文之間的禮貌性延遲，避免對 IThome／TechCrunch
 # 站台造成流量負擔（比照 robinson SPEC.md FR-34c 104 爬蟲的做法）。
 _ARTICLE_FETCH_DELAY_MIN_SECONDS = 1
@@ -119,9 +134,10 @@ def _fetch_rss_articles_safely(newsfeed_client, feed_url: str, source_name: str,
 def _enrich_articles_with_content(newsfeed_client, articles: list[dict]) -> list[dict]:
     """幫每篇 RSS 文章補上網頁正文全文（2026-08-09 新增，見 ADR-27）。
 
-    單篇抓取失敗只記 log、該篇的 `content` 留 `None`（由 Prompt 組裝端註記「僅有標題」），
-    不影響同一來源其他篇文章，也不中斷整批收集（見模組 docstring「來源容錯」）。文章之間加入
-    1～2 秒隨機延遲，避免對來源站台造成流量負擔。
+    2026-08-12 修正（見模組 docstring 生產環境回饋修正②）：單篇抓取失敗只記 log，直接捨棄該篇
+    （不放進回傳結果），不再帶著「僅有標題」餵給 Gemini——資料庫最終存下的摘要只根據「有完整
+    標題＋正文」的文章生成。不影響同一來源其他篇文章，也不中斷整批收集（見模組 docstring
+    「來源容錯」）。文章之間加入 1～2 秒隨機延遲，避免對來源站台造成流量負擔。
     """
     enriched: list[dict] = []
     for index, article in enumerate(articles):
@@ -130,46 +146,45 @@ def _enrich_articles_with_content(newsfeed_client, articles: list[dict]) -> list
         try:
             content = newsfeed_client.fetch_article_content(article["link"])
         except Exception:
-            _logger.exception("抓取文章全文失敗，該篇僅保留標題：%s", article["link"])
-            content = None
+            _logger.exception("抓取文章全文失敗，該篇直接跳過，不納入摘要：%s", article["link"])
+            continue
         enriched.append({**article, "content": content})
     return enriched
 
 
 def _build_source_prompt(source: str, content: list) -> str:
-    """組出給 Gemini 的單一來源深入摘要 Prompt（見 ADR-27）：針對每篇文章／電子報 story 各自
-    列點寫至少 5 句話的重點摘要，最後加一段總結；只能根據實際提供的內容撰寫，不可編造。
+    """組出給 Gemini 的單一來源精簡摘要 Prompt（2026-08-12 修正，見模組 docstring 生產環境回饋
+    修正①）：整篇輸出限制在 200 個中文字以內的單一段落重點總結，不再逐篇列點寫至少 5 句話——
+    避免 Telegram 訊息超過 4096 字元上限而整則送不出去。只能根據實際提供的內容撰寫，不可編造；
+    這裡收到的 `content` 一律已經是有完整標題＋正文的文章／電子報（見 `_enrich_articles_with_content`
+    生產環境回饋修正②），不需要再處理「只有標題」的情況。
     """
     label = _SOURCE_DISPLAY_NAMES[source]
     instruction = (
         f"你是 Robinson，以下是 Robin 訂閱的「{label}」今天的技術新聞／電子報內容。"
-        "請用繁體中文，針對每一則報導或電子報 story 各自寫一個列點摘要，每則至少要有 5 句話，"
-        "具體說明重點內容、背景與影響，不要只有一兩句空泛帶過；列點格式為「* 文章N：……」。"
-        "全部列點寫完後，另外加一段「總結：」統整今天這些內容的共同重點或趨勢。"
-        "只能根據下面提供的實際內容撰寫，絕對不可以編造沒有出現在原文裡的資訊；"
-        "如果某篇文章只有標題、沒有提供全文內容，該則列點請直接寫"
-        "「（原文擷取失敗，僅有標題：{標題}）」，不要憑空杜撰內容。\n\n"
+        f"請用繁體中文寫一段重點總結，總長度務必控制在 {_SUMMARY_MAX_CHARS} 個中文字以內"
+        "（含標點），不要分段、不要逐篇列點，直接統整今天這些內容中最值得 Robin 知道的重點與"
+        "共同趨勢。只能根據下面提供的實際內容撰寫，絕對不可以編造沒有出現在原文裡的資訊。\n\n"
     )
 
     if source == "tldr":
         body = "\n\n".join(f"--- 電子報 {index} ---\n{text}" for index, text in enumerate(content, start=1))
     else:
-        parts = []
-        for index, article in enumerate(content, start=1):
-            if article.get("content"):
-                parts.append(f"文章 {index} 標題：{article['title']}\n文章 {index} 全文：\n{article['content']}")
-            else:
-                parts.append(f"文章 {index} 標題：{article['title']}（無法取得全文）")
-        body = "\n\n".join(parts)
+        body = "\n\n".join(
+            f"文章 {index} 標題：{article['title']}\n文章 {index} 全文：\n{article['content']}"
+            for index, article in enumerate(content, start=1)
+        )
 
     return instruction + body
 
 
 def summarize_source(source: str, content: list, llm_client) -> str:
-    """FR-23：把單一來源當天的原始內容，呼叫 Gemini 產出深入摘要（每篇文章至少 5 句話＋總結）。
+    """FR-23：把單一來源當天的原始內容，呼叫 Gemini 產出 200 字以內的重點總結
+    （2026-08-12 修正，見模組 docstring 生產環境回饋修正①）。
 
-    該來源當天沒有內容時，不呼叫 Gemini（省 API 額度、避免對空內容生成無意義文字），
-    直接回傳固定文字「今日無內容」。
+    該來源當天沒有內容時（含所有文章都因抓不到正文被捨棄的情況），不呼叫 Gemini（省 API 額度、
+    避免對空內容生成無意義文字），直接回傳固定文字「今日無內容」。字數上限只透過 Prompt 要求
+    Gemini 自行控制，不在程式端強制截斷（2026-08-12 依 Robin 回饋移除，避免內容被硬生生切斷）。
     """
     if not content:
         return _NO_CONTENT_TEXT
