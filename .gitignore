@@ -2,11 +2,12 @@
 .env
 .env.*
 !.env.example
-*.json
-!package.json
 
-# 專屬遮蔽金鑰
+# 專屬遮蔽金鑰（2026-08-12 修正：原本 `*.json` 過於寬泛，連 mobile/tsconfig.json
+# 等必要設定檔都被誤擋，導致 push 上去的程式碼不完整；改為只擋真正的金鑰檔案）
 google_service_account.json
+*-service-account*.json
+*.key.json
 
 # Python 快取與虛擬環境
 __pycache__/
