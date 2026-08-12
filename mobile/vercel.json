@@ -3,6 +3,10 @@
     {
       "source": "/api/:path*",
       "destination": "https://life-assistant-bot-yhkm.onrender.com/api/:path*"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
     }
   ]
 }
