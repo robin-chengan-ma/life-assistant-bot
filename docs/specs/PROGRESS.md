@@ -176,10 +176,11 @@ updated: 2026-08-14
 
 ## Commit 紀錄
 
-> 本表只代表本地 Git commit，不等同於已 push 或已部署。資料來源為 `git log --format="%h|%ad|%s" --date=short`（截至 2026-08-14 共 110 筆 commit）。git author 全部是 Robin 本人，因此「開發者」欄依 commit 內容與工作階段判斷。
+> 本表只代表本地 Git commit，不等同於已 push 或已部署。資料來源為 `git log --format="%h|%ad|%s" --date=short`（截至 2026-08-14 共 112 筆 commit）。git author 全部是 Robin 本人，因此「開發者」欄依 commit 內容與工作階段判斷。
 
 | 日期 | 版本 / commit | 異動摘要 | 開發者 |
 | --- | --- | --- | --- |
+| 2026-08-14 | `d84222f` | 正式取消 App 三項設定功能 | Codex |
 | 2026-08-14 | `fb62163` | 統一開發與文件治理規則 | Codex |
 | 2026-08-14 | `ec36062` | 補齊待討論、已取消與擱置項目 | Codex |
 | 2026-08-14 | `b991323` | 補齊正式技術棧資訊 | Codex |
