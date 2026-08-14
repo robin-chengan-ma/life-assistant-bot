@@ -64,4 +64,4 @@ for f in files:
 
 ## 對應 Spec
 
-[docs/specs/submodules-core/SPEC.md](../../docs/specs/submodules-core/SPEC.md)
+[docs/specs/SPEC.md](../../docs/specs/SPEC.md)「Submodules 共用子模組基礎骨架」、[docs/ADR/discuss/submodules-core.md](../../docs/ADR/discuss/submodules-core.md)

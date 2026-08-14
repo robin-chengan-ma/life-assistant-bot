@@ -35,8 +35,8 @@ details = client.get_video_details([c["video_id"] for c in candidates])
 
 1. 只支援搜尋與查詢統計資料（`search_videos`／`get_video_details`），不做其他寫入類操作——本模組只是輕量的唯讀資料獲取層。
 2. 篩選（格式過濾/歷史去重）、LLM 語意判讀排序、多主題分配、推播等商業邏輯一律由呼叫端（`src/bot/youtube.py`）決定，本模組只負責跟 YouTube API 溝通。
-3. `search_videos` 消耗 100 Units／次、`get_video_details` 消耗約每 50 支影片 1 Unit，配額管理與每日上限判斷由呼叫端負責（見 docs/specs/robinson/SPEC.md FR-59b）。
+3. `search_videos` 消耗 100 Units／次、`get_video_details` 消耗約每 50 支影片 1 Unit，配額管理與每日上限判斷由呼叫端負責（見 docs/specs/SPEC.md FR-59b）。
 
 ## 對應 Spec
 
-[docs/specs/robinson/SPEC.md](../../docs/specs/robinson/SPEC.md) FR-57～FR-59、ADR-21
+[docs/specs/SPEC.md](../../docs/specs/SPEC.md) FR-57～FR-59、[docs/ADR/discuss/youtube-intel.md](../../docs/ADR/discuss/youtube-intel.md) ADR-21

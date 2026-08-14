@@ -40,9 +40,9 @@ texts = client.fetch_emails_from_domain_on_date("tldrnewsletter.com", date(2026,
 
 1. 寄信只支援純文字信件（`send_text`），不做附件、HTML 信件等其他能力；讀信只支援「依寄件者網域＋指定日期」篩選收件匣信件（`fetch_emails_from_domain_on_date`），不做其他資料夾、其他篩選條件、標記已讀/刪除等操作——目前呼叫端只需要這兩個能力，需要更多功能時再依實際需求擴充。
 2. `GMAIL_PASSWORD` 一律要求是應用程式密碼：Google 自 2022 年起，已開啟兩步驟驗證的帳號必須用應用程式密碼才能通過 SMTP／IMAP 驗證，一般登入密碼會被拒絕，這是 Google 官方機制，不是本模組的限制。
-3. 寄信這個 Client 設計上是「備援管道」，不是主要通知手段——目前呼叫端是 `src/bot/webhook.py` 的 `_notify_robin_of_error()`，只在 Telegram 私訊 Robin 失敗時才會觸發，平常不會用到，見 robinson SPEC.md FR-19b。
+3. 寄信這個 Client 設計上是「備援管道」，不是主要通知手段——目前呼叫端是 `src/bot/webhook.py` 的 `_notify_robin_of_error()`，只在 Telegram 私訊 Robin 失敗時才會觸發，平常不會用到，見 SPEC.md FR-19b（服務健康與治理）。
 4. 讀信用寄件者網域比對（`_is_from_domain()`）而非主旨關鍵字，並用信件 `Date` header 換算台灣時間精確比對指定日期（`_sent_on_date()`），避免 IMAP `SINCE`/`BEFORE` 以日曆日為單位、不保證時區精確所造成的誤差；目前唯一呼叫端是 Step 3.1 每日技術摘要（FR-23），固定台灣時間 23:00 讀取「當天」的 TLDR 電子報。
 
 ## 對應 Spec
 
-[docs/specs/submodules-core/SPEC.md](../../docs/specs/submodules-core/SPEC.md)、[docs/specs/robinson/SPEC.md](../../docs/specs/robinson/SPEC.md) FR-19b、FR-23
+[docs/specs/SPEC.md](../../docs/specs/SPEC.md) FR-19b、FR-23、[docs/ADR/discuss/submodules-core.md](../../docs/ADR/discuss/submodules-core.md)

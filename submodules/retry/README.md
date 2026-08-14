@@ -1,8 +1,8 @@
 # retry
 
-共用重試工具，提供 `call_with_retry()`：對外部 API 呼叫套用「最多重試 3 次 + Exponential Backoff（第 1 次失敗等 1 秒、第 2 次失敗等 2 秒、第 3 次失敗等 4 秒）」的一致邏輯（見 [docs/specs/robinson/SPEC.md](../../docs/specs/robinson/SPEC.md) FR-19i）。
+共用重試工具，提供 `call_with_retry()`：對外部 API 呼叫套用「最多重試 3 次 + Exponential Backoff（第 1 次失敗等 1 秒、第 2 次失敗等 2 秒、第 3 次失敗等 4 秒）」的一致邏輯（見 [docs/specs/SPEC.md](../../docs/specs/SPEC.md) FR-19i）。
 
-這是 `submodules/` 底下唯一不是「包裝外部服務」的子模組——它不直接呼叫任何第三方 API，純粹是重試迴圈與 Exponential Backoff 的流程控制工具，供其他子模組（`llm`／`telegram`／`voice`／`gdrive`／`calendar`／`email`）內部呼叫（見 [docs/specs/submodules-core/SPEC.md](../../docs/specs/submodules-core/SPEC.md) ADR-13）。
+這是 `submodules/` 底下唯一不是「包裝外部服務」的子模組——它不直接呼叫任何第三方 API，純粹是重試迴圈與 Exponential Backoff 的流程控制工具，供其他子模組（`llm`／`telegram`／`voice`／`gdrive`／`calendar`／`email`）內部呼叫（見 [docs/ADR/discuss/submodules-core.md](../../docs/ADR/discuss/submodules-core.md) ADR-13）。
 
 ## 環境變數
 
@@ -40,4 +40,4 @@ result = call_with_retry(
 
 ## 對應 Spec
 
-[docs/specs/robinson/SPEC.md](../../docs/specs/robinson/SPEC.md) FR-19i、[docs/specs/submodules-core/SPEC.md](../../docs/specs/submodules-core/SPEC.md) ADR-13
+[docs/specs/SPEC.md](../../docs/specs/SPEC.md) FR-19i、[docs/ADR/discuss/submodules-core.md](../../docs/ADR/discuss/submodules-core.md) ADR-13

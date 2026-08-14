@@ -2,7 +2,7 @@
 
 Google Calendar 通用 Client，使用 OAuth 2.0（以 Robin 本人 Google 帳號身分）認證，對指定的「Robinson 家庭行事曆」做事件的建立/更新/刪除。
 
-見 [docs/specs/robinson/SPEC.md](../../docs/specs/robinson/SPEC.md) FR-66、ADR-17：待辦事項、重要通知（節日/生日）、體態目標期限單向同步寫入這個共用行事曆，家人用「查看所有活動詳細資料」（唯讀）權限訂閱，在自己手機的原生行事曆 App 瀏覽。
+見 [docs/specs/SPEC.md](../../docs/specs/SPEC.md) FR-66、[docs/ADR/discuss/google-calendar.md](../../docs/ADR/discuss/google-calendar.md) ADR-17：待辦事項、重要通知（節日/生日）、體態目標期限單向同步寫入這個共用行事曆，家人用「查看所有活動詳細資料」（唯讀）權限訂閱，在自己手機的原生行事曆 App 瀏覽。
 
 ## 環境變數
 
@@ -78,4 +78,4 @@ client.delete_event(event_id=event_id)
 
 ## 對應 Spec
 
-[docs/specs/submodules-core/SPEC.md](../../docs/specs/submodules-core/SPEC.md)
+[docs/specs/SPEC.md](../../docs/specs/SPEC.md)「Submodules 共用子模組基礎骨架」、[docs/ADR/discuss/submodules-core.md](../../docs/ADR/discuss/submodules-core.md)

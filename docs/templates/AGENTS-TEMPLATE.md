@@ -16,36 +16,55 @@
 
 ## SDD（Spec-Driven Development）— 硬規則
 
-1. 非 trivial 任務必須先找或建 spec（`docs/specs/<slug>/SPEC.md`），再實作
-2. 不得重問 spec 中已記錄的決策
-3. 不得跳過 spec 直接進入中大型實作
-4. 實作完必須更新 spec 的 checkbox 和 `updated` 日期
+### 文件路徑規則（本專案與日後所有專案通用）
+
+| 檔案 | 用途 |
+| --- | --- |
+| `docs/specs/SPEC.md` | 唯一定案規格：產品背景、技術棧與平台策略、產品藍圖與功能規格、例外處理與邊界條件、驗收矩陣 |
+| `docs/specs/PROGRESS.md` | 開發進度時程、任務狀態、推版紀錄 |
+| `docs/specs/DRAFT.md` | 未定案（待討論／臨時想到／已取消／擱置中） |
+| `docs/ADR/discuss/<功能>.md` | 按功能拆檔的討論紀錄，跟 AI／PM／QA／組員／單位／使用者的討論都記在這裡，用標籤區分對象 |
+| `docs/ADR/debug/<功能>.md` | 按功能拆檔的修復紀錄，不論有沒有改 code 都要記 |
+| `docs/reference/<主題>.md` | 技術參考文件（如 API Schema、DB Schema），跟著程式碼異動更新，不是決策紀錄也不是產品規格；內容力求簡述，避免堆疊敘事性長段落 |
+
+> **防呆**：`docs/specs/PROGRESS.md`、`docs/specs/DRAFT.md` 若不存在（例如被誤刪），視為內容為空，
+> 依對應的 `docs/templates/PROGRESS-TEMPLATE.md`／`DRAFT-TEMPLATE.md` 直接建立空白版本，不中斷流程、
+> 不當作錯誤回報給使用者卡住等待。
+
+1. 非 trivial 任務必須先查 `docs/specs/SPEC.md` 是否已有該功能的定案規格，再實作
+2. 沒有定案規格時，先查 `docs/specs/DRAFT.md`；沒有草稿就先寫進 DRAFT.md，使用者確認要做才升級進 SPEC.md
+3. 不得重問 SPEC.md 或 `docs/ADR/discuss/` 中已記錄的決策
+4. 不得跳過 SPEC.md／DRAFT.md 直接進入中大型實作
 5. 中大型實作前必須等使用者確認
+6. 討論過程即時記進 `docs/ADR/discuss/<功能>.md`；修 bug 無論有沒有改 code 都要記進 `docs/ADR/debug/<功能>.md`
+7. 實作完成後必須更新 SPEC.md 對應功能區塊（若規格有變動）、PROGRESS.md 任務狀態與 `updated` 日期
+8. SPEC.md 單一功能區塊若成長超過約 200 行，必須把細節移到 `discuss/` 或獨立附錄，SPEC.md 本體只留摘要＋連結，避免重新腫成難以維護的巨檔
 
-### SDD 工作流程
+### 討論紀錄格式（`docs/ADR/discuss/<功能>.md`）
 
-```text
-1. 尋找 active spec（docs/specs/<feature-slug>/SPEC.md）
-2. Spec 已存在 -> 讀取，理解需求和進度，從 checkbox 找下一個待辦
-3. Spec 不存在 -> 先建 spec，等使用者確認再實作
-4. 中大型任務 -> 呈現實作計畫（影響範圍、步驟、風險），等確認
-5. 實作完成 -> 更新 spec checkbox、updated 日期、PROGRESS.md（若有）
-```
-
-### 決策記錄格式（ADR）
-
-重大技術決策記在 spec 中：
+同一功能的多次討論用同一檔案，依時間附加新的段落：
 
 ```markdown
-### ADR：<決策主題>
-**背景**：<為什麼需要做這個決策>
-**決策**：<最終選擇>
+## YYYY-MM-DD [標籤：AI / PM / QA / 組員 / 單位 / 使用者] <討論主題>
+**狀態**：pending | accepted | superseded | deprecated
+**背景**：<為什麼需要討論>
+**討論內容**：<過程摘要>
+**決策**（若有）：<最終選擇>
 **理由**：<選擇原因>
-**替代方案**：
-- 方案 A：<優缺點>
-- 方案 B：<優缺點>
 **後果**：<決策帶來的影響>
-**狀態**：accepted | superseded | deprecated
+```
+
+### 修復紀錄格式（`docs/ADR/debug/<功能>.md`）
+
+同一功能的多次除錯用同一檔案，依時間附加新的段落：
+
+```markdown
+## YYYY-MM-DD <問題摘要>
+**現象**：<觀察到的問題>
+**排查過程**：<怎麼定位問題>
+**根因**：<真正原因>
+**修復方式**：<有改 code 附檔案路徑；沒改 code 要說明原因>
+**驗證方式**：<怎麼確認修好了>
 ```
 
 ---
@@ -121,7 +140,7 @@ RED（寫失敗的測試）
 5. [TDD] 寫最少的實作（GREEN）
 6. [TDD] 重構（REFACTOR）
 7. [TDD] 重複 4-6 直到完成
-8. [SDD] 更新 Spec / Progress / Changelog
+8. [SDD] 更新 SPEC.md / PROGRESS.md，視情況記錄 discuss / debug
 ```
 
 ---
@@ -136,20 +155,32 @@ RED（寫失敗的測試）
 
 ```text
 步驟：
-1. 搜尋 docs/specs/ 目錄，找相關的 SPEC.md
-2. 若找到：
-   - 讀取 spec，理解需求、決策歷史、目前進度
-   - 從 checkbox 找到下一個未完成的 task
+1. 讀取 docs/specs/SPEC.md，搜尋是否已有該功能的定案區塊
+2. 已定案：
+   - 讀取對應功能區塊；若段落連結了 docs/ADR/discuss/<功能>.md，一併讀取脈絡
+   - 讀取 docs/specs/PROGRESS.md，從對應 FR 編號找下一個未完成任務
    - 報告：「目前進度 X/Y，下一個 task 是...」
    - 等使用者確認後開始實作
-3. 若沒找到：
-   - 用 docs/templates/SPEC-TEMPLATE.md 建立新 spec
-   - 填入已知資訊，標記待確認項目
+3. 未定案：
+   - 查 docs/specs/DRAFT.md 是否已有相關草稿
+   - 有草稿且使用者確認要做 -> 依 docs/templates/SPEC-TEMPLATE.md 的功能區塊格式，補進
+     SPEC.md 對應功能區塊，DRAFT.md 該項標記「已升級」
+   - 沒有草稿 -> 先記錄進 DRAFT.md，待使用者確認才升級進 SPEC.md
    - 呈現給使用者確認，確認後才開始實作
-4. 實作完成後：
-   - 更新 spec 中對應的 checkbox 為 [x]
-   - 更新 spec 的 updated 日期
+4. 中大型任務 -> 呈現實作計畫（影響範圍、步驟、風險），等確認
+5. 討論過程即時寫進 docs/ADR/discuss/<功能>.md（標註對象標籤與狀態）
+6. 實作完成後：
+   - 更新 SPEC.md 對應功能區塊（若規格有變動；單一區塊超過約 200 行要把細節移到 discuss/ 或附錄）
+   - 更新 PROGRESS.md：任務狀態、對應 FR 編號、開發者（Claude／Codex／Robin）、updated 日期，
+     必要時補推版紀錄
+   - 若過程中修了 bug（不論有沒有改 code）-> 記錄進 docs/ADR/debug/<功能>.md
    - 報告：影響範圍、測試狀態、剩餘 tasks
+   - 若剛完成的是單一 Step（子階段）-> 主動詢問使用者：「這個 step 做完了，要執行 `/compact` 嗎？」
+   - 若剛完成整個 Phase（大階段，含整個功能最後一個 Phase）-> 主動詢問使用者：
+     「這個 phase 做完了，要執行 `/clear` 嗎？（提醒：`/clear` 前請確認 SPEC.md / PROGRESS.md
+     已更新，避免進度遺失）」
+   - 沒有 Phase 結構的舊文件 -> 以「一個完整邏輯段落完成」為準，比照上述規則主動詢問
+   - 兩個指令一律只提醒、不自動執行，是否執行由使用者決定
 ```
 
 ### Workflow: TDD（啟動測試驅動開發循環）
@@ -177,29 +208,29 @@ RED（寫失敗的測試）
    - 未驗證範圍
 ```
 
-### Workflow: Spec Status（查看所有 spec 進度）
+### Workflow: Spec Status（查看規格與進度）
 
-觸發詞：「spec 進度」、「spec status」、「有哪些 spec」
+觸發詞：「spec 進度」、「spec status」、「有哪些功能」
 
 ```text
 步驟：
-1. 掃描 docs/specs/ 下所有 SPEC.md
-2. 讀取每個 spec 的 frontmatter（title, status, updated）
-3. 計算每個 spec 的 checkbox 完成率
+1. 讀取 docs/specs/SPEC.md，列出所有已定案功能區塊
+2. 讀取 docs/specs/PROGRESS.md，計算每個功能對應 FR 的完成率
+3. 讀取 docs/specs/DRAFT.md，列出待討論／擱置中的項目
 4. 輸出摘要表格：
-   | Spec | 狀態 | 進度 | 最後更新 |
-5. 問使用者要繼續哪個 spec
+   | 功能 | 定案狀態 | 進度 | 最後更新 |
+5. 問使用者要繼續哪個功能，或要不要把某個 DRAFT 項目升級進 SPEC.md
 ```
 
-### Workflow: New Spec（建立新 spec）
+### Workflow: New Feature（新增功能到 SPEC）
 
-觸發詞：「新 spec」、「new spec」、「建 spec」
+觸發詞：「新功能」、「new spec」、「新增規格」
 
 ```text
 步驟：
-1. 問使用者 feature name（或從對話推斷）
-2. 建立 docs/specs/<slug>/SPEC.md（使用 template）
-3. 填入已知資訊
+1. 問使用者功能名稱與概要（或從對話推斷）
+2. 先寫進 docs/specs/DRAFT.md（未定案，待確認）
+3. 使用者確認要做 -> 依 docs/templates/SPEC-TEMPLATE.md 的功能區塊格式，補進 docs/specs/SPEC.md
 4. 呈現給使用者確認和補充
 ```
 
@@ -243,7 +274,7 @@ RED（寫失敗的測試）
 
 - 若專案是後端服務：優先採 `api/`（或 `controller/`）→ `service/` → `repository/` 三層職責分離，禁止跨層直接呼叫
 - 若專案是前端應用：優先採 Feature-Sliced 慣例（`features/<name>/{_components,_composables,_types,_views}` + `index.ts` 作為對外唯一入口），feature 之間禁止互相 import
-- Spec 一律放在 `docs/specs/<slug>/SPEC.md`，模板放在 `docs/templates/`
+- 規格文件一律放在 `docs/specs/SPEC.md`（定案）／`docs/specs/PROGRESS.md`（進度）／`docs/specs/DRAFT.md`（未定案），討論與除錯紀錄放在 `docs/ADR/discuss/<功能>.md`／`docs/ADR/debug/<功能>.md`（按功能拆檔），模板放在 `docs/templates/`
 
 ### 覆蓋率與安全要求微調（如與預設不同才填）
 

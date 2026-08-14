@@ -60,7 +60,8 @@ size_bytes = rows[0]["size_bytes"]
 4. 連線池上限預設 `max_conn=5`，對應 Neon 免費方案的連線數限制；若升級付費方案可自行調整。
 5. `execute()` 是繞過參數化保護的逃生口，只給程式內部信任的 SQL（如 migration 檔案）使用，絕對不可以把使用者輸入拼進去；目前唯一呼叫端是 `src/migrations/runner.py`（見 ADR-11）。
 6. `execute_query()` 跟 `execute()` 一樣是逃生口，差別只在於它會回傳資料列，用於系統層級查詢（例如 `src/bot/monitoring.py` 查 Neon 容量），一樣不可以把使用者輸入拼進去。
+7. `params is None` 時完全不傳第二參數給 psycopg2（而非傳空 tuple），避免 SQL 內文只要含字面 `%` 字元（例如 migration 的 `COMMENT ON COLUMN` 註解寫「50%」）就被誤判成參數佔位符觸發 `IndexError`；細節見 `docs/ADR/debug/submodules-core.md` 2026-08-08 條目（生產事故）。
 
 ## 對應 Spec
 
-[docs/specs/submodules-core/SPEC.md](../../docs/specs/submodules-core/SPEC.md)
+[docs/specs/SPEC.md](../../docs/specs/SPEC.md)「Submodules 共用子模組基礎骨架」、[docs/ADR/discuss/submodules-core.md](../../docs/ADR/discuss/submodules-core.md)、[docs/ADR/debug/submodules-core.md](../../docs/ADR/debug/submodules-core.md)

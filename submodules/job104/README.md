@@ -45,4 +45,4 @@ detail = client.fetch_job_detail(jobs[0]["job_slug"])
 
 ## 對應 Spec
 
-[docs/specs/robinson/SPEC.md](../../docs/specs/robinson/SPEC.md) FR-34、ADR-24 決策 4
+[docs/specs/SPEC.md](../../docs/specs/SPEC.md) FR-34、[docs/ADR/discuss/job-search.md](../../docs/ADR/discuss/job-search.md) ADR-24 決策 4
