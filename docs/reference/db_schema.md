@@ -343,7 +343,7 @@ CREATE TABLE budget_overrides (
 | `body_weight_logs` | 已建立 | FR-46 | 體重歷史紀錄，`weight_kg >= 40` 為最後防線檢查 |
 | `exercise_logs` | 已建立 | FR-47、FR-64 | 運動紀錄支援時間 AI 估算與人工熱量雙模式，並保留來源及重訓內容 |
 | `diet_logs` | 已建立 | FR-48、FR-64 | 飲食與飲水共用一表，營養數值可由 AI 估算或人工輸入並保留來源 |
-| `body_goals` | 已建立 | FR-45～FR-48 | 體重/運動/飲食三子功能共用一表（`goal_type` 區分） |
+| `body_goals` | 已建立 | FR-45～FR-48／FR-72a | 體重/運動/飲食三子功能共用一表（`goal_type` 區分）；`important_day_id` 連結期限事件 |
 
 <details>
 <summary>SQL 與設計理由</summary>
@@ -417,6 +417,7 @@ CREATE TABLE body_goals (
     target_value NUMERIC(6,2),
     baseline_value NUMERIC(6,2),
     target_date DATE,
+    important_day_id BIGINT REFERENCES important_days(id) ON DELETE SET NULL,
     status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'achieved', 'cancelled')),
     achieved_notified BOOLEAN NOT NULL DEFAULT FALSE,
     deadline_reminder_sent BOOLEAN NOT NULL DEFAULT FALSE,
@@ -425,7 +426,7 @@ CREATE TABLE body_goals (
 );
 CREATE INDEX idx_body_goals_user_id ON body_goals (user_id);
 ```
-`src/migrations/0027_create_body_goals_table.sql`
+`src/migrations/0027_create_body_goals_table.sql`、`0082_link_goals_to_important_days.sql`
 
 - 三子功能共用一表、`goal_type` 區分，語意隨類型不同由 App 層解讀；`weight` 用 `baseline_value` 判斷增/減方向；`exercise` 用累積分鐘數（各運動類型通用單位）；`diet` 不支援自動達成判斷（太主觀），只能手動標記
 </details>
@@ -461,7 +462,7 @@ CREATE TABLE important_notifications_log (
 | `certificate_questions`（原 `toeic_questions`） | 已建立 | FR-25a～FR-25c | 證照題庫軌道一（照片/音檔上傳建題），2026-08-07 泛用化支援任意證照類型 |
 | `toeic_vocab_questions` | 已建立 | FR-25d、FR-25e | TOEIC 題庫軌道二（Gemini 即時生成單字題），刻意維持 TOEIC 專用不隨軌道一泛用化 |
 | `answer_logs` | 已建立 | FR-27、FR-29 | 作答紀錄，跨軌道一/二共用一表；`assignment_id`（2026-08-08 追加）精準對應「今天這一批」 |
-| `certificate_goals` | 已建立 | FR-24 | 證照準備目標（UPSERT，每人每 `exam_type` 一筆） |
+| `certificate_goals` | 已建立 | FR-24／FR-72a | 證照準備目標（UPSERT，每人每 `exam_type` 一筆）；`important_day_id` 連結考試日期事件 |
 | `exam_official_scores` | 已建立 | FR-30 | 正式應考成績，僅查詢不修改，與每日小考作答紀錄分開建表 |
 | `certificate_daily_settings` | 已建立 | FR-26 | 每日出題數量／新題複習題比例／TOEIC 三軌比例設定 |
 | `certificate_daily_schedule_overrides` | 已建立 | FR-26 | 彈性排程的日期區間覆蓋（挪動/取消/區間覆蓋/平攤） |
@@ -561,12 +562,13 @@ CREATE TABLE certificate_goals (
     exam_type TEXT NOT NULL,
     target_date DATE,
     target_score TEXT,
+    important_day_id BIGINT REFERENCES important_days(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (user_id, exam_type)
 );
 ```
-`src/migrations/0041_create_certificate_goals_table.sql`
+`src/migrations/0041_create_certificate_goals_table.sql`、`0082_link_goals_to_important_days.sql`
 
 - `UNIQUE (user_id, exam_type)` UPSERT 設計；`target_score` 用 TEXT 相容量化分數與通過/未通過兩種形式
 

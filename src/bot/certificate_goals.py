@@ -7,9 +7,13 @@
 生成客製化建議文字，不走固定範本（見 ADR-19、FR-24 條文）——這裡只負責組 Prompt，實際呼叫 LLM
 與對話狀態機是 `src/bot/commands.py` 的責任。
 """
+import logging
 from datetime import date
 
+from src.services.goal_important_day_sync import sync_certificate_goal
 from submodules.cloudsql.client import CloudSQLClient
+
+_logger = logging.getLogger(__name__)
 
 _ADVICE_PROMPT_TEMPLATE = """\
 你是 Robinson，Robin 的個人生活小助手，個性活潑、稱呼 Robin 為「主任」。Robin 正在準備「{exam_type}」\
@@ -43,8 +47,15 @@ def set_goal(
 
     if existing is not None:
         db.update("certificate_goals", data, where="id = %s", params=(existing["id"],))
+        goal_id = existing["id"]
     else:
-        db.insert("certificate_goals", {"user_id": user_id, "exam_type": exam_type, **data})
+        goal_id = db.insert("certificate_goals", {"user_id": user_id, "exam_type": exam_type, **data})
+
+    if target_date is not None or existing is not None:
+        try:
+            sync_certificate_goal(db, goal_id)
+        except Exception:
+            _logger.exception("證照目標（id=%s）同步至重要日子失敗，目標本身已成功儲存", goal_id)
 
     return {"previous": existing, "target_date": target_date, "target_score": target_score}
 

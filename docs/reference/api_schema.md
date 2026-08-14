@@ -132,7 +132,7 @@ updated: 2026-08-14
 | `/log_diet` | 已實作（`src/bot/commands.py::start_diet_log`） | FR-48 | 記錄飲食，先問類型；三大營養素改用 LLM 拆算（`body.py::estimate_diet_macros`），附誤差聲明 |
 | `/backfill_diet` | 已實作（`src/bot/commands.py::start_diet_backfill`） | FR-48 | 先問補記日期，確定後接入 `/log_diet` 同一組流程 |
 | `/my_diet_logs` | 已實作（`src/bot/commands.py::start_diet_list`） | FR-48 | 列出飲食紀錄，輸入編號可更新或刪除；飲食目標不做自動達成判斷，只能手動取消 |
-| `/set_body_goal` | 已實作（`src/bot/commands.py::start_body_goal`） | FR-45～FR-48 | 設定體態管理目標，先問類型；體重/運動/飲食三種目標共用 `body_goals` 表 |
+| `/set_body_goal` | 已實作（`src/bot/commands.py::start_body_goal`） | FR-45～FR-48／FR-72a | 設定體態管理目標，先問類型；體重/運動/飲食三種目標共用 `body_goals` 表；有明確期限時預設同步至重要日子 |
 | `/my_body_goals` | 已實作（`src/bot/commands.py::start_body_goal_list`） | FR-45～FR-48 | 列出進行中目標，輸入編號可取消 |
 | FR-45 目標達成通知（體重記錄當下即時檢查／運動借用 `/healthz` 頻率排程檢查，非獨立路由） | 已實作（`src/bot/body.py::check_weight_goal_achieved`／`check_and_push_exercise_goal_achievements`） | FR-45 | 體重目標於每次記錄體重時即時判斷方向（要瘦/要增）並達成即標記；運動目標是累積分鐘數，需跨多筆紀錄加總，改借用 `/healthz` 頻率排程檢查 |
 | FR-45 目標期限前 7 天提醒（借用 `/healthz` 頻率，非獨立路由） | 已實作（`src/bot/body.py::check_and_push_goal_deadline_reminders`） | FR-45 | 適用所有有設定 `target_date` 的進行中目標，`deadline_reminder_sent` 去重，每個目標僅提醒一次 |
@@ -163,7 +163,7 @@ updated: 2026-08-14
 | `/adjust_quiz_schedule` | 已實作（`src/bot/commands.py::start_quiz_schedule_adjust`） | FR-26 | 彈性排程調整流程，支援 MOVE（挪到別天）/CANCEL（取消不補不挪）/RANGE（區間覆蓋）/SPREAD（平攤到接下來幾天，需提案確認才寫入）四種語意 |
 | `/log_exam_score` | 已實作（`src/bot/commands.py::start_log_exam_score`） | FR-30 | 記錄正式應考成績，獨立建表僅查詢不修改 |
 | `/my_exam_scores` | 已實作（`src/bot/commands.py::handle_my_exam_scores`） | FR-30 | 單次查詢正式成績列表，不經對話狀態機 |
-| `/set_certificate_goal` | 已實作（`src/bot/commands.py::start_set_certificate_goal`） | FR-24 | 設定證照準備目標 |
+| `/set_certificate_goal` | 已實作（`src/bot/commands.py::start_set_certificate_goal`） | FR-24／FR-72a | 設定證照準備目標；有明確考試日期時預設同步至重要日子，覆寫日期時同步更新 |
 | `/my_certificate_goals` | 已實作（`src/bot/commands.py::handle_my_certificate_goals`） | FR-24 | 單次查詢證照準備目標列表，不經對話狀態機 |
 | `/certificate_advice` | 已實作（`src/bot/commands.py::start_certificate_advice`） | FR-24 | 依近 30 天作答成效與目標，用 LLM 生成客製化讀書建議方向 |
 | `/my_quiz_stats` | 已實作（`src/bot/commands.py::start_quiz_stats_query`） | FR-29 | 彈性自然語言問答查詢作答成效，不做圖表，排除未作答日子並支援跨區間比較 |

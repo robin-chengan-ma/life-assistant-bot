@@ -31,6 +31,7 @@ import re
 from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 
+from src.services.goal_important_day_sync import sync_body_goal
 from submodules.cloudsql.client import CloudSQLClient
 
 _TAIWAN_TZ = ZoneInfo("Asia/Taipei")
@@ -470,7 +471,7 @@ def create_goal(
     這個布林選擇。沒有 `target_date` 的目標即使選了同步也沒有意義（沒有日期可以建事件），由
     呼叫端在反問流程裡自行決定要不要問這一題。
     """
-    return db.insert(
+    goal_id = db.insert(
         "body_goals",
         {
             "user_id": user_id,
@@ -485,6 +486,12 @@ def create_goal(
             "sync_to_calendar": sync_to_calendar,
         },
     )
+    if target_date is not None:
+        try:
+            sync_body_goal(db, goal_id)
+        except Exception:
+            _logger.exception("體態目標（id=%s）同步至重要日子失敗，目標本身已成功建立", goal_id)
+    return goal_id
 
 
 def set_calendar_event_id(db: CloudSQLClient, goal_id: int, event_id: str) -> None:
@@ -514,6 +521,10 @@ def cancel_goal(db: CloudSQLClient, goal_id: int, calendar_client=None, google_c
     """取消一筆體態目標（使用者明確確認後才會呼叫）。`google_calendar_event_id`（2026-08-05，
     見 FR-66c、ADR-17）由呼叫端傳入（`commands.py` 在列出清單時已經查過），這裡不重複查詢。"""
     db.update("body_goals", {"status": "cancelled"}, where="id = %s", params=(goal_id,))
+    try:
+        sync_body_goal(db, goal_id)
+    except Exception:
+        _logger.exception("體態目標（id=%s）取消後停用重要日子失敗", goal_id)
     _delete_calendar_event_if_synced(calendar_client, google_calendar_event_id, goal_id)
 
 
@@ -532,6 +543,10 @@ def _delete_calendar_event_if_synced(calendar_client, google_calendar_event_id, 
 
 def _mark_goal_achieved(db: CloudSQLClient, goal_id: int, calendar_client=None, google_calendar_event_id=None) -> None:
     db.update("body_goals", {"status": "achieved", "achieved_notified": True}, where="id = %s", params=(goal_id,))
+    try:
+        sync_body_goal(db, goal_id)
+    except Exception:
+        _logger.exception("體態目標（id=%s）達成後停用重要日子失敗", goal_id)
     _delete_calendar_event_if_synced(calendar_client, google_calendar_event_id, goal_id)
 
 

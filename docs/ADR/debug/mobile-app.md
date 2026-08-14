@@ -214,3 +214,23 @@
 **修復方式**：已在 `mobile/app/exploration.tsx` 改用跨平台自製確認 Modal，並補上防連點、處理中、成功／失敗訊息及刪除後 5 秒復原。
 
 **驗證方式**：Python 語法編譯、`git diff --check`、Mobile TypeScript typecheck 與 Expo Web export 通過；目前 Python 環境缺少 pytest，後端自動測試及 Robin 實機確認／取消／刪除／失敗重試／復原流程仍待執行。
+## 2026-08-14 探索地圖篩選器與定位提示漏套用
+**現象**：探索地圖「走過的地方，都留在地圖上」區塊下方未顯示定位精度提醒，國家與區域／城市仍以橫向按鈕呈現，未改為可搜尋、可選擇的下拉選單。
+**排查過程**：比對 `mobile/app/exploration.tsx`、`mobile/src/components/CollectionModal.tsx` 與 `mobile/src/components/SearchableSelect.tsx`，確認定位提醒及組合式下拉選單只套用於收藏表單，探索地圖仍保留舊 `Filter` 元件。
+**根因**：上一輪實作只完成收藏與旅遊行程的地點欄位，漏掉探索地圖篩選畫面。
+**修復方式**：`mobile/app/exploration.tsx` 改用共用 `SearchableSelect`，並補上已定案的定位精度提醒；`SearchableSelect` 新增篩選情境需要的「全部」與禁止自訂值選項。
+**驗證方式**：Mobile TypeScript typecheck 通過；仍待實機驗證國家切換清除城市、全部／空值恢復完整地圖，以及深淺色與手機窄螢幕顯示。
+
+## 2026-08-14 新增旅遊行程行事曆漏顯示今日樣式
+**現象**：新增／編輯旅遊行程的行事曆雖已顯示休假日、節日與重要日子，但今日日期沒有比照其他行事曆顯示紅底白字。
+**排查過程**：比對 `mobile/app/trips.tsx` 的自訂 `dayComponent` 與 `DateRangeFilter`、重要日子設定頁的今日判斷，確認旅遊行程日期格沒有計算 `isToday`，亦未套用今日樣式。
+**根因**：行程行事曆整合共用日曆資料時，只移植活動標籤，漏掉今日視覺規則。
+**修復方式**：`mobile/app/trips.tsx` 補上台灣時區今日判斷及紅底白字樣式；今日樣式置於區間樣式之後，確保落在選取區間時仍優先顯示。
+**驗證方式**：Mobile TypeScript typecheck 通過；仍待實機驗證今日未選取、位於區間起點／中間／終點時的視覺結果。
+
+## 2026-08-14 重要日子設定 API 回傳 503
+**現象**：進入「重要日子設定」頁面時顯示「重要日子目前無法載入，請稍後再試」。
+**排查過程**：確認該訊息由 `GET /api/app/important-days` 捕捉未預期例外後回傳 503；查詢直接引用較新 migration 才加入的 `important_day_occurrences.occurrence_end_date`，部署資料庫若有欄位版本落差會在整份清單載入前失敗，且原 API 未留下伺服器端例外日誌，無法從安全的使用者訊息辨識原因。
+**根因**：部署環境的實際例外仍須推版後由 Render 日誌確認；程式層已確認存在對 occurrence 區間欄位的硬相依，且缺少安全診斷日誌，會讓 schema 落差直接表現為無資訊的 503。
+**修復方式**：`src/services/app_important_days.py` 改用 `TO_JSONB(o)` 安全讀取可選的結束日欄位，舊 schema 缺欄位時退回單日行為；`src/api/app_important_days.py` 新增只寫入伺服器端的例外日誌，對使用者仍維持安全訊息。
+**驗證方式**：Python compileall 通過；本機環境缺 pytest，Service／API 自動測試未執行。需部署後驗證空清單、既有事件、行程連動事件與通知對象，並以 Render 日誌確認是否仍有其他資料庫例外。

@@ -12,6 +12,7 @@ updated: 2026-08-14
 
 | 日期 | 對應 FR | 任務內容 | 開發者 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- | --- |
+| 2026-08-14 | FR-72a／FR-74／FR-75 | 探索篩選與定位提示、旅遊行程今日標示、重要日子載入相容修正及目標日期同步 | Codex | 實作完成（待實機／部署驗收） | 新增 `0082` 體態／證照目標的重要日子關聯與既有資料回填；重要日子查詢相容舊 occurrence 區間欄位；目標同步 3 項直接測試、Python compileall、TypeScript typecheck、Expo Web export 與 diff check 通過，環境缺 pytest |
 | 2026-08-14 | FR-73／FR-75 | 收藏地址選填、漸進式近似定位及收藏操作按鈕修復 | Codex | 完成（待實機驗收） | 地址定位依精確門牌、道路、城市逐級放寬；無地址可定位區域；以跨平台確認 Modal 取代 Web 不可靠的 `Alert.alert()`；相關後端 39 項測試、TypeScript typecheck 與 Expo Web export 通過 |
 | 2026-08-14 | FR-73～FR-76a | 收藏清單／旅遊行程／探索地圖／成果展示 Phase 5 實作 | Codex | 完成（待實機驗收／migration 套用） | 新增 `0079`、`0080`、生活探索 API／Service、Mobile 行程／探索／成果畫面、記帳行程關聯、Nominatim 地址定位與測試；TypeScript 與 Expo Web export 通過；正式部署前需設定 Nominatim 識別 User-Agent |
 | 2026-08-14 | FR-75 | 完成 Nominatim 地址轉座標、快取、頻率限制及探索重新定位 | Codex | 完成（待部署驗收） | 新收藏由使用者明確按鈕定位；修改地址會清除舊座標，可選擇重新定位；定位失敗仍可保存至無法定位清單；相關後端測試 34 項通過 |

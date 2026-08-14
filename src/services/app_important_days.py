@@ -66,14 +66,14 @@ class AppImportantDayService:
             SELECT d.*,
               COALESCE(ARRAY_AGG(DISTINCT r.user_id) FILTER (WHERE r.user_id IS NOT NULL), '{}') AS recipient_ids,
               o.occurrence_date AS current_year_date,
-              o.occurrence_end_date AS current_year_end_date
+              (TO_JSONB(o) ->> 'occurrence_end_date') AS current_year_end_date
             FROM important_days d
             LEFT JOIN important_day_recipients r ON r.important_day_id = d.id
             LEFT JOIN important_day_occurrences o ON o.important_day_id = d.id AND o.occurrence_year = %s
-            WHERE d.owner_user_id = %s OR d.audience_mode = 'all'
+            WHERE (d.owner_user_id = %s OR d.audience_mode = 'all'
               OR EXISTS (SELECT 1 FROM important_day_recipients visible
-                         WHERE visible.important_day_id = d.id AND visible.user_id = %s)
-            GROUP BY d.id, o.occurrence_date, o.occurrence_end_date
+                         WHERE visible.important_day_id = d.id AND visible.user_id = %s))
+            GROUP BY d.id, o.occurrence_date, (TO_JSONB(o) ->> 'occurrence_end_date')
             ORDER BY d.is_active DESC, d.updated_at DESC, d.id DESC""",
             (current.year, user_id, user_id),
         )
