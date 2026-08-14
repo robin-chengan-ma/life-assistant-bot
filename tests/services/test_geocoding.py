@@ -72,6 +72,7 @@ def test_search_calls_nominatim_with_identity_and_caches_result():
     assert calls[0][1]["headers"]["User-Agent"].startswith("RobinsonLifeAssistant/")
     assert first["latitude"] == 25.033964
     assert first["cached"] is False
+    assert first["precision"] == "exact"
     assert second["cached"] is True
     assert db.rows[0]["latitude"] == Decimal("25.033964")
 
@@ -114,3 +115,48 @@ def test_search_reports_not_found_and_network_failure():
     geocoder = NominatimGeocoder(FakeDatabase(), http_get=fail, user_agent="app/contact")
     with pytest.raises(GeocodingUnavailableError, match="無法連線"):
         geocoder.search(payload)
+
+
+def test_search_falls_back_from_house_number_to_road():
+    calls = []
+
+    def http_get(_url, **kwargs):
+        calls.append(kwargs["params"]["q"])
+        if len(calls) == 1:
+            return FakeResponse([])
+        return FakeResponse([{
+            "lat": "24.1750552", "lon": "120.7247448",
+            "display_name": "軍福十六路, 北屯區, 臺中市, 臺灣",
+        }])
+
+    result = NominatimGeocoder(
+        FakeDatabase(), http_get=http_get, user_agent="app/contact",
+        monotonic=lambda: 10.0, sleep=lambda _seconds: None,
+    ).search({
+        "address": "台中市北屯區軍福十六路356號",
+        "city_name": "台中市北屯區",
+        "country_name": "台灣",
+    })
+
+    assert calls == [
+        "台中市北屯區軍福十六路356號, 台中市北屯區, 台灣",
+        "軍福十六路, 台中市北屯區, 台灣",
+    ]
+    assert result["precision"] == "road"
+    assert result["precision_label"] == "道路近似位置"
+
+
+def test_search_without_address_uses_city_location():
+    calls = []
+
+    def http_get(_url, **kwargs):
+        calls.append(kwargs["params"]["q"])
+        return FakeResponse([{"lat": "24.1477", "lon": "120.6736", "display_name": "臺中市, 臺灣"}])
+
+    result = NominatimGeocoder(
+        FakeDatabase(), http_get=http_get, user_agent="app/contact", monotonic=lambda: 10.0,
+    ).search({"city_name": "台中市", "country_name": "台灣"})
+
+    assert calls == ["台中市, 台灣"]
+    assert result["precision"] == "city"
+    assert result["precision_label"] == "城市近似位置"

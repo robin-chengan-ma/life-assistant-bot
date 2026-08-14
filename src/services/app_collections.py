@@ -189,8 +189,6 @@ class AppCollectionService:
         if city_name is None:
             raise CollectionValidationError("請輸入區域／城市")
         address = _optional_text(payload.get("address"), "地址", 500)
-        if item_type not in {"activity", "other"} and address is None:
-            raise CollectionValidationError("請輸入地址")
 
         latitude = _optional_decimal(payload.get("latitude"), "緯度", Decimal("-90"), Decimal("90"))
         longitude = _optional_decimal(payload.get("longitude"), "經度", Decimal("-180"), Decimal("180"))

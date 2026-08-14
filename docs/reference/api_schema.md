@@ -238,8 +238,8 @@ updated: 2026-08-14
 
 > 對應 SPEC FR-73。
 > 收藏寫入欄位為 `item_type`、`title`、`country_name`、`city_name`、選填 `country_code`、`address`、
-> `latitude`／`longitude`、`source_url`、`estimated_cost`、`notes`。國家及區域／城市必填；餐廳、景點、
-> 山岳與住宿的地址必填，活動及其他可省略地址。`currency_code` 固定為 `TWD`；不接受用戶端直接設定
+> `latitude`／`longitude`、`source_url`、`estimated_cost`、`notes`。國家及區域／城市必填，地址對所有
+> 類型皆為選填；未填地址時可用國家與區域／城市取得近似座標。`currency_code` 固定為 `TWD`；不接受用戶端直接設定
 > `priority`、`desired_date`、`administrative_area`、`trip_id`、`status` 或 `visited_at`。
 
 | 項目 | 狀態 | 對應 FR | 說明 |
@@ -249,7 +249,7 @@ updated: 2026-08-14
 | `PATCH /api/app/collections/<id>` | 已實作（`update_collection_item()`） | FR-73 | 更新收藏內容，不覆寫由行程／造訪流程推導的狀態 |
 | `DELETE /api/app/collections/<id>` | 已實作（`delete_collection_item()`） | FR-73 | 軟刪除收藏並移除規劃中／已確認行程關聯；既有探索快照保留，回傳 5 秒復原資訊 |
 | `POST /api/app/collections/<id>/restore` | 已實作（`restore_collection_item()`） | FR-73 | 復原已軟刪除收藏 |
-| `POST /api/app/collections/geocode` | 已實作（`geocode_collection_address()`） | FR-75 | 由使用者明確觸發地址轉座標；必填地址、區域／城市、國家，成功結果寫入 `geocoding_cache`，找不到回 404、服務不可用回 503 |
+| `POST /api/app/collections/geocode` | 已實作（`geocode_collection_address()`） | FR-75 | 由使用者明確觸發定位；區域／城市及國家必填、地址選填；有地址依精確門牌→道路→城市放寬，無地址直接查城市，回傳 `precision／precision_label`；成功結果寫入 `geocoding_cache`，全部找不到回 404、服務不可用回 503 |
 
 ### 生活探索與成果（`src/api/app_life_exploration.py`，url_prefix `/api/app/life`）
 

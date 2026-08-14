@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import threading
 import time
 from decimal import Decimal, InvalidOperation
@@ -45,6 +46,30 @@ def _text(value: Any, label: str, maximum: int) -> str:
     return normalized
 
 
+def _optional_text(value: Any, label: str, maximum: int) -> str | None:
+    if value in (None, ""):
+        return None
+    if not isinstance(value, str):
+        raise GeocodingValidationError(f"{label}格式不正確")
+    normalized = " ".join(value.split())
+    if not normalized:
+        return None
+    if len(normalized) > maximum:
+        raise GeocodingValidationError(f"{label}不可超過 {maximum} 個字元")
+    return normalized
+
+
+def _road_fallback(address: str, city_name: str, country_name: str) -> str | None:
+    candidate = address.replace(country_name, "").replace(city_name, "").strip(" ,，")
+    if not candidate:
+        candidate = address
+    parts = [part.strip(" ,，") for part in re.split(r"[縣市區鄉鎮村里]", candidate) if part.strip(" ,，")]
+    if parts:
+        candidate = parts[-1]
+    candidate = re.sub(r"\s*\d+(?:[-之]\d+)?號.*$", "", candidate).strip(" ,，")
+    return candidate or None
+
+
 class NominatimGeocoder:
     def __init__(
         self,
@@ -62,49 +87,71 @@ class NominatimGeocoder:
         self._user_agent = user_agent or os.environ.get("NOMINATIM_USER_AGENT", "").strip()
 
     def search(self, payload: dict[str, Any]) -> dict[str, Any]:
-        address = _text(payload.get("address"), "地址", 500)
+        address = _optional_text(payload.get("address"), "地址", 500)
         city_name = _text(payload.get("city_name"), "區域／城市", 100)
         country_name = _text(payload.get("country_name"), "國家", 100)
-        query_text = ", ".join((address, city_name, country_name))
-        query_key = query_text.casefold()
+        attempts: list[tuple[str, str]] = []
+        if address:
+            attempts.append((", ".join((address, city_name, country_name)), "exact"))
+            road = _road_fallback(address, city_name, country_name)
+            if road:
+                attempts.append((", ".join((road, city_name, country_name)), "road"))
+        attempts.append((", ".join((city_name, country_name)), "city"))
 
-        cached = self._db.select(
-            "geocoding_cache", where="query_key = %s", params=(query_key,), fetch_one=True
-        )
-        if cached is not None:
-            return self._serialize(cached, cached=True)
-        if not self._user_agent:
-            raise GeocodingUnavailableError("地址定位服務尚未完成識別設定")
+        seen: set[str] = set()
+        for query_text, precision in attempts:
+            query_key = query_text.casefold()
+            if query_key in seen:
+                continue
+            seen.add(query_key)
+            cached = self._db.select(
+                "geocoding_cache", where="query_key = %s", params=(query_key,), fetch_one=True
+            )
+            if cached is not None:
+                return self._serialize(cached, cached=True, precision=precision)
+            if not self._user_agent:
+                raise GeocodingUnavailableError("地址定位服務尚未完成識別設定")
+            first = self._first_result(query_text)
+            if first is None:
+                continue
+            row = self._cache_row(query_key, query_text, first)
+            self._db.insert("geocoding_cache", row)
+            return self._serialize(row, cached=False, precision=precision)
+        raise GeocodingNotFoundError("找不到可用位置，請確認國家與區域／城市後重試")
 
+    def _first_result(self, query_text: str) -> dict[str, Any] | None:
         response = self._request(query_text)
         try:
             results = response.json()
         except (TypeError, ValueError) as exc:
             raise GeocodingUnavailableError("地址定位服務回傳格式不正確") from exc
-        if not isinstance(results, list) or not results:
-            raise GeocodingNotFoundError("找不到此地址，請補充更完整的地址後重試")
-        first = results[0]
-        if not isinstance(first, dict):
+        if not isinstance(results, list):
             raise GeocodingUnavailableError("地址定位服務回傳格式不正確")
+        if not results:
+            return None
+        if not isinstance(results[0], dict):
+            raise GeocodingUnavailableError("地址定位服務回傳格式不正確")
+        return results[0]
+
+    @staticmethod
+    def _cache_row(query_key: str, query_text: str, result: dict[str, Any]) -> dict[str, Any]:
         try:
-            latitude = Decimal(str(first["lat"]))
-            longitude = Decimal(str(first["lon"]))
+            latitude = Decimal(str(result["lat"]))
+            longitude = Decimal(str(result["lon"]))
         except (KeyError, InvalidOperation, ValueError) as exc:
             raise GeocodingUnavailableError("地址定位服務回傳座標不正確") from exc
         if not latitude.is_finite() or not Decimal("-90") <= latitude <= Decimal("90"):
             raise GeocodingUnavailableError("地址定位服務回傳座標不正確")
         if not longitude.is_finite() or not Decimal("-180") <= longitude <= Decimal("180"):
             raise GeocodingUnavailableError("地址定位服務回傳座標不正確")
-        row = {
+        return {
             "query_key": query_key,
             "query_text": query_text,
             "latitude": latitude.quantize(Decimal("0.000001")),
             "longitude": longitude.quantize(Decimal("0.000001")),
-            "display_name": str(first.get("display_name") or query_text)[:1000],
+            "display_name": str(result.get("display_name") or query_text)[:1000],
             "provider": "nominatim",
         }
-        self._db.insert("geocoding_cache", row)
-        return self._serialize(row, cached=False)
 
     def _request(self, query_text: str):
         global _LAST_REQUEST_AT
@@ -127,12 +174,15 @@ class NominatimGeocoder:
         return response
 
     @staticmethod
-    def _serialize(row: dict[str, Any], *, cached: bool) -> dict[str, Any]:
+    def _serialize(row: dict[str, Any], *, cached: bool, precision: str = "exact") -> dict[str, Any]:
+        precision_labels = {"exact": "精確地址", "road": "道路近似位置", "city": "城市近似位置"}
         return {
             "latitude": float(row["latitude"]),
             "longitude": float(row["longitude"]),
             "display_name": row["display_name"],
             "provider": "nominatim",
+            "precision": precision,
+            "precision_label": precision_labels[precision],
             "cached": cached,
             "attribution": "© OpenStreetMap contributors",
         }

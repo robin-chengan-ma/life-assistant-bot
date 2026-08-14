@@ -46,6 +46,8 @@ export type GeocodingResult = {
   provider: "nominatim";
   cached: boolean;
   attribution: string;
+  precision: "exact" | "road" | "city";
+  precision_label: "精確地址" | "道路近似位置" | "城市近似位置";
 };
 
 export type CollectionResponse = {
@@ -89,7 +91,7 @@ export function restoreCollectionItem(request: AuthRequest, id: number): Promise
 
 export function geocodeCollectionAddress(
   request: AuthRequest,
-  payload: { address: string; city_name: string; country_name: string },
+  payload: { address?: string; city_name: string; country_name: string },
 ): Promise<GeocodingResult> {
   return request("/api/app/collections/geocode", { method: "POST", body: JSON.stringify(payload) });
 }

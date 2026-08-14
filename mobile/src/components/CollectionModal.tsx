@@ -84,14 +84,13 @@ export function CollectionModal({ authorizedRequest, initial = null, onClose, on
   const locateAddress = async () => {
     if (!countryName.trim()) { setError("請先輸入國家"); return; }
     if (!cityName.trim()) { setError("請先輸入區域／城市"); return; }
-    if (!address.trim()) { setError("請先輸入地址"); return; }
     setLocating(true); setError(null);
     try {
       const result = await geocodeCollectionAddress(authorizedRequest, {
-        address: address.trim(), city_name: cityName.trim(), country_name: countryName.trim(),
+        address: address.trim() || undefined, city_name: cityName.trim(), country_name: countryName.trim(),
       });
       setLatitude(result.latitude); setLongitude(result.longitude);
-      setLocationLabel(`定位完成：${result.display_name}`);
+      setLocationLabel(`${result.precision_label}：${result.display_name}`);
     } catch (caught) {
       setLatitude(null); setLongitude(null); setLocationLabel(null);
       setError(caught instanceof Error ? caught.message : "地址定位失敗，請稍後重試");
@@ -102,7 +101,6 @@ export function CollectionModal({ authorizedRequest, initial = null, onClose, on
     if (!title.trim()) { setError("請輸入收藏名稱"); return; }
     if (!countryName.trim()) { setError("請輸入國家"); return; }
     if (!cityName.trim()) { setError("請輸入區域／城市"); return; }
-    if (!["activity", "other"].includes(itemType) && !address.trim()) { setError("請輸入地址"); return; }
     const cost = estimatedCost.trim() ? Number(estimatedCost) : undefined;
     if (cost !== undefined && (!Number.isFinite(cost) || cost < 0)) { setError("請輸入正確的預估費用"); return; }
     const payload: CollectionPayload = {
@@ -140,8 +138,8 @@ export function CollectionModal({ authorizedRequest, initial = null, onClose, on
           <ChoiceRow label="類型" onChange={setItemType} options={TYPE_OPTIONS} styles={styles} value={itemType} />
           <Field label="國家" onChangeText={invalidateCountry} placeholder="例如：台灣" styles={styles} value={countryName} />
           <Field label="區域／城市" onChangeText={invalidateCity} placeholder="例如：台北市信義區" styles={styles} value={cityName} />
-          <Field label={["activity", "other"].includes(itemType) ? "地址（選填）" : "地址"} onChangeText={invalidateLocation} placeholder="請輸入地址" styles={styles} value={address} />
-          {!(["activity", "other"].includes(itemType) && !address.trim()) ? <View style={styles.locationRow}><Pressable disabled={locating || saving} onPress={() => void locateAddress()} style={styles.locate}>{locating ? <ActivityIndicator color={colors.primaryDark} /> : <><MaterialCommunityIcons color={colors.primaryDark} name="map-marker-check-outline" size={18} /><Text style={styles.locateText}>{latitude !== null ? "重新定位地址" : "定位地址"}</Text></>}</Pressable>{locationLabel ? <Text style={styles.locationText}>{locationLabel}</Text> : <Text style={styles.locationHint}>儲存前請先確認地址定位</Text>}</View> : null}
+          <Field label="地址（選填）" onChangeText={invalidateLocation} placeholder="可輸入詳細地址以提高定位精度" styles={styles} value={address} />
+          <View style={styles.locationRow}><Pressable disabled={locating || saving} onPress={() => void locateAddress()} style={styles.locate}>{locating ? <ActivityIndicator color={colors.primaryDark} /> : <><MaterialCommunityIcons color={colors.primaryDark} name="map-marker-check-outline" size={18} /><Text style={styles.locateText}>{latitude !== null ? "重新定位" : address.trim() ? "定位地址" : "定位區域"}</Text></>}</Pressable>{locationLabel ? <Text style={styles.locationText}>{locationLabel}</Text> : <Text style={styles.locationHint}>尚未執行定位；未定位仍可儲存</Text>}</View>
           <Field autoCapitalize="none" keyboardType="url" label="參考網址" onChangeText={setSourceUrl} placeholder="https://" styles={styles} value={sourceUrl} />
           <Field keyboardType="decimal-pad" label="預估費用（台幣）" onChangeText={(value) => setEstimatedCost(value.replace(/[^0-9.]/g, ""))} placeholder="請輸入數字" styles={styles} value={estimatedCost} />
           <Field label="備註" multiline onChangeText={setNotes} placeholder="可填寫推薦原因、必吃菜色或其他說明" styles={styles} value={notes} />

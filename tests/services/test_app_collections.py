@@ -91,12 +91,20 @@ def test_coordinates_must_be_provided_as_a_pair():
     [
         ({"country_name": ""}, "請輸入國家"),
         ({"city_name": ""}, "請輸入區域／城市"),
-        ({"address": ""}, "請輸入地址"),
     ],
 )
 def test_location_collection_requires_country_city_and_address(overrides, message):
     with pytest.raises(CollectionValidationError, match=message):
         AppCollectionService(FakeDatabase()).create(1, payload(**overrides))
+
+
+@pytest.mark.parametrize("item_type", ["restaurant", "attraction", "mountain", "accommodation"])
+def test_location_collection_can_omit_optional_address(item_type):
+    db = FakeDatabase()
+
+    AppCollectionService(db).create(1, payload(item_type=item_type, address=""))
+
+    assert db.tables["collection_items"][0]["address"] is None
 
 
 @pytest.mark.parametrize("item_type", ["activity", "other"])
