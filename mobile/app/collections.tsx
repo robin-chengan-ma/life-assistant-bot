@@ -1,7 +1,7 @@
 import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import { type Href, Redirect, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Modal, ScrollView, StyleSheet } from "react-native";
+import { ActivityIndicator, Modal, ScrollView, StyleSheet, useWindowDimensions } from "react-native";
 
 import { AppPressable as Pressable } from "@/components/AppPressable";
 import { AppShell } from "@/components/AppShell";
@@ -21,6 +21,7 @@ const STATUS_LABEL = Object.fromEntries(STATUSES) as Record<string, string>;
 type Confirmation = { kind: "visit" | "delete"; item: CollectionItem };
 
 export default function CollectionsScreen() {
+  const { height } = useWindowDimensions();
   const router = useRouter();
   const { authorizedRequest, status } = useAuth();
   const { colors, theme } = useAppPreferences();
@@ -101,7 +102,7 @@ export default function CollectionsScreen() {
       <FilterRow label="狀態" options={STATUSES} setValue={(value) => setItemStatus(value as CollectionStatus | "")} styles={styles} value={itemStatus} />
       {data.filters.countries.length ? <FilterRow label="國家" options={[["", "全部國家"], ...data.filters.countries.map((value) => [value, value] as [string, string])]} setValue={setCountry} styles={styles} value={country} /> : null}
       {data.filters.cities.length ? <FilterRow label="城市" options={[["", "全部城市"], ...data.filters.cities.map((value) => [value, value] as [string, string])]} setValue={setCity} styles={styles} value={city} /> : null}
-      <View style={styles.list}>{visibleItems.length ? visibleItems.map((item) => <CollectionCard item={item} key={item.id} onDelete={() => setConfirmation({ kind: "delete", item })} onEdit={() => setEditing(item)} onVisit={() => setConfirmation({ kind: "visit", item })} styles={styles} />) : <View style={styles.empty}><MaterialCommunityIcons color={colors.textMuted} name="bookmark-off-outline" size={36} /><Text style={styles.muted}>目前沒有符合條件的收藏項目</Text></View>}</View>
+      <ScrollView contentContainerStyle={styles.list} nestedScrollEnabled showsVerticalScrollIndicator style={{ maxHeight: height * .6 }}>{visibleItems.length ? visibleItems.map((item) => <CollectionCard item={item} key={item.id} onDelete={() => setConfirmation({ kind: "delete", item })} onEdit={() => setEditing(item)} onVisit={() => setConfirmation({ kind: "visit", item })} styles={styles} />) : <View style={styles.empty}><MaterialCommunityIcons color={colors.textMuted} name="bookmark-off-outline" size={36} /><Text style={styles.muted}>目前沒有符合條件的收藏項目</Text></View>}</ScrollView>
     </> : null}
     {editing ? <CollectionModal authorizedRequest={authorizedRequest} initial={editing} onClose={() => setEditing(null)} onSaved={async (savedMessage) => { setMessage(savedMessage); setEditing(null); await load(); }} visible /> : null}
     {confirmation ? <Modal animationType="fade" onRequestClose={() => setConfirmation(null)} transparent visible><View style={styles.confirmBackdrop}><View style={styles.confirmCard}><Text style={styles.confirmTitle}>{confirmation.kind === "visit" ? "確認已造訪？" : "確認刪除？"}</Text><Text style={styles.confirmBody}>{confirmation.kind === "visit" ? `將以今天日期為「${confirmation.item.title}」建立探索紀錄。` : `刪除「${confirmation.item.title}」後有 5 秒可以復原；既有探索歷史不會被刪除。`}</Text><View style={styles.confirmActions}><Pressable disabled={actionBusy} onPress={() => setConfirmation(null)} style={styles.confirmCancel}><Text style={styles.confirmCancelText}>取消</Text></Pressable><Pressable disabled={actionBusy} onPress={() => void executeConfirmedAction()} style={confirmation.kind === "delete" ? styles.confirmDelete : styles.confirmSubmit}>{actionBusy ? <ActivityIndicator color={colors.white} /> : <Text style={styles.confirmSubmitText}>{confirmation.kind === "delete" ? "刪除" : "確認"}</Text>}</Pressable></View></View></View></Modal> : null}

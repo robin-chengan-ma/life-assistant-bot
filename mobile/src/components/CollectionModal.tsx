@@ -5,11 +5,13 @@ import { ActivityIndicator, Modal, ScrollView, StyleSheet, TextInput } from "rea
 import { AppPressable as Pressable } from "@/components/AppPressable";
 import { AppText as Text } from "@/components/AppText";
 import { AppView as View } from "@/components/AppView";
+import { SearchableSelect } from "@/components/SearchableSelect";
 import { useAppPreferences } from "@/context/AppPreferencesContext";
 import type { AuthRequest } from "@/services/analyticsApi";
 import {
   createCollectionItem,
   geocodeCollectionAddress,
+  getCollectionItems,
   type CollectionItem,
   type CollectionItemType,
   type CollectionPayload,
@@ -43,6 +45,9 @@ export function CollectionModal({ authorizedRequest, initial = null, onClose, on
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [locating, setLocating] = useState(false);
+  const [locationOptions, setLocationOptions] = useState<{ countries: string[]; items: CollectionItem[] }>({ countries: [], items: [] });
+
+  useEffect(() => { if (visible) void getCollectionItems(authorizedRequest).then((result) => setLocationOptions({ countries: result.filters.countries, items: result.items })).catch(() => undefined); }, [authorizedRequest, visible]);
 
   useEffect(() => {
     if (!visible) return;
@@ -69,6 +74,7 @@ export function CollectionModal({ authorizedRequest, initial = null, onClose, on
 
   const invalidateCountry = (value: string) => {
     setCountryName(value);
+    setCityName("");
     setLatitude(null);
     setLongitude(null);
     setLocationLabel(null);
@@ -134,10 +140,11 @@ export function CollectionModal({ authorizedRequest, initial = null, onClose, on
         <Pressable accessibilityLabel="關閉" onPress={onClose} style={styles.close}><MaterialCommunityIcons color={colors.textMuted} name="close" size={26} /></Pressable>
         <Text style={styles.title}>{initial ? "編輯收藏" : "新增收藏"}</Text>
         <ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
+          <Text style={styles.locationNotice}>目前定位功能以「行政區／鄉鎮市區」為主，有時候可能無法精確辨識至門牌或街道。</Text>
           <Field label="收藏名稱" onChangeText={setTitle} placeholder="請輸入收藏名稱" styles={styles} value={title} />
           <ChoiceRow label="類型" onChange={setItemType} options={TYPE_OPTIONS} styles={styles} value={itemType} />
-          <Field label="國家" onChangeText={invalidateCountry} placeholder="例如：台灣" styles={styles} value={countryName} />
-          <Field label="區域／城市" onChangeText={invalidateCity} placeholder="例如：台北市信義區" styles={styles} value={cityName} />
+          <SearchableSelect label="國家" onChange={invalidateCountry} options={locationOptions.countries} placeholder="搜尋或輸入國家" value={countryName} />
+          <SearchableSelect label="區域／城市" onChange={invalidateCity} options={[...new Set(locationOptions.items.filter((item) => !countryName || item.country_name === countryName).map((item) => item.city_name).filter((value): value is string => Boolean(value)))]} placeholder="搜尋或輸入區域／城市" value={cityName} />
           <Field label="地址（選填）" onChangeText={invalidateLocation} placeholder="可輸入詳細地址以提高定位精度" styles={styles} value={address} />
           <View style={styles.locationRow}><Pressable disabled={locating || saving} onPress={() => void locateAddress()} style={styles.locate}>{locating ? <ActivityIndicator color={colors.primaryDark} /> : <><MaterialCommunityIcons color={colors.primaryDark} name="map-marker-check-outline" size={18} /><Text style={styles.locateText}>{latitude !== null ? "重新定位" : address.trim() ? "定位地址" : "定位區域"}</Text></>}</Pressable>{locationLabel ? <Text style={styles.locationText}>{locationLabel}</Text> : <Text style={styles.locationHint}>尚未執行定位；未定位仍可儲存</Text>}</View>
           <Field autoCapitalize="none" keyboardType="url" label="參考網址" onChangeText={setSourceUrl} placeholder="https://" styles={styles} value={sourceUrl} />
@@ -170,6 +177,7 @@ const createStyles = (colors: ReturnType<typeof useAppPreferences>["colors"], th
   choices: { flexDirection: "row", flexWrap: "wrap", gap: 8 }, choice: { backgroundColor: colors.primarySoft, borderColor: colors.border, borderRadius: 16, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 7 },
   choiceActive: { backgroundColor: colors.primary, borderColor: colors.primary }, choiceText: { color: colors.primaryDark, fontSize: 13, fontWeight: "700" }, choiceTextActive: { color: theme === "dark" ? colors.background : colors.white },
   error: { color: colors.danger, fontSize: 13, fontWeight: "700" }, actions: { backgroundColor: colors.surface, flexDirection: "row", gap: 10, justifyContent: "flex-end", marginTop: 4, paddingTop: 4 },
+  locationNotice: { backgroundColor: colors.primarySoft, borderRadius: 10, color: colors.textMuted, fontSize: 12, lineHeight: 19, padding: 11 },
   locationRow: { alignItems: "flex-start", gap: 7 }, locate: { alignItems: "center", alignSelf: "flex-start", backgroundColor: colors.primarySoft, borderRadius: 10, flexDirection: "row", gap: 7, paddingHorizontal: 13, paddingVertical: 9 }, locateText: { color: colors.primaryDark, fontWeight: "800" }, locationText: { color: colors.primaryDark, fontSize: 12, lineHeight: 18 }, locationHint: { color: colors.textMuted, fontSize: 12 },
   cancel: { backgroundColor: colors.primarySoft, borderRadius: 10, paddingHorizontal: 20, paddingVertical: 11 }, cancelText: { color: colors.text, fontWeight: "800" }, submit: { alignItems: "center", backgroundColor: colors.primary, borderRadius: 10, minWidth: 92, paddingHorizontal: 20, paddingVertical: 11 }, submitText: { color: theme === "dark" ? colors.background : colors.white, fontWeight: "800" },
 });

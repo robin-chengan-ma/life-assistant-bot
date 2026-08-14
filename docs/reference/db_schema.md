@@ -31,6 +31,7 @@ updated: 2026-08-14
 
 - `trips`：起訖日期改為規劃中可空值；狀態改為 `planning／confirmed／completed／cancelled`；新增國家、區域／城市、六種新台幣分類預估支出及 `deleted_at`。
 - `trip_collection_items`：新增收藏與旅遊行程多對多關聯，保存排序、實際造訪結果、探索事件關聯與名稱快照。
+- `trips.sync_to_important_day`／`trips.important_day_id`：控制 FR-74b 行程是否同步一次性重要日子，並以外鍵保存穩定的一對一連動關係；關閉同步、取消或刪除行程時只停用重要日子。
 - `collection_items`：新增 `deleted_at` 供刪除復原；既有 `priority／desired_date／administrative_area／trip_id` 暫不刪欄，只停止由新版 API／UI 寫入。
 - `exploration_events`：新增原收藏關聯、來源網址與 `deleted_at`；原有位置、日期及文字欄位作為造訪快照。
 - `user_achievements`：建立來源統一為 `manual／suggested`，新增 `deleted_at`。

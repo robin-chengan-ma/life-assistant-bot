@@ -7,6 +7,8 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
+from src.services.app_important_days import AppImportantDayService
+
 _TAIWAN_TZ = ZoneInfo("Asia/Taipei")
 _TRIP_STATUSES = {"planning", "confirmed", "completed", "cancelled"}
 _BUDGET_FIELDS = (
@@ -159,6 +161,7 @@ class AppLifeExplorationService:
         data, collection_ids = self._validated_trip(payload, user_id)
         trip_id = self._db.insert("trips", {"user_id": user_id, **data})
         self._replace_trip_items(trip_id, user_id, collection_ids)
+        self._sync_trip_important_day(trip_id, user_id, payload)
         return {"id": trip_id, "message": "旅遊行程已建立"}
 
     def update_trip(self, trip_id: int, user_id: int, payload: dict[str, Any]) -> dict[str, Any]:
@@ -171,14 +174,16 @@ class AppLifeExplorationService:
             params=(trip_id, user_id),
         )
         self._replace_trip_items(trip_id, user_id, collection_ids)
+        self._sync_trip_important_day(trip_id, user_id, payload)
         return {"id": trip_id, "message": "旅遊行程已更新"}
 
     def delete_trip(self, trip_id: int, user_id: int) -> dict[str, Any]:
-        self._owned("trips", trip_id, user_id)
+        trip = self._owned("trips", trip_id, user_id)
         self._db.update(
             "trips", {"deleted_at": datetime.now(_TAIWAN_TZ)},
             where="id = %s AND user_id = %s", params=(trip_id, user_id),
         )
+        self._set_linked_important_day_active(trip, user_id, False)
         return {"id": trip_id, "message": "旅遊行程已刪除", "undo_seconds": 5}
 
     def restore_trip(self, trip_id: int, user_id: int) -> dict[str, Any]:
@@ -186,6 +191,8 @@ class AppLifeExplorationService:
         if row is None:
             raise LifeNotFoundError("找不到指定的旅遊行程")
         self._db.update("trips", {"deleted_at": None}, where="id = %s AND user_id = %s", params=(trip_id, user_id))
+        if row.get("sync_to_important_day") and row.get("status") != "cancelled":
+            self._set_linked_important_day_active(row, user_id, True)
         return {"id": trip_id, "message": "旅遊行程已復原"}
 
     def complete_trip(self, trip_id: int, user_id: int, payload: dict[str, Any]) -> dict[str, Any]:
@@ -390,8 +397,12 @@ class AppLifeExplorationService:
         if status in {"confirmed", "completed"} and start_date is None:
             raise LifeValidationError("確認或完成行程前請設定日期")
         collection_ids = _id_list(payload.get("collection_item_ids"), "收藏項目")
+        country_name = _text(payload.get("country_name"), "國家", required=True, maximum=100)
+        city_name = _text(payload.get("city_name"), "區域／城市", required=True, maximum=100)
         for collection_id in collection_ids:
-            self._owned("collection_items", collection_id, user_id)
+            item = self._owned("collection_items", collection_id, user_id)
+            if item.get("country_name") != country_name or item.get("city_name") != city_name:
+                raise LifeValidationError("收藏項目必須與行程的國家及區域／城市相同")
         budgets = {field: _money(payload.get(field), "預估支出") for field in _BUDGET_FIELDS}
         category_total = sum((value or Decimal(0)) for value in budgets.values())
         total = _money(payload.get("budget_amount"), "預估總支出")
@@ -399,14 +410,60 @@ class AppLifeExplorationService:
             "title": _text(payload.get("title"), "行程名稱", required=True, maximum=120),
             "start_date": start_date,
             "end_date": end_date,
-            "country_name": _text(payload.get("country_name"), "國家", required=True, maximum=100),
-            "city_name": _text(payload.get("city_name"), "區域／城市", required=True, maximum=100),
+            "country_name": country_name,
+            "city_name": city_name,
             "budget_amount": total if total is not None else category_total,
             "currency_code": "TWD",
             "status": status,
             "notes": _text(payload.get("notes"), "備註"),
+            "sync_to_important_day": bool(payload.get("sync_to_important_day", True)),
             **budgets,
         }, collection_ids
+
+    def _sync_trip_important_day(self, trip_id: int, user_id: int, payload: dict[str, Any]) -> None:
+        trip = self._owned("trips", trip_id, user_id)
+        sync_enabled = bool(payload.get("sync_to_important_day", True))
+        active = (
+            sync_enabled
+            and trip.get("status") != "cancelled"
+            and bool(trip.get("start_date"))
+        )
+        important_day_id = trip.get("important_day_id")
+        if not active:
+            self._set_linked_important_day_active(trip, user_id, False)
+            return
+        audience_mode = payload.get("important_day_audience_mode", "self")
+        reminder_days = payload.get("important_day_reminder_days_before", 1)
+        recipient_ids = payload.get("important_day_recipient_ids", [])
+        important_payload = {
+            "title": trip["title"], "recurrence_type": "one_time",
+            "event_date": str(trip["start_date"]), "event_end_date": str(trip["end_date"]),
+            "is_all_day": True, "reminder_days_before": reminder_days,
+            "audience_mode": audience_mode, "recipient_ids": recipient_ids,
+            "show_on_todo_calendar": bool(payload.get("important_day_show_on_calendar", True)),
+            "is_active": True, "notes": "由旅遊行程自動同步",
+        }
+        service = AppImportantDayService(self._db)
+        if important_day_id:
+            service.update(important_day_id, user_id, important_payload)
+        else:
+            result = service.create(user_id, important_payload)
+            self._db.update(
+                "trips",
+                {"important_day_id": result["id"]},
+                where="id = %s AND user_id = %s",
+                params=(trip_id, user_id),
+            )
+
+    def _set_linked_important_day_active(self, trip: dict[str, Any], user_id: int, active: bool) -> None:
+        important_day_id = trip.get("important_day_id")
+        if important_day_id:
+            self._db.update(
+                "important_days",
+                {"is_active": active, "updated_at": datetime.now(_TAIWAN_TZ)},
+                where="id = %s AND owner_user_id = %s",
+                params=(important_day_id, user_id),
+            )
 
     def _replace_trip_items(self, trip_id: int, user_id: int, collection_ids: list[int]) -> None:
         previous = self._db.select("trip_collection_items", where="trip_id = %s", params=(trip_id,))

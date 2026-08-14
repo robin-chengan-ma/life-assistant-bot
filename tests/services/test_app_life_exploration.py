@@ -9,9 +9,13 @@ from src.services.app_life_exploration import AppLifeExplorationService, LifeVal
 class FakeDatabase:
     def __init__(self):
         self.tables = {
-            "collection_items": [{"id": 2, "user_id": 1, "title": "拉麵店", "status": "saved"}],
+            "collection_items": [{
+                "id": 2, "user_id": 1, "title": "拉麵店", "status": "saved",
+                "country_name": "日本", "city_name": "東京",
+            }],
             "trips": [], "trip_collection_items": [], "exploration_events": [],
-            "user_achievements": [], "achievement_candidates": [],
+            "user_achievements": [], "achievement_candidates": [], "important_days": [],
+            "important_day_recipients": [], "important_day_occurrences": [],
         }
         self.next_id = 10
 
@@ -34,7 +38,8 @@ class FakeDatabase:
         return len(rows)
 
     def delete(self, table, where, params):
-        self.tables[table] = [row for row in self.tables[table] if row.get("trip_id") != params[0]]
+        key = "trip_id" if "trip_id" in (where or "") else "important_day_id"
+        self.tables[table] = [row for row in self.tables[table] if row.get(key) != params[0]]
         return 1
 
     def execute_query(self, query, params=None):
@@ -64,6 +69,27 @@ def test_confirmed_trip_requires_dates_and_end_cannot_precede_start():
         service.create_trip(1, trip_payload(status="confirmed"))
     with pytest.raises(LifeValidationError, match="不可早於"):
         service.create_trip(1, trip_payload(start_date="2026-08-20", end_date="2026-08-19"))
+
+
+def test_trip_rejects_collection_from_other_destination():
+    service = AppLifeExplorationService(FakeDatabase())
+    with pytest.raises(LifeValidationError, match="必須與行程"):
+        service.create_trip(1, trip_payload(city_name="大阪"))
+
+
+def test_dated_trip_creates_linked_important_day_with_defaults():
+    db = FakeDatabase()
+    result = AppLifeExplorationService(db).create_trip(
+        1, trip_payload(start_date="2026-08-11", end_date="2026-08-15"),
+    )
+    trip = db.tables["trips"][0]
+    important_day = db.tables["important_days"][0]
+    assert result["id"] == trip["id"]
+    assert trip["important_day_id"] == important_day["id"]
+    assert important_day["event_date"] == date(2026, 8, 11)
+    assert important_day["event_end_date"] == date(2026, 8, 15)
+    assert important_day["reminder_days_before"] == 1
+    assert important_day["audience_mode"] == "self"
 
 
 @pytest.mark.parametrize(("score", "target", "expected"), [("850", "800", True), ("700", "800", False), ("通過", "合格", True)])

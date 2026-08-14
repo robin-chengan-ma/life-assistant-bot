@@ -202,3 +202,15 @@
 **修復方式**：以專案既有樣式的跨平台自製確認 Modal 取代兩處 `Alert.alert()`，保留刪除二次確認、5 秒復原、標記造訪確認、防連點及 API 成功／失敗訊息。
 
 **驗證方式**：TypeScript typecheck、Expo Web export 與相關後端 39 項測試均通過。尚待 Robin 實機驗證兩種確認、取消、API 成功、API 失敗及刪除復原流程。
+
+## 2026-08-14 探索地圖「刪除」按鈕無反應
+
+**現象**：在 Mobile Web／PWA 的探索地圖下方造訪紀錄卡片點擊「刪除」後沒有可見反應，探索紀錄未刪除。
+
+**排查過程**：核對 `mobile/app/exploration.tsx`，確認刪除 API 已存在，但前端把實際 `deleteExploration()` 呼叫放在 React Native `Alert.alert()` 多按鈕確認回呼內；此寫法與先前收藏清單「標記已造訪／刪除」無反應的實作模式相同。
+
+**根因**：Expo Web／PWA 環境未可靠執行 React Native `Alert.alert()` 多按鈕確認流程，因此刪除確認回呼沒有觸發，後端 API 未收到請求。
+
+**修復方式**：已在 `mobile/app/exploration.tsx` 改用跨平台自製確認 Modal，並補上防連點、處理中、成功／失敗訊息及刪除後 5 秒復原。
+
+**驗證方式**：Python 語法編譯、`git diff --check`、Mobile TypeScript typecheck 與 Expo Web export 通過；目前 Python 環境缺少 pytest，後端自動測試及 Robin 實機確認／取消／刪除／失敗重試／復原流程仍待執行。

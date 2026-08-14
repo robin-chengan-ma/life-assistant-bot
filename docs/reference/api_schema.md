@@ -255,7 +255,7 @@ updated: 2026-08-14
 
 | 項目 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `GET／POST /api/app/life/trips` | 已實作 | FR-74 | 列出／建立本人旅遊行程；回傳預估、實際與差額，建立時可關聯多筆收藏 |
+| `GET／POST /api/app/life/trips` | 已實作 | FR-74／FR-74b | 列出／建立本人旅遊行程；回傳預估、實際與差額，建立時只能關聯相同國家及區域／城市的收藏；`sync_to_important_day` 預設 `true`，並可傳提醒天數、通知對象、指定對象與待辦行事曆顯示設定 |
 | `PATCH／DELETE /api/app/life/trips/<id>` | 已實作 | FR-74 | 更新／軟刪除本人行程 |
 | `POST /api/app/life/trips/<id>/restore` | 已實作 | FR-74 | 復原已刪除行程 |
 | `POST /api/app/life/trips/<id>/complete` | 已實作 | FR-74、FR-75 | 依 `visited_collection_ids` 完成行程，只為實際造訪收藏建立探索快照 |
