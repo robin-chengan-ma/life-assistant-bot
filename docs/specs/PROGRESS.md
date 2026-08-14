@@ -180,10 +180,11 @@ updated: 2026-08-14
 
 ## Commit 紀錄
 
-> 本表只代表本地 Git commit，不等同於已 push 或已部署。資料來源為 `git log --format="%h|%ad|%s" --date=short`（截至 2026-08-14，含本次文件同步 commit 共 115 筆）。git author 全部是 Robin 本人，因此「開發者」欄依 commit 內容與工作階段判斷。
+> 本表只代表本地 Git commit，不等同於已 push 或已部署。資料來源為 `git log --format="%h|%ad|%s" --date=short`（截至 2026-08-14，第一筆功能 commit 完成後共 116 筆）。git author 全部是 Robin 本人，因此「開發者」欄依 commit 內容與工作階段判斷。
 
 | 日期 | 版本 / commit | 異動摘要 | 開發者 |
 | --- | --- | --- | --- |
+| 2026-08-14 | `c514b17` | 完成 Mobile App 收藏、旅遊行程、探索地圖與成果展示 Phase 5 | Codex |
 | 2026-08-14 | `84960d2` | 擴充 Mobile App 飲食與運動紀錄模式 | Codex |
 | 2026-08-14 | `d84222f` | 正式取消 App 三項設定功能 | Codex |
 | 2026-08-14 | `fb62163` | 統一開發與文件治理規則 | Codex |
@@ -303,6 +304,7 @@ updated: 2026-08-14
 
 | 日期 | Branch／版本 | 遠端 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- |
+| 2026-08-14 | `main`／`c514b17` | GitHub | 完成 | Robin 已推版；本次 PROGRESS 同步 commit 將一併 push |
 | 2026-08-14 | `main`／`84960d2`＋`18a4ef7` | GitHub | 完成 | Robin 已確認功能 commit 與 PROGRESS 同步 commit 均已 push |
 | 2026-08-14 | `main`／`fbb905a` | GitHub | 完成 | Robin 已確認 Push 紀錄同步 commit 已 push |
 | 2026-08-14 | `main`／`1c8e836` | GitHub | 完成 | Robin 已確認本次兩筆 commit 均已 push |
