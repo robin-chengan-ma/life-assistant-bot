@@ -44,6 +44,7 @@ tools: ["Read", "Grep", "Glob", "Bash", "WebSearch", "WebFetch"]
 - 明確推薦一個方案
 - 說明理由
 - 列出風險和緩解
+- 使用者採納技術選型後，將決策寫入對應 discuss ADR；reference 只記錄最後採用的現行技術事實
 
 ## 回報格式
 

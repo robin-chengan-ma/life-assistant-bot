@@ -3,8 +3,8 @@
 > **這是一份可直接複製到任何新專案的通用模板**，不綁定特定語言或框架。
 > 使用方式：複製整份檔案為新專案根目錄的 `AGENTS.md` 與 `CLAUDE.md`（`CLAUDE.md` 內容固定為 `@AGENTS.md`），
 > 再依照文末「專案覆寫」區塊，把新專案的技術棧、指令填進 Tech Stack 對照表即可。
-> 第 1–116 行（SDD / TDD / 效率紀律 / 通用原則 / Workflows）是技術棧無關的通用規則，**不需要改**；
-> 唯一要客製的是最後的「專案覆寫」區塊。
+> 「SDD／TDD／Git／文件同步／效率紀律／Workflows」是技術棧無關的通用規則；
+> 新專案只需客製最後的「專案覆寫」區塊。規則引用一律使用章節名稱，不得寫死行號。
 >
 > 本模板整理自三個實際專案的共同規則（Python/FastAPI、Go、Nuxt/Vue），驗證過這套 SDD+TDD 流程
 > 在不同技術棧下是可以逐字共用的，只有指令和目錄結構需要換。
@@ -21,7 +21,7 @@
 | 檔案 | 用途 |
 | --- | --- |
 | `docs/specs/SPEC.md` | 唯一定案規格：產品背景、技術棧與平台策略、產品藍圖與功能規格、例外處理與邊界條件、驗收矩陣 |
-| `docs/specs/PROGRESS.md` | 開發進度時程、任務狀態、推版紀錄 |
+| `docs/specs/PROGRESS.md` | 開發進度、測試結果、commit／push／部署狀態與 Roadmap 內未完成項目 |
 | `docs/specs/DRAFT.md` | 未定案（待討論／臨時想到／已取消／擱置中） |
 | `docs/ADR/discuss/<功能>.md` | 按功能拆檔的討論紀錄，跟 AI／PM／QA／組員／單位／使用者的討論都記在這裡，用標籤區分對象 |
 | `docs/ADR/debug/<功能>.md` | 按功能拆檔的修復紀錄，不論有沒有改 code 都要記 |
@@ -32,13 +32,36 @@
 > 不當作錯誤回報給使用者卡住等待。
 
 1. 非 trivial 任務必須先查 `docs/specs/SPEC.md` 是否已有該功能的定案規格，再實作
-2. 沒有定案規格時，先查 `docs/specs/DRAFT.md`；沒有草稿就先寫進 DRAFT.md，使用者確認要做才升級進 SPEC.md
+2. 沒有定案規格時，先查 `docs/specs/DRAFT.md`；沒有草稿就先寫進 DRAFT.md，使用者確認且規格定案後才移進 SPEC.md，並從 DRAFT.md 移除原項目
 3. 不得重問 SPEC.md 或 `docs/ADR/discuss/` 中已記錄的決策
 4. 不得跳過 SPEC.md／DRAFT.md 直接進入中大型實作
 5. 中大型實作前必須等使用者確認
 6. 討論過程即時記進 `docs/ADR/discuss/<功能>.md`；修 bug 無論有沒有改 code 都要記進 `docs/ADR/debug/<功能>.md`
-7. 實作完成後必須更新 SPEC.md 對應功能區塊（若規格有變動）、PROGRESS.md 任務狀態與 `updated` 日期
+7. 實作完成後必須更新 SPEC.md 對應功能區塊（若規格有變動）、PROGRESS.md 任務狀態、測試結果與 `updated` 日期；若技術現況改變，必須同步更新 reference
 8. SPEC.md 單一功能區塊若成長超過約 200 行，必須把細節移到 `discuss/` 或獨立附錄，SPEC.md 本體只留摘要＋連結，避免重新腫成難以維護的巨檔
+
+### Git 與文件同步規則
+
+- `commit` 是本地版本、`push` 是推送遠端、`部署／推版` 是發布至執行環境，三者不得混用。
+- `git add` 與 `git commit` 必須先摘要變更並取得使用者明確同意；嚴禁執行 `git push`。
+- Commit 前必須完成適用文件同步、風險相符的測試與 `git diff --check`。
+- 每次 commit 後，最晚在下一次文件提交前，把日期、短版 hash、摘要與開發者補進 PROGRESS.md；純文件 commit 也要記錄。
+- 單純補寫上一筆 commit 紀錄所建立的文件 commit 不記錄自身，避免無限循環。
+- PROGRESS.md 必須分開記錄 commit、push 與部署狀態；宣稱同步前必須比對近期 `git log`。
+- 文件同步是任務完成條件，不需使用者再次提醒；程式碼完成但文件未同步時，不得回報任務完成。
+
+### 文件生命週期與分流
+
+- SPEC 只保留已定案且目前有效的需求；DRAFT 只保留未定案、暫緩、取消或未排入 Roadmap 的內容。
+- DRAFT 項目正式定案後，完整內容移入 SPEC 並從 DRAFT 移除，不保留「已升級」副本。
+- PROGRESS 的未完成項目只限已定案且已排入 Roadmap 的工作，不得與 DRAFT 重複。
+- discuss ADR 保存決策歷史，不得覆寫舊決策；改變決策時新增段落，舊段落標記 `superseded` 或 `deprecated` 並連結新決策。
+- `pending` 表示未定案、`accepted` 表示目前有效、`superseded` 表示被新決策取代、`deprecated` 表示停止採用且無替代決策。
+- debug ADR 記錄現象、重現、排查、根因、修復、驗證與未驗證範圍；若修復改變正式產品行為，還要同步 SPEC 與 discuss ADR。
+- Reference 只記錄目前有效的技術事實；歷史與理由放 ADR。API、DB、環境變數或部署現況改變時必須同一任務同步。
+- Reference 只能記錄環境變數名稱與假資料，不得包含 Token、密碼、個資或敏感 URL。
+- 文件有實質異動才更新 `updated`，日期統一 `YYYY-MM-DD`，不得只改日期。
+- 完成前確認 SPEC／DRAFT 無重複、ADR 狀態正確、Reference 與程式碼一致、連結有效且 `git diff --check` 通過。
 
 ### 討論紀錄格式（`docs/ADR/discuss/<功能>.md`）
 
@@ -54,6 +77,8 @@
 **後果**：<決策帶來的影響>
 ```
 
+ADR 是不可覆寫的決策歷史；新決策取代舊決策時，新增段落並更新狀態與雙向連結，不得直接刪除舊內容。
+
 ### 修復紀錄格式（`docs/ADR/debug/<功能>.md`）
 
 同一功能的多次除錯用同一檔案，依時間附加新的段落：
@@ -65,6 +90,7 @@
 **根因**：<真正原因>
 **修復方式**：<有改 code 附檔案路徑；沒改 code 要說明原因>
 **驗證方式**：<怎麼確認修好了>
+**未驗證範圍**：<尚未驗證的項目；全部驗證則填無>
 ```
 
 ---
@@ -163,16 +189,16 @@ RED（寫失敗的測試）
    - 等使用者確認後開始實作
 3. 未定案：
    - 查 docs/specs/DRAFT.md 是否已有相關草稿
-   - 有草稿且使用者確認要做 -> 依 docs/templates/SPEC-TEMPLATE.md 的功能區塊格式，補進
-     SPEC.md 對應功能區塊，DRAFT.md 該項標記「已升級」
+   - 有草稿且使用者確認、規格正式定案 -> 依 docs/templates/SPEC-TEMPLATE.md 的功能區塊格式補進
+     SPEC.md 對應功能區塊，連結 accepted ADR，並從 DRAFT.md 移除原項目
    - 沒有草稿 -> 先記錄進 DRAFT.md，待使用者確認才升級進 SPEC.md
    - 呈現給使用者確認，確認後才開始實作
 4. 中大型任務 -> 呈現實作計畫（影響範圍、步驟、風險），等確認
 5. 討論過程即時寫進 docs/ADR/discuss/<功能>.md（標註對象標籤與狀態）
 6. 實作完成後：
    - 更新 SPEC.md 對應功能區塊（若規格有變動；單一區塊超過約 200 行要把細節移到 discuss/ 或附錄）
-   - 更新 PROGRESS.md：任務狀態、對應 FR 編號、開發者（Claude／Codex／Robin）、updated 日期，
-     必要時補推版紀錄
+   - 更新 PROGRESS.md：任務狀態、對應 FR 編號、開發者（Claude／Codex／Robin）、測試結果、updated 日期；commit／push／部署狀態分開記錄
+   - 若 API、DB Schema、環境變數或部署現況有變，更正對應 reference
    - 若過程中修了 bug（不論有沒有改 code）-> 記錄進 docs/ADR/debug/<功能>.md
    - 報告：影響範圍、測試狀態、剩餘 tasks
    - 若剛完成的是單一 Step（子階段）-> 主動詢問使用者：「這個 step 做完了，要執行 `/compact` 嗎？」
@@ -206,6 +232,7 @@ RED（寫失敗的測試）
    - 執行結果（通過/失敗）
    - 覆蓋率
    - 未驗證範圍
+   - 將測試結果與未驗證範圍同步至 PROGRESS.md
 ```
 
 ### Workflow: Spec Status（查看規格與進度）
@@ -229,9 +256,10 @@ RED（寫失敗的測試）
 ```text
 步驟：
 1. 問使用者功能名稱與概要（或從對話推斷）
-2. 先寫進 docs/specs/DRAFT.md（未定案，待確認）
-3. 使用者確認要做 -> 依 docs/templates/SPEC-TEMPLATE.md 的功能區塊格式，補進 docs/specs/SPEC.md
-4. 呈現給使用者確認和補充
+2. 先寫進 docs/specs/DRAFT.md 與 pending discuss ADR（未定案，待確認）
+3. 使用者確認且規格定案 -> 依 docs/templates/SPEC-TEMPLATE.md 的功能區塊格式補進 docs/specs/SPEC.md，將 ADR 改為 accepted
+4. 從 DRAFT.md 移除已升級項目，避免與 SPEC 重複
+5. 呈現給使用者確認和補充
 ```
 
 ---

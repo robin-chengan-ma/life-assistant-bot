@@ -10,3 +10,5 @@ user-invocable: true
 分析目前要做的功能或要修的 bug，進入 RED -> GREEN -> REFACTOR 循環。
 
 請立即開始執行 AGENTS.md 的 TDD workflow 步驟。
+
+完成後將測試命令、結果、覆蓋率與未驗證範圍同步到 `docs/specs/PROGRESS.md`。

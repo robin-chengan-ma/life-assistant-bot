@@ -40,6 +40,9 @@ tools: ["Read", "Write", "Edit", "Bash", "Grep"]
 ### 7. 檢查覆蓋率
 確認達 80%+，不足則補測試。
 
+### 8. 同步進度
+將測試命令、執行結果、覆蓋率與未驗證範圍更新至 `docs/specs/PROGRESS.md`。
+
 ## 必須測試的 Edge Case
 
 1. Null / Undefined

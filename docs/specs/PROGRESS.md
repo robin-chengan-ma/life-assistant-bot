@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-13
+updated: 2026-08-14
 ---
 
 # 開發進度
@@ -12,6 +12,7 @@ updated: 2026-08-13
 
 | 日期 | 對應 FR | 任務內容 | 開發者 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- | --- |
+| 2026-08-14 | | 專案開發治理規則統一：AGENTS／Template 補齊文件生命週期、commit 同步、ADR／Reference 規範，並修正 `.claude/` 指令與代理規則漂移 | Codex | 完成 | 純文件治理；不需程式測試 |
 | 2026-07-28 | | 專案緣起：完成外部服務註冊／API 金鑰申請、Telegram Bot 基礎設定，與 Gemini 腦力激盪收斂 PRD 雛形 | Robin | 完成 | Claude Code 協作開始前 |
 | 2026-07-29 | | 完成需求彙整，建立產品規格書 `docs/specs/robinson/SPEC.md` | Claude | 完成 | 里程碑 |
 | 2026-07-29 | | 建立開發階段紀錄文件 PROGRESS.md | Claude | 完成 | 里程碑 |
@@ -174,12 +175,15 @@ updated: 2026-08-13
 
 > 「開發者」欄固定填 `Claude`、`Codex` 或實際負責人姓名，方便回溯是哪個工具／人做的。
 
-## 推版紀錄
+## Commit 紀錄
 
-> 資料來源為 `git log --format="%h|%ad|%s" --date=short`（共 106 筆 commit）。git author 全部是 Robin 本人，因此「開發者」欄改以 commit 內容比對 `codex.md` 工作階段與 robinson 里程碑判斷。
+> 本表只代表本地 Git commit，不等同於已 push 或已部署。資料來源為 `git log --format="%h|%ad|%s" --date=short`（截至 2026-08-14 共 109 筆 commit）。git author 全部是 Robin 本人，因此「開發者」欄依 commit 內容與工作階段判斷。
 
 | 日期 | 版本 / commit | 異動摘要 | 開發者 |
 | --- | --- | --- | --- |
+| 2026-08-14 | `ec36062` | 補齊待討論、已取消與擱置項目 | Codex |
+| 2026-08-14 | `b991323` | 補齊正式技術棧資訊 | Codex |
+| 2026-08-14 | `55177ad` | 整併規格與文件架構 | Codex |
 | 2026-08-13 | `3160b14` | 記錄 PWA icon/縮放/SPA 路由修正過程，補充 FR-65c 保持登入在 Web 版的已知限制 | Claude |
 | 2026-08-12 | `4f7bfd3` | 修正 web.output 改為 static，讓 +html.tsx 的 icon/manifest/viewport 設定真正生效 | Claude |
 | 2026-08-12 | `ed644f3` | Web 版加入 App icon、manifest，加入主畫面時使用真正的羅賓森頭像並支援全螢幕模式 | Claude |
@@ -286,3 +290,17 @@ updated: 2026-08-13
 | 2026-07-27 | `d92b391` | fix: rename DockerFile to Dockerfile | Robin |
 | 2026-07-27 | `9041aab` | chore: add initial project skeleton for deployment setup | Robin |
 | 2026-07-27 | `91eff3b` | Initial commit | Robin |
+
+## Push 紀錄
+
+> Push 必須由 Robin 親自執行；本表只記錄已有明確證據的結果。本輪文件治理未執行 push，也不推測遠端狀態。
+
+| 日期 | Branch／版本 | 遠端 | 狀態 | 備註 |
+| --- | --- | --- | --- | --- |
+| 2026-08-12 | `main`／Step 4.4～4.5 | GitHub | 完成 | 依當日正式上線里程碑紀錄 |
+
+## 部署紀錄
+
+| 日期 | 版本／範圍 | 環境 | 狀態 | 驗證 |
+| --- | --- | --- | --- | --- |
+| 2026-08-12 | Step 4.4～4.5 Mobile App 與後端 API | Render＋Vercel 正式環境 | 完成 | 依當日正式上線里程碑紀錄 |

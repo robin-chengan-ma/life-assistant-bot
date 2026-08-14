@@ -51,6 +51,13 @@ tools: ["Read", "Grep", "Glob", "Bash"]
 - 測試是否涵蓋新邏輯和 edge case
 - 測試品質（不測實作細節）
 
+### 6. 文件一致性
+- SPEC 與 DRAFT 是否重複或衝突
+- PROGRESS 是否符合程式碼、測試、commit、push 與部署現況
+- ADR 狀態與決策連結是否正確
+- API、DB、環境變數或部署變更是否同步 reference
+- 文件是否含敏感資料或失效連結
+
 ## 審查流程
 
 1. 讀取專案根目錄的 AGENTS.md，確認目前的技術棧、目錄結構慣例、覆蓋率與安全要求
