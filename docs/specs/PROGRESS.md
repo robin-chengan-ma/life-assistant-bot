@@ -12,6 +12,7 @@ updated: 2026-08-14
 
 | 日期 | 對應 FR | 任務內容 | 開發者 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- | --- |
+| 2026-08-14 | FR-64／FR-65 | 修復重要日子家庭成員查詢與求職分析契合度欄位錯置 | Codex | 實作完成（待部署驗收） | 使用者 ID 改由 `users.id` 動態產生；求職 SQL 改讀 `score AS match_score`，同步更新 API／DB／Mobile UX reference，並補伺服器端安全日誌及回歸測試；Python compileall、直接檢查與 diff check 通過，環境缺 pytest／部分依賴 |
 | 2026-08-14 | FR-72a／FR-74／FR-75 | 探索篩選與定位提示、旅遊行程今日標示、重要日子載入相容修正及目標日期同步 | Codex | 實作完成（待實機／部署驗收） | 新增 `0082` 體態／證照目標的重要日子關聯與既有資料回填；重要日子查詢相容舊 occurrence 區間欄位；目標同步 3 項直接測試、Python compileall、TypeScript typecheck、Expo Web export 與 diff check 通過，環境缺 pytest |
 | 2026-08-14 | FR-73／FR-75 | 收藏地址選填、漸進式近似定位及收藏操作按鈕修復 | Codex | 完成（待實機驗收） | 地址定位依精確門牌、道路、城市逐級放寬；無地址可定位區域；以跨平台確認 Modal 取代 Web 不可靠的 `Alert.alert()`；相關後端 39 項測試、TypeScript typecheck 與 Expo Web export 通過 |
 | 2026-08-14 | FR-73～FR-76a | 收藏清單／旅遊行程／探索地圖／成果展示 Phase 5 實作 | Codex | 完成（待實機驗收／migration 套用） | 新增 `0079`、`0080`、生活探索 API／Service、Mobile 行程／探索／成果畫面、記帳行程關聯、Nominatim 地址定位與測試；TypeScript 與 Expo Web export 通過；正式部署前需設定 Nominatim 識別 User-Agent |
@@ -184,10 +185,11 @@ updated: 2026-08-14
 
 ## Commit 紀錄
 
-> 本表只代表本地 Git commit，不等同於已 push 或已部署。資料來源為 `git log --format="%h|%ad|%s" --date=short`（截至 2026-08-14，本次 PROGRESS 同步 commit 完成後共 125 筆）。git author 全部是 Robin 本人，因此「開發者」欄依 commit 內容與工作階段判斷。
+> 本表只代表本地 Git commit，不等同於已 push 或已部署。資料來源為 `git log --format="%h|%ad|%s" --date=short`（截至 2026-08-14，本次 PROGRESS 同步 commit 完成後共 127 筆）。git author 全部是 Robin 本人，因此「開發者」欄依 commit 內容與工作階段判斷。
 
 | 日期 | 版本 / commit | 異動摘要 | 開發者 |
 | --- | --- | --- | --- |
+| 2026-08-14 | `67ef251` | 修正重要日子家庭成員查詢與求職分析載入 | Codex |
 | 2026-08-14 | `b3f165a` | 同步目標日期並修正 Mobile App 重要日子相關問題 | Codex |
 | 2026-08-14 | `4760689` | 完善 Mobile 收藏地點選擇、固定捲動、旅遊行程與重要日子同步 | Codex |
 | 2026-08-14 | `bff8679` | 改善收藏地址定位並修復已造訪與刪除操作 | Codex |
@@ -312,6 +314,7 @@ updated: 2026-08-14
 
 | 日期 | Branch／版本 | 遠端 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- |
+| 2026-08-14 | `main`／`67ef251` | GitHub | 完成 | 8/14 Robin 已推版；本次 PROGRESS 同步 commit 將一併 push |
 | 2026-08-14 | `main`／`b3f165a` | GitHub | 完成 | 8/14 Robin 已推版；本次 PROGRESS 同步 commit 將一併 push |
 | 2026-08-14 | `main`／`4760689` | GitHub | 完成 | 8/14 Robin 已推版；本次 PROGRESS 同步 commit 將一併 push |
 | 2026-08-14 | `main`／`bff8679` | GitHub | 完成 | 8/14 Robin 已推版；本次 PROGRESS 同步 commit 將一併 push |
