@@ -57,3 +57,17 @@
 **理由**：這是唯一能同時滿足「人工審核不能省」與「核准後全自動、不用自己動手」兩個條件的作法。
 
 **後果**：往後任何新增/修改資料表，都改為「提案→Robin 同意→Claude 建立 migration 檔並 push」，不再手動於 Neon 主控台執行；`src/schema/db_schema.md` 的紀錄時機從「執行後」改為「push 後」立即記錄。
+
+## 2026-08-14 [標籤：使用者] 技術棧表補齊實際 Runtime、Mobile Web 與部署資料
+
+**狀態**：accepted
+
+**背景**：整併後的 `docs/specs/SPEC.md` 技術棧表雖已列出 Flask、Neon 與 Render，但沒有明確列出 Python、TypeScript、React／Expo、Docker、Vercel 與中華民國政府行政機關辦公日曆，且 Mobile App 狀態仍誤寫為 Placeholder。
+
+**討論內容**：逐項比對 `requirements.txt`、`mobile/package.json`、根目錄 `Dockerfile`、`mobile/vercel.json` 與政府辦公日曆實作，區分正式核心技術、一般底層依賴，以及尚在 DRAFT 的 Leaflet／OpenStreetMap 探索地圖 POC。
+
+**決策**：技術棧表補入 Python 3.11、TypeScript／React／React Native／Expo、React Native Web／Expo Router、Mobile 日期與圖片元件、bcrypt／PyJWT／Expo SecureStore、中華民國政府行政機關辦公日曆 CSV、Docker、Vercel、pytest／pytest-cov 與 Ruff；Render 明確標示為後端部署，Vercel 明確標示為 Mobile Web 部署，Mobile App 狀態修正為 2026-08-12 正式上線。
+
+**理由**：技術棧表應能直接回答系統使用的語言、Framework、資料來源、建置方式與前後端部署位置，不能只列外部服務名稱，也不能保留與實際上線狀態衝突的舊資訊。
+
+**後果**：`docs/specs/SPEC.md` 與實際部署架構一致；Leaflet／OpenStreetMap 仍屬未升級的 DRAFT 功能，本次不提前列為正式使用中的產品技術棧。

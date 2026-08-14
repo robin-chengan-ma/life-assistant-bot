@@ -21,15 +21,20 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 是唯�
 
 | 層級 | 技術/工具/API | 版本 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- |
+| 後端語言／Runtime | Python | 3.11 | 使用中 | Render 使用 `python:3.11-slim` Docker Image 執行 Flask、Telegram Bot 與背景排程 |
 | 前台（輸入＋CRUD） | Telegram Bot API | — | 使用中 | 唯一使用者輸入介面（文字/語音/圖片），`python-telegram-bot` 已移除，改用原生 JSON dict 解析 |
-| 前台（唯讀＋設定） | Mobile App「羅賓森」（React Native + Expo） | — | 使用中（Phase 4 Placeholder，尚未開工） | 取代原規劃的 Notion 後台；帳密登入＋JWT，取代原規劃的 `APP Access Token` |
+| Mobile 語言／UI Framework | TypeScript + React + React Native + Expo | TypeScript 6／React 19／React Native 0.86／Expo 57 | 使用中（2026-08-12 正式上線） | Mobile App「羅賓森」共用 Web／iOS／Android 程式架構；目前正式交付版本為 Expo Web |
+| Mobile Web／路由 | React Native Web + Expo Router | React Native Web 0.21／Expo Router 57 | 使用中 | SPA 頁面、登入導向與各分析／設定頁路由 |
+| Mobile 日期／圖片輸入 | `react-native-calendars` + DateTimePicker + `expo-image-picker` | — | 使用中 | 待辦、日期區間、重要日子、時間選擇，以及飲食拍照／相簿選擇 |
 | Web 框架 | Flask | — | 使用中 | 同步架構，webhook 單一進入點 |
 | 資料庫 | Neon PostgreSQL（psycopg2 + ThreadedConnectionPool） | — | 使用中 | 不用 ORM；連線池上限低（預設 1～5）配合免費額度 |
 | 資料庫 Migration | `src/migrations/` + 開機自動套用 | — | 使用中 | 取代人工貼 SQL；`schema_migrations` 追蹤表 |
+| App 登入認證 | bcrypt + PyJWT + Expo SecureStore | — | 使用中 | bcrypt 保存密碼雜湊、JWT Access Token、rolling Refresh Token；原生裝置以 SecureStore 保存 Refresh Token |
 | 檔案儲存 | Google Drive（OAuth 2.0，真人帳號身分） | — | 使用中 | 取代原 Service Account（無 Drive 儲存額度問題） |
 | AI 對話/生成 | Gemini API（`gemini-3.5-flash-lite`） | — | 使用中 | 依用途拆多把 Key，見下方「AI 模型金鑰分流」 |
 | AI 語音轉文字 | Groq Whisper（OpenAI 相容 REST API） | — | 使用中 | 取代原規劃「語音一律用 Gemini」；`requests` 直打，不裝官方 `groq` SDK |
 | 家庭行事曆 | Google Calendar API v3（OAuth 2.0，獨立憑證，`calendar.events` scope） | — | 使用中 | 單一共用行事曆，僅 Robin 授權，家人訂閱瀏覽 |
+| 政府辦公日曆資料 | 中華民國政府行政機關辦公日曆 CSV（政府資料開放平臺） | — | 使用中 | 由 `TaiwanCalendarService` 按年度取得並快取至 `taiwan_calendar_days`，供休假日、補班日與節日顯示 |
 | 備援通知 | Gmail SMTP/IMAP（`smtplib`/`imaplib`，標準函式庫） | — | 使用中 | Telegram 故障備援 + TLDR 電子報讀取 |
 | RSS 擷取 | 標準函式庫 `xml.etree.ElementTree` + `requests` | — | 使用中 | 不裝 `feedparser` |
 | 網頁正文擷取 | `beautifulsoup4` | — | 使用中 | 技術新聞全文摘要用 |
@@ -39,8 +44,12 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 是唯�
 | 音訊處理 | `pydub`（依賴系統 `ffmpeg`） | — | 使用中 | 整包聽力 MP3 切割 |
 | 圖片壓縮 | `Pillow` | — | 使用中 | 上傳圖片先壓縮至 1024×1024／JPEG 80% 再送 AI |
 | 農曆計算 | `lunarcalendar` | — | 使用中 | 純 Python、免網路，即時計算節日西曆日期 |
-| 部署 | Render（免費方案） | — | 使用中 | Git push to main 自動部署 |
+| 後端容器 | Docker（`python:3.11-slim` + ffmpeg） | — | 使用中 | 安裝正式 Python 依賴並以 `python main.py` 啟動 Flask 服務 |
+| 後端部署 | Render（免費方案） | — | 使用中 | Git push to main 自動部署 Docker 容器 |
+| Mobile Web 部署 | Vercel | — | 使用中 | 託管 Expo Web SPA，並將同源 `/api/*` Proxy 至 Render Flask API |
 | Keep-alive | cron-job.org（每 10 分鐘打 `/healthz`） | — | 使用中 | 同時借用頻率跑十餘個排程檢查（背景 daemon thread） |
+| 後端測試／覆蓋率 | pytest + pytest-cov | — | 使用中 | 測試集中於 `tests/`；認證與安全邏輯要求 100% 覆蓋 |
+| Python Lint | Ruff | — | 使用中 | 執行 PEP 8 與 Python 程式碼品質檢查 |
 | ORM（SQLAlchemy） | — | — | 決定不用 | 需要為每個模組定義 Model，與「跨專案重用的通用 CRUD 小工具」目標衝突，見 submodules-core 討論紀錄 ADR-1 |
 | Notion（視覺化後台） | — | — | 決定不用 | 客製化程度低、無多用戶權限機制，改採 Mobile App，見 mobile-app 討論紀錄 |
 | Google Search grounding | — | — | 決定不用 | Gemini 2.5 世代對新專案關閉存取、Gemini 3 世代免費層 grounding 額度為 0，見 chat-core 討論紀錄 ADR-5、submodules-core 討論紀錄 ADR-7/ADR-8 |
