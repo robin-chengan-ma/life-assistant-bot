@@ -184,10 +184,11 @@ updated: 2026-08-14
 
 ## Commit 紀錄
 
-> 本表只代表本地 Git commit，不等同於已 push 或已部署。資料來源為 `git log --format="%h|%ad|%s" --date=short`（截至 2026-08-14，旅遊行程與地點操作 commit 完成後共 119 筆）。git author 全部是 Robin 本人，因此「開發者」欄依 commit 內容與工作階段判斷。
+> 本表只代表本地 Git commit，不等同於已 push 或已部署。資料來源為 `git log --format="%h|%ad|%s" --date=short`（截至 2026-08-14，本次 PROGRESS 同步 commit 完成後共 125 筆）。git author 全部是 Robin 本人，因此「開發者」欄依 commit 內容與工作階段判斷。
 
 | 日期 | 版本 / commit | 異動摘要 | 開發者 |
 | --- | --- | --- | --- |
+| 2026-08-14 | `b3f165a` | 同步目標日期並修正 Mobile App 重要日子相關問題 | Codex |
 | 2026-08-14 | `4760689` | 完善 Mobile 收藏地點選擇、固定捲動、旅遊行程與重要日子同步 | Codex |
 | 2026-08-14 | `bff8679` | 改善收藏地址定位並修復已造訪與刪除操作 | Codex |
 | 2026-08-14 | `b2e3362` | 完成 Mobile App 探索地址定位、快取與重新定位 | Codex |
@@ -311,6 +312,7 @@ updated: 2026-08-14
 
 | 日期 | Branch／版本 | 遠端 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- |
+| 2026-08-14 | `main`／`b3f165a` | GitHub | 完成 | 8/14 Robin 已推版；本次 PROGRESS 同步 commit 將一併 push |
 | 2026-08-14 | `main`／`4760689` | GitHub | 完成 | 8/14 Robin 已推版；本次 PROGRESS 同步 commit 將一併 push |
 | 2026-08-14 | `main`／`bff8679` | GitHub | 完成 | 8/14 Robin 已推版；本次 PROGRESS 同步 commit 將一併 push |
 | 2026-08-14 | `main`／`b2e3362` | GitHub | 完成 | 8/14 Robin 已推版；本次 PROGRESS 同步 commit 將一併 push |
