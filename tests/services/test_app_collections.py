@@ -171,3 +171,14 @@ def test_delete_is_soft_delete_and_restore_recovers_item():
     service.restore(item_id, 1)
 
     assert db.tables["collection_items"][0]["deleted_at"] is None
+
+
+def test_geocode_delegates_to_configured_service():
+    class Geocoder:
+        def search(self, value):
+            assert value == {"address": "台北 101"}
+            return {"latitude": 25.033964, "longitude": 121.564468}
+
+    result = AppCollectionService(FakeDatabase(), Geocoder()).geocode({"address": "台北 101"})
+
+    assert result["latitude"] == 25.033964

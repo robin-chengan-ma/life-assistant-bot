@@ -25,6 +25,7 @@ updated: 2026-08-14
 | --- | --- | --- | --- |
 | `0071`～`0077` | 已建立 | 前置 POC | 建立 `trips`、`collection_items`、`exploration_events`、舊版每日行程、探索照片、成果及 `transactions.trip_id` |
 | `0079_align_life_exploration_phase5.sql` | 待套用 | FR-73～FR-76a | 以追加 migration 對齊 2026-08-14 定案規格，不回寫既有 migration |
+| `0080_create_geocoding_cache.sql` | 待套用 | FR-75 | 建立 Nominatim 地址轉座標快取；以正規化查詢字串唯一去重，保存座標、顯示名稱及來源 |
 
 `0079` Schema 異動摘要：
 
@@ -35,6 +36,10 @@ updated: 2026-08-14
 - `user_achievements`：建立來源統一為 `manual／suggested`，新增 `deleted_at`。
 - `achievement_candidates`：新增使用者成果候選、來源、完成日期與 `pending／accepted／rejected` 決策狀態，同一使用者的 `candidate_key` 唯一以防重複提示。
 - 所有既有記帳金額仍只存於 `transactions`；`trip_id` 沿用 `0077`，不複製實際支出。
+
+`0080` Schema 異動摘要：
+
+- `geocoding_cache`：以 `query_key` 唯一約束快取地址查詢，保存原查詢、緯度、經度、顯示名稱、Nominatim 來源與時間戳；座標具合法範圍檢查。
 
 ## 平台核心入口
 

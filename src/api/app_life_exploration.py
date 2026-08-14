@@ -11,13 +11,19 @@ from src.services.app_life_exploration import (
     LifeNotFoundError,
     LifeValidationError,
 )
+from src.services.geocoding import (
+    GeocodingNotFoundError,
+    GeocodingUnavailableError,
+    GeocodingValidationError,
+    NominatimGeocoder,
+)
 from submodules.cloudsql.client import CloudSQLClient
 
 app_life_exploration_bp = Blueprint("app_life_exploration", __name__, url_prefix="/api/app/life")
 
 
 def _service(db: CloudSQLClient) -> AppLifeExplorationService:
-    return AppLifeExplorationService(db)
+    return AppLifeExplorationService(db, NominatimGeocoder(db))
 
 
 @app_life_exploration_bp.after_request
@@ -47,6 +53,12 @@ def _run(action: Callable[[AppLifeExplorationService], dict[str, Any]], *, creat
         return jsonify({"message": str(exc)}), 400
     except LifeNotFoundError as exc:
         return jsonify({"message": str(exc)}), 404
+    except GeocodingValidationError as exc:
+        return jsonify({"message": str(exc)}), 400
+    except GeocodingNotFoundError as exc:
+        return jsonify({"message": str(exc)}), 404
+    except GeocodingUnavailableError as exc:
+        return jsonify({"message": str(exc)}), 503
     except Exception:  # noqa: BLE001
         return jsonify({"message": "生活探索資料目前無法處理，請稍後再試"}), 503
     finally:
@@ -122,6 +134,12 @@ def delete_exploration(event_id: int):
 @require_access_token
 def restore_exploration(event_id: int):
     return _run(lambda service: service.restore_exploration(event_id, g.app_user.database_id))
+
+
+@app_life_exploration_bp.post("/exploration/<int:event_id>/relocate")
+@require_access_token
+def relocate_exploration(event_id: int):
+    return _run(lambda service: service.relocate_exploration(event_id, g.app_user.database_id))
 
 
 @app_life_exploration_bp.get("/achievements")

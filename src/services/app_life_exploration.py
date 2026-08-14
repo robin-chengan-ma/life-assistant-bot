@@ -28,6 +28,10 @@ class LifeDatabase(Protocol):
     def execute_query(self, query, params=None): ...
 
 
+class LifeGeocoder(Protocol):
+    def search(self, payload: dict[str, Any]) -> dict[str, Any]: ...
+
+
 class LifeExplorationError(Exception):
     """可安全回傳給 App 的生活探索錯誤。"""
 
@@ -111,8 +115,9 @@ def _serialize(value: Any) -> Any:
 
 
 class AppLifeExplorationService:
-    def __init__(self, db: LifeDatabase):
+    def __init__(self, db: LifeDatabase, geocoder: LifeGeocoder | None = None):
         self._db = db
+        self._geocoder = geocoder
 
     def list_trips(self, user_id: int) -> dict[str, Any]:
         rows = self._db.execute_query(
@@ -258,16 +263,42 @@ class AppLifeExplorationService:
         }
 
     def update_exploration(self, event_id: int, user_id: int, payload: dict[str, Any]) -> dict[str, Any]:
-        self._owned("exploration_events", event_id, user_id)
+        current = self._owned("exploration_events", event_id, user_id)
+        address = _text(payload.get("address"), "地址", maximum=500)
         data: dict[str, Any] = {
             "start_date": _iso_date(payload.get("visited_on"), "造訪日期", required=True),
             "end_date": _iso_date(payload.get("visited_on"), "造訪日期", required=True),
             "notes": _text(payload.get("notes"), "備註"),
-            "address": _text(payload.get("address"), "地址", maximum=500),
+            "address": address,
             "updated_at": datetime.now(_TAIWAN_TZ),
         }
+        if address != current.get("address"):
+            data.update({"latitude": None, "longitude": None})
         self._db.update("exploration_events", data, where="id = %s AND user_id = %s", params=(event_id, user_id))
         return {"id": event_id, "message": "探索紀錄已更新"}
+
+    def relocate_exploration(self, event_id: int, user_id: int) -> dict[str, Any]:
+        row = self._owned("exploration_events", event_id, user_id)
+        if self._geocoder is None:
+            raise LifeValidationError("地址定位服務尚未設定")
+        result = self._geocoder.search(
+            {
+                "address": row.get("address"),
+                "city_name": row.get("city_name"),
+                "country_name": row.get("country_name"),
+            }
+        )
+        self._db.update(
+            "exploration_events",
+            {
+                "latitude": result["latitude"],
+                "longitude": result["longitude"],
+                "updated_at": datetime.now(_TAIWAN_TZ),
+            },
+            where="id = %s AND user_id = %s",
+            params=(event_id, user_id),
+        )
+        return {"id": event_id, "message": "探索地址已重新定位", **result}
 
     def delete_exploration(self, event_id: int, user_id: int) -> dict[str, Any]:
         self._soft_delete("exploration_events", event_id, user_id)

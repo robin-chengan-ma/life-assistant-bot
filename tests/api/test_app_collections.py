@@ -114,3 +114,21 @@ def test_write_maps_expected_errors(client, monkeypatch, error, status):
 
     assert response.status_code == status
     assert response.get_json()["message"] == str(error)
+
+
+def test_geocode_route_uses_authenticated_service(client, monkeypatch):
+    test_client, module = client
+
+    class Service:
+        def geocode(self, payload):
+            assert payload["address"] == "台北 101"
+            return {"latitude": 25.033964, "longitude": 121.564468}
+
+    monkeypatch.setattr(module, "_service", lambda db: Service())
+    response = test_client.post(
+        "/api/app/collections/geocode", headers=headers(),
+        json={"address": "台北 101", "city_name": "台北", "country_name": "台灣"},
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["longitude"] == 121.564468

@@ -12,7 +12,8 @@ updated: 2026-08-14
 
 | 日期 | 對應 FR | 任務內容 | 開發者 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- | --- |
-| 2026-08-14 | FR-73～FR-76a | 完成收藏清單／旅遊行程／探索地圖／成果展示 Phase 5 實作 | Codex | 完成（待實機驗收／migration 套用） | 新增 `0079`、生活探索 API／Service、Mobile 行程／探索／成果畫面、記帳行程關聯與測試；成果刪除具二次確認與 5 秒復原；相關測試 60 項通過，TypeScript 與 Expo Web export 通過；全專案 1692 項通過、3 項僅因本機缺 ffmpeg 失敗 |
+| 2026-08-14 | FR-73～FR-76a | 收藏清單／旅遊行程／探索地圖／成果展示 Phase 5 實作 | Codex | 完成（待實機驗收／migration 套用） | 新增 `0079`、`0080`、生活探索 API／Service、Mobile 行程／探索／成果畫面、記帳行程關聯、Nominatim 地址定位與測試；TypeScript 與 Expo Web export 通過；正式部署前需設定 Nominatim 識別 User-Agent |
+| 2026-08-14 | FR-75 | 完成 Nominatim 地址轉座標、快取、頻率限制及探索重新定位 | Codex | 完成（待部署驗收） | 新收藏由使用者明確按鈕定位；修改地址會清除舊座標，可選擇重新定位；定位失敗仍可保存至無法定位清單；相關後端測試 34 項通過 |
 | 2026-08-14 | FR-73 | 修復 Mobile App 首頁「新增收藏」Modal 在手機窄螢幕跑版 | Codex | 完成（待實機驗收） | 精簡定案欄位並修正選項換行、捲動區與底部按鈕間距，見 `docs/ADR/debug/mobile-app.md` |
 | 2026-08-14 | FR-69／FR-70／FR-71 | 正式取消 Mobile App 目標與指標設定、功能開關頁及 Robin 專屬排程設定，從 SPEC 與 Roadmap 移除 | Codex | 已取消 | 既有 Telegram 設定流程不受影響；見 DRAFT 與 mobile-app ADR |
 | 2026-08-14 | | 專案開發治理規則統一：AGENTS／Template 補齊文件生命週期、commit 同步、ADR／Reference 規範，並修正 `.claude/` 指令與代理規則漂移 | Codex | 完成 | 純文件治理；不需程式測試 |

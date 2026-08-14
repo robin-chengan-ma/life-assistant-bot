@@ -9,6 +9,7 @@ import { useAppPreferences } from "@/context/AppPreferencesContext";
 import type { AuthRequest } from "@/services/analyticsApi";
 import {
   createCollectionItem,
+  geocodeCollectionAddress,
   type CollectionItem,
   type CollectionItemType,
   type CollectionPayload,
@@ -33,11 +34,15 @@ export function CollectionModal({ authorizedRequest, initial = null, onClose, on
   const [countryName, setCountryName] = useState("");
   const [cityName, setCityName] = useState("");
   const [address, setAddress] = useState("");
+  const [latitude, setLatitude] = useState<number | null>(null);
+  const [longitude, setLongitude] = useState<number | null>(null);
+  const [locationLabel, setLocationLabel] = useState<string | null>(null);
   const [sourceUrl, setSourceUrl] = useState("");
   const [estimatedCost, setEstimatedCost] = useState("");
   const [notes, setNotes] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [locating, setLocating] = useState(false);
 
   useEffect(() => {
     if (!visible) return;
@@ -46,11 +51,52 @@ export function CollectionModal({ authorizedRequest, initial = null, onClose, on
     setCountryName(initial?.country_name ?? "");
     setCityName(initial?.city_name ?? "");
     setAddress(initial?.address ?? "");
+    setLatitude(initial?.latitude ?? null);
+    setLongitude(initial?.longitude ?? null);
+    setLocationLabel(initial?.latitude !== null && initial?.longitude !== null ? "已完成地址定位" : null);
     setSourceUrl(initial?.source_url ?? "");
     setEstimatedCost(initial?.estimated_cost?.toString() ?? "");
     setNotes(initial?.notes ?? "");
     setError(null);
   }, [initial, visible]);
+
+  const invalidateLocation = (value: string) => {
+    setAddress(value);
+    setLatitude(null);
+    setLongitude(null);
+    setLocationLabel(null);
+  };
+
+  const invalidateCountry = (value: string) => {
+    setCountryName(value);
+    setLatitude(null);
+    setLongitude(null);
+    setLocationLabel(null);
+  };
+
+  const invalidateCity = (value: string) => {
+    setCityName(value);
+    setLatitude(null);
+    setLongitude(null);
+    setLocationLabel(null);
+  };
+
+  const locateAddress = async () => {
+    if (!countryName.trim()) { setError("請先輸入國家"); return; }
+    if (!cityName.trim()) { setError("請先輸入區域／城市"); return; }
+    if (!address.trim()) { setError("請先輸入地址"); return; }
+    setLocating(true); setError(null);
+    try {
+      const result = await geocodeCollectionAddress(authorizedRequest, {
+        address: address.trim(), city_name: cityName.trim(), country_name: countryName.trim(),
+      });
+      setLatitude(result.latitude); setLongitude(result.longitude);
+      setLocationLabel(`定位完成：${result.display_name}`);
+    } catch (caught) {
+      setLatitude(null); setLongitude(null); setLocationLabel(null);
+      setError(caught instanceof Error ? caught.message : "地址定位失敗，請稍後重試");
+    } finally { setLocating(false); }
+  };
 
   const submit = async () => {
     if (!title.trim()) { setError("請輸入收藏名稱"); return; }
@@ -65,6 +111,8 @@ export function CollectionModal({ authorizedRequest, initial = null, onClose, on
       country_name: countryName.trim() || undefined,
       city_name: cityName.trim() || undefined,
       address: address.trim() || undefined,
+      latitude: latitude ?? undefined,
+      longitude: longitude ?? undefined,
       source_url: sourceUrl.trim() || undefined,
       estimated_cost: cost,
       currency_code: "TWD",
@@ -90,9 +138,10 @@ export function CollectionModal({ authorizedRequest, initial = null, onClose, on
         <ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
           <Field label="收藏名稱" onChangeText={setTitle} placeholder="請輸入收藏名稱" styles={styles} value={title} />
           <ChoiceRow label="類型" onChange={setItemType} options={TYPE_OPTIONS} styles={styles} value={itemType} />
-          <Field label="國家" onChangeText={setCountryName} placeholder="例如：台灣" styles={styles} value={countryName} />
-          <Field label="區域／城市" onChangeText={setCityName} placeholder="例如：台北市信義區" styles={styles} value={cityName} />
-          <Field label={["activity", "other"].includes(itemType) ? "地址（選填）" : "地址"} onChangeText={setAddress} placeholder="請輸入地址" styles={styles} value={address} />
+          <Field label="國家" onChangeText={invalidateCountry} placeholder="例如：台灣" styles={styles} value={countryName} />
+          <Field label="區域／城市" onChangeText={invalidateCity} placeholder="例如：台北市信義區" styles={styles} value={cityName} />
+          <Field label={["activity", "other"].includes(itemType) ? "地址（選填）" : "地址"} onChangeText={invalidateLocation} placeholder="請輸入地址" styles={styles} value={address} />
+          {!(["activity", "other"].includes(itemType) && !address.trim()) ? <View style={styles.locationRow}><Pressable disabled={locating || saving} onPress={() => void locateAddress()} style={styles.locate}>{locating ? <ActivityIndicator color={colors.primaryDark} /> : <><MaterialCommunityIcons color={colors.primaryDark} name="map-marker-check-outline" size={18} /><Text style={styles.locateText}>{latitude !== null ? "重新定位地址" : "定位地址"}</Text></>}</Pressable>{locationLabel ? <Text style={styles.locationText}>{locationLabel}</Text> : <Text style={styles.locationHint}>儲存前請先確認地址定位</Text>}</View> : null}
           <Field autoCapitalize="none" keyboardType="url" label="參考網址" onChangeText={setSourceUrl} placeholder="https://" styles={styles} value={sourceUrl} />
           <Field keyboardType="decimal-pad" label="預估費用（台幣）" onChangeText={(value) => setEstimatedCost(value.replace(/[^0-9.]/g, ""))} placeholder="請輸入數字" styles={styles} value={estimatedCost} />
           <Field label="備註" multiline onChangeText={setNotes} placeholder="可填寫推薦原因、必吃菜色或其他說明" styles={styles} value={notes} />
@@ -123,5 +172,6 @@ const createStyles = (colors: ReturnType<typeof useAppPreferences>["colors"], th
   choices: { flexDirection: "row", flexWrap: "wrap", gap: 8 }, choice: { backgroundColor: colors.primarySoft, borderColor: colors.border, borderRadius: 16, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 7 },
   choiceActive: { backgroundColor: colors.primary, borderColor: colors.primary }, choiceText: { color: colors.primaryDark, fontSize: 13, fontWeight: "700" }, choiceTextActive: { color: theme === "dark" ? colors.background : colors.white },
   error: { color: colors.danger, fontSize: 13, fontWeight: "700" }, actions: { backgroundColor: colors.surface, flexDirection: "row", gap: 10, justifyContent: "flex-end", marginTop: 4, paddingTop: 4 },
+  locationRow: { alignItems: "flex-start", gap: 7 }, locate: { alignItems: "center", alignSelf: "flex-start", backgroundColor: colors.primarySoft, borderRadius: 10, flexDirection: "row", gap: 7, paddingHorizontal: 13, paddingVertical: 9 }, locateText: { color: colors.primaryDark, fontWeight: "800" }, locationText: { color: colors.primaryDark, fontSize: 12, lineHeight: 18 }, locationHint: { color: colors.textMuted, fontSize: 12 },
   cancel: { backgroundColor: colors.primarySoft, borderRadius: 10, paddingHorizontal: 20, paddingVertical: 11 }, cancelText: { color: colors.text, fontWeight: "800" }, submit: { alignItems: "center", backgroundColor: colors.primary, borderRadius: 10, minWidth: 92, paddingHorizontal: 20, paddingVertical: 11 }, submitText: { color: theme === "dark" ? colors.background : colors.white, fontWeight: "800" },
 });

@@ -21,6 +21,7 @@ export const getExploration = (request: AuthRequest, filters: { country?: string
 export const updateExploration = (request: AuthRequest, id: number, payload: { visited_on: string; notes?: string; address?: string }) => request(`/api/app/life/exploration/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
 export const deleteExploration = (request: AuthRequest, id: number) => request(`/api/app/life/exploration/${id}`, { method: "DELETE" });
 export const restoreExploration = (request: AuthRequest, id: number) => request(`/api/app/life/exploration/${id}/restore`, { method: "POST" });
+export const relocateExploration = (request: AuthRequest, id: number): Promise<{ id: number; message: string; latitude: number; longitude: number; display_name: string }> => request(`/api/app/life/exploration/${id}/relocate`, { method: "POST" });
 export const getAchievements = (request: AuthRequest): Promise<AchievementResponse> => request("/api/app/life/achievements");
 export const createAchievement = (request: AuthRequest, payload: { category: string; title: string; description?: string; completed_on: string; cover_image_url?: string }) => request("/api/app/life/achievements", { method: "POST", body: JSON.stringify(payload) });
 export const deleteAchievement = (request: AuthRequest, id: number) => request(`/api/app/life/achievements/${id}`, { method: "DELETE" });

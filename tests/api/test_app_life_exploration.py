@@ -76,3 +76,19 @@ def test_candidate_decision_requires_boolean(client):
         json={"accept": "yes"},
     )
     assert response.status_code == 400
+
+
+def test_relocate_exploration_route_uses_authenticated_user(client, monkeypatch):
+    test_client, module = client
+    calls = []
+
+    class Service:
+        def relocate_exploration(self, event_id, user_id):
+            calls.append((event_id, user_id))
+            return {"id": event_id, "latitude": 25.0, "longitude": 121.0}
+
+    monkeypatch.setattr(module, "_service", lambda db: Service())
+    response = test_client.post("/api/app/life/exploration/8/relocate", headers=headers())
+
+    assert response.status_code == 200
+    assert calls == [(8, 1)]

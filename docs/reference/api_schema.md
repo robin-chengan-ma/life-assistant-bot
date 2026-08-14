@@ -17,9 +17,8 @@ updated: 2026-08-14
 > 本文件已涵蓋 `docs/specs/SPEC.md` 目前收錄的所有功能區塊（Phase 1～4）。已知現況：① 除了
 > 「羅賓森 Mobile App」區塊，其餘功能全部透過 Telegram 對話觸發，不是真正的 HTTP REST 端點；
 > 只有 Mobile App 對應的 `src/api/` 底下 Flask Blueprint 是對外 HTTP API。② Mobile App 的
-> `app_collections.py`（收藏清單／旅遊行程／探索地圖／成果展示）與 `app_important_days.py`
-> （重要日子設定）兩支 Blueprint 已上線，但對應功能規格尚未定案進 `docs/specs/SPEC.md`，仍記錄
-> 在 `docs/specs/DRAFT.md`「待討論」區塊，故下方這兩個小節的路由刻意不掛 FR 編號。
+> `app_collections.py`／`app_life_exploration.py` 對應 FR-73～FR-76a；`app_important_days.py`
+> （重要日子設定）已上線但規格仍記錄於 `docs/specs/DRAFT.md`「待討論」區塊，故只有重要日子路由不掛 FR 編號。
 
 ## 平台核心入口
 
@@ -250,6 +249,7 @@ updated: 2026-08-14
 | `PATCH /api/app/collections/<id>` | 已實作（`update_collection_item()`） | FR-73 | 更新收藏內容，不覆寫由行程／造訪流程推導的狀態 |
 | `DELETE /api/app/collections/<id>` | 已實作（`delete_collection_item()`） | FR-73 | 軟刪除收藏並移除規劃中／已確認行程關聯；既有探索快照保留，回傳 5 秒復原資訊 |
 | `POST /api/app/collections/<id>/restore` | 已實作（`restore_collection_item()`） | FR-73 | 復原已軟刪除收藏 |
+| `POST /api/app/collections/geocode` | 已實作（`geocode_collection_address()`） | FR-75 | 由使用者明確觸發地址轉座標；必填地址、區域／城市、國家，成功結果寫入 `geocoding_cache`，找不到回 404、服務不可用回 503 |
 
 ### 生活探索與成果（`src/api/app_life_exploration.py`，url_prefix `/api/app/life`）
 
@@ -263,10 +263,13 @@ updated: 2026-08-14
 | `GET /api/app/life/exploration` | 已實作 | FR-75 | 依 `country`／`city` 篩選；有座標資料按同座標聚合標記，無座標資料放入 `unlocated` |
 | `PATCH／DELETE /api/app/life/exploration/<id>` | 已實作 | FR-75 | 更新單次造訪日期／備註／地址，或軟刪除探索紀錄 |
 | `POST /api/app/life/exploration/<id>/restore` | 已實作 | FR-75 | 復原已刪除探索紀錄 |
+| `POST /api/app/life/exploration/<id>/relocate` | 已實作 | FR-75 | 依本人探索快照的地址、區域／城市與國家重新取得座標；更新地址但未重定位時會先清除舊座標 |
 | `GET／POST /api/app/life/achievements` | 已實作 | FR-76 | 列出成果與待確認候選；手動新增成果可帶類別、完成日、說明與 HTTPS 封面照片網址 |
 | `DELETE /api/app/life/achievements/<id>` | 已實作 | FR-76 | 軟刪除成果，不異動來源資料 |
 | `POST /api/app/life/achievements/<id>/restore` | 已實作 | FR-76 | 復原已刪除成果 |
 | `POST /api/app/life/achievement-candidates/<id>/decision` | 已實作 | FR-76 | `accept=true／false` 接受或拒絕成果候選；拒絕後相同 `candidate_key` 不重複提示 |
+
+> FR-75 Nominatim 呼叫由後端代理，需設定 `NOMINATIM_USER_AGENT`；未設定時回 503，不會以匿名預設值呼叫公開服務。
 
 ### 重要日子設定（`src/api/app_important_days.py`，url_prefix `/api/app/important-days`）
 

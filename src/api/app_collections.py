@@ -8,13 +8,19 @@ from src.services.app_collections import (
     CollectionNotFoundError,
     CollectionValidationError,
 )
+from src.services.geocoding import (
+    GeocodingNotFoundError,
+    GeocodingUnavailableError,
+    GeocodingValidationError,
+    NominatimGeocoder,
+)
 from submodules.cloudsql.client import CloudSQLClient
 
 app_collections_bp = Blueprint("app_collections", __name__, url_prefix="/api/app/collections")
 
 
 def _service(db: CloudSQLClient) -> AppCollectionService:
-    return AppCollectionService(db)
+    return AppCollectionService(db, NominatimGeocoder(db))
 
 
 @app_collections_bp.after_request
@@ -53,6 +59,29 @@ def list_collection_items():
 @require_access_token
 def create_collection_item():
     return _write(None)
+
+
+@app_collections_bp.post("/geocode")
+@require_access_token
+def geocode_collection_address():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"message": "請確認輸入內容"}), 400
+    db = None
+    try:
+        db = CloudSQLClient()
+        return jsonify(_service(db).geocode(payload)), 200
+    except GeocodingValidationError as exc:
+        return jsonify({"message": str(exc)}), 400
+    except GeocodingNotFoundError as exc:
+        return jsonify({"message": str(exc)}), 404
+    except GeocodingUnavailableError as exc:
+        return jsonify({"message": str(exc)}), 503
+    except Exception:  # noqa: BLE001
+        return jsonify({"message": "地址定位服務目前無法使用，請稍後再試"}), 503
+    finally:
+        if db is not None:
+            db.close()
 
 
 @app_collections_bp.patch("/<int:item_id>")

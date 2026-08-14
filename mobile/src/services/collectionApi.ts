@@ -31,10 +31,21 @@ export type CollectionPayload = {
   country_name?: string;
   city_name?: string;
   address?: string;
+  latitude?: number;
+  longitude?: number;
   source_url?: string;
   estimated_cost?: number;
   currency_code?: "TWD";
   notes?: string;
+};
+
+export type GeocodingResult = {
+  latitude: number;
+  longitude: number;
+  display_name: string;
+  provider: "nominatim";
+  cached: boolean;
+  attribution: string;
 };
 
 export type CollectionResponse = {
@@ -74,4 +85,11 @@ export function deleteCollectionItem(request: AuthRequest, id: number): Promise<
 
 export function restoreCollectionItem(request: AuthRequest, id: number): Promise<{ message: string }> {
   return request(`/api/app/collections/${id}/restore`, { method: "POST" });
+}
+
+export function geocodeCollectionAddress(
+  request: AuthRequest,
+  payload: { address: string; city_name: string; country_name: string },
+): Promise<GeocodingResult> {
+  return request("/api/app/collections/geocode", { method: "POST", body: JSON.stringify(payload) });
 }

@@ -154,3 +154,27 @@
 **修復方式**：調整 `mobile/src/components/CollectionModal.tsx`：移除欄位不必要的伸展、固定表單與操作區間距、保留 Modal 內 ScrollView，並同步移除已取消的優先程度／日期／縣市／手動狀態欄位。
 
 **驗證方式**：TypeScript typecheck 通過；仍需 Robin 以手機窄螢幕實機確認類型按鈕換行、完整欄位捲動，以及底部操作列不遮擋輸入內容。
+
+## 2026-08-14 探索地圖誤標為全部完成
+
+**現象**：`PROGRESS.md` 將 FR-73～FR-76a Phase 5 整體標示為完成，但新建收藏只保存地址，Mobile 表單沒有取得經緯度；探索地圖只能顯示既有座標資料，無座標造訪會進入「無法定位」清單。
+
+**排查過程**：核對 `SPEC.md` 技術棧、`CollectionModal.tsx`、`app_collections.py` 與 `app_life_exploration.py`。確認後端資料結構可接收與保存 `latitude`／`longitude`，Leaflet 地圖也能呈現既有座標，但專案沒有 Nominatim Geocoding API，Mobile 表單不會產生座標，探索地址更新也只更新文字欄位。
+
+**根因**：開發驗收只確認 Leaflet 地圖、探索快照、篩選、標記聚合與無法定位清單，誤將「可以保存無座標資料」視為完整定位流程，漏查地址轉座標與重新定位的端到端路徑。
+
+**修復方式**：本次只校正文件：`SPEC.md` 補列 Leaflet／OpenStreetMap 為使用中、Nominatim 為待開發，FR-75 改為部分完成；`PROGRESS.md` 降級 Phase 5 狀態；`api_schema.md` 明確標示尚無 Geocoding／重新定位 API。程式碼尚未異動。
+
+**驗證方式**：以程式碼搜尋確認目前僅資料欄位與地圖呈現層使用經緯度，沒有 Nominatim 呼叫或 Geocoding API；待後續完成定位功能後，需重新驗證新增收藏定位、定位失敗、修改地址後重新定位、快取與每秒一次限制。
+
+## 2026-08-14 補齊 FR-75 地址定位端到端流程
+
+**現象**：承接前一筆誤標紀錄，收藏地址與探索快照缺少可實際產生、更新座標的端到端流程。
+
+**排查過程**：依 FR-75／NFR-15 與 Nominatim 公開服務政策核對表單、API、Service、Migration 與探索地圖資料流；另發現修改地址、國家或區域／城市時若未清除舊座標，地圖會繼續顯示失效位置。
+
+**根因**：原流程只保存文字地址與選填座標，未建立 Geocoding Service、明確定位操作、快取與重新定位入口，也未處理地址異動後的座標失效。
+
+**修復方式**：新增 `src/services/geocoding.py`、`0080_create_geocoding_cache.sql`、收藏 Geocoding API 與探索重新定位 API；Mobile 收藏表單新增明確定位按鈕，探索編輯提供「僅儲存／儲存並重新定位」。地址、國家或區域／城市改變時清除舊座標；後端使用識別 User-Agent、每秒一次節流與 PostgreSQL 快取，定位失敗仍允許保存至無法定位清單。
+
+**驗證方式**：Geocoding／收藏／探索相關後端 34 項測試通過，包含快取、User-Agent、每秒一次、找不到、斷線、API 身分與地址異動清除舊座標；Mobile TypeScript typecheck 與 Expo Web export 通過。尚待部署套用 `0080`、設定 `NOMINATIM_USER_AGENT` 並以實際地址驗收。

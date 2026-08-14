@@ -77,3 +77,25 @@ def test_manual_achievement_requires_category_and_date():
         service.create_achievement(1, {"category": "other", "title": "學會料理", "completed_on": "錯誤"})
     result = service.create_achievement(1, {"category": "other", "title": "學會料理", "completed_on": date.today().isoformat()})
     assert result["message"] == "成果已建立"
+
+
+def test_relocate_exploration_updates_coordinates_and_address_change_clears_them():
+    db = FakeDatabase()
+    db.tables["exploration_events"].append({
+        "id": 8, "user_id": 1, "start_date": "2026-08-14", "end_date": "2026-08-14",
+        "address": "舊地址", "city_name": "台北", "country_name": "台灣",
+        "latitude": Decimal("25.0"), "longitude": Decimal("121.0"), "notes": None,
+    })
+
+    class Geocoder:
+        def search(self, value):
+            assert value["address"] == "新地址"
+            return {"latitude": 25.033964, "longitude": 121.564468, "display_name": "新位置"}
+
+    service = AppLifeExplorationService(db, Geocoder())
+    service.update_exploration(8, 1, {"visited_on": "2026-08-14", "address": "新地址"})
+    assert db.tables["exploration_events"][0]["latitude"] is None
+
+    result = service.relocate_exploration(8, 1)
+    assert result["latitude"] == 25.033964
+    assert db.tables["exploration_events"][0]["longitude"] == 121.564468

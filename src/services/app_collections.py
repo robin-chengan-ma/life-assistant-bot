@@ -20,6 +20,10 @@ class CollectionDatabase(Protocol):
     def execute_query(self, query, params=None): ...
 
 
+class CollectionGeocoder(Protocol):
+    def search(self, payload: dict[str, Any]) -> dict[str, Any]: ...
+
+
 class CollectionError(Exception):
     """收藏清單可預期錯誤。"""
 
@@ -60,8 +64,14 @@ def _optional_decimal(value: Any, label: str, minimum: Decimal, maximum: Decimal
 
 
 class AppCollectionService:
-    def __init__(self, db: CollectionDatabase):
+    def __init__(self, db: CollectionDatabase, geocoder: CollectionGeocoder | None = None):
         self._db = db
+        self._geocoder = geocoder
+
+    def geocode(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if self._geocoder is None:
+            raise CollectionValidationError("地址定位服務尚未設定")
+        return self._geocoder.search(payload)
 
     def list_for_user(
         self,
