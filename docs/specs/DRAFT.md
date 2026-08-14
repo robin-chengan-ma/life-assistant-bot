@@ -23,6 +23,7 @@ updated: 2026-08-14
 
 ## 已取消
 
+- 2026-08-14：FR-69／FR-70／FR-71「Mobile App 目標與指標設定／功能開關頁／Robin 專屬排程設定」正式取消；未建立頁面、API 或資料表，既有 Telegram 設定流程維持不變 — 詳見 `docs/ADR/discuss/mobile-app.md` 2026-08-14 條目
 - 2026-08-04：視覺化後台原採 Notion，改用 Mobile App（React Native + Expo）— 詳見 `docs/ADR/discuss/mobile-app.md` 2026-08-04 條目
 - 2026-08-05：AI 自主診斷＋GitHub PR 自動化修復機制，改用「完整 log 上傳雲端＋私訊 Robin 專屬連結」— 詳見 `docs/ADR/discuss/service-resilience.md` 2026-08-05 條目
 - 2026-08-11：FR-64a 藍牙體重計整合全面取消；原生 BLE 與 Web Bluetooth／Bluefy 方案均不採用，Android、iOS、Web 統一改為手動輸入體重 — 詳見 `docs/ADR/discuss/mobile-app.md` 2026-08-11 條目

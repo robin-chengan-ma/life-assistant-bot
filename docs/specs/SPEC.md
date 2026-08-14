@@ -232,24 +232,23 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 是唯�
 
 ### 羅賓森 Mobile App（全功能個人化入口）
 
-**狀態**：active（FR-69／FR-70／FR-71 依 Robin 指示跳過，不排入目前 Roadmap，詳見下方）
+**狀態**：active
 **討論紀錄**：`docs/ADR/discuss/mobile-app.md`
 **來源說明**：原記錄於 mobile-app 規格，已於 2026-08-13 併入本文件（原 robinson spec ADR-14、ADR-28 已併入本討論紀錄）。
 
-**概要**：App 定位「唯讀分析頁面＋可編輯設定頁面」雙軌設計，取代原規劃的 Notion 後台與唯讀 BI Dashboard。高頻「記一筆」操作仍以 Telegram 為主，App 承接目標/開關/排程等低頻結構化設定。細節規劃（首頁卡片、各模組頁面呈現、全域 UX 規則、視覺風格）見 `docs/reference/mobile-app-ux.md`，本區塊僅列架構層決策摘要。登入/選單/個人資訊/APP設定/唯讀分析/體態飲食記錄已於 2026-08-12 正式上線部署（後端 Render＋前端 Vercel），完整路由清單見 `docs/reference/api_schema.md`「羅賓森 Mobile App」區塊。
+**概要**：App 定位「分析頁面＋個人資訊／APP 設定＋生活紀錄」的視覺化入口，取代原規劃的 Notion 後台與唯讀 BI Dashboard。目標、功能開關與排程仍由既有 Telegram 流程處理。細節規劃（首頁卡片、各模組頁面呈現、全域 UX 規則、視覺風格）見 `docs/reference/mobile-app-ux.md`，本區塊僅列架構層決策摘要。登入/選單/個人資訊/APP設定/唯讀分析/體態飲食記錄已於 2026-08-12 正式上線部署（後端 Render＋前端 Vercel），完整路由清單見 `docs/reference/api_schema.md`「羅賓森 Mobile App」區塊。
 
 **功能性需求**
-- FR-64：唯讀分析頁面（記帳、體態等模組圖表）＋可編輯設定頁面（目標指標、功能開關、排程僅 Robin、APP設定）；寫入一律複用既有 service 層函式——已實作
+- FR-64：分析頁面（記帳、體態等模組圖表）＋生活紀錄與 APP 設定；寫入一律複用既有 service 層函式——已實作
 - FR-64a：藍牙體重計整合已全面移除（見上方技術棧「決定不用」），改為手動輸入按鈕「記錄一下」——已實作
 - FR-65：帳密登入（使用者ID＋密碼），密碼單向雜湊（bcrypt/argon2），忘記密碼＝重設新密碼透過 Telegram 發送，保持登入 Refresh Token 30 天效期——已實作
 - FR-67：左上選單導覽＋右上頭像下拉選單，權限矩陣依 `owner_only` 決定可見項目——已實作
 - FR-68：個人基本資訊頁面（唯讀）——已實作
-- FR-69～FR-71：目標與指標設定、功能開關、排程設定（僅 Robin，6 項既有排程）——**2026-08-12 依 Robin 指示整批跳過**，未建立頁面/API/資料表，不排入目前 Roadmap，見 `docs/ADR/discuss/mobile-app.md`
 - FR-72：APP設定（深色模式／字體大小／隱私數字遮罩／修改密碼）——已實作
 
 **實作階段**
 - Phase 4 Step 4.1～4.3（求職模組）：全數完成
-- Phase 4 Step 4.4／4.5（App 本體）：FR-64／FR-64a／FR-65／FR-67／FR-68／FR-72 已完成並於 2026-08-12 正式上線部署（後端 Render＋前端 Vercel）；FR-69／FR-70／FR-71 依 Robin 指示跳過，未開工
+- Phase 4 Step 4.4／4.5（App 本體）：FR-64／FR-64a／FR-65／FR-67／FR-68／FR-72 已完成並於 2026-08-12 正式上線部署（後端 Render＋前端 Vercel）
 
 ### 服務健康與治理
 

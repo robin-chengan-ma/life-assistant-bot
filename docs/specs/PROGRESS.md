@@ -12,6 +12,7 @@ updated: 2026-08-14
 
 | 日期 | 對應 FR | 任務內容 | 開發者 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- | --- |
+| 2026-08-14 | FR-69／FR-70／FR-71 | 正式取消 Mobile App 目標與指標設定、功能開關頁及 Robin 專屬排程設定，從 SPEC 與 Roadmap 移除 | Codex | 已取消 | 既有 Telegram 設定流程不受影響；見 DRAFT 與 mobile-app ADR |
 | 2026-08-14 | | 專案開發治理規則統一：AGENTS／Template 補齊文件生命週期、commit 同步、ADR／Reference 規範，並修正 `.claude/` 指令與代理規則漂移 | Codex | 完成 | 純文件治理；不需程式測試 |
 | 2026-07-28 | | 專案緣起：完成外部服務註冊／API 金鑰申請、Telegram Bot 基礎設定，與 Gemini 腦力激盪收斂 PRD 雛形 | Robin | 完成 | Claude Code 協作開始前 |
 | 2026-07-29 | | 完成需求彙整，建立產品規格書 `docs/specs/robinson/SPEC.md` | Claude | 完成 | 里程碑 |
@@ -171,16 +172,15 @@ updated: 2026-08-14
 | 2026-08-12 | | 收藏清單／探索地圖／成果展示前置 POC（Leaflet 1.9.4＋OpenStreetMap，不採 Expo Maps） | Codex | 完成 | codex.md；技術選型見 `docs/ADR/discuss/mobile-app.md` |
 | 2026-08-12 | FR-64 | 首頁心情趨勢卡片高度修正 | Codex | 完成 | codex.md；除錯紀錄見 `docs/ADR/debug/mobile-app.md` |
 | 2026-08-12 | FR-65 | Web 預覽登入無法連線修正（API Base URL 改 `window.location.origin`、React Hook 順序、快取標頭） | Codex | 完成 | codex.md；除錯紀錄見 `docs/ADR/debug/mobile-app.md` |
-| — | FR-69／FR-70／FR-71 | Mobile App 目標與指標設定、功能開關頁、排程設定頁（僅 Robin） | 未標註 | 待辦 | 2026-08-12 FR-72 那輪依 Robin 指示整批跳過，尚未開工 |
-
 > 「開發者」欄固定填 `Claude`、`Codex` 或實際負責人姓名，方便回溯是哪個工具／人做的。
 
 ## Commit 紀錄
 
-> 本表只代表本地 Git commit，不等同於已 push 或已部署。資料來源為 `git log --format="%h|%ad|%s" --date=short`（截至 2026-08-14 共 109 筆 commit）。git author 全部是 Robin 本人，因此「開發者」欄依 commit 內容與工作階段判斷。
+> 本表只代表本地 Git commit，不等同於已 push 或已部署。資料來源為 `git log --format="%h|%ad|%s" --date=short`（截至 2026-08-14 共 110 筆 commit）。git author 全部是 Robin 本人，因此「開發者」欄依 commit 內容與工作階段判斷。
 
 | 日期 | 版本 / commit | 異動摘要 | 開發者 |
 | --- | --- | --- | --- |
+| 2026-08-14 | `fb62163` | 統一開發與文件治理規則 | Codex |
 | 2026-08-14 | `ec36062` | 補齊待討論、已取消與擱置項目 | Codex |
 | 2026-08-14 | `b991323` | 補齊正式技術棧資訊 | Codex |
 | 2026-08-14 | `55177ad` | 整併規格與文件架構 | Codex |
@@ -297,6 +297,7 @@ updated: 2026-08-14
 
 | 日期 | Branch／版本 | 遠端 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- |
+| 2026-08-14 | `main`／`fb62163` | GitHub | 完成 | Robin 已確認 push |
 | 2026-08-12 | `main`／Step 4.4～4.5 | GitHub | 完成 | 依當日正式上線里程碑紀錄 |
 
 ## 部署紀錄
