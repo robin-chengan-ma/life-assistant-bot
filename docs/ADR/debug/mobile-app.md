@@ -234,3 +234,17 @@
 **根因**：部署環境的實際例外仍須推版後由 Render 日誌確認；程式層已確認存在對 occurrence 區間欄位的硬相依，且缺少安全診斷日誌，會讓 schema 落差直接表現為無資訊的 503。
 **修復方式**：`src/services/app_important_days.py` 改用 `TO_JSONB(o)` 安全讀取可選的結束日欄位，舊 schema 缺欄位時退回單日行為；`src/api/app_important_days.py` 新增只寫入伺服器端的例外日誌，對使用者仍維持安全訊息。
 **驗證方式**：Python compileall 通過；本機環境缺 pytest，Service／API 自動測試未執行。需部署後驗證空清單、既有事件、行程連動事件與通知對象，並以 Render 日誌確認是否仍有其他資料庫例外。
+
+## 2026-08-14 重要日子家庭成員查詢誤用不存在欄位
+**現象**：進入「重要日子設定」頁面時顯示「重要日子目前無法載入，請稍後再試」；Render 日誌顯示查詢 `users.app_user_id` 時發生 `UndefinedColumn`。
+**排查過程**：比對 `src/services/app_important_days.py`、登入使用者 ID 規則與正式 migration，確認 App 使用者 ID 是由 `users.id` 動態格式化為 `user01`、`user10`，`users` 表並沒有持久化 `app_user_id` 欄位。
+**根因**：`family_users()` 誤將衍生值 `app_user_id` 當成資料庫實體欄位查詢；既有 FakeDatabase 測試資料也自行加入該欄位，未能反映正式 schema。
+**修復方式**：`src/services/app_important_days.py` 改為只讀取 `users.id`、`users.role`，再依 FR-65 規則由資料庫 ID 動態產生 `user01`、`user10`；同步移除測試假資料中不存在的欄位並新增格式回歸測試。
+**驗證方式**：Python compileall、直接格式化檢查與 `git diff --check` 通過。環境缺少 pytest／bcrypt，Service／API 自動測試未執行；仍待部署後確認重要日子頁面及指定家人清單可載入。
+
+## 2026-08-14 求職分析查詢錯用契合度欄位名稱
+**現象**：「求職分析」頁面持續顯示「資料目前無法載入，請稍後再試」，重新載入仍回傳相同錯誤。
+**排查過程**：比對 `src/services/app_analytics.py` 的求職分析 SQL 與 `0058_add_scoring_fields_to_job_postings.sql`，確認正式欄位名稱為 `score`，分析 SQL 與測試假資料卻使用 `match_score`；分析 API 的未預期例外目前未寫入伺服器日誌。
+**根因**：求職分析 SQL 查詢不存在的 `job_postings.match_score`，且測試 fixture 沿用同一錯誤欄位名稱，未能攔截 schema 漂移。
+**修復方式**：`src/services/app_analytics.py` 改查詢正式欄位 `score AS match_score`，維持 Mobile API 既有輸出格式；新增 SQL 防回歸斷言。`src/api/app_analytics.py` 補上只寫入伺服器端的分析模組例外日誌，App 仍只收到安全通用訊息。
+**驗證方式**：Python compileall 與 `git diff --check` 通過，並以靜態斷言確認 SQL 使用 `score AS match_score`。環境缺少 pytest／lunarcalendar，Service／API 自動測試未執行；仍待部署後驗證求職分布、推薦清單與應徵時間軸。

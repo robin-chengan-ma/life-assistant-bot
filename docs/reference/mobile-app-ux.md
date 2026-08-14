@@ -156,6 +156,8 @@ App、用手機原生行事曆看」的情境，兩者互補、不重複，App �
 3. 本期 Top 推薦清單：職稱、公司、分數、推薦理由摘要，可展開看技能缺口說明（`recommend_reason`／`skill_gap_note`）
 4. 應徵歷程時間軸：依時間列出每個職缺的狀態變化（`job_applications`）
 
+後端正式資料欄位為 `job_postings.score`；Mobile 分析查詢以 `score AS match_score` 維持既有 API 回傳欄位 `match_score`，不得直接查詢不存在的資料庫欄位 `job_postings.match_score`。
+
 ### 考試成績（`exams`，Robin only）
 
 1. 各證照目標進度卡片：目標日期倒數天數、目標分數/合格門檻（`certificate_goals`）

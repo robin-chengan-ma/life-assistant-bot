@@ -1,5 +1,6 @@
 """FR-64 Mobile App Dashboard 與唯讀分析 HTTP API。"""
 
+import logging
 import math
 import os
 from datetime import datetime
@@ -35,6 +36,7 @@ from submodules.cloudsql.client import CloudSQLClient
 from submodules.llm.client import LLMClient
 
 app_analytics_bp = Blueprint("app_analytics", __name__, url_prefix="/api/app")
+_logger = logging.getLogger(__name__)
 _TAIWAN_TZ = ZoneInfo("Asia/Taipei")
 _ANALYTICS_METHODS = {
     "todos": "todos",
@@ -92,6 +94,7 @@ def dashboard():
         db = CloudSQLClient()
         return jsonify(_build_analytics(db).dashboard(g.app_user)), 200
     except Exception:  # noqa: BLE001 - HTTP 邊界不得洩漏資料庫或程式細節
+        _logger.exception("載入 Mobile App 首頁資料失敗")
         return _unexpected_error()
     finally:
         if db is not None:
@@ -146,6 +149,7 @@ def analytics(module_key: str):
     except ForbiddenModuleError as exc:
         return jsonify({"message": str(exc)}), 403
     except Exception:  # noqa: BLE001 - HTTP 邊界不得洩漏資料庫或程式細節
+        _logger.exception("載入 Mobile App %s 分析失敗", module_key)
         return _unexpected_error()
     finally:
         if db is not None:

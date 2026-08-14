@@ -361,6 +361,9 @@ def test_remaining_analysis_modules_return_chart_ready_payloads():
     assert todos["calendar_counts"] == {"2026-08-02": 2}
     assert service.mood(user(), start, end)["items"][0]["date"] == "2026-08-02"
     jobs = service.jobs(user(is_owner=True), start, end)
+    jobs_query = next(query for query in db.executed_queries if "app_analytics:jobs_postings" in query)
+    assert "score AS match_score" in jobs_query
+    assert "title, match_score" not in jobs_query
     assert jobs["funnel"]["interview"] == 1
     assert jobs["score_distribution"] == {"high": 1, "medium": 1, "low": 1}
     assert service.exams(user(is_owner=True), start, end)["practice"][0]["correct"] == 1

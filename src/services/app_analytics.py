@@ -656,7 +656,7 @@ class AppAnalyticsService:
     def jobs(self, user: AuthenticatedUser, start: date, end: date) -> dict[str, Any]:
         self._authorize(user, "jobs")
         postings = self._db.execute_query(
-            """/* app_analytics:jobs_postings */ SELECT job_id_104, title, match_score,
+            """/* app_analytics:jobs_postings */ SELECT job_id_104, title, score AS match_score,
             recommend_reason, skill_gap_note, first_seen_at FROM job_postings
             WHERE DATE(first_seen_at AT TIME ZONE 'Asia/Taipei') BETWEEN %s AND %s
             ORDER BY match_score DESC NULLS LAST""",

@@ -56,8 +56,15 @@ class AppImportantDayService:
         self._db = db
 
     def family_users(self) -> list[dict[str, Any]]:
-        rows = self._db.select("users", columns=("id", "role", "app_user_id"))
-        return [{"id": row["id"], "role": row["role"], "user_id": row["app_user_id"]} for row in rows]
+        rows = self._db.select("users", columns=("id", "role"))
+        return [
+            {
+                "id": row["id"],
+                "role": row["role"],
+                "user_id": f"user{row['id']:02d}",
+            }
+            for row in rows
+        ]
 
     def list_for_user(self, user_id: int, *, today: date | None = None) -> list[dict[str, Any]]:
         current = today or datetime.now(_TAIWAN_TZ).date()

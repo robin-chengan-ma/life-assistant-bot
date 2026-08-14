@@ -16,8 +16,8 @@ class FakeDatabase:
             "important_day_recipients": [],
             "important_day_occurrences": [],
             "users": [
-                {"id": 1, "role": "Robin", "app_user_id": "user01"},
-                {"id": 2, "role": "爸爸", "app_user_id": "user02"},
+                {"id": 1, "role": "Robin"},
+                {"id": 10, "role": "爸爸"},
             ],
         }
         self.next_id = 1
@@ -78,6 +78,15 @@ def test_create_self_event_only_assigns_owner_as_recipient():
     assert result["id"] == 1
     assert db.tables["important_days"][0]["audience_mode"] == "self"
     assert db.tables["important_day_recipients"] == [{"important_day_id": 1, "user_id": 1}]
+
+
+def test_family_users_derives_app_user_id_from_database_id():
+    users = AppImportantDayService(FakeDatabase()).family_users()
+
+    assert users == [
+        {"id": 1, "role": "Robin", "user_id": "user01"},
+        {"id": 10, "role": "爸爸", "user_id": "user10"},
+    ]
 
 
 def test_specific_audience_requires_at_least_one_recipient():

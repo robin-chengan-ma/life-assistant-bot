@@ -278,7 +278,7 @@ updated: 2026-08-14
 
 | 項目 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `GET /api/app/important-days` | 已實作（App 端，規格未定案）（`list_important_days()`） | 無（見 `docs/specs/DRAFT.md` 待討論） | 查詢個人設定的重要日子清單，並附家人使用者名單供選擇對象 |
+| `GET /api/app/important-days` | 已實作（App 端，規格未定案）（`list_important_days()`） | 無（見 `docs/specs/DRAFT.md` 待討論） | 查詢個人設定的重要日子清單，並附家人使用者名單供選擇對象；名單的 `user_id` 不存於 `users` 表，而是依 FR-65 由 `users.id` 動態格式化為 `user01`、`user10` |
 | `POST /api/app/important-days` | 已實作（App 端，規格未定案）（`create_important_day()`） | 無（見 `docs/specs/DRAFT.md` 待討論） | 新增一筆重要日子設定 |
 | `PATCH /api/app/important-days/<id>` | 已實作（App 端，規格未定案）（`update_important_day()`） | 無（見 `docs/specs/DRAFT.md` 待討論） | 更新一筆重要日子設定 |
 | `DELETE /api/app/important-days/<id>` | 已實作（App 端，規格未定案）（`delete_important_day()`） | 無（見 `docs/specs/DRAFT.md` 待討論） | 刪除一筆重要日子設定 |
