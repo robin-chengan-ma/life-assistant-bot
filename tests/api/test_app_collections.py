@@ -58,7 +58,7 @@ def test_list_passes_filters_to_service(client, monkeypatch):
     }
 
 
-def test_create_update_and_delete_use_authenticated_user(client, monkeypatch):
+def test_create_update_delete_and_restore_use_authenticated_user(client, monkeypatch):
     test_client, module = client
     calls = []
 
@@ -75,17 +75,24 @@ def test_create_update_and_delete_use_authenticated_user(client, monkeypatch):
             calls.append(("delete", item_id, user_id))
             return {"message": "收藏項目已刪除"}
 
+        def restore(self, item_id, user_id):
+            calls.append(("restore", item_id, user_id))
+            return {"message": "收藏項目已復原"}
+
     monkeypatch.setattr(module, "_service", lambda db: Service())
     created = test_client.post("/api/app/collections", headers=headers(), json={"title": "餐廳"})
     updated = test_client.patch("/api/app/collections/8", headers=headers(), json={"title": "拉麵店"})
     deleted = test_client.delete("/api/app/collections/8", headers=headers())
+    restored = test_client.post("/api/app/collections/8/restore", headers=headers())
 
     assert created.status_code == 201
     assert updated.status_code == 200
     assert deleted.status_code == 200
+    assert restored.status_code == 200
     assert calls[0][:2] == ("create", 1)
     assert calls[1][:3] == ("update", 8, 1)
     assert calls[2] == ("delete", 8, 1)
+    assert calls[3] == ("restore", 8, 1)
 
 
 @pytest.mark.parametrize(

@@ -100,3 +100,19 @@ def delete_collection_item(item_id: int):
     finally:
         if db is not None:
             db.close()
+
+
+@app_collections_bp.post("/<int:item_id>/restore")
+@require_access_token
+def restore_collection_item(item_id: int):
+    db = None
+    try:
+        db = CloudSQLClient()
+        return jsonify(_service(db).restore(item_id, g.app_user.database_id)), 200
+    except CollectionNotFoundError as exc:
+        return jsonify({"message": str(exc)}), 404
+    except Exception:  # noqa: BLE001
+        return jsonify({"message": "收藏項目目前無法復原，請稍後再試"}), 503
+    finally:
+        if db is not None:
+            db.close()

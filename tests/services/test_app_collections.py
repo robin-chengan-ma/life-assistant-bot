@@ -1,4 +1,3 @@
-from datetime import date
 from decimal import Decimal
 
 import pytest
@@ -56,29 +55,30 @@ def payload(**overrides):
         "country_code": "JP",
         "country_name": "日本",
         "city_name": "東京",
+        "address": "東京都千代田區",
         "latitude": 35.681236,
         "longitude": 139.767125,
         "estimated_cost": 1200,
-        "currency_code": "jpy",
-        "priority": "high",
-        "desired_date": "2026-10-21",
-        "status": "saved",
     }
     value.update(overrides)
     return value
 
 
-def test_create_normalizes_collection_values():
+def test_create_normalizes_collection_values_and_uses_fixed_defaults():
     db = FakeDatabase()
 
-    result = AppCollectionService(db).create(1, payload(trip_id=9))
+    result = AppCollectionService(db).create(1, payload())
 
     assert result == {"id": 1, "message": "收藏項目已新增"}
     row = db.tables["collection_items"][0]
     assert row["user_id"] == 1
-    assert row["currency_code"] == "JPY"
-    assert row["desired_date"] == date(2026, 10, 21)
+    assert row["currency_code"] == "TWD"
+    assert row["status"] == "saved"
     assert row["estimated_cost"] == Decimal("1200")
+    assert "priority" not in row
+    assert "desired_date" not in row
+    assert "administrative_area" not in row
+    assert "trip_id" not in row
 
 
 def test_coordinates_must_be_provided_as_a_pair():
@@ -86,16 +86,34 @@ def test_coordinates_must_be_provided_as_a_pair():
         AppCollectionService(FakeDatabase()).create(1, payload(longitude=None))
 
 
-def test_rejects_trip_owned_by_another_user():
-    with pytest.raises(CollectionValidationError, match="找不到可加入"):
-        AppCollectionService(FakeDatabase()).create(2, payload(trip_id=9))
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"country_name": ""}, "請輸入國家"),
+        ({"city_name": ""}, "請輸入區域／城市"),
+        ({"address": ""}, "請輸入地址"),
+    ],
+)
+def test_location_collection_requires_country_city_and_address(overrides, message):
+    with pytest.raises(CollectionValidationError, match=message):
+        AppCollectionService(FakeDatabase()).create(1, payload(**overrides))
 
 
-def test_visited_status_sets_timestamp_when_missing():
+@pytest.mark.parametrize("item_type", ["activity", "other"])
+def test_non_location_activity_can_omit_address(item_type):
+    db = FakeDatabase()
+
+    AppCollectionService(db).create(1, payload(item_type=item_type, address=""))
+
+    assert db.tables["collection_items"][0]["address"] is None
+
+
+def test_client_cannot_set_visited_status_directly():
     db = FakeDatabase()
     AppCollectionService(db).create(1, payload(status="visited"))
 
-    assert db.tables["collection_items"][0]["visited_at"] is not None
+    assert db.tables["collection_items"][0]["status"] == "saved"
+    assert "visited_at" not in db.tables["collection_items"][0]
 
 
 def test_list_returns_summary_and_serializable_numbers():
@@ -103,12 +121,12 @@ def test_list_returns_summary_and_serializable_numbers():
     db.tables["collection_items"] = [
         {
             "id": 1, "user_id": 1, "title": "餐廳", "status": "saved",
-            "priority": "high", "country_name": "日本", "city_name": "東京",
-            "desired_date": date(2026, 10, 21), "estimated_cost": Decimal("1000.50"),
+            "country_name": "日本", "city_name": "東京",
+            "estimated_cost": Decimal("1000.50"),
         },
         {
             "id": 2, "user_id": 1, "title": "富士山", "status": "visited",
-            "priority": "medium", "country_name": "日本", "city_name": "富士吉田",
+            "country_name": "日本", "city_name": "富士吉田",
         },
     ]
 
@@ -116,8 +134,17 @@ def test_list_returns_summary_and_serializable_numbers():
 
     assert result["summary"] == {"total": 2, "saved": 1, "added_to_trip": 0, "visited": 1}
     assert result["filters"]["countries"] == ["日本"]
-    assert result["items"][0]["desired_date"] == "2026-10-21"
     assert result["items"][0]["estimated_cost"] == 1000.5
+
+
+def test_update_does_not_overwrite_derived_status():
+    db = FakeDatabase()
+    item_id = AppCollectionService(db).create(1, payload())["id"]
+    db.tables["collection_items"][0]["status"] = "visited"
+
+    AppCollectionService(db).update(item_id, 1, payload(title="更新名稱", status="cancelled"))
+
+    assert db.tables["collection_items"][0]["status"] == "visited"
 
 
 def test_other_user_cannot_update_or_delete_collection_item():
@@ -129,3 +156,18 @@ def test_other_user_cannot_update_or_delete_collection_item():
         service.update(item_id, 2, payload(title="不是我的收藏"))
     with pytest.raises(CollectionNotFoundError):
         service.delete(item_id, 2)
+
+
+def test_delete_is_soft_delete_and_restore_recovers_item():
+    db = FakeDatabase()
+    service = AppCollectionService(db)
+    item_id = service.create(1, payload())["id"]
+
+    deleted = service.delete(item_id, 1)
+
+    assert deleted["undo_seconds"] == 5
+    assert db.tables["collection_items"][0]["deleted_at"] is not None
+
+    service.restore(item_id, 1)
+
+    assert db.tables["collection_items"][0]["deleted_at"] is None

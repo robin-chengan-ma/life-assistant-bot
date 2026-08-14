@@ -132,7 +132,7 @@ class AppRecordService:
     def create(self, kind: str, user_id: int, payload: dict[str, Any], *, allow_duplicate: bool = False) -> dict:
         if kind == "weight":
             payload = self._with_preserved_body_values(user_id, payload)
-        data, table, fingerprint = self._validated(kind, payload)
+        data, table, fingerprint = self._validated(kind, payload, user_id=user_id)
         if kind in _SINGLE_DAILY_KINDS and self._latest_today(table, user_id, kind=kind) is not None:
             raise RecordValidationError("今日已有紀錄，請更新原紀錄")
         if not allow_duplicate and self._is_duplicate(table, user_id, fingerprint):
@@ -158,7 +158,7 @@ class AppRecordService:
         self._ensure_editable(kind, row, user_id, table)
         if kind == "weight":
             payload = self._with_preserved_body_values(user_id, payload, current=row)
-        data, _table, _fingerprint = self._validated(kind, payload)
+        data, _table, _fingerprint = self._validated(kind, payload, user_id=user_id)
         if not allow_duplicate and self._is_duplicate(table, user_id, _fingerprint, exclude_id=record_id):
             raise DuplicateRecordError("發現一筆可能重複的紀錄，確定仍要更新嗎？")
         data.pop("entry_date", None)
@@ -214,7 +214,7 @@ class AppRecordService:
             if latest is not None and latest.get("id") != row.get("id"):
                 raise HistoricalRecordError("今日僅能異動最新一筆紀錄")
 
-    def _validated(self, kind: str, payload: dict[str, Any]) -> tuple[dict, str, tuple]:
+    def _validated(self, kind: str, payload: dict[str, Any], *, user_id: int) -> tuple[dict, str, tuple]:
         if kind == "todo":
             content = _required_text(payload.get("content"), "待辦內容")
             due_at = _parse_due_at(payload.get("due_at"))
@@ -233,8 +233,24 @@ class AppRecordService:
             if category not in finance.categories_for_type(transaction_type):
                 raise RecordValidationError("請選擇正確的記帳類別")
             amount = _round_amount(payload.get("amount"))
+            trip_id = payload.get("trip_id")
+            if trip_id not in (None, ""):
+                if isinstance(trip_id, bool) or not isinstance(trip_id, int) or trip_id <= 0:
+                    raise RecordValidationError("旅遊行程格式不正確")
+                trip = self._db.select(
+                    "trips",
+                    where="id = %s AND user_id = %s AND deleted_at IS NULL",
+                    params=(trip_id, user_id),
+                    fetch_one=True,
+                )
+                if trip is None:
+                    raise RecordValidationError("找不到指定的旅遊行程")
+            else:
+                trip_id = None
             return {"type": transaction_type, "category": category, "amount": amount, "note": None,
-                    "transaction_date": self._today}, "transactions", (transaction_type, category, amount)
+                    "trip_id": trip_id, "transaction_date": self._today}, "transactions", (
+                        transaction_type, category, amount
+                    )
         if kind == "diet":
             description = _required_text(payload.get("description"), "今日的飲食內容")
             description, _detected = privacy.mask_text(description)
@@ -338,8 +354,16 @@ class AppRecordService:
                                 params=(record_id, user_id))
             return record_id
         if kind == "finance":
-            return finance.create_transaction(self._db, user_id, data["type"], data["category"], data["amount"],
-                                              None, data["transaction_date"])
+            record_id = finance.create_transaction(
+                self._db, user_id, data["type"], data["category"], data["amount"],
+                None, data["transaction_date"],
+            )
+            if data.get("trip_id") is not None:
+                self._db.update(
+                    "transactions", {"trip_id": data["trip_id"]},
+                    where="id = %s AND user_id = %s", params=(record_id, user_id),
+                )
+            return record_id
         if kind == "weight":
             height_cm = data.pop("height_cm", None)
             if height_cm is not None:

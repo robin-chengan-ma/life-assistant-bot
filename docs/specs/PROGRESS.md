@@ -12,6 +12,8 @@ updated: 2026-08-14
 
 | 日期 | 對應 FR | 任務內容 | 開發者 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- | --- |
+| 2026-08-14 | FR-73～FR-76a | 完成收藏清單／旅遊行程／探索地圖／成果展示 Phase 5 實作 | Codex | 完成（待實機驗收／migration 套用） | 新增 `0079`、生活探索 API／Service、Mobile 行程／探索／成果畫面、記帳行程關聯與測試；成果刪除具二次確認與 5 秒復原；相關測試 60 項通過，TypeScript 與 Expo Web export 通過；全專案 1692 項通過、3 項僅因本機缺 ffmpeg 失敗 |
+| 2026-08-14 | FR-73 | 修復 Mobile App 首頁「新增收藏」Modal 在手機窄螢幕跑版 | Codex | 完成（待實機驗收） | 精簡定案欄位並修正選項換行、捲動區與底部按鈕間距，見 `docs/ADR/debug/mobile-app.md` |
 | 2026-08-14 | FR-69／FR-70／FR-71 | 正式取消 Mobile App 目標與指標設定、功能開關頁及 Robin 專屬排程設定，從 SPEC 與 Roadmap 移除 | Codex | 已取消 | 既有 Telegram 設定流程不受影響；見 DRAFT 與 mobile-app ADR |
 | 2026-08-14 | | 專案開發治理規則統一：AGENTS／Template 補齊文件生命週期、commit 同步、ADR／Reference 規範，並修正 `.claude/` 指令與代理規則漂移 | Codex | 完成 | 純文件治理；不需程式測試 |
 | 2026-07-28 | | 專案緣起：完成外部服務註冊／API 金鑰申請、Telegram Bot 基礎設定，與 Gemini 腦力激盪收斂 PRD 雛形 | Robin | 完成 | Claude Code 協作開始前 |
@@ -168,7 +170,7 @@ updated: 2026-08-14
 | 2026-08-12 | FR-64 | 重要日子設定：行事曆統一與通知對象狀態改善 | Codex | 完成 | codex.md |
 | 2026-08-12 | FR-64 | 待辦事項與重要日子日期區間（`0070` 結束日欄位、區間重疊查詢、`GENERATE_SERIES` 逐日計數） | Codex | 完成 | codex.md |
 | 2026-08-12 | FR-64 | 分析頁日期選擇器行事曆統一（`holidayOnly` 模式，只顯示政府節日） | Codex | 完成 | codex.md |
-| 2026-08-12 | FR-64a | 飲食照片與 Gemini 流程驗證（本機階段，未改產品程式碼；實機相機／相簿驗收仍待 Robin） | Codex | 完成 | codex.md |
+| 2026-08-11 | FR-64a | 飲食照片與 Gemini 流程實機驗收完成（拍照／相簿選擇、辨識與後續流程可正常使用） | Robin／Codex | 完成 | Robin 已於實體手機確認兩種照片來源皆可使用 |
 | 2026-08-12 | | 收藏清單／探索地圖／成果展示前置 POC（Leaflet 1.9.4＋OpenStreetMap，不採 Expo Maps） | Codex | 完成 | codex.md；技術選型見 `docs/ADR/discuss/mobile-app.md` |
 | 2026-08-12 | FR-64 | 首頁心情趨勢卡片高度修正 | Codex | 完成 | codex.md；除錯紀錄見 `docs/ADR/debug/mobile-app.md` |
 | 2026-08-14 | FR-64 | 飲食／運動雙輸入模式、AI／人工來源圖例、心情 Emoji 與窄螢幕按鈕完成實作 | Codex | 完成 | 新增 `0078` migration、輸入防呆、照片確認流程、來源拆分圖表與 Tooltip；147 項相關測試通過，完整回歸 1676 通過／3 項因本機缺 `ffmpeg` 未執行，Mobile typecheck 與 Web export 通過 |
@@ -301,7 +303,7 @@ updated: 2026-08-14
 
 | 日期 | Branch／版本 | 遠端 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- |
-| 2026-08-14 | `main`／`84960d2`＋文件同步 commit | GitHub | 待 Push | Robin 將一次 push 本次功能 commit 與 PROGRESS 同步 commit；完成狀態待 Robin 確認 |
+| 2026-08-14 | `main`／`84960d2`＋`18a4ef7` | GitHub | 完成 | Robin 已確認功能 commit 與 PROGRESS 同步 commit 均已 push |
 | 2026-08-14 | `main`／`fbb905a` | GitHub | 完成 | Robin 已確認 Push 紀錄同步 commit 已 push |
 | 2026-08-14 | `main`／`1c8e836` | GitHub | 完成 | Robin 已確認本次兩筆 commit 均已 push |
 | 2026-08-14 | `main`／`fb62163` | GitHub | 完成 | Robin 已確認 push |

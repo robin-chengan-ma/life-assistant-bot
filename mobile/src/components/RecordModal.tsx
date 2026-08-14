@@ -11,6 +11,7 @@ import { TimePickerField } from "@/components/TimePickerField";
 import { useAppPreferences } from "@/context/AppPreferencesContext";
 import { ApiError } from "@/services/authApi";
 import { calculateDietNutrition, createRecord, getAnalytics, recognizeDietPhoto, updateRecord, type AuthRequest, type DietNutrition, type RecordItem, type RecordKind, type TodoAnalytics } from "@/services/analyticsApi";
+import { getTrips, type Trip } from "@/services/lifeExplorationApi";
 import { calendarImportantDaySummary, IMPORTANT_DAY_COLOR } from "@/utils/calendarLabels";
 
 const EXPENSE = ["餐飲", "交通", "購物", "居住", "娛樂", "醫療", "其他"];
@@ -54,6 +55,8 @@ export function RecordModal({ authorizedRequest, defaults, initial, kind, onClos
   const [type, setType] = useState<"expense" | "income">("expense");
   const [category, setCategory] = useState("餐飲");
   const [amount, setAmount] = useState("");
+  const [tripId, setTripId] = useState<number | null>(null);
+  const [availableTrips, setAvailableTrips] = useState<Trip[]>([]);
   const [activity, setActivity] = useState("跑步");
   const [customActivity, setCustomActivity] = useState("");
   const [duration, setDuration] = useState("");
@@ -93,6 +96,7 @@ export function RecordModal({ authorizedRequest, defaults, initial, kind, onClos
     const initialType = source?.type === "income" ? "income" : "expense";
     setType(initialType); setCategory(String(source?.category ?? (initialType === "income" ? "薪資" : "餐飲")));
     setAmount(source?.amount == null ? "" : String(source.amount));
+    setTripId(typeof source?.trip_id === "number" ? source.trip_id : null);
     const oldActivity = String(source?.activity ?? "跑步");
     setActivity(EXERCISE.includes(oldActivity) ? oldActivity : "其他");
     setCustomActivity(EXERCISE.includes(oldActivity) ? "" : oldActivity);
@@ -125,6 +129,13 @@ export function RecordModal({ authorizedRequest, defaults, initial, kind, onClos
   }, [initial, defaults, kind, source, visible]);
 
   useEffect(() => {
+    if (!visible || kind !== "finance") return;
+    void getTrips(authorizedRequest)
+      .then((result) => setAvailableTrips(result.trips.filter((trip) => trip.status !== "cancelled")))
+      .catch(() => setAvailableTrips([]));
+  }, [authorizedRequest, kind, visible]);
+
+  useEffect(() => {
     if (!visible || kind !== "todo") return;
     const selectedDate = date.slice(0, 7) === calendarMonth ? date : `${calendarMonth}-01`;
     void getAnalytics(authorizedRequest, "todos", { start: selectedDate, end: selectedDate }, { calendarMonth })
@@ -137,7 +148,7 @@ export function RecordModal({ authorizedRequest, defaults, initial, kind, onClos
 
   const payload = useMemo<Record<string, unknown>>(() => {
     if (kind === "todo") return { content, start_at: `${date}T${time}:00+08:00`, due_at: `${endDate}T${time}:00+08:00`, status: todoStatus };
-    if (kind === "finance") return { type, category, amount: Number(amount) };
+    if (kind === "finance") return { type, category, amount: Number(amount), trip_id: tripId };
     if (kind === "diet") {
       const hasNutrition = nutritionMode === "manual" || dietNutrition !== null;
       return {
@@ -167,7 +178,7 @@ export function RecordModal({ authorizedRequest, defaults, initial, kind, onClos
       waist_cm: waist ? Number(waist) : editing ? null : source?.waist_cm ?? null,
     };
     return { mood_category: mood, content };
-  }, [activity, amount, category, content, customActivity, date, dietCalories, dietCarbs, dietFat, dietNutrition, dietProtein, duration, editing, endDate, exerciseCalories, exerciseInputMode, heartRate, height, kind, mood, nutritionMode, source, time, todoStatus, trainingDetails, type, waist, waterMl, weight]);
+  }, [activity, amount, category, content, customActivity, date, dietCalories, dietCarbs, dietFat, dietNutrition, dietProtein, duration, editing, endDate, exerciseCalories, exerciseInputMode, heartRate, height, kind, mood, nutritionMode, source, time, todoStatus, trainingDetails, tripId, type, waist, waterMl, weight]);
 
   const validate = (): string | null => {
     if (kind === "todo" && (!content.trim() || !/^\d{2}:\d{2}$/.test(time))) return "請完整輸入執行日期、時間與內容";
@@ -292,7 +303,7 @@ export function RecordModal({ authorizedRequest, defaults, initial, kind, onClos
     <View style={styles.titleRow}><Text style={styles.title}>{editing ? `編輯${TITLE[kind].replace(/^記錄今日|^新增/, "")}` : TITLE[kind]}</Text></View>
     {step === "form" ? <>
       {kind === "todo" ? <><Text style={styles.label}>日期區間</Text><Text style={styles.hint}>{date} ～ {endDate}（依序點選開始與結束日；只選一天即為單日）</Text><View style={styles.calendar}><Calendar current={date} dayComponent={({ date: calendarDate, state }) => { if (!calendarDate) return null; const inRange = calendarDate.dateString >= date && calendarDate.dateString <= endDate; const isStart = calendarDate.dateString === date; const isEnd = calendarDate.dateString === endDate; const holiday = todoCalendar.calendar_days[calendarDate.dateString]; const count = todoCalendar.calendar_counts[calendarDate.dateString] ?? 0; const importantDaySummary = calendarImportantDaySummary(holiday); const selectDay = () => { if (!dateSelectionStarted) { setDate(calendarDate.dateString); setEndDate(calendarDate.dateString); setDateSelectionStarted(true); } else { if (calendarDate.dateString < date) { setEndDate(date); setDate(calendarDate.dateString); } else setEndDate(calendarDate.dateString); setDateSelectionStarted(false); } }; return <Pressable onPress={selectDay} style={[styles.calendarDay, inRange && styles.calendarRangeDay, isStart && styles.calendarRangeStart, isEnd && styles.calendarRangeEnd]}><Text style={[styles.calendarDayNumber, state === "disabled" && styles.calendarDayDisabled, holiday?.is_holiday && styles.calendarHolidayText, (isStart || isEnd) && styles.calendarDaySelectedText]}>{calendarDate.day}</Text>{count > 0 ? <Text style={styles.calendarCount}>{count}件</Text> : <View style={styles.calendarMetaPlaceholder} />}{holiday?.name ? <Text numberOfLines={1} style={styles.calendarHolidayName}>{holiday.name}</Text> : <View style={styles.calendarHolidayPlaceholder} />}{importantDaySummary ? <Text numberOfLines={1} style={styles.calendarNotificationName}>{importantDaySummary}</Text> : null}</Pressable>; }} onDayPress={(day: DateData) => { if (!dateSelectionStarted) { setDate(day.dateString); setEndDate(day.dateString); setDateSelectionStarted(true); } else { setEndDate(day.dateString >= date ? day.dateString : date); if (day.dateString < date) setDate(day.dateString); setDateSelectionStarted(false); } }} onMonthChange={(month) => setCalendarMonth(month.dateString.slice(0, 7))} theme={{ arrowColor: colors.primary, calendarBackground: colors.surface, dayTextColor: colors.text, monthTextColor: colors.text, textSectionTitleColor: colors.textMuted, textDisabledColor: theme === "dark" ? "#52645F" : "#C4CECB", todayTextColor: colors.danger }} /></View><TimePickerField onChange={setTime} value={time} /><Field label="內容" multiline onChange={setContent} placeholder="請輸入待辦內容" value={content} /><Text style={styles.label}>狀態</Text><Dropdown options={TODO_STATUSES} selected={todoStatus} setSelected={setTodoStatus} /></> : null}
-      {kind === "finance" ? <><Text style={styles.label}>類型</Text><Options options={[["expense", "支出"], ["income", "收入"]]} selected={type} setSelected={(value) => setType(value as "expense" | "income")} /><Text style={styles.label}>類別</Text><Options options={categories.map((value) => [value, value])} selected={category} setSelected={setCategory} /><Field inputMode="decimal" label="台幣金額（元）" onChange={(value) => setAmount(value.replace(/[^0-9.]/g, ""))} placeholder="請輸入台幣金額" value={amount} /></> : null}
+      {kind === "finance" ? <><Text style={styles.label}>類型</Text><Options options={[["expense", "支出"], ["income", "收入"]]} selected={type} setSelected={(value) => setType(value as "expense" | "income")} /><Text style={styles.label}>類別</Text><Options options={categories.map((value) => [value, value])} selected={category} setSelected={setCategory} /><Field inputMode="decimal" label="台幣金額（元）" onChange={(value) => setAmount(value.replace(/[^0-9.]/g, ""))} placeholder="請輸入台幣金額" value={amount} />{availableTrips.length ? <><Text style={styles.label}>旅遊行程（選填）</Text><View style={styles.options}><Pressable onPress={() => setTripId(null)} style={[styles.option, tripId === null && styles.optionSelected]}><Text style={[styles.optionText, tripId === null && styles.optionTextSelected]}>不指定</Text></Pressable>{availableTrips.map((trip) => <Pressable key={trip.id} onPress={() => setTripId(trip.id)} style={[styles.option, tripId === trip.id && styles.optionSelected]}><Text style={[styles.optionText, tripId === trip.id && styles.optionTextSelected]}>{trip.title}</Text></Pressable>)}</View></> : null}</> : null}
       {kind === "diet" ? <>
         <Field inputMode="numeric" label="飲水量（毫升）" onChange={(value) => setWaterMl(value.replace(/\D/g, ""))} placeholder="請輸入數字" suffix="毫升" value={waterMl} />
         <Text style={styles.label}>輸入方式</Text><Options options={[["text", "文字"], ["photo", "照片"]]} selected={dietInputMode} setSelected={(value) => { setDietInputMode(value as "text" | "photo"); setError(null); }} />

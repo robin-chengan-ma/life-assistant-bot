@@ -23,6 +23,7 @@ import {
   type RecordKind,
 } from "@/services/analyticsApi";
 import { getCollectionItems, type CollectionResponse } from "@/services/collectionApi";
+import { getAchievements, type AchievementResponse } from "@/services/lifeExplorationApi";
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -33,6 +34,7 @@ export default function HomeScreen() {
   const [body, setBody] = useState<BodyAnalytics | null>(null);
   const [mood, setMood] = useState<MoodAnalytics | null>(null);
   const [collections, setCollections] = useState<CollectionResponse | null>(null);
+  const [achievements, setAchievements] = useState<AchievementResponse | null>(null);
   const [collectionModalOpen, setCollectionModalOpen] = useState(false);
   const [recordTarget, setRecordTarget] = useState<{ kind: RecordKind; initial: RecordItem | null; defaults?: Partial<RecordItem> | null } | null>(null);
   const [savedMessage, setSavedMessage] = useState<string | null>(null);
@@ -40,12 +42,13 @@ export default function HomeScreen() {
   const loadPreviews = useCallback(async () => {
     if (status !== "authenticated") return;
     const range = defaultDateRange();
-    const [bodyData, moodData, collectionData] = await Promise.all([
+    const [bodyData, moodData, collectionData, achievementData] = await Promise.all([
       getAnalytics(authorizedRequest, "body", range).catch(() => null),
       getAnalytics(authorizedRequest, "mood", range).catch(() => null),
       getCollectionItems(authorizedRequest).catch(() => null),
+      getAchievements(authorizedRequest).catch(() => null),
     ]);
-    setBody(bodyData); setMood(moodData); setCollections(collectionData);
+    setBody(bodyData); setMood(moodData); setCollections(collectionData); setAchievements(achievementData);
   }, [authorizedRequest, status]);
   useEffect(() => { void loadPreviews(); }, [loadPreviews]);
 
@@ -91,7 +94,7 @@ export default function HomeScreen() {
       </Pressable>
 
       <View style={styles.cardGrid}>{cards.map((card, index) => { const item = data?.navigation[card.module]; const disabled = item ? !item.is_enabled : false; const singleDaily = (["diet", "weight", "mood"] as RecordKind[]).includes(card.kind); const initial = singleDaily ? latestTodayRecord(card.kind) : null; const defaults = card.kind === "weight" ? body?.body_defaults ?? null : null; const updating = Boolean(initial); return <Pressable key={`${card.title}-${index}`} onPress={() => openModule(card.module)} style={[styles.summaryCard, disabled && styles.disabledCard]}><MaterialCommunityIcons color={disabled ? colors.textMuted : item?.color ?? colors.primary} name={card.icon} size={27} /><View style={styles.flex}><View style={styles.cardTitleRow}><Text style={[styles.cardTitle, disabled && styles.disabledText]}>{card.title}</Text><Pressable disabled={disabled} onPress={(event) => { event.stopPropagation(); setRecordTarget({ kind: card.kind, initial, defaults }); }} style={[styles.measureButton, updating && styles.updateButton, disabled && styles.measureButtonDisabled]}><MaterialCommunityIcons color={theme === "dark" ? colors.background : colors.white} name={card.kind === "todo" ? "calendar-plus" : "pencil-outline"} size={17} /><Text style={styles.measureButtonText}>{card.kind === "todo" ? "新增待辦" : updating ? "更新紀錄" : card.count > 0 && !singleDaily ? "再記一筆" : "記錄一下"}</Text></Pressable></View><View style={styles.cardTextRow}>{typeof card.text === "string" ? <Text style={styles.cardText}>{card.text}</Text> : card.text}</View></View></Pressable>; })}
-        <Pressable onPress={() => router.push("/achievements" as Href)} style={styles.summaryCard}><MaterialCommunityIcons color="#A56CC1" name="trophy-outline" size={27} /><View style={styles.flex}><View style={styles.cardTitleRow}><Text style={styles.cardTitle}>成果展示</Text><Pressable onPress={(event) => { event.stopPropagation(); router.push("/achievements" as Href); }} style={styles.measureButton}><MaterialCommunityIcons color={theme === "dark" ? colors.background : colors.white} name="plus" size={17} /><Text style={styles.measureButtonText}>新增成果</Text></Pressable></View><Text style={styles.cardText}>用卡片收藏已完成的目標與個人成就</Text></View></Pressable>
+        <Pressable onPress={() => router.push("/achievements" as Href)} style={styles.summaryCard}><MaterialCommunityIcons color="#A56CC1" name="trophy-outline" size={27} /><View style={styles.flex}><View style={styles.cardTitleRow}><Text style={styles.cardTitle}>成果展示</Text><Pressable onPress={(event) => { event.stopPropagation(); router.push("/achievements" as Href); }} style={styles.measureButton}><MaterialCommunityIcons color={theme === "dark" ? colors.background : colors.white} name="plus" size={17} /><Text style={styles.measureButtonText}>新增成果</Text></Pressable></View><Text style={styles.cardText}>{achievements?.candidates.length ? `有 ${achievements.candidates.length} 項成果候選待你確認` : `已收藏 ${achievements?.achievements.length ?? 0} 項成果`}</Text></View></Pressable>
       </View>
 
       <View style={styles.cardGrid}>

@@ -7,6 +7,7 @@ from flask import Flask, jsonify
 from src.api.app_analytics import app_analytics_bp
 from src.api.app_auth import app_bp
 from src.api.app_collections import app_collections_bp
+from src.api.app_life_exploration import app_life_exploration_bp
 from src.api.app_important_days import app_important_days_bp
 from src.bot import monitoring
 from src.bot.webhook import bot_bp
@@ -20,6 +21,7 @@ app = Flask(__name__)
 app.register_blueprint(app_analytics_bp)
 app.register_blueprint(app_bp)
 app.register_blueprint(app_collections_bp)
+app.register_blueprint(app_life_exploration_bp)
 app.register_blueprint(app_important_days_bp)
 app.register_blueprint(bot_bp)
 

@@ -142,3 +142,15 @@
 **根因**：Web 平台一律使用 `window.location.origin`，Expo 開發伺服器只有前端靜態資源、沒有 Flask `/api/*` 路由，因此請求被送到錯誤的 8082 連接埠。
 **修復方式**：`mobile/src/services/authApi.ts` 在 localhost／127.0.0.1 預覽時改用 `EXPO_PUBLIC_API_BASE_URL`；正式同網域部署仍使用 `window.location.origin`，原生 App 亦維持使用設定值。
 **驗證方式**：TypeScript typecheck 通過；Expo 於 `http://localhost:8081` 重啟；正式 API 對 localhost Origin 回傳 CORS 與 `{"recognized": true}`；瀏覽器實測輸入 `user01` 後點登入，密碼欄由停用改為可輸入。
+
+## 2026-08-14 首頁「新增收藏」Modal 在手機窄螢幕跑版
+
+**現象**：實體手機開啟首頁「收藏清單」的「新增收藏」視窗後，類型按鈕換行時「其他」與下一個「國家」標題重疊；捲動到底部時，取消／確認按鈕覆蓋備註輸入框，造成欄位與操作區無法正常閱讀。
+
+**排查過程**：依使用者提供的兩張實體手機截圖與 `CollectionModal` 樣式定位；類型容器雖可換行，但表單欄位曾帶伸展樣式，底部操作區也未與捲動內容保留穩定間距。
+
+**根因**：窄螢幕下欄位容器與選項換行高度互相擠壓；操作區位於同一捲動內容但留白不足，導致備註框與按鈕視覺重疊。
+
+**修復方式**：調整 `mobile/src/components/CollectionModal.tsx`：移除欄位不必要的伸展、固定表單與操作區間距、保留 Modal 內 ScrollView，並同步移除已取消的優先程度／日期／縣市／手動狀態欄位。
+
+**驗證方式**：TypeScript typecheck 通過；仍需 Robin 以手機窄螢幕實機確認類型按鈕換行、完整欄位捲動，以及底部操作列不遮擋輸入內容。

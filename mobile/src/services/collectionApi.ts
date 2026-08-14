@@ -1,7 +1,6 @@
 import type { AuthRequest } from "@/services/analyticsApi";
 
 export type CollectionItemType = "restaurant" | "attraction" | "mountain" | "accommodation" | "activity" | "other";
-export type CollectionPriority = "low" | "medium" | "high";
 export type CollectionStatus = "saved" | "added_to_trip" | "visited" | "cancelled";
 
 export type CollectionItem = {
@@ -11,7 +10,6 @@ export type CollectionItem = {
   title: string;
   country_code: string | null;
   country_name: string | null;
-  administrative_area: string | null;
   city_name: string | null;
   address: string | null;
   latitude: number | null;
@@ -19,8 +17,6 @@ export type CollectionItem = {
   source_url: string | null;
   estimated_cost: number | null;
   currency_code: string;
-  priority: CollectionPriority;
-  desired_date: string | null;
   notes: string | null;
   status: CollectionStatus;
   visited_at: string | null;
@@ -33,16 +29,12 @@ export type CollectionPayload = {
   title: string;
   country_code?: string;
   country_name?: string;
-  administrative_area?: string;
   city_name?: string;
   address?: string;
   source_url?: string;
   estimated_cost?: number;
-  currency_code?: string;
-  priority: CollectionPriority;
-  desired_date?: string;
+  currency_code?: "TWD";
   notes?: string;
-  status: CollectionStatus;
 };
 
 export type CollectionResponse = {
@@ -78,4 +70,8 @@ export function updateCollectionItem(
 
 export function deleteCollectionItem(request: AuthRequest, id: number): Promise<{ message: string }> {
   return request(`/api/app/collections/${id}`, { method: "DELETE" });
+}
+
+export function restoreCollectionItem(request: AuthRequest, id: number): Promise<{ message: string }> {
+  return request(`/api/app/collections/${id}/restore`, { method: "POST" });
 }

@@ -231,22 +231,42 @@ updated: 2026-08-14
 | `POST /api/app/body/weight-logs` | 已實作（`create_weight_log()`） | FR-64a | App 端手動輸入體重（取代已移除的藍牙體重計整合方案），40～150 公斤範圍檢查，複用 `src/bot/body.py::create_weight_log()` |
 | `POST /api/app/diet/recognize-photo` | 已實作（`recognize_diet_image()`） | FR-64 | 飲食照片辨識（LLM Vision），App 端專屬能力，Telegram 端沒有對應路由 |
 | `POST /api/app/diet/calculate-nutrition` | 已實作（`calculate_diet_image_nutrition()`） | FR-64 | 依確認後的飲食描述計算三大營養素，App 端專屬能力 |
-| `POST /api/app/records/<kind>` | 已實作（`create_record()`） | FR-64、FR-68～FR-72 | 泛用記錄新增；`diet` 支援 `nutrition_source=ai/manual` 與人工營養數值，`exercise` 支援 `input_mode=time/calories`、`training_details`；重複紀錄預設擋下，可帶 `allow_duplicate` 略過檢查 |
-| `PATCH /api/app/records/<kind>/<id>` | 已實作（`update_record()`） | FR-64、FR-68～FR-72 | 泛用記錄更新，沿用飲食／運動輸入來源欄位；歷史（過去）紀錄的異動限制見 `HistoricalRecordError` |
+| `POST /api/app/records/<kind>` | 已實作（`create_record()`） | FR-64、FR-68～FR-74a | 泛用記錄新增；`diet` 支援 `nutrition_source=ai/manual` 與人工營養數值，`exercise` 支援 `input_mode=time/calories`、`training_details`，`finance` 可選填本人有效的 `trip_id`；重複紀錄預設擋下，可帶 `allow_duplicate` 略過檢查 |
+| `PATCH /api/app/records/<kind>/<id>` | 已實作（`update_record()`） | FR-64、FR-68～FR-74a | 泛用記錄更新，沿用飲食／運動輸入來源欄位及記帳行程關聯；歷史（過去）紀錄的異動限制見 `HistoricalRecordError` |
 | `DELETE /api/app/records/<kind>/<id>` | 已實作（`delete_record()`） | FR-68～FR-72 | 泛用記錄刪除 |
 
 ### 收藏清單（`src/api/app_collections.py`，url_prefix `/api/app/collections`）
 
-> 對應「收藏清單／旅遊行程／探索地圖／成果展示」，規格範圍外的新方向，已完成 Leaflet 地圖技術 POC
-> 與第一階段實作，但尚未走規格確認流程、未收錄進 `docs/specs/SPEC.md`，見 `docs/specs/DRAFT.md`
-> 「待討論」區塊 2026-08-12 條目。
+> 對應 SPEC FR-73。
+> 收藏寫入欄位為 `item_type`、`title`、`country_name`、`city_name`、選填 `country_code`、`address`、
+> `latitude`／`longitude`、`source_url`、`estimated_cost`、`notes`。國家及區域／城市必填；餐廳、景點、
+> 山岳與住宿的地址必填，活動及其他可省略地址。`currency_code` 固定為 `TWD`；不接受用戶端直接設定
+> `priority`、`desired_date`、`administrative_area`、`trip_id`、`status` 或 `visited_at`。
 
 | 項目 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `GET /api/app/collections` | 已實作（App 端，規格未定案）（`list_collection_items()`） | 無（見 `docs/specs/DRAFT.md` 待討論） | 依國家/城市/類型/狀態篩選查詢個人收藏清單項目 |
-| `POST /api/app/collections` | 已實作（App 端，規格未定案）（`create_collection_item()`） | 無（見 `docs/specs/DRAFT.md` 待討論） | 新增一筆收藏清單項目 |
-| `PATCH /api/app/collections/<id>` | 已實作（App 端，規格未定案）（`update_collection_item()`） | 無（見 `docs/specs/DRAFT.md` 待討論） | 更新一筆收藏清單項目 |
-| `DELETE /api/app/collections/<id>` | 已實作（App 端，規格未定案）（`delete_collection_item()`） | 無（見 `docs/specs/DRAFT.md` 待討論） | 刪除一筆收藏清單項目 |
+| `GET /api/app/collections` | 已實作（`list_collection_items()`） | FR-73 | 依國家／區域城市／類型／推導狀態篩選個人收藏，按最近更新時間排序 |
+| `POST /api/app/collections` | 已實作（`create_collection_item()`） | FR-73 | 新增收藏；初始狀態固定為 `saved`，不接受用戶端手動指定狀態 |
+| `PATCH /api/app/collections/<id>` | 已實作（`update_collection_item()`） | FR-73 | 更新收藏內容，不覆寫由行程／造訪流程推導的狀態 |
+| `DELETE /api/app/collections/<id>` | 已實作（`delete_collection_item()`） | FR-73 | 軟刪除收藏並移除規劃中／已確認行程關聯；既有探索快照保留，回傳 5 秒復原資訊 |
+| `POST /api/app/collections/<id>/restore` | 已實作（`restore_collection_item()`） | FR-73 | 復原已軟刪除收藏 |
+
+### 生活探索與成果（`src/api/app_life_exploration.py`，url_prefix `/api/app/life`）
+
+| 項目 | 狀態 | 對應 FR | 說明 |
+| --- | --- | --- | --- |
+| `GET／POST /api/app/life/trips` | 已實作 | FR-74 | 列出／建立本人旅遊行程；回傳預估、實際與差額，建立時可關聯多筆收藏 |
+| `PATCH／DELETE /api/app/life/trips/<id>` | 已實作 | FR-74 | 更新／軟刪除本人行程 |
+| `POST /api/app/life/trips/<id>/restore` | 已實作 | FR-74 | 復原已刪除行程 |
+| `POST /api/app/life/trips/<id>/complete` | 已實作 | FR-74、FR-75 | 依 `visited_collection_ids` 完成行程，只為實際造訪收藏建立探索快照 |
+| `POST /api/app/life/collections/<id>/visit` | 已實作 | FR-73、FR-75 | 未透過行程時直接將收藏標記為已造訪；必填 `visited_on` |
+| `GET /api/app/life/exploration` | 已實作 | FR-75 | 依 `country`／`city` 篩選；有座標資料按同座標聚合標記，無座標資料放入 `unlocated` |
+| `PATCH／DELETE /api/app/life/exploration/<id>` | 已實作 | FR-75 | 更新單次造訪日期／備註／地址，或軟刪除探索紀錄 |
+| `POST /api/app/life/exploration/<id>/restore` | 已實作 | FR-75 | 復原已刪除探索紀錄 |
+| `GET／POST /api/app/life/achievements` | 已實作 | FR-76 | 列出成果與待確認候選；手動新增成果可帶類別、完成日、說明與 HTTPS 封面照片網址 |
+| `DELETE /api/app/life/achievements/<id>` | 已實作 | FR-76 | 軟刪除成果，不異動來源資料 |
+| `POST /api/app/life/achievements/<id>/restore` | 已實作 | FR-76 | 復原已刪除成果 |
+| `POST /api/app/life/achievement-candidates/<id>/decision` | 已實作 | FR-76 | `accept=true／false` 接受或拒絕成果候選；拒絕後相同 `candidate_key` 不重複提示 |
 
 ### 重要日子設定（`src/api/app_important_days.py`，url_prefix `/api/app/important-days`）
 
