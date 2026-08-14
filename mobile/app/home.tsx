@@ -69,7 +69,7 @@ export default function HomeScreen() {
     if (kind === "mood") return mood?.items.slice().reverse().find((item) => item.date === today) as RecordItem ?? null;
     return null;
   };
-  const moodIcon: keyof typeof MaterialCommunityIcons.glyphMap = ({ happy_excited: "emoticon-excited-outline", calm_relaxed: "emoticon-cool-outline", neutral: "emoticon-neutral-outline", tired_burned_out: "emoticon-sad-outline", sad_down: "emoticon-cry-outline", angry_anxious: "emoticon-angry-outline" } as const)[summary?.latest_mood_category ?? ""] ?? "emoticon-happy-outline";
+  const moodEmoji = ({ happy_excited: "🥳", calm_relaxed: "😌", neutral: "🙂", tired_burned_out: "🫠", sad_down: "😢", angry_anxious: "😡" } as const)[summary?.latest_mood_category ?? ""] ?? "🙂";
   const cards: Array<{ module: AnalyticsModule; kind: RecordKind; title: string; text: React.ReactNode; icon: keyof typeof MaterialCommunityIcons.glyphMap; count: number }> = [
     { module: "todos", kind: "todo", title: "待辦事項", text: `今日有 ${summary?.todo_count ?? 0} 件待辦事項`, icon: "calendar-check-outline", count: Number(summary?.todo_count ?? 0) },
     { module: "finance", kind: "finance", title: "記帳分析", text: <View><View style={styles.inlineText}><Text style={styles.cardText}>收入：{summary?.income_count ? `今日已記 ${summary.income_count} 筆，共 ` : "無紀錄"}</Text>{summary?.income_count ? <SensitiveValue style={styles.cardText}>{`${Number(summary.income_today).toLocaleString()} 元`}</SensitiveValue> : null}</View><View style={styles.inlineText}><Text style={styles.cardText}>支出：{summary?.expense_count ? `今日已記 ${summary.expense_count} 筆，共 ` : "無紀錄"}</Text>{summary?.expense_count ? <SensitiveValue style={styles.cardText}>{`${Number(summary.expense_today).toLocaleString()} 元`}</SensitiveValue> : null}</View></View>, icon: "wallet-outline", count: Number(summary?.income_count ?? 0) + Number(summary?.expense_count ?? 0) },
@@ -99,7 +99,7 @@ export default function HomeScreen() {
         <Pressable onPress={() => router.push("/exploration" as Href)} style={styles.summaryCard}><MaterialCommunityIcons color="#278DA8" name="map-marker-radius-outline" size={27} /><View style={styles.flex}><View style={styles.cardTitleRow}><Text style={styles.cardTitle}>探索地圖</Text><MaterialCommunityIcons color={colors.textMuted} name="chevron-right" size={22} /></View><Text style={styles.cardText}>用地圖查看過去的旅遊、餐廳、山岳與景點紀錄</Text></View></Pressable>
       </View>
 
-      <Pressable onPress={() => openModule("mood")} style={[styles.summaryCard, styles.fullWidthCard]}><MaterialCommunityIcons color="#A56CC1" name="emoticon-happy-outline" size={27} /><View style={styles.flex}><View style={styles.cardTitleRow}><Text style={styles.cardTitle}>心情趨勢</Text><Pressable onPress={(event) => { event.stopPropagation(); setRecordTarget({ kind: "mood", initial: latestTodayRecord("mood") }); }} style={[styles.measureButton, latestTodayRecord("mood") && styles.updateButton]}><MaterialCommunityIcons color={theme === "dark" ? colors.background : colors.white} name="pencil-outline" size={17} /><Text style={styles.measureButtonText}>{latestTodayRecord("mood") ? "更新紀錄" : "紀錄一下"}</Text></Pressable></View><View style={styles.cardTextRow}><Text style={styles.cardText}>{summary?.mood_count ? "今日最新心情：" : "今日尚未記錄心情"}</Text>{summary?.mood_count ? <MaterialCommunityIcons color="#A56CC1" name={moodIcon} size={27} /> : null}</View></View></Pressable>
+      <Pressable onPress={() => openModule("mood")} style={[styles.summaryCard, styles.fullWidthCard]}><MaterialCommunityIcons color="#A56CC1" name="emoticon-happy-outline" size={27} /><View style={styles.flex}><View style={styles.cardTitleRow}><Text style={styles.cardTitle}>心情趨勢</Text><Pressable onPress={(event) => { event.stopPropagation(); setRecordTarget({ kind: "mood", initial: latestTodayRecord("mood") }); }} style={[styles.measureButton, latestTodayRecord("mood") && styles.updateButton]}><MaterialCommunityIcons color={theme === "dark" ? colors.background : colors.white} name="pencil-outline" size={17} /><Text style={styles.measureButtonText}>{latestTodayRecord("mood") ? "更新紀錄" : "紀錄一下"}</Text></Pressable></View><View style={styles.cardTextRow}><Text style={styles.cardText}>{summary?.mood_count ? "今日最新心情：" : "今日尚未記錄心情"}</Text>{summary?.mood_count ? <Text style={styles.moodEmoji}>{moodEmoji}</Text> : null}</View></View></Pressable>
       </AppShell>
 
       {savedMessage ? <View accessibilityLiveRegion="polite" style={styles.savedToast}><Text style={styles.savedToastText}>{savedMessage}</Text></View> : null}
@@ -120,6 +120,7 @@ const createStyles = (colors: ReturnType<typeof useAppPreferences>["colors"], th
   cardTitleRow: { alignItems: "center", flexDirection: "row", gap: 10, justifyContent: "space-between" },
   cardTitle: { color: colors.text, fontSize: 15, fontWeight: "800" },
   cardText: { color: colors.textMuted, fontSize: 13, lineHeight: 19, marginTop: 4 },
+  moodEmoji: { fontSize: 25, lineHeight: 30 },
   inlineText: { alignItems: "baseline", flexDirection: "row", flexWrap: "wrap" },
   cardTextRow: { alignItems: "center", flexDirection: "row", gap: 8 },
   fullWidthCard: { flexBasis: "auto", flexGrow: 0, width: "100%" },

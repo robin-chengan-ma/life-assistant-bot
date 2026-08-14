@@ -28,7 +28,7 @@
 """
 import logging
 import re
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 
 from submodules.cloudsql.client import CloudSQLClient
@@ -198,18 +198,25 @@ def latest_weight(db: CloudSQLClient, user_id: int) -> float | None:
 # ---------------------------------------------------------------------------
 
 
-def estimate_exercise_calories(llm_client, activity: str, duration_minutes: int, heart_rate: int | None) -> float | None:
+def estimate_exercise_calories(
+    llm_client,
+    activity: str,
+    duration_minutes: int,
+    heart_rate: int | None,
+    training_details: str | None = None,
+) -> float | None:
     """呼叫 LLM 估算這次運動大約消耗的卡路里（決策①）。回傳解析出的第一個數字；LLM 回覆無法解析
     出數字時回傳 None，呼叫端仍應正常存檔（`estimated_calories` 存 NULL），不能因為估算失敗就擋下
     整筆紀錄。"""
     heart_rate_part = f"，心率約 {heart_rate} 下/分鐘" if heart_rate else "（沒有心率資料）"
+    training_part = f"，訓練內容為「{training_details}」" if training_details else ""
     prompt = (
-        f"請估算一般成人做「{activity}」運動 {duration_minutes} 分鐘{heart_rate_part}大約消耗多少大卡"
+        f"請估算一般成人做「{activity}」運動 {duration_minutes} 分鐘{heart_rate_part}{training_part}大約消耗多少大卡"
         "熱量，只要回覆一個數字（大卡），不要附加其他文字或單位。"
     )
     try:
         response = llm_client.generate_text(prompt)
-    except Exception:
+    except Exception:  # noqa: BLE001 - 外部 LLM 失敗時降級為無估算值
         return None
     match = re.search(r"\d+(\.\d+)?", response or "")
     return float(match.group()) if match else None
@@ -233,6 +240,9 @@ def create_exercise_log(
             "duration_minutes": duration_minutes,
             "heart_rate": heart_rate,
             "estimated_calories": estimated_calories,
+            "input_mode": "time",
+            "calorie_source": "ai",
+            "training_details": None,
             "entry_date": entry_date,
         },
     )
@@ -249,6 +259,9 @@ def update_exercise_log(
             "duration_minutes": duration_minutes,
             "heart_rate": heart_rate,
             "estimated_calories": estimated_calories,
+            "input_mode": "time",
+            "calorie_source": "ai",
+            "training_details": None,
         },
         where="id = %s",
         params=(log_id,),
@@ -275,9 +288,12 @@ def format_exercise_log_list(logs: list[dict]) -> str:
     for index, item in enumerate(logs, start=1):
         calories = item.get("estimated_calories")
         calories_part = f"　約 {float(calories):.0f} 大卡" if calories is not None else ""
-        lines.append(
-            f"{index}. {item['entry_date']:%Y/%m/%d} {item['activity']} {item['duration_minutes']} 分鐘{calories_part}"
-        )
+        if item.get("input_mode") == "calories":
+            lines.append(f"{index}. {item['entry_date']:%Y/%m/%d} {item['activity']}　{float(calories):.0f} 大卡（人工輸入）")
+        else:
+            lines.append(
+                f"{index}. {item['entry_date']:%Y/%m/%d} {item['activity']} {item['duration_minutes']} 分鐘{calories_part}"
+            )
     return "\n".join(lines)
 
 
@@ -316,7 +332,7 @@ def estimate_diet_macros(llm_client, description: str) -> dict:
     )
     try:
         response = llm_client.generate_text(prompt) or ""
-    except Exception:
+    except Exception:  # noqa: BLE001 - 外部 LLM 失敗時保留飲食紀錄
         response = ""
 
     def _extract(field: str) -> float | None:
@@ -350,6 +366,7 @@ def create_diet_log(
             "entry_type": entry_type,
             "description": description,
             "water_ml": water_ml,
+            "nutrition_source": "ai" if entry_type == "food" else "manual",
             "estimated_calories": macros.get("estimated_calories"),
             "protein_g": macros.get("protein_g"),
             "carbs_g": macros.get("carbs_g"),

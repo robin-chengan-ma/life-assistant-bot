@@ -196,6 +196,49 @@ def test_create_record_maps_duplicate_to_conflict(client, monkeypatch):
     assert response.get_json()["code"] == "DUPLICATE_RECORD"
 
 
+def test_create_record_passes_manual_nutrition_payload_to_service(client, monkeypatch):
+    test_client, module = client
+    called = {}
+
+    class Records:
+        def create(self, kind, user_id, payload, *, allow_duplicate):
+            called.update(
+                kind=kind,
+                user_id=user_id,
+                payload=payload,
+                allow_duplicate=allow_duplicate,
+            )
+            return {"id": 21, "message": "飲食紀錄已新增"}
+
+    monkeypatch.setattr(module, "_build_records", lambda db: Records())
+    payload = {
+        "description": "雞胸肉便當",
+        "water_ml": 800,
+        "nutrition_source": "manual",
+        "nutrition": {
+            "fat_g": 12.34,
+            "carbs_g": 65.55,
+            "protein_g": 42.04,
+            "estimated_calories": 620.5,
+        },
+    }
+
+    response = test_client.post(
+        "/api/app/records/diet",
+        headers=auth_headers(),
+        json=payload,
+    )
+
+    assert response.status_code == 201
+    assert response.get_json()["id"] == 21
+    assert called == {
+        "kind": "diet",
+        "user_id": 1,
+        "payload": payload,
+        "allow_duplicate": False,
+    }
+
+
 def test_diet_photo_endpoints_return_recognition_and_nutrition(client, monkeypatch):
     test_client, module = client
     monkeypatch.setattr(module, "_build_llm", lambda: object())

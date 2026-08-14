@@ -127,6 +127,22 @@ def test_estimate_exercise_calories_parses_number():
     assert calories == 318.0
 
 
+def test_estimate_exercise_calories_includes_strength_details():
+    llm_client = Mock()
+    llm_client.generate_text.return_value = "320"
+
+    body.estimate_exercise_calories(
+        llm_client,
+        "重訓",
+        45,
+        130,
+        training_details="深蹲 60 公斤 5 組，每組 8 下",
+    )
+
+    prompt = llm_client.generate_text.call_args.args[0]
+    assert "深蹲 60 公斤 5 組，每組 8 下" in prompt
+
+
 def test_estimate_exercise_calories_returns_none_when_unparseable():
     llm_client = Mock()
     llm_client.generate_text.return_value = "不確定"

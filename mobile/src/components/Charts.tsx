@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { StyleSheet } from "react-native";
 import Svg, { Circle, G, Line, Path, Polyline, Rect, Text as SvgText } from "react-native-svg";
 
@@ -6,14 +7,15 @@ import { AppText as Text } from "@/components/AppText";
 import { AppView as View } from "@/components/AppView";
 import { SensitiveValue } from "@/components/SensitiveValue";
 
-export type ChartPoint = { label: string; value: number | null };
-export type ChartSeries = { color: string; label: string; points: ChartPoint[] };
+export type ChartPoint = { label: string; tooltip?: string; value: number | null };
+export type ChartSeries = { color: string; label: string; marker?: "solid" | "hollow"; points: ChartPoint[] };
 
 const WIDTH = 340;
 const HEIGHT = 190;
 const PADDING = 28;
 
 export function LineChart({ series }: { series: ChartSeries[] }) {
+  const [tooltip, setTooltip] = useState<string | null>(null);
   const values = series.flatMap((item) => item.points.map((point) => point.value)).filter((value): value is number => value !== null);
   if (!values.length) return <EmptyChart />;
   const min = Math.min(...values);
@@ -46,14 +48,15 @@ export function LineChart({ series }: { series: ChartSeries[] }) {
               {segments.map((segment, index) => (
                 <Polyline key={index} fill="none" points={segment.join(" ")} stroke={item.color} strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} />
               ))}
-              {item.points.map((point, index) => point.value === null ? null : <Circle key={index} cx={x(index)} cy={y(point.value)} fill={colors.surface} r={4} stroke={item.color} strokeWidth={2} />)}
+              {item.points.map((point, index) => point.value === null ? null : <Circle accessibilityLabel={`${item.label} ${point.label} ${point.value}`} key={index} cx={x(index)} cy={y(point.value)} fill={item.marker === "solid" ? item.color : colors.surface} onPress={() => setTooltip(point.tooltip ?? `${point.label}｜${item.label}：${point.value}`)} r={5} stroke={item.color} strokeWidth={2} />)}
             </G>
           );
         })}
         <SvgText fill={colors.textMuted} fontSize={10} x={PADDING} y={HEIGHT - 6}>{series[0]?.points[0]?.label ?? ""}</SvgText>
         <SvgText fill={colors.textMuted} fontSize={10} textAnchor="end" x={WIDTH - PADDING} y={HEIGHT - 6}>{series[0]?.points.at(-1)?.label ?? ""}</SvgText>
       </Svg>
-      <View style={styles.legend}>{series.map((item) => <View key={item.label} style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: item.color }]} /><Text style={styles.legendText}>{item.label}</Text></View>)}</View>
+      {tooltip ? <Text style={styles.tooltip}>{tooltip}</Text> : null}
+      <View style={styles.legend}>{series.map((item) => <View key={item.label} style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: item.marker === "hollow" ? colors.surface : item.color, borderColor: item.color, borderWidth: item.marker === "hollow" ? 2 : 0 }]} /><Text style={styles.legendText}>{item.label}</Text></View>)}</View>
     </View>
   );
 }
@@ -112,6 +115,7 @@ const styles = StyleSheet.create({
   legendItem: { alignItems: "center", flexDirection: "row", gap: 5 },
   legendDot: { borderRadius: 4, height: 8, width: 8 },
   legendText: { color: colors.textMuted, fontSize: 11 },
+  tooltip: { alignSelf: "center", backgroundColor: colors.primarySoft, borderRadius: 9, color: colors.text, fontSize: 11, lineHeight: 17, paddingHorizontal: 10, paddingVertical: 7, textAlign: "center" },
   pieRow: { alignItems: "center", flexDirection: "row", flexWrap: "wrap", justifyContent: "center" },
   pieLegend: { gap: 8, minWidth: 130 },
   funnel: { alignItems: "center", gap: 7, paddingVertical: 8 },

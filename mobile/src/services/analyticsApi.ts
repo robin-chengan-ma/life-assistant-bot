@@ -100,12 +100,30 @@ export type BodyAnalytics = {
   diet: Array<{
     date: string;
     water_ml: number;
-    fat_g: number;
-    protein_g: number;
-    carbs_g: number;
-    calories: number;
+    ai_count: number;
+    manual_count: number;
+    ai_fat_g: number;
+    manual_fat_g: number;
+    total_fat_g: number;
+    ai_protein_g: number;
+    manual_protein_g: number;
+    total_protein_g: number;
+    ai_carbs_g: number;
+    manual_carbs_g: number;
+    total_carbs_g: number;
+    ai_calories: number;
+    manual_calories: number;
+    total_calories: number;
   }>;
-  exercise: Array<{ date: string; calories: number; minutes: number }>;
+  exercise: Array<{
+    date: string;
+    ai_count: number;
+    manual_count: number;
+    ai_calories: number;
+    manual_calories: number;
+    total_calories: number;
+    minutes: number;
+  }>;
   goals: Array<{
     goal_type: string;
     target_description: string;

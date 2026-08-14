@@ -505,31 +505,43 @@ class AppAnalyticsService:
                     "bmi": round(value / ((height / 100) ** 2), 2) if height else None,
                 }
             )
-        diet = [
-            _json_row(row)
-            for row in self._db.execute_query(
-                """/* app_analytics:body_diet */ SELECT entry_date AS date,
-                COALESCE(MAX(water_ml) FILTER (WHERE entry_type = 'water'), 0) AS water_ml,
-                COALESCE(MAX(fat_g) FILTER (WHERE entry_type = 'food'), 0) AS fat_g,
-                COALESCE(MAX(protein_g) FILTER (WHERE entry_type = 'food'), 0) AS protein_g,
-                COALESCE(MAX(carbs_g) FILTER (WHERE entry_type = 'food'), 0) AS carbs_g,
-                COALESCE(MAX(estimated_calories) FILTER (WHERE entry_type = 'food'), 0) AS calories
-                FROM diet_logs WHERE user_id = %s AND entry_date BETWEEN %s AND %s
-                GROUP BY entry_date ORDER BY entry_date""",
-                (user.database_id, start, end),
-            )
-        ]
-        exercise = [
-            _json_row(row)
-            for row in self._db.execute_query(
-                """/* app_analytics:body_exercise */ SELECT entry_date AS date,
-                COALESCE(SUM(estimated_calories), 0) AS calories,
-                COALESCE(SUM(duration_minutes), 0) AS minutes
-                FROM exercise_logs WHERE user_id = %s AND entry_date BETWEEN %s AND %s
-                GROUP BY entry_date ORDER BY entry_date""",
-                (user.database_id, start, end),
-            )
-        ]
+        diet = []
+        for row in self._db.execute_query(
+            """/* app_analytics:body_diet */ SELECT entry_date AS date,
+            COALESCE(MAX(water_ml) FILTER (WHERE entry_type = 'water'), 0) AS water_ml,
+            COUNT(*) FILTER (WHERE entry_type = 'food' AND nutrition_source = 'ai') AS ai_count,
+            COUNT(*) FILTER (WHERE entry_type = 'food' AND nutrition_source = 'manual') AS manual_count,
+            COALESCE(SUM(fat_g) FILTER (WHERE entry_type = 'food' AND nutrition_source = 'ai'), 0) AS ai_fat_g,
+            COALESCE(SUM(fat_g) FILTER (WHERE entry_type = 'food' AND nutrition_source = 'manual'), 0) AS manual_fat_g,
+            COALESCE(SUM(protein_g) FILTER (WHERE entry_type = 'food' AND nutrition_source = 'ai'), 0) AS ai_protein_g,
+            COALESCE(SUM(protein_g) FILTER (WHERE entry_type = 'food' AND nutrition_source = 'manual'), 0) AS manual_protein_g,
+            COALESCE(SUM(carbs_g) FILTER (WHERE entry_type = 'food' AND nutrition_source = 'ai'), 0) AS ai_carbs_g,
+            COALESCE(SUM(carbs_g) FILTER (WHERE entry_type = 'food' AND nutrition_source = 'manual'), 0) AS manual_carbs_g,
+            COALESCE(SUM(estimated_calories) FILTER (WHERE entry_type = 'food' AND nutrition_source = 'ai'), 0) AS ai_calories,
+            COALESCE(SUM(estimated_calories) FILTER (WHERE entry_type = 'food' AND nutrition_source = 'manual'), 0) AS manual_calories
+            FROM diet_logs WHERE user_id = %s AND entry_date BETWEEN %s AND %s
+            GROUP BY entry_date ORDER BY entry_date""",
+            (user.database_id, start, end),
+        ):
+            item = _json_row(row)
+            for nutrient in ("fat_g", "protein_g", "carbs_g", "calories"):
+                item[f"total_{nutrient}"] = item[f"ai_{nutrient}"] + item[f"manual_{nutrient}"]
+            diet.append(item)
+        exercise = []
+        for row in self._db.execute_query(
+            """/* app_analytics:body_exercise */ SELECT entry_date AS date,
+            COUNT(*) FILTER (WHERE calorie_source = 'ai') AS ai_count,
+            COUNT(*) FILTER (WHERE calorie_source = 'manual') AS manual_count,
+            COALESCE(SUM(estimated_calories) FILTER (WHERE calorie_source = 'ai'), 0) AS ai_calories,
+            COALESCE(SUM(estimated_calories) FILTER (WHERE calorie_source = 'manual'), 0) AS manual_calories,
+            COALESCE(SUM(duration_minutes), 0) AS minutes
+            FROM exercise_logs WHERE user_id = %s AND entry_date BETWEEN %s AND %s
+            GROUP BY entry_date ORDER BY entry_date""",
+            (user.database_id, start, end),
+        ):
+            item = _json_row(row)
+            item["total_calories"] = item["ai_calories"] + item["manual_calories"]
+            exercise.append(item)
         latest_body_rows = self._db.execute_query(
             """/* app_analytics:body_latest */ SELECT w.*, u.height_cm
             FROM body_weight_logs w JOIN users u ON u.id = w.user_id

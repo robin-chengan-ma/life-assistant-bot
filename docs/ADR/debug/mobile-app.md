@@ -134,3 +134,11 @@
 **修復方式**：`mobile/src/services/authApi.ts` — Web 平台 API Base URL 改用目前頁面的 `window.location.origin`，本機 `localhost`、新 HTTPS Tunnel 或正式網址都走同一 origin 下的 `/api/*`；iOS／Android 原生建置仍沿用 `EXPO_PUBLIC_API_BASE_URL`。`mobile/app/login.tsx` — 把 Redirect 判斷移到所有 Hook 之後，讓每次 render 的 Hook 數量穩定；同時加上使用者 ID 停止輸入 350ms 後自動辨識。本機暫存預覽代理 `/private/tmp/robinson_mobile_preview.py` 靜態回應補上 `Cache-Control: no-store, no-cache, must-revalidate, max-age=0`、`Pragma: no-cache`、`Expires: 0`（該代理屬本機預覽工具，不是正式專案原始碼）。
 
 **驗證方式**：重新產生 `mobile/dist` 並確認 bundle 已不含過期 Tunnel 網址；重啟預覽後 `/login`、Web bundle 與 `/healthz` 均回 `200`，登入頁 DOM 完整顯示；TypeScript 與 Expo Web export 通過（Hook 修正後 Metro 完成 1200 modules，新 bundle hash 為獨立版本）；瀏覽器實測 `user01` 辨識後，密碼欄由「請先確認使用者ID」切換為可輸入的「請輸入密碼」。
+
+## 2026-08-14 Expo 本機預覽登入 API 回傳 404
+
+**現象**：新啟動的 `http://localhost:8082/login` 可顯示登入頁，但使用者辨識與登入無法完成。
+**排查過程**：直接呼叫預覽站的 `/api/app/auth/identify`，確認回傳 HTTP 404；比對 `authApi.ts` 的 Web API Base URL 選擇邏輯。
+**根因**：Web 平台一律使用 `window.location.origin`，Expo 開發伺服器只有前端靜態資源、沒有 Flask `/api/*` 路由，因此請求被送到錯誤的 8082 連接埠。
+**修復方式**：`mobile/src/services/authApi.ts` 在 localhost／127.0.0.1 預覽時改用 `EXPO_PUBLIC_API_BASE_URL`；正式同網域部署仍使用 `window.location.origin`，原生 App 亦維持使用設定值。
+**驗證方式**：TypeScript typecheck 通過；Expo 於 `http://localhost:8081` 重啟；正式 API 對 localhost Origin 回傳 CORS 與 `{"recognized": true}`；瀏覽器實測輸入 `user01` 後點登入，密碼欄由停用改為可輸入。

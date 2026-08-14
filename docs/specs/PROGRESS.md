@@ -171,6 +171,8 @@ updated: 2026-08-14
 | 2026-08-12 | FR-64a | 飲食照片與 Gemini 流程驗證（本機階段，未改產品程式碼；實機相機／相簿驗收仍待 Robin） | Codex | 完成 | codex.md |
 | 2026-08-12 | | 收藏清單／探索地圖／成果展示前置 POC（Leaflet 1.9.4＋OpenStreetMap，不採 Expo Maps） | Codex | 完成 | codex.md；技術選型見 `docs/ADR/discuss/mobile-app.md` |
 | 2026-08-12 | FR-64 | 首頁心情趨勢卡片高度修正 | Codex | 完成 | codex.md；除錯紀錄見 `docs/ADR/debug/mobile-app.md` |
+| 2026-08-14 | FR-64 | 飲食／運動雙輸入模式、AI／人工來源圖例、心情 Emoji 與窄螢幕按鈕完成實作 | Codex | 完成 | 新增 `0078` migration、輸入防呆、照片確認流程、來源拆分圖表與 Tooltip；147 項相關測試通過，完整回歸 1676 通過／3 項因本機缺 `ffmpeg` 未執行，Mobile typecheck 與 Web export 通過 |
+| 2026-08-14 | FR-65 | Expo 本機預覽登入 API 路由修正 | Codex | 完成 | localhost 改用 `EXPO_PUBLIC_API_BASE_URL`，正式 Web 維持同網域 API；瀏覽器已驗證 `user01` 可完成身分辨識 |
 | 2026-08-12 | FR-65 | Web 預覽登入無法連線修正（API Base URL 改 `window.location.origin`、React Hook 順序、快取標頭） | Codex | 完成 | codex.md；除錯紀錄見 `docs/ADR/debug/mobile-app.md` |
 > 「開發者」欄固定填 `Claude`、`Codex` 或實際負責人姓名，方便回溯是哪個工具／人做的。
 
@@ -298,6 +300,7 @@ updated: 2026-08-14
 
 | 日期 | Branch／版本 | 遠端 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- |
+| 2026-08-14 | `main`／`fbb905a` | GitHub | 完成 | Robin 已確認 Push 紀錄同步 commit 已 push |
 | 2026-08-14 | `main`／`1c8e836` | GitHub | 完成 | Robin 已確認本次兩筆 commit 均已 push |
 | 2026-08-14 | `main`／`fb62163` | GitHub | 完成 | Robin 已確認 push |
 | 2026-08-12 | `main`／Step 4.4～4.5 | GitHub | 完成 | 依當日正式上線里程碑紀錄 |

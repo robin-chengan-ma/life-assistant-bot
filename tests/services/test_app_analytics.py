@@ -200,6 +200,53 @@ def test_body_keeps_missing_days_absent_so_line_chart_breaks_the_line():
     assert "w.created_at DESC, w.id DESC" in weight_query
 
 
+def test_body_splits_diet_and_exercise_totals_by_ai_and_manual_source():
+    db = FakeDatabase(
+        toggles=[{"feature_key": "body", "is_enabled": True}],
+        query_rows={
+            "app_analytics:body_weight": [],
+            "app_analytics:body_diet": [{
+                "date": date(2026, 8, 1),
+                "water_ml": 1200,
+                "ai_count": 1,
+                "manual_count": 1,
+                "ai_fat_g": 10,
+                "manual_fat_g": 5,
+                "ai_protein_g": 30,
+                "manual_protein_g": 20,
+                "ai_carbs_g": 40,
+                "manual_carbs_g": 15,
+                "ai_calories": 500,
+                "manual_calories": 300,
+            }],
+            "app_analytics:body_exercise": [{
+                "date": date(2026, 8, 1),
+                "ai_count": 1,
+                "manual_count": 1,
+                "ai_calories": 250,
+                "manual_calories": 120,
+                "minutes": 45,
+            }],
+            "app_analytics:body_goals": [],
+        },
+    )
+
+    result = AppAnalyticsService(db).body(user(), date(2026, 8, 1), date(2026, 8, 7))
+
+    assert result["diet"][0]["ai_calories"] == 500.0
+    assert result["diet"][0]["manual_calories"] == 300.0
+    assert result["diet"][0]["total_calories"] == 800.0
+    assert result["exercise"][0] == {
+        "date": "2026-08-01",
+        "ai_count": 1,
+        "manual_count": 1,
+        "ai_calories": 250.0,
+        "manual_calories": 120.0,
+        "total_calories": 370.0,
+        "minutes": 45.0,
+    }
+
+
 def test_body_returns_latest_record_defaults_bmi_and_goal_description():
     db = FakeDatabase(
         toggles=[{"feature_key": "body", "is_enabled": True}],

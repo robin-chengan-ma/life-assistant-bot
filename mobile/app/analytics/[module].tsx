@@ -39,7 +39,7 @@ import { ApiError } from "@/services/authApi";
 
 const MODULES: AnalyticsModule[] = ["todos", "body", "finance", "mood", "jobs", "exams", "skills", "complaints"];
 const MOOD_SCORE: Record<string, number> = { angry_anxious: 1, sad_down: 2, tired_burned_out: 2.5, neutral: 3, calm_relaxed: 4, happy_excited: 5 };
-const MOOD_LABEL: Record<string, string> = { angry_anxious: "生氣／焦慮", sad_down: "難過／低落", tired_burned_out: "疲倦／厭世", neutral: "普通／平淡", calm_relaxed: "平靜／放鬆", happy_excited: "高興／興奮" };
+const MOOD_LABEL: Record<string, string> = { angry_anxious: "😡 生氣／焦慮", sad_down: "😢 難過／低落", tired_burned_out: "🫠 疲憊／厭世", neutral: "🙂 普通／平淡", calm_relaxed: "😌 平靜／放鬆", happy_excited: "🥳 高興／興奮" };
 const TODO_STATUS: Record<string, { backgroundColor: string; label: string }> = {
   expired: { backgroundColor: "#E1E4E3", label: "已過期" },
   pending: { backgroundColor: "#FAD7D5", label: "待處理" },
@@ -266,7 +266,26 @@ function TodoView({ calendarMonth, data, range, scrollViewRef, setCalendarMonth 
 function BodyView({ data }: { data: BodyAnalytics }) {
   const weightGoal = data.goals.find((goal) => goal.goal_type === "weight")?.target_value ?? null;
   const exerciseGoal = data.goals.find((goal) => goal.goal_type === "exercise")?.target_value ?? null;
-  return <><ChartCard title="體重趨勢"><LineChart series={[{ label: "體重", color: "#2E9D74", points: data.weight.map((row) => ({ label: row.date, value: row.weight })) }, { label: "目標", color: "#9AA8A4", points: data.weight.map((row) => ({ label: row.date, value: weightGoal })) }]} /></ChartCard><ChartCard title="腰圍趨勢"><LineChart series={[{ label: "腰圍", color: "#D9544D", points: data.weight.map((row) => ({ label: row.date, value: row.waist })) }]} /></ChartCard><ChartCard title="BMI 趨勢"><LineChart series={[{ label: "BMI", color: "#3B82F6", points: data.weight.map((row) => ({ label: row.date, value: row.bmi })) }]} /></ChartCard><ChartCard title="飲食五大成分"><LineChart series={[{ label: "水 ml", color: "#3B82F6", points: data.diet.map((row) => ({ label: row.date, value: row.water_ml })) }, { label: "脂肪 g", color: "#EB9741", points: data.diet.map((row) => ({ label: row.date, value: row.fat_g })) }, { label: "蛋白質 g", color: "#2E9D74", points: data.diet.map((row) => ({ label: row.date, value: row.protein_g })) }, { label: "碳水 g", color: "#A56CC1", points: data.diet.map((row) => ({ label: row.date, value: row.carbs_g })) }, { label: "大卡", color: "#D9544D", points: data.diet.map((row) => ({ label: row.date, value: row.calories })) }]} /><Text style={styles.aiEstimateNotice}>提醒：此結果為 AI 給出的預估值，未必是最準確的數值喔！</Text></ChartCard><ChartCard title="運動趨勢"><LineChart series={[{ label: "消耗大卡", color: "#EB9741", points: data.exercise.map((row) => ({ label: row.date, value: row.calories })) }, { label: "分鐘", color: "#2E9D74", points: data.exercise.map((row) => ({ label: row.date, value: row.minutes })) }, { label: "目標分鐘", color: "#9AA8A4", points: data.exercise.map((row) => ({ label: row.date, value: exerciseGoal })) }]} /><Text style={styles.aiEstimateNotice}>提醒：此結果為 AI 給出的預估值，未必是最準確的數值喔！</Text></ChartCard></>;
+  const dietTooltip = (row: BodyAnalytics["diet"][number], nutrient: "fat_g" | "protein_g" | "carbs_g" | "calories", unit: string) => `${row.date}｜人工 ${row[`manual_${nutrient}`]} ${unit}｜AI ${row[`ai_${nutrient}`]} ${unit}｜合計 ${row[`total_${nutrient}`]} ${unit}`;
+  const exerciseTooltip = (row: BodyAnalytics["exercise"][number]) => `${row.date}｜人工 ${row.manual_calories} 大卡｜AI ${row.ai_calories} 大卡｜合計 ${row.total_calories} 大卡`;
+  return <>
+    <ChartCard title="體重趨勢"><LineChart series={[{ label: "體重", color: "#2E9D74", marker: "solid", points: data.weight.map((row) => ({ label: row.date, value: row.weight })) }, { label: "目標", color: "#9AA8A4", marker: "hollow", points: data.weight.map((row) => ({ label: row.date, value: weightGoal })) }]} /></ChartCard>
+    <ChartCard title="腰圍趨勢"><LineChart series={[{ label: "腰圍", color: "#D9544D", marker: "solid", points: data.weight.map((row) => ({ label: row.date, value: row.waist })) }]} /></ChartCard>
+    <ChartCard title="BMI 趨勢"><LineChart series={[{ label: "BMI", color: "#3B82F6", marker: "solid", points: data.weight.map((row) => ({ label: row.date, value: row.bmi })) }]} /></ChartCard>
+    <ChartCard title="飲食五大成分"><LineChart series={[
+      { label: "飲水 ml（人工）", color: "#3B82F6", marker: "solid", points: data.diet.map((row) => ({ label: row.date, tooltip: `${row.date}｜飲水 ${row.water_ml} ml`, value: row.water_ml })) },
+      ...([ ["脂肪", "fat_g", "#EB9741", "g"], ["蛋白質", "protein_g", "#2E9D74", "g"], ["碳水", "carbs_g", "#A56CC1", "g"], ["熱量", "calories", "#D9544D", "大卡"] ] as const).flatMap(([label, key, color, unit]) => [
+        { label: `${label}（人工）`, color, marker: "solid" as const, points: data.diet.map((row) => ({ label: row.date, tooltip: dietTooltip(row, key, unit), value: row.manual_count ? row[`manual_${key}`] : null })) },
+        { label: `${label}（AI）`, color, marker: "hollow" as const, points: data.diet.map((row) => ({ label: row.date, tooltip: dietTooltip(row, key, unit), value: row.ai_count ? row[`ai_${key}`] : null })) },
+      ]),
+    ]} /><Text style={styles.aiEstimateNotice}>提醒：實心圓為人工輸入，空心圓為 AI 估算；AI 結果未必是最準確的數值喔！</Text></ChartCard>
+    <ChartCard title="運動趨勢"><LineChart series={[
+      { label: "消耗大卡（人工）", color: "#EB9741", marker: "solid", points: data.exercise.map((row) => ({ label: row.date, tooltip: exerciseTooltip(row), value: row.manual_count ? row.manual_calories : null })) },
+      { label: "消耗大卡（AI）", color: "#EB9741", marker: "hollow", points: data.exercise.map((row) => ({ label: row.date, tooltip: exerciseTooltip(row), value: row.ai_count ? row.ai_calories : null })) },
+      { label: "分鐘", color: "#2E9D74", marker: "solid", points: data.exercise.map((row) => ({ label: row.date, value: row.minutes })) },
+      { label: "目標分鐘", color: "#9AA8A4", marker: "hollow", points: data.exercise.map((row) => ({ label: row.date, value: exerciseGoal })) },
+    ]} /><Text style={styles.aiEstimateNotice}>提醒：實心圓為人工輸入，空心圓為 AI 估算；AI 結果未必是最準確的數值喔！</Text></ChartCard>
+  </>;
 }
 
 function FinanceView({ data }: { data: FinanceAnalytics }) {

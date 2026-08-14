@@ -33,7 +33,10 @@ type ApiErrorBody = {
 const configuredApiBaseUrl = (
   process.env.EXPO_PUBLIC_API_BASE_URL ?? "http://localhost:8080"
 ).replace(/\/$/, "");
-const apiBaseUrl = Platform.OS === "web" && typeof window !== "undefined"
+const isLocalWebPreview = Platform.OS === "web"
+  && typeof window !== "undefined"
+  && ["localhost", "127.0.0.1"].includes(window.location.hostname);
+const apiBaseUrl = Platform.OS === "web" && typeof window !== "undefined" && !isLocalWebPreview
   ? window.location.origin
   : configuredApiBaseUrl;
 

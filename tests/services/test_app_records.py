@@ -179,6 +179,7 @@ def test_diet_stores_water_as_separate_record_without_sending_it_to_nutrition():
         "entry_type": "water",
         "description": "飲水",
         "water_ml": 1200,
+        "nutrition_source": "manual",
         "estimated_calories": None,
         "protein_g": None,
         "carbs_g": None,
@@ -202,6 +203,127 @@ def test_diet_rejects_invalid_reviewed_nutrition():
         AppRecordService(FakeDatabase(), now=NOW).create(
             "diet", 1, {"description": "雞胸肉", "nutrition": {"estimated_calories": -1}}
         )
+
+
+def test_diet_manual_nutrition_rounds_values_and_records_source_without_llm():
+    class FailingLlm:
+        def generate_text(self, prompt):
+            raise AssertionError("人工輸入不應呼叫 Gemini")
+
+    db = FakeDatabase()
+    AppRecordService(db, llm_client=FailingLlm(), now=NOW).create(
+        "diet",
+        1,
+        {
+            "description": "雞胸肉便當",
+            "nutrition_source": "manual",
+            "nutrition": {
+                "estimated_calories": 520.5,
+                "protein_g": 36.26,
+                "carbs_g": 0,
+                "fat_g": 14.04,
+            },
+        },
+    )
+
+    saved = db.inserted[0][1]
+    assert saved["nutrition_source"] == "manual"
+    assert saved["estimated_calories"] == 521
+    assert saved["protein_g"] == 36.3
+    assert saved["carbs_g"] == 0.0
+    assert saved["fat_g"] == 14.0
+
+
+@pytest.mark.parametrize(
+    "nutrition",
+    [
+        {"estimated_calories": 0, "protein_g": 1, "carbs_g": 1, "fat_g": 1},
+        {"estimated_calories": 10001, "protein_g": 1, "carbs_g": 1, "fat_g": 1},
+        {"estimated_calories": 500, "protein_g": 1000.1, "carbs_g": 1, "fat_g": 1},
+        {"estimated_calories": 500, "protein_g": 1, "carbs_g": None, "fat_g": 1},
+    ],
+)
+def test_diet_manual_nutrition_enforces_required_ranges(nutrition):
+    with pytest.raises(RecordValidationError):
+        AppRecordService(FakeDatabase(), now=NOW).create(
+            "diet",
+            1,
+            {"description": "便當", "nutrition_source": "manual", "nutrition": nutrition},
+        )
+
+
+@pytest.mark.parametrize("water_ml", [0, 10001])
+def test_diet_water_enforces_confirmed_range(water_ml):
+    with pytest.raises(RecordValidationError, match="飲水量"):
+        AppRecordService(FakeDatabase(), now=NOW).create(
+            "diet", 1, {"description": "便當", "water_ml": water_ml}
+        )
+
+
+def test_exercise_manual_calories_rounds_and_does_not_call_llm():
+    class FailingLlm:
+        def generate_text(self, prompt):
+            raise AssertionError("人工輸入不應呼叫 Gemini")
+
+    db = FakeDatabase()
+    AppRecordService(db, llm_client=FailingLlm(), now=NOW).create(
+        "exercise",
+        1,
+        {"activity": "跑步", "input_mode": "calories", "calories": 320.5},
+    )
+
+    saved = db.inserted[0][1]
+    assert saved["input_mode"] == "calories"
+    assert saved["calorie_source"] == "manual"
+    assert saved["estimated_calories"] == 321
+    assert saved["duration_minutes"] is None
+    assert saved["heart_rate"] is None
+
+
+@pytest.mark.parametrize("calories", [0, 5001])
+def test_exercise_manual_calories_enforces_range(calories):
+    with pytest.raises(RecordValidationError, match="消耗熱量"):
+        AppRecordService(FakeDatabase(), now=NOW).create(
+            "exercise",
+            1,
+            {"activity": "跑步", "input_mode": "calories", "calories": calories},
+        )
+
+
+def test_strength_time_mode_requires_details_and_passes_them_to_ai(monkeypatch):
+    captured = {}
+
+    def fake_estimate(_llm, activity, duration, heart_rate, training_details=None):
+        captured.update(
+            activity=activity,
+            duration=duration,
+            heart_rate=heart_rate,
+            training_details=training_details,
+        )
+        return 280
+
+    monkeypatch.setattr("src.services.app_records.body.estimate_exercise_calories", fake_estimate)
+    with pytest.raises(RecordValidationError, match="強度與組數"):
+        AppRecordService(FakeDatabase(), llm_client=object(), now=NOW).create(
+            "exercise",
+            1,
+            {"activity": "重訓", "input_mode": "time", "duration_minutes": 45},
+        )
+
+    db = FakeDatabase()
+    AppRecordService(db, llm_client=object(), now=NOW).create(
+        "exercise",
+        1,
+        {
+            "activity": "重訓",
+            "input_mode": "time",
+            "duration_minutes": 45,
+            "training_details": "深蹲 60 公斤 5 組，每組 8 下",
+        },
+    )
+
+    assert captured["training_details"] == "深蹲 60 公斤 5 組，每組 8 下"
+    assert db.inserted[0][1]["calorie_source"] == "ai"
 
 
 def test_weight_accepts_optional_waist_and_preserves_existing_waist_when_cleared():

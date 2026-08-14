@@ -318,8 +318,8 @@ CREATE TABLE budget_overrides (
 | 資料表 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
 | `body_weight_logs` | 已建立 | FR-46 | 體重歷史紀錄，`weight_kg >= 40` 為最後防線檢查 |
-| `exercise_logs` | 已建立 | FR-47 | 運動紀錄，卡路里用 LLM 估算（非 MET 公式） |
-| `diet_logs` | 已建立 | FR-48 | 飲食與飲水共用一表（`entry_type` 區分），三大營養素 LLM 拆算 |
+| `exercise_logs` | 已建立 | FR-47、FR-64 | 運動紀錄支援時間 AI 估算與人工熱量雙模式，並保留來源及重訓內容 |
+| `diet_logs` | 已建立 | FR-48、FR-64 | 飲食與飲水共用一表，營養數值可由 AI 估算或人工輸入並保留來源 |
 | `body_goals` | 已建立 | FR-45～FR-48 | 體重/運動/飲食三子功能共用一表（`goal_type` 區分） |
 
 <details>
@@ -359,6 +359,8 @@ CREATE INDEX idx_exercise_logs_user_id ON exercise_logs (user_id);
 `src/migrations/0025_create_exercise_logs_table.sql`
 
 - 卡路里用 LLM 估算而非 MET 公式；估算失敗時允許 NULL，不擋下整筆紀錄；`activity` 自由文字（項目差異太大無法窮舉）
+- `0078_add_mobile_record_input_sources.sql` 將 `duration_minutes` 改為可空，新增 `input_mode`、
+  `calorie_source`、`training_details` 與範圍檢查；人工熱量模式不呼叫 LLM。
 
 ```sql
 CREATE TABLE diet_logs (
@@ -380,6 +382,8 @@ CREATE INDEX idx_diet_logs_user_id ON diet_logs (user_id);
 `src/migrations/0026_create_diet_logs_table.sql`
 
 - 飲食與飲水共用一表、`entry_type` 區分（比照 `transactions.type`），兩者互斥欄位皆允許 NULL；營養拆算靠 LLM（無食物資料庫），回覆需附誤差聲明（FR-17c）
+- `0078_add_mobile_record_input_sources.sql` 新增 `nutrition_source`（`ai`／`manual`）與營養數值範圍檢查；
+  人工模式要求脂肪、碳水、蛋白質與熱量皆有值，飲水列固定標記為人工來源。
 
 ```sql
 CREATE TABLE body_goals (

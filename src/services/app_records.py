@@ -54,7 +54,7 @@ def _required_text(value: Any, label: str, *, max_length: int = 1000) -> str:
     return result
 
 
-def _positive_int(value: Any, label: str, *, optional: bool = False) -> int | None:
+def _positive_int(value: Any, label: str, *, optional: bool = False, maximum: int | None = None) -> int | None:
     if optional and (value is None or value == ""):
         return None
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
@@ -62,6 +62,8 @@ def _positive_int(value: Any, label: str, *, optional: bool = False) -> int | No
     result = int(value)
     if result <= 0 or result != value:
         raise RecordValidationError(f"{label}只能輸入正整數")
+    if maximum is not None and result > maximum:
+        raise RecordValidationError(f"{label}不可超過 {maximum}")
     return result
 
 
@@ -71,20 +73,40 @@ def _round_amount(value: Any) -> int:
     return int(Decimal(str(value)).quantize(Decimal(1), rounding=ROUND_HALF_UP))
 
 
-def _diet_nutrition(value: Any) -> dict[str, float | None] | None:
+def _rounded_int(value: Any, label: str, *, maximum: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+        raise RecordValidationError(f"{label}只能輸入大於 0 的數字")
+    result = int(Decimal(str(value)).quantize(Decimal(1), rounding=ROUND_HALF_UP))
+    if result < 1 or result > maximum:
+        raise RecordValidationError(f"{label}僅能輸入 1 到 {maximum}")
+    return result
+
+
+def _diet_nutrition(value: Any, *, source: str) -> dict[str, float | int | None] | None:
     if value is None:
         return None
     if not isinstance(value, dict):
         raise RecordValidationError("營養估算資料格式不正確")
-    result: dict[str, float | None] = {}
+    result: dict[str, float | int | None] = {}
     for field in ("estimated_calories", "protein_g", "carbs_g", "fat_g"):
         number = value.get(field)
+        if number is None and source == "manual":
+            raise RecordValidationError("人工輸入時請完整填寫脂肪、碳水化合物、蛋白質與熱量")
         if number is None:
             result[field] = None
-        elif isinstance(number, bool) or not isinstance(number, (int, float)) or not math.isfinite(number) or number < 0:
+        elif isinstance(number, bool) or not isinstance(number, (int, float)) or not math.isfinite(number):
             raise RecordValidationError("營養估算資料格式不正確")
+        elif field == "estimated_calories":
+            try:
+                result[field] = _rounded_int(number, "飲食熱量", maximum=10000)
+            except RecordValidationError as exc:
+                if source == "ai":
+                    raise RecordValidationError("營養估算資料格式不正確") from exc
+                raise
+        elif number < 0 or number > 1000:
+            raise RecordValidationError("三大營養素僅能輸入 0 到 1000.0 公克")
         else:
-            result[field] = round(float(number), 1)
+            result[field] = float(Decimal(str(number)).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP))
     return result
 
 
@@ -117,7 +139,10 @@ class AppRecordService:
             raise DuplicateRecordError("發現一筆可能重複的紀錄，確定仍要新增嗎？")
         record_id = self._insert(kind, table, user_id, data)
         if kind == "diet":
-            self._sync_today_water(user_id, _positive_int(payload.get("water_ml"), "飲水量", optional=True))
+            self._sync_today_water(
+                user_id,
+                _positive_int(payload.get("water_ml"), "飲水量", optional=True, maximum=10000),
+            )
         return {"id": record_id, "message": "紀錄已新增"}
 
     def update(
@@ -152,7 +177,10 @@ class AppRecordService:
             data = {"content": data["content"], "start_at": data["start_at"], "due_at": data["due_at"], "status": data["status"]}
         self._db.update(table, data, where="id = %s AND user_id = %s", params=(record_id, user_id))
         if kind == "diet":
-            self._sync_today_water(user_id, _positive_int(payload.get("water_ml"), "飲水量", optional=True))
+            self._sync_today_water(
+                user_id,
+                _positive_int(payload.get("water_ml"), "飲水量", optional=True, maximum=10000),
+            )
         return {"id": record_id, "message": "紀錄已更新"}
 
     def delete(self, kind: str, record_id: int, user_id: int) -> dict:
@@ -210,11 +238,18 @@ class AppRecordService:
         if kind == "diet":
             description = _required_text(payload.get("description"), "今日的飲食內容")
             description, _detected = privacy.mask_text(description)
-            macros = _diet_nutrition(payload.get("nutrition"))
+            nutrition_source = payload.get("nutrition_source", "ai")
+            if nutrition_source not in {"ai", "manual"}:
+                raise RecordValidationError("營養資料來源不正確")
+            macros = _diet_nutrition(payload.get("nutrition"), source=nutrition_source)
             if macros is None:
-                macros = body.estimate_diet_macros(self._llm, description) if self._llm else {}
+                estimated = body.estimate_diet_macros(self._llm, description) if self._llm else {}
+                try:
+                    macros = _diet_nutrition(estimated, source="ai") if estimated else {}
+                except RecordValidationError:
+                    macros = {field: None for field in ("estimated_calories", "protein_g", "carbs_g", "fat_g")}
             data = {"entry_type": "food", "description": description, "water_ml": None,
-                    "entry_date": self._today, **macros}
+                    "nutrition_source": nutrition_source, "entry_date": self._today, **macros}
             return data, "diet_logs", (description,)
         if kind == "exercise":
             activity = payload.get("activity")
@@ -223,12 +258,39 @@ class AppRecordService:
                 activity = _required_text(custom, "其他運動名稱", max_length=100)
             elif activity not in _EXERCISE_CATEGORIES:
                 raise RecordValidationError("請選擇運動類別")
+            input_mode = payload.get("input_mode", "time")
+            if input_mode not in {"time", "calories"}:
+                raise RecordValidationError("請選擇正確的運動輸入模式")
+            if input_mode == "calories":
+                calories = _rounded_int(payload.get("calories"), "消耗熱量", maximum=5000)
+                data = {"activity": activity, "duration_minutes": None, "heart_rate": None,
+                        "estimated_calories": calories, "input_mode": "calories", "calorie_source": "manual",
+                        "training_details": None, "entry_date": self._today}
+                return data, "exercise_logs", (activity, input_mode, calories)
             duration = _positive_int(payload.get("duration_minutes"), "持續時間")
             heart_rate = _positive_int(payload.get("heart_rate"), "心率", optional=True)
-            calories = body.estimate_exercise_calories(self._llm, activity, duration, heart_rate) if self._llm else None
+            training_details = payload.get("training_details")
+            if activity == "重訓":
+                training_details = _required_text(training_details, "強度與組數", max_length=1000)
+                training_details, _detected = privacy.mask_text(training_details)
+            else:
+                training_details = None
+            calories = body.estimate_exercise_calories(
+                self._llm,
+                activity,
+                duration,
+                heart_rate,
+                training_details=training_details,
+            ) if self._llm else None
+            if calories is not None:
+                try:
+                    calories = _rounded_int(calories, "AI 估算消耗熱量", maximum=5000)
+                except RecordValidationError:
+                    calories = None
             data = {"activity": activity, "duration_minutes": duration, "heart_rate": heart_rate,
-                    "estimated_calories": calories, "entry_date": self._today}
-            return data, "exercise_logs", (activity, duration, heart_rate)
+                    "estimated_calories": calories, "input_mode": "time", "calorie_source": "ai",
+                    "training_details": training_details, "entry_date": self._today}
+            return data, "exercise_logs", (activity, input_mode, duration, heart_rate, training_details)
         if kind == "weight":
             value = payload.get("weight_kg")
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
@@ -313,6 +375,7 @@ class AppRecordService:
             "entry_type": "water",
             "description": "飲水",
             "water_ml": water_ml,
+            "nutrition_source": "manual",
             "estimated_calories": None,
             "protein_g": None,
             "carbs_g": None,
@@ -358,7 +421,15 @@ class AppRecordService:
         if table == "todos": return (row.get("content", "").strip(), row.get("start_at"), row.get("due_at"))
         if table == "transactions": return (row.get("type"), row.get("category"), int(Decimal(str(row.get("amount"))).quantize(Decimal(1), rounding=ROUND_HALF_UP)))
         if table == "diet_logs": return (row.get("description", "").strip(),)
-        if table == "exercise_logs": return (row.get("activity"), row.get("duration_minutes"), row.get("heart_rate"))
+        if table == "exercise_logs":
+            return (
+                row.get("activity"),
+                row.get("input_mode", "time"),
+                row.get("duration_minutes"),
+                row.get("heart_rate"),
+                row.get("training_details"),
+                row.get("estimated_calories") if row.get("input_mode") == "calories" else None,
+            )
         if table == "body_weight_logs":
             waist = row.get("waist_cm")
             return (float(row.get("weight_kg")), float(waist) if waist is not None else None)
