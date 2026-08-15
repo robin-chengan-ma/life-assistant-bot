@@ -15,7 +15,7 @@ updated: 2026-08-15
 | 2026-08-15 | FR-6h／NFR-19 | 補正 Mobile 日期特例並定案 Telegram 重構採漸進式資料遷移，不整庫刪除重建 | Codex | 已定案／待開發 | Mobile 不限今日範圍包含待辦、重要日子、收藏、旅遊、探索、成果；先做唯讀 Schema／引用盤點，必要時採 V2 表回填切換，未執行 Migration 或刪表 |
 | 2026-08-15 | FR-3～FR-6h／FR-9c～FR-9d／FR-20a／FR-72b／NFR-18 | 定案 Telegram 角色選單、帳號安全、歷史 CRUD、統一功能流程、七日查詢、排程通知與 Phase 6 執行順序 | Codex | 已定案／待開發 | 查詢由最終日期往前推 6 天且可跨多模組；Mobile 仍只異動今日生活紀錄，Telegram 負責歷史回補；隱私遮罩改帳號層雙端共用；草稿保留 30 分鐘、功能模式 10 分鐘 |
 | 2026-08-15 | FR-3～FR-6h | Phase 6 第二批（Telegram 選單與狀態機）開工前盤點：確認現況無 `/start`、無按鈕基礎設施、`state.flow` 約 85 種、`/set_invite_codes` 移除範圍，並拆出子批次 2a／2b... | Claude | 完成（純盤點與拆批決策，未開工） | 決策記錄見 `docs/ADR/discuss/robinson.md` 2026-08-15「Phase 6 第二批拆批盤點」；2a＝按鈕基礎設施＋選單骨架＋認證選單化（含移除 `/set_invite_codes`），2b 起才逐批遷移既有 85 個 flow |
-| 2026-08-15 | FR-3／FR-4／FR-4a～FR-4d／FR-5／FR-6a～FR-6e | Phase 6 第二批 2a 實作完成：Telegram 按鈕基礎設施（`reply_markup`／`answer_callback_query`）、`webhook.py` callback_query 解析與分派、`menu.py` 選單骨架、`/start` 正式實作、Owner 權限管理選單化並移除 `/set_invite_codes` | Claude | 實作完成（待 Robin commit／push／實機驗收） | 完整設計內容見 `docs/ADR/discuss/robinson.md` 2026-08-15「Phase 6 第二批 2a 實作計畫」及「開工完成」補述；主選單其餘 7 項（日常紀錄／資料查詢／待辦事項／重要日子／收藏與旅遊／成果展示／排程設定）2a 先回覆「功能開發中」，實際邏輯留給 2b 起逐批接上；新增 `tests/bot/test_menu.py`、擴充 `test_router.py`／`test_commands.py`／`test_webhook.py`／`tests/submodules/telegram/test_client.py`，Claude 沙箱 1716 項全過，Robin 本機 1750 項通過／3 項失敗（`test_toeic.py` 因本機未裝 `ffmpeg`，屬既有環境問題，與本批無關） |
+| 2026-08-15 | FR-3／FR-4／FR-4a～FR-4d／FR-5／FR-6a～FR-6e | Phase 6 第二批 2a 實作完成：Telegram 按鈕基礎設施（`reply_markup`／`answer_callback_query`）、`webhook.py` callback_query 解析與分派、`menu.py` 選單骨架、`/start` 正式實作、Owner 權限管理選單化並移除 `/set_invite_codes` | Claude | 已 commit／已推版（待實機驗收） | 完整設計內容見 `docs/ADR/discuss/robinson.md` 2026-08-15「Phase 6 第二批 2a 實作計畫」及「開工完成」補述；主選單其餘 7 項（日常紀錄／資料查詢／待辦事項／重要日子／收藏與旅遊／成果展示／排程設定）2a 先回覆「功能開發中」，實際邏輯留給 2b 起逐批接上；新增 `tests/bot/test_menu.py`、擴充 `test_router.py`／`test_commands.py`／`test_webhook.py`／`tests/submodules/telegram/test_client.py`，Claude 沙箱 1716 項全過，Robin 本機 1750 項通過／3 項失敗（`test_toeic.py` 因本機未裝 `ffmpeg`，屬既有環境問題，與本批無關）；commit `f623566`，8/15 Robin 已推版 |
 | 2026-08-15 | FR-77／NFR-14～NFR-15 | 定案取消功能的路由／資料表清理，以及 backend／mobile／data／submodules 責任分工 | Codex | 已定案／待開發 | 第一批淘汰 complaints、knowledge_base、conversation_logs、conversation_summaries；Mobile 維持根目錄，Telegram 與 LLM 歸後端，獨立爬蟲歸 data，第一階段不開 schemas；AGENTS 已分列實際現況與 Phase 6 目標 |
 | 2026-08-15 | FR-19k | 定案 Owner 錯誤通知的 Telegram／Email／未送達狀態追蹤與系統錯誤管理呈現 | Codex | 已定案／待開發 | Email 成功不重複通知；雙重失敗只保留錯誤紀錄與 Log；不適用一般使用者推播 |
 | 2026-08-15 | FR-1～FR-4（功能開關） | 將技術分享、求職分析、考試成績改為 Robin／Owner 永久專屬，取消非管理者授權與個別排程設計 | Codex | 已定案／待開發 | 一般使用者 Telegram／Mobile 不顯示入口且後端拒絕存取；Mobile 另需同步角色顯示、移除客訴入口、成果候選跨端狀態及系統錯誤送達狀態；既有資料保留 |
@@ -205,6 +205,7 @@ updated: 2026-08-15
 
 | 日期 | 版本 / commit | 異動摘要 | 開發者 |
 | --- | --- | --- | --- |
+| 2026-08-15 | `f623566` | Phase 6 第二批 2a：Telegram 按鈕選單與 /start 認證流程 | Claude |
 | 2026-08-15 | `996c603` | 修正 /set_invite_codes 因 0083 NOT NULL 迴歸 | Claude |
 | 2026-08-15 | `4740d00` | Phase 6 第一批：通關密碼到期與鎖定、使用者停用機制 | Claude |
 | 2026-08-15 | `d13c390` | 定案 Telegram 重構、權限管理與功能取消，同步 8/15 部署驗收 | Claude |
@@ -333,6 +334,7 @@ updated: 2026-08-15
 
 | 日期 | Branch／版本 | 遠端 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- |
+| 2026-08-15 | `main`／`f623566` | GitHub | 完成 | 8/15 Robin 已推版 |
 | 2026-08-15 | `main`／`996c603` | GitHub | 完成 | 8/15 Robin 已推版 |
 | 2026-08-15 | `main`／`4740d00` | GitHub | 完成 | 8/15 Robin 已推版 |
 | 2026-08-15 | `main`／`d13c390` | GitHub | 完成 | 8/15 Robin 已推版 |
