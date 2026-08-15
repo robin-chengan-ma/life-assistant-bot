@@ -283,6 +283,9 @@ class FakeCloudSQLClient:
             return row.get("code") == params[0]
         if where == "user_id = %s AND is_used = FALSE":
             return row.get("user_id") == params[0] and row.get("is_used") is False
+        # 2026-08-15（Phase 6 第二批 2a，見 SPEC.md FR-4）：權限管理選單建立使用者流程測試查詢。
+        if where == "family_title = %s":
+            return row.get("family_title") == params[0]
 
         raise NotImplementedError(f"FakeCloudSQLClient 尚未支援這個 where 條件：{where}")
 

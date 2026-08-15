@@ -1,6 +1,6 @@
 ---
 title: API Schema
-updated: 2026-08-14
+updated: 2026-08-15
 ---
 
 # API Schema
@@ -24,9 +24,11 @@ updated: 2026-08-14
 
 | 項目 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `POST /telegram/webhook` | 已實作（`src/bot/webhook.py`） | FR-1、FR-2、FR-5～FR-8、FR-17 | 所有使用者文字/圖片訊息的統一入口，依訊息類型分三路（不支援格式直接拒絕／圖片轉圖片訊息路由／其餘文字依內容路由）；`handle_message()`／`handle_photo_message()` 拋出未預期例外一律記錄 Traceback＋安全用語回覆＋仍回 HTTP 200，避免 Telegram 重試風暴（見 `docs/ADR/discuss/service-resilience.md`） |
-| `/rule` | 已實作（`src/bot/commands.py::handle_rule`） | FR-6d、FR-55 | 回傳固定使用規則全文（附錄 A），不經 LLM |
-| `/set_invite_codes` | 已實作（`src/bot/commands.py::start_set_invite_codes`） | FR-6a～FR-6c | 僅 Owner；引導式通關密碼設定對話流，狀態存記憶體不落地資料庫 |
+| `POST /telegram/webhook` | 已實作（`src/bot/webhook.py`） | FR-1、FR-2、FR-5～FR-8、FR-17 | 所有使用者文字/圖片/語音/按鈕點擊更新的統一入口，依 Update 類型分流（`callback_query` 獨立路由／不支援格式直接拒絕／圖片轉圖片訊息路由／語音轉文字後併入文字路由／其餘文字依內容路由）；`handle_message()`／`handle_photo_message()`／`handle_voice_message()` 拋出未預期例外一律記錄 Traceback＋安全用語回覆＋仍回 HTTP 200，避免 Telegram 重試風暴（見 `docs/ADR/discuss/service-resilience.md`）；`callback_query` 走獨立精簡安全網，見下方說明 |
+| `/start` | 已實作（`src/bot/router.py::handle_message`） | FR-3、FR-4c、FR-6a | 唯一保留的 Slash Command（2026-08-15 起取代 `/set_invite_codes` 等舊指令）；未綁定使用者按下後才進入「等待通關密碼」狀態、下一則文字才驗證密碼；已綁定使用者（含 Owner）按下顯示主選單（`src/bot/menu.py`） |
+| `callback_query`（Inline Keyboard 按鈕） | 已實作（`src/bot/router.py::handle_callback_query`、`src/bot/webhook.py::_handle_callback_query_update`） | FR-4、FR-6c、FR-6e | 按下主選單／權限管理選單按鈕觸發；每個分支重新驗證 `auth.is_owner()`（FR-6c，不信任前端選單是否顯示過這顆按鈕）；一律先呼叫 `answerCallbackQuery` 避免 Telegram 客戶端卡在轉圈狀態 |
+| `/rule` | 已實作（`src/bot/commands.py::handle_rule`） | FR-6d、FR-55 | 回傳固定使用規則全文（附錄 A），不經 LLM；亦可由主選單「使用規則」按鈕觸發 |
+| ~~`/set_invite_codes`~~ | 2026-08-15 已移除 | FR-6a | 已由 `/start`＋主選單「權限管理」（`src/bot/commands.py::start_permission_menu`／`handle_permission_callback`／`handle_permission_step`）取代；舊指令使用者會收到 Telegram 預設的「指令不存在」提示，不提供相容期，見 `docs/ADR/discuss/robinson.md` 2026-08-15「Phase 6 第二批 2a 實作計畫」 |
 
 ## 服務健康與治理
 

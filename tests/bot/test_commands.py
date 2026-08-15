@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.bot import commands, templates, toggles
+from src.bot import commands, menu, templates, toggles
 from src.bot.state import ConversationStateStore
 
 
@@ -533,95 +533,112 @@ def test_handle_function_prompt_includes_persona_and_raw_overview(fake_db):
         assert feature["name"] in llm_client.last_prompt
 
 
-def test_start_set_invite_codes_sets_awaiting_role_state():
+# --- 權限管理選單（FR-4，Phase 6 第二批 2a，取代舊版 /set_invite_codes）---
+
+
+def test_start_permission_menu_returns_fixed_keyboard():
+    text, keyboard = commands.start_permission_menu()
+    assert "請選擇" in text
+    assert keyboard["inline_keyboard"][0][0]["callback_data"] == "permission:create"
+
+
+def test_handle_permission_callback_create_sets_awaiting_family_title_state():
     store = ConversationStateStore()
-    reply = commands.start_set_invite_codes(store, telegram_user_id=1)
-    assert store.get(1) == {"flow": "set_invite_codes", "step": "awaiting_role"}
+    reply, keyboard = commands.handle_permission_callback(None, store, telegram_user_id=1, action="create")
+    assert store.get(1) == {"flow": "permission_create", "step": "awaiting_family_title"}
+    assert keyboard is None
     assert "稱謂" in reply
 
 
-def test_awaiting_role_step_with_role_text_moves_to_awaiting_code(fake_db):
+def test_handle_permission_callback_disable_lists_candidates(fake_db):
+    fake_db.insert("users", {"telegram_user_id": 555, "role": "爸爸", "is_owner": False, "is_active": True})
     store = ConversationStateStore()
-    store.set(1, {"flow": "set_invite_codes", "step": "awaiting_role"})
 
-    reply = commands.handle_set_invite_codes_step(fake_db, store, telegram_user_id=1, text="爸爸")
+    reply, keyboard = commands.handle_permission_callback(fake_db, store, telegram_user_id=1, action="disable")
 
-    assert store.get(1) == {"flow": "set_invite_codes", "step": "awaiting_code", "role": "爸爸"}
+    assert keyboard is None
     assert "爸爸" in reply
-    assert "通關密碼" in reply
-    # 這個步驟只暫存稱謂，還不該寫進資料庫（因為 code 還沒收到）
-    assert fake_db.select("users") == []
-    assert fake_db.select("invite_codes") == []
+    assert store.get(1)["flow"] == "permission_disable"
 
 
-def test_awaiting_role_step_with_exit_phrase_clears_state(fake_db):
+def test_handle_permission_callback_disable_with_no_candidates_returns_back_button(fake_db):
     store = ConversationStateStore()
-    store.set(1, {"flow": "set_invite_codes", "step": "awaiting_role"})
 
-    reply = commands.handle_set_invite_codes_step(fake_db, store, telegram_user_id=1, text="沒有了")
+    reply, keyboard = commands.handle_permission_callback(fake_db, store, telegram_user_id=1, action="disable")
+
+    assert "沒有" in reply
+    assert keyboard == menu.back_to_main_menu_keyboard()
+    assert store.get(1) is None
+
+
+def test_permission_create_full_flow_creates_user_and_invite(fake_db):
+    store = ConversationStateStore()
+    commands.handle_permission_callback(fake_db, store, telegram_user_id=1, action="create")
+    commands.handle_permission_step(fake_db, store, telegram_user_id=1, text="爸爸")
+    reply = commands.handle_permission_step(fake_db, store, telegram_user_id=1, text="略過")
+
+    users = fake_db.select("users", where="family_title = %s", params=("爸爸",))
+    assert len(users) == 1
+    assert users[0]["telegram_user_id"] is None
+    invite = fake_db.select("invite_codes", where="user_id = %s AND is_used = FALSE", params=(users[0]["id"],), fetch_one=True)
+    assert invite is not None
+    assert invite["expires_at"] is not None
+    assert store.get(1) is None
+    assert "已建立" in reply
+
+
+def test_permission_create_flow_exit_phrase_clears_state(fake_db):
+    store = ConversationStateStore()
+    commands.handle_permission_callback(fake_db, store, telegram_user_id=1, action="create")
+
+    reply = commands.handle_permission_step(fake_db, store, telegram_user_id=1, text="沒有了")
 
     assert store.get(1) is None
     assert "結束" in reply
 
 
-def test_awaiting_role_step_with_alternate_exit_phrase_clears_state(fake_db):
+def test_permission_disable_flow_with_invalid_index_reprompts(fake_db):
+    fake_db.insert("users", {"telegram_user_id": 555, "role": "爸爸", "is_owner": False, "is_active": True})
     store = ConversationStateStore()
-    store.set(1, {"flow": "set_invite_codes", "step": "awaiting_role"})
+    commands.handle_permission_callback(fake_db, store, telegram_user_id=1, action="disable")
 
-    commands.handle_set_invite_codes_step(fake_db, store, telegram_user_id=1, text="結束")
+    reply = commands.handle_permission_step(fake_db, store, telegram_user_id=1, text="99")
 
-    assert store.get(1) is None
+    assert "編號" in reply
+    assert store.get(1) is not None
 
 
-def test_awaiting_code_step_creates_user_and_invite_code(fake_db):
+def test_permission_enable_flow_reactivates_user(fake_db):
+    fake_db.insert("users", {"telegram_user_id": 555, "role": "爸爸", "is_owner": False, "is_active": False})
     store = ConversationStateStore()
-    store.set(1, {"flow": "set_invite_codes", "step": "awaiting_code", "role": "爸爸"})
+    commands.handle_permission_callback(fake_db, store, telegram_user_id=1, action="enable")
 
-    reply = commands.handle_set_invite_codes_step(fake_db, store, telegram_user_id=1, text="dad-code-1")
+    reply = commands.handle_permission_step(fake_db, store, telegram_user_id=1, text="1")
 
-    users = fake_db.select("users")
-    invite_codes = fake_db.select("invite_codes")
-    assert len(users) == 1
-    assert users[0]["role"] == "爸爸"
-    assert users[0]["telegram_user_id"] is None
-    assert len(invite_codes) == 1
-    assert invite_codes[0]["code"] == "dad-code-1"
-    assert invite_codes[0]["is_used"] is False
-    assert invite_codes[0]["user_id"] == users[0]["id"]
-    assert "已寫入" in reply
+    updated = fake_db.select("users", where="telegram_user_id = %s", params=(555,), fetch_one=True)
+    assert updated["is_active"] is True
+    assert "恢復" in reply
 
 
-def test_awaiting_code_step_loops_back_to_awaiting_role(fake_db):
+def test_permission_resend_flow_generates_new_passcode(fake_db):
+    user_id = fake_db.insert("users", {"telegram_user_id": None, "role": "爸爸", "is_owner": False, "is_active": True})
+    fake_db.insert("invite_codes", {"code": "old-code", "is_used": False, "user_id": user_id})
     store = ConversationStateStore()
-    store.set(1, {"flow": "set_invite_codes", "step": "awaiting_code", "role": "爸爸"})
+    commands.handle_permission_callback(fake_db, store, telegram_user_id=1, action="resend")
 
-    commands.handle_set_invite_codes_step(fake_db, store, telegram_user_id=1, text="dad-code-1")
+    reply = commands.handle_permission_step(fake_db, store, telegram_user_id=1, text="1")
 
-    assert store.get(1) == {"flow": "set_invite_codes", "step": "awaiting_role"}
+    assert "已重發" in reply
+    old_invite = fake_db.select("invite_codes", where="code = %s", params=("old-code",), fetch_one=True)
+    assert old_invite["is_used"] is True
 
 
-def test_full_two_family_members_setup_flow(fake_db):
+def test_handle_permission_step_raises_on_unknown_state(fake_db):
     store = ConversationStateStore()
-    commands.start_set_invite_codes(store, telegram_user_id=1)
-    commands.handle_set_invite_codes_step(fake_db, store, telegram_user_id=1, text="爸爸")
-    commands.handle_set_invite_codes_step(fake_db, store, telegram_user_id=1, text="dad-code")
-    commands.handle_set_invite_codes_step(fake_db, store, telegram_user_id=1, text="媽媽")
-    commands.handle_set_invite_codes_step(fake_db, store, telegram_user_id=1, text="mom-code")
-    final_reply = commands.handle_set_invite_codes_step(fake_db, store, telegram_user_id=1, text="沒有了")
-
-    invite_codes = fake_db.select("invite_codes")
-    assert {i["code"] for i in invite_codes} == {"dad-code", "mom-code"}
-    assert store.get(1) is None
-    assert "結束" in final_reply
-
-
-def test_handle_set_invite_codes_step_raises_on_unknown_state(fake_db):
-    # 防呆：state 內容不是預期的兩種 step 之一時，明確拋錯而不是悄悄吞掉或亂猜
-    store = ConversationStateStore()
-    store.set(1, {"step": "some_unexpected_step"})
+    store.set(1, {"flow": "not_a_real_flow"})
 
     with pytest.raises(ValueError):
-        commands.handle_set_invite_codes_step(fake_db, store, telegram_user_id=1, text="whatever")
+        commands.handle_permission_step(fake_db, store, telegram_user_id=1, text="whatever")
 
 
 # --- /my_toggles、/set_toggle（docs/specs/feature-toggles/SPEC.md）---

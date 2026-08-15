@@ -14,6 +14,8 @@ updated: 2026-08-15
 | --- | --- | --- | --- | --- | --- |
 | 2026-08-15 | FR-6h／NFR-19 | 補正 Mobile 日期特例並定案 Telegram 重構採漸進式資料遷移，不整庫刪除重建 | Codex | 已定案／待開發 | Mobile 不限今日範圍包含待辦、重要日子、收藏、旅遊、探索、成果；先做唯讀 Schema／引用盤點，必要時採 V2 表回填切換，未執行 Migration 或刪表 |
 | 2026-08-15 | FR-3～FR-6h／FR-9c～FR-9d／FR-20a／FR-72b／NFR-18 | 定案 Telegram 角色選單、帳號安全、歷史 CRUD、統一功能流程、七日查詢、排程通知與 Phase 6 執行順序 | Codex | 已定案／待開發 | 查詢由最終日期往前推 6 天且可跨多模組；Mobile 仍只異動今日生活紀錄，Telegram 負責歷史回補；隱私遮罩改帳號層雙端共用；草稿保留 30 分鐘、功能模式 10 分鐘 |
+| 2026-08-15 | FR-3～FR-6h | Phase 6 第二批（Telegram 選單與狀態機）開工前盤點：確認現況無 `/start`、無按鈕基礎設施、`state.flow` 約 85 種、`/set_invite_codes` 移除範圍，並拆出子批次 2a／2b... | Claude | 完成（純盤點與拆批決策，未開工） | 決策記錄見 `docs/ADR/discuss/robinson.md` 2026-08-15「Phase 6 第二批拆批盤點」；2a＝按鈕基礎設施＋選單骨架＋認證選單化（含移除 `/set_invite_codes`），2b 起才逐批遷移既有 85 個 flow |
+| 2026-08-15 | FR-3／FR-4／FR-4a～FR-4d／FR-5／FR-6a～FR-6e | Phase 6 第二批 2a 實作完成：Telegram 按鈕基礎設施（`reply_markup`／`answer_callback_query`）、`webhook.py` callback_query 解析與分派、`menu.py` 選單骨架、`/start` 正式實作、Owner 權限管理選單化並移除 `/set_invite_codes` | Claude | 實作完成（待 Robin commit／push／實機驗收） | 完整設計內容見 `docs/ADR/discuss/robinson.md` 2026-08-15「Phase 6 第二批 2a 實作計畫」及「開工完成」補述；主選單其餘 7 項（日常紀錄／資料查詢／待辦事項／重要日子／收藏與旅遊／成果展示／排程設定）2a 先回覆「功能開發中」，實際邏輯留給 2b 起逐批接上；新增 `tests/bot/test_menu.py`、擴充 `test_router.py`／`test_commands.py`／`test_webhook.py`／`tests/submodules/telegram/test_client.py`，Claude 沙箱 1716 項全過，Robin 本機 1750 項通過／3 項失敗（`test_toeic.py` 因本機未裝 `ffmpeg`，屬既有環境問題，與本批無關） |
 | 2026-08-15 | FR-77／NFR-14～NFR-15 | 定案取消功能的路由／資料表清理，以及 backend／mobile／data／submodules 責任分工 | Codex | 已定案／待開發 | 第一批淘汰 complaints、knowledge_base、conversation_logs、conversation_summaries；Mobile 維持根目錄，Telegram 與 LLM 歸後端，獨立爬蟲歸 data，第一階段不開 schemas；AGENTS 已分列實際現況與 Phase 6 目標 |
 | 2026-08-15 | FR-19k | 定案 Owner 錯誤通知的 Telegram／Email／未送達狀態追蹤與系統錯誤管理呈現 | Codex | 已定案／待開發 | Email 成功不重複通知；雙重失敗只保留錯誤紀錄與 Log；不適用一般使用者推播 |
 | 2026-08-15 | FR-1～FR-4（功能開關） | 將技術分享、求職分析、考試成績改為 Robin／Owner 永久專屬，取消非管理者授權與個別排程設計 | Codex | 已定案／待開發 | 一般使用者 Telegram／Mobile 不顯示入口且後端拒絕存取；Mobile 另需同步角色顯示、移除客訴入口、成果候選跨端狀態及系統錯誤送達狀態；既有資料保留 |
@@ -24,7 +26,7 @@ updated: 2026-08-15
 | 2026-08-15 | FR-6a／FR-6b | Telegram 除 `/start` 外全面取消 Slash Commands，所有一般與 Owner 操作改由權限化選單及引導式對話 | Codex | 已定案／待開發 | 不保留舊指令相容期；自然語言／語音功能名稱確認入口仍保留 |
 | 2026-08-15 | FR-5／FR-6／FR-56 | Telegram「使用規則」改為固定模板選單並精簡文案；取消 `/function` 與功能總覽／細節追問 | Codex | 已定案／待開發 | 精簡模板沿用於首次綁定歡迎，刪除條目後重新連號 |
 | 2026-08-15 | | 建立新專案與未來新功能的資料模型準則，並明定本專案既有表不因整理目的刪除重建 | Codex | 完成 | 同步 AGENTS、通用 Template 與 DB Schema Reference；純文件治理，未執行 Migration |
-| 2026-08-15 | FR-2～FR-4／FR-4a～FR-4d | Phase 6 第一批（認證／使用者綁定）：新增 `nickname`／`family_title`／`is_active`、通關密碼 24 小時到期與 5 次錯誤鎖定 30 分鐘、`create_user_and_invite()`／`resend_passcode()`／`set_user_active()` | Claude | 實作完成（待部署驗收） | 範圍刻意只做後端資料模型與核心驗證邏輯，Owner「權限管理」選單化流程延後到下一批（Telegram 選單與狀態機）一起做，避免與選單重構混在同一不可回退批次；`try_bind_invite_code()` 對外行為相容，`router.py` 呼叫端未變動；鎖定計數存 process 記憶體不落地（理由見 db_schema.md 0083 條目）；新增 `tests/bot/test_auth.py` 27 項測試全數通過，Robin 本機亦已覆核通過。**2026-08-15 追加修正**：`0083` 把 `invite_codes.expires_at` 改 NOT NULL 後，發現既有 `/set_invite_codes` 指令流程（`src/bot/commands.py`）未帶該欄位會直接寫入失敗，已補上 `expires_at`／`family_title`／`is_active`，屬本批次內部迴歸修正，未變更該指令對外行為 |
+| 2026-08-15 | FR-2～FR-4／FR-4a～FR-4d | Phase 6 第一批（認證／使用者綁定）：新增 `nickname`／`family_title`／`is_active`、通關密碼 24 小時到期與 5 次錯誤鎖定 30 分鐘、`create_user_and_invite()`／`resend_passcode()`／`set_user_active()` | Claude | 完成（已部署／實機驗收） | 範圍刻意只做後端資料模型與核心驗證邏輯，Owner「權限管理」選單化流程延後到下一批（Telegram 選單與狀態機）一起做，避免與選單重構混在同一不可回退批次；`try_bind_invite_code()` 對外行為相容，`router.py` 呼叫端未變動；鎖定計數存 process 記憶體不落地（理由見 db_schema.md 0083 條目）；新增 `tests/bot/test_auth.py` 27 項測試全數通過，Robin 本機亦已覆核通過。**2026-08-15 追加修正**：`0083` 把 `invite_codes.expires_at` 改 NOT NULL 後，發現既有 `/set_invite_codes` 指令流程（`src/bot/commands.py`）未帶該欄位會直接寫入失敗，已補上 `expires_at`／`family_title`／`is_active`，屬本批次內部迴歸修正，未變更該指令對外行為。**2026-08-15 Robin 實機確認**：Render 部署後 Migration `0083` 已自動套用，`/set_invite_codes` 寫入正常、家人帳號輸入密碼綁定成功 |
 | 2026-08-15 | FR-60～FR-63 | 原「使用者建檔與移除客訴」條目拆分：客訴入口、API、流程與資料表清理保留在 FR-77 Phase 6 統一清理範圍，不併入本批 | Claude | 待開發 | 見 FR-77 那筆任務 |
 | 2026-08-14 | FR-64／FR-65 | 修復重要日子家庭成員查詢與求職分析契合度欄位錯置 | Codex | 完成（已部署驗收） | 使用者 ID 改由 `users.id` 動態產生；求職 SQL 改讀 `score AS match_score`；2026-08-15 Robin 已確認正式環境功能正常 |
 | 2026-08-14 | FR-72a／FR-74／FR-75 | 探索篩選與定位提示、旅遊行程今日標示、重要日子載入相容修正及目標日期同步 | Codex | 完成（已部署驗收） | `0082` 體態／證照目標的重要日子關聯與既有資料回填已部署；2026-08-15 Robin 已確認功能正常 |
@@ -350,5 +352,6 @@ updated: 2026-08-15
 
 | 日期 | 版本／範圍 | 環境 | 狀態 | 驗證 |
 | --- | --- | --- | --- | --- |
+| 2026-08-15 | FR-2～FR-4a～FR-4d（Phase 6 第一批，Migration 0083） | Render 正式環境／Telegram 實機 | 完成 | Robin 已確認 `/set_invite_codes` 寫入正常、家人 Telegram 帳號輸入通關密碼綁定成功 |
 | 2026-08-15 | FR-64／FR-65／FR-72a／FR-73～FR-76a | Render＋Vercel 正式環境／Mobile 實體手機 | 完成 | Robin 已確認重要日子與求職分析載入、收藏／旅遊／探索／成果、Nominatim 定位、相關 migration 與 Mobile 實機操作正常 |
 | 2026-08-12 | Step 4.4～4.5 Mobile App 與後端 API | Render＋Vercel 正式環境 | 完成 | 依當日正式上線里程碑紀錄 |

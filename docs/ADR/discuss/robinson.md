@@ -317,3 +317,43 @@
 **理由**：目前正式環境已有使用者、Token、生活紀錄、待辦、重要日子、收藏、行程、探索、成果及跨模組外鍵；整庫重建會破壞使用者 ID、登入狀態、歷史資料與 Migration 一致性，實際風險及回復成本高於漸進遷移。
 
 **後果**：Phase 6 開工前須產出「沿用／新增欄位／新增獨立表／V2 搬遷／正式淘汰」資料表對照。`users` 保留既有主鍵；通關密碼安全、通知紀錄與帳號偏好依盤點結果決定擴充或拆表。第一批已取消功能的四張表仍維持 FR-77 淘汰計畫，但 DROP 前置審核不變。
+
+### 2026-08-15 補充決策：Phase 6 第二批（Telegram 選單與狀態機）拆批盤點
+
+**狀態**：accepted
+
+**背景**：開工前依重構順序決策先盤點 `router.py`／`commands.py`／`templates.py`／`webhook.py`／`submodules/telegram/client.py`，確認第二批「選單與狀態機」的實際範圍。
+
+**盤點結果**：
+①`router.py` 目前以 50 組以上文字觸發詞集合（Slash Command＋中文觸發詞）搭配 `if/elif` 鏈路派發，Owner 專屬指令純粹靠程式碼寫在 `if is_owner:` 區塊內達成權限隔離，沒有資料驅動的權限定義。
+②目前**沒有 `/start` 指令**：Owner 每則訊息都會觸發 `auth.get_or_create_owner()` 自動建檔；一般使用者的「首次接觸」是把任何一則訊息當通關密碼嘗試綁定，FR-3／FR-4c 定案的「按 START 才進入密碼驗證」流程尚未存在。
+③`state.flow` 現況約 85 種值，每個小步驟各自獨立，是「統一功能流程」的雛形，但沒有一致的「摘要→二次確認」結構。
+④**Telegram 串接層完全沒有按鈕基礎設施**：`submodules/telegram/client.py` 的 `send_text()` 不支援 `reply_markup`，`webhook.py` 沒有解析 `callback_query`，全庫零筆 `InlineKeyboard`／`callback_data` 相關程式碼。要做角色選單矩陣，必須先擴充 Telegram 串接層，不是只改 `router.py` 的派發邏輯。
+⑤`/set_invite_codes` 的移除範圍已確認乾淨可移除：`router.py` 第 33、189-190、540-541 行，`commands.py` 第 501-543 行整段函式，無其他呼叫端引用；換掉的邏輯改用 Phase 6 第一批已寫好但尚未接上任何呼叫端的 `auth.create_user_and_invite()`／`auth.resend_passcode()`。
+
+**決策**：Phase 6 第二批進一步拆成子批次，避免把「按鈕基礎設施」「認證選單化」「85 個既有 flow 遷移」三種性質、風險都不同的工作放進同一個不可回退批次：
+- **第二批（2a）**：Telegram 按鈕基礎設施（`submodules/telegram/client.py` 支援 `reply_markup`、`webhook.py` 解析 `callback_query` 並呼叫 `answerCallbackQuery`）＋選單骨架與認證流程選單化（正式實作 `/start`、角色選單矩陣、Owner「權限管理」建立使用者流程改選單引導式並接上 `create_user_and_invite()`／`resend_passcode()`、移除 `/set_invite_codes`）。
+- **後續子批次（2b、2c...）**：既有約 85 個 `state.flow` 依模組分組（例如先記帳、再體態、再待辦），逐批改成選單觸發並套用統一「摘要→二次確認」結構，每批各自獨立測試與實機驗收。
+
+**理由**：三種工作的失敗模式不同——按鈕基礎設施是純技術擴充、認證選單化牽涉安全與 FR-3／FR-4 已定案行為、既有 flow 遷移數量龐大且橫跨全部功能模組；混在一批會讓單一批次的回歸範圍難以掌握，違反重構順序決策「批次隔離」的原則。
+
+**後果**：第二批（2a）開工前需先設計選單文字／按鈕結構草案供 Robin 確認。2b 之後的子批次分組順序待 2a 完成後再排定，不在本次一併定案。
+
+### 2026-08-15 補充決策：Phase 6 第二批 2a（按鈕基礎設施＋選單骨架＋認證選單化）實作計畫
+
+**狀態**：accepted（已開工完成，見下方「2026-08-15 開工完成」補述）
+
+**設計內容**：
+①**Telegram 串接層**（`submodules/telegram/client.py`）：`send_text()` 新增可選參數 `reply_markup: dict | None`；新增 `answer_callback_query(callback_query_id, text=None)`。純技術擴充，不含商業邏輯。
+②**Webhook 解析**（`src/bot/webhook.py`）：新增 `_extract_callback_query(payload)` 解析 `payload["callback_query"]`（回傳 telegram_user_id、chat_id、data、callback_query_id）；`telegram_webhook()` 主流程最前面加分支偵測 callback_query，改呼叫新的 `handle_callback_query()`；沿用既有 `try/except` 安全網（FR-7）與 `update_id` 去重機制。
+③**選單骨架**（新檔 `src/bot/menu.py`）：資料驅動的選單定義（取代現行「權限寫在 if 區塊裡」的作法），`MAIN_MENU` 列表含 `key`／`label`／`owner_only` 欄位；`build_main_menu_keyboard(is_owner)` 依 FR-6e 組出對應按鈕，`callback_data` 格式固定 `"menu:<key>"`。**這批只做主選單骨架＋權限管理選單**，日常紀錄、資料查詢、待辦事項、重要日子、收藏與旅遊、成果展示、排程設定這 6 項先回覆「功能開發中」暫時訊息，實際邏輯留給 2b 之後遷移對應模組時才接上——確保主選單本身能獨立完整測試（按鈕都看得到、按得動）。
+④**`/start` 正式實作**（FR-3、FR-4c）：`router.py` 新增 `_START_TRIGGERS = {"/start"}`，是 FR-6a 定義下唯一保留的 Slash Command。未綁定使用者按 `/start` 先回覆「請輸入通關密碼」，下一則文字才進入 `try_bind_invite_code()` 驗證（取代現行「任何文字都當密碼試」的隱性行為，堵住無明確驗證動作就能無限次嘗試密碼的漏洞）；已綁定使用者再次 `/start` 只重新顯示主選單；綁定成功呼叫 `toggles.ensure_default_toggles()`、發送 `templates.APPENDIX_A_TEXT`（FR-5：首次綁定同時作為使用規則模板），接著顯示主選單。
+⑤**Owner「權限管理」選單化＋移除 `/set_invite_codes`**：精確刪除 `router.py` 第 33、189-190、540-541 行與 `commands.py` 第 501-543 行整段函式（範圍依 2026-08-15 前次盤點條目確認乾淨可移除，無其他呼叫端引用）；新增 callback 驅動的選單引導流程（權限管理 →建立使用者／停用使用者／恢復使用者／重發密碼→建立使用者時問家庭稱謂、暱稱可選），接上 Phase 6 第一批已寫好但尚未接上呼叫端的 `auth.create_user_and_invite()`／`auth.resend_passcode()`／`auth.set_user_active()`；密碼類訊息只在建立完成當下的受控回覆顯示（FR-4b）。
+⑥**測試**：新增 `tests/bot/test_menu.py`（選單結構產生、Owner／非 Owner 按鈕差異）；擴充 `tests/bot/test_webhook.py`（callback_query 解析）、`tests/bot/test_router.py`（`/start` 首次／重複、權限管理選單流程）；`submodules/telegram/client.py` 對應測試檔案（`reply_markup`／`answer_callback_query` 呼叫格式，實際檔名開工時確認）。
+⑦**文件**：`docs/reference/api_schema.md` 視實作是否新增內部路由結構決定要不要補；`docs/specs/SPEC.md` 不動（本批是實作既有 FR，不改變規格內容）。
+
+**理由**：現行完全無按鈕、無 `/start` 的架構若直接在單一批次塞入全部 85 個 flow 的選單化，回歸風險過高；先落地按鈕基礎設施＋主選單骨架＋認證選單化，讓其餘模組能在後續子批次逐一掛載，同時解決 FR-3 要求但現行架構缺漏的「明確驗證動作」安全缺口。
+
+**後果**：2a 開工後，`router.py`／`commands.py`／`webhook.py`／`submodules/telegram/client.py` 均會異動；`/set_invite_codes` 移除後舊指令使用者會收到「指令不存在」提示（Telegram 預設行為），不提供相容期（FR-6a）。2b 起的子批次分組順序待本批完成後再排定。
+
+**2026-08-15 開工完成**：實作按設計內容①～⑥完成（⑦文件同步見本篇與 PROGRESS.md 對應條目，`api_schema.md` 因本批未新增對外 API 路由，確認不需更新）。`src/bot/menu.py`／`tests/bot/test_menu.py` 為新檔，`src/bot/commands.py`／`router.py`／`webhook.py`／`submodules/telegram/client.py` 依設計異動，`tests/bot/conftest.py`／`test_commands.py`／`test_router.py`／`test_webhook.py`／`tests/submodules/telegram/test_client.py` 同步擴充。Claude 沙箱執行完整測試 1716 項全數通過；Robin 本機執行 `python3 -m pytest` 1750 項通過、3 項失敗（`tests/bot/test_toeic.py` 因本機未安裝 `ffmpeg` 導致，屬既有環境問題，與本批異動無關，不列入本批驗收範圍）。尚待 Robin 完成 commit／push 與實機驗收。

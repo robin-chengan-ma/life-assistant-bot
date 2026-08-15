@@ -67,6 +67,59 @@ def test_send_text_includes_parse_mode_when_explicitly_given(monkeypatch):
     }
 
 
+# --- reply_markup（2026-08-15，Phase 6 第二批 2a，按鈕基礎設施）---
+
+
+def test_send_text_omits_reply_markup_by_default(monkeypatch):
+    mock_post = MagicMock(return_value=_fake_response({"ok": True}))
+    monkeypatch.setattr(client_module.requests, "post", mock_post)
+
+    client = TelegramClient(bot_token="fake-token")
+    client.send_text(chat_id=123, text="哈囉")
+
+    assert "reply_markup" not in mock_post.call_args.kwargs["json"]
+
+
+def test_send_text_includes_reply_markup_when_given(monkeypatch):
+    mock_post = MagicMock(return_value=_fake_response({"ok": True}))
+    monkeypatch.setattr(client_module.requests, "post", mock_post)
+
+    keyboard = {"inline_keyboard": [[{"text": "選項一", "callback_data": "menu:daily_log"}]]}
+    client = TelegramClient(bot_token="fake-token")
+    client.send_text(chat_id=123, text="請選擇功能：", reply_markup=keyboard)
+
+    assert mock_post.call_args.kwargs["json"] == {
+        "chat_id": 123,
+        "text": "請選擇功能：",
+        "reply_markup": keyboard,
+    }
+
+
+def test_answer_callback_query_without_text(monkeypatch):
+    mock_post = MagicMock(return_value=_fake_response({"ok": True}))
+    monkeypatch.setattr(client_module.requests, "post", mock_post)
+
+    client = TelegramClient(bot_token="fake-token")
+    client.answer_callback_query("callback-id-1")
+
+    assert mock_post.call_args.kwargs["json"] == {"callback_query_id": "callback-id-1"}
+    called_url = mock_post.call_args.args[0]
+    assert called_url == "https://api.telegram.org/botfake-token/answerCallbackQuery"
+
+
+def test_answer_callback_query_with_text(monkeypatch):
+    mock_post = MagicMock(return_value=_fake_response({"ok": True}))
+    monkeypatch.setattr(client_module.requests, "post", mock_post)
+
+    client = TelegramClient(bot_token="fake-token")
+    client.answer_callback_query("callback-id-1", text="已收到！")
+
+    assert mock_post.call_args.kwargs["json"] == {
+        "callback_query_id": "callback-id-1",
+        "text": "已收到！",
+    }
+
+
 def test_send_photo_builds_correct_payload(monkeypatch):
     mock_post = MagicMock(return_value=_fake_response({"ok": True}))
     monkeypatch.setattr(client_module.requests, "post", mock_post)

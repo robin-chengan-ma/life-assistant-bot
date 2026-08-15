@@ -3,7 +3,7 @@ from io import BytesIO
 
 from PIL import Image
 
-from src.bot import commands, router, templates, voice
+from src.bot import commands, menu, router, templates, voice
 from src.bot.state import ConversationStateStore
 
 
@@ -33,16 +33,18 @@ def _seed_pending_invite(fake_db, role="爸爸", code="secret123"):
 
 # --- 未知使用者 ---
 
-def test_unknown_user_with_correct_code_gets_welcome_message(fake_db, monkeypatch):
+def test_unknown_user_without_start_is_not_bound_even_with_correct_code(fake_db, monkeypatch):
+    """FR-3：改為 /start 閘控後，沒按過 /start 就直接輸入正確密碼也不會被綁定，見下方
+    test_start_then_correct_passcode_binds_user 才是完整成功流程。"""
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     _seed_pending_invite(fake_db, code="secret123")
     store = ConversationStateStore()
 
     reply = router.handle_message(fake_db, store, FAMILY_ID, "secret123")
 
-    assert reply == templates.APPENDIX_A_TEXT
+    assert reply == router._NOT_BOUND_REPLY
     bound = fake_db.select("users", where="telegram_user_id = %s", params=(FAMILY_ID,), fetch_one=True)
-    assert bound is not None
+    assert bound is None
 
 
 def test_unknown_user_with_wrong_code_gets_prompt(fake_db, monkeypatch):
@@ -136,36 +138,144 @@ def test_owner_can_trigger_function_via_slash_command(fake_db, monkeypatch):
     assert reply == "這是人格化後的功能總覽"
 
 
-def test_owner_can_trigger_set_invite_codes(fake_db, monkeypatch):
+# --- /start（FR-6a，Phase 6 第二批 2a）---
+
+
+def test_start_shows_main_menu_for_owner(fake_db, monkeypatch):
     monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
     store = ConversationStateStore()
 
-    reply = router.handle_message(fake_db, store, ROBIN_ID, "/set_invite_codes")
+    reply, keyboard = router.handle_message(fake_db, store, ROBIN_ID, "/start")
 
-    assert store.get(ROBIN_ID) == {"flow": "set_invite_codes", "step": "awaiting_role"}
-    assert "稱謂" in reply
+    assert reply == menu.MAIN_MENU_TEXT
+    assert keyboard == menu.build_main_menu_keyboard(is_owner=True)
+    owner_row = fake_db.select("users", where="telegram_user_id = %s", params=(ROBIN_ID,), fetch_one=True)
+    assert owner_row is not None
 
 
-def test_owner_mid_setup_flow_continues_state_machine(fake_db, monkeypatch):
+def test_start_prompts_passcode_for_unbound_user(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    store = ConversationStateStore()
+
+    reply = router.handle_message(fake_db, store, FAMILY_ID, "/start")
+
+    assert reply == router._AWAITING_PASSCODE_REPLY
+    assert store.get(FAMILY_ID) == {"flow": "awaiting_passcode"}
+
+
+def test_passcode_only_accepted_right_after_start(fake_db, monkeypatch):
+    """FR-3：沒按過 /start 就直接輸入密碼，不會被當成密碼驗證，只會拿到通用未綁定提示。"""
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    _seed_pending_invite(fake_db, code="secret123")
+    store = ConversationStateStore()
+
+    reply = router.handle_message(fake_db, store, FAMILY_ID, "secret123")
+
+    assert reply == router._NOT_BOUND_REPLY
+    bound = fake_db.select("users", where="telegram_user_id = %s", params=(FAMILY_ID,), fetch_one=True)
+    assert bound is None
+
+
+def test_start_then_correct_passcode_binds_user(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    _seed_pending_invite(fake_db, code="secret123")
+    store = ConversationStateStore()
+
+    router.handle_message(fake_db, store, FAMILY_ID, "/start")
+    reply = router.handle_message(fake_db, store, FAMILY_ID, "secret123")
+
+    assert reply == templates.APPENDIX_A_TEXT
+    bound = fake_db.select("users", where="telegram_user_id = %s", params=(FAMILY_ID,), fetch_one=True)
+    assert bound is not None
+    assert store.get(FAMILY_ID) is None
+
+
+def test_start_then_wrong_passcode_gets_bind_failed_reply(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    store = ConversationStateStore()
+
+    router.handle_message(fake_db, store, FAMILY_ID, "/start")
+    reply = router.handle_message(fake_db, store, FAMILY_ID, "wrong-code")
+
+    assert reply == router._PASSCODE_BIND_FAILED_REPLY
+
+
+def test_start_shows_main_menu_for_bound_family_member(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+
+    reply, keyboard = router.handle_message(fake_db, store, FAMILY_ID, "/start")
+
+    assert reply == menu.MAIN_MENU_TEXT
+    assert keyboard == menu.build_main_menu_keyboard(is_owner=False)
+
+
+# --- 權限管理選單（FR-4，取代舊版 /set_invite_codes）---
+
+
+def test_permission_create_flow_writes_new_user_and_invite(fake_db, monkeypatch):
     monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
     store = ConversationStateStore()
-    store.set(ROBIN_ID, {"flow": "set_invite_codes", "step": "awaiting_role"})
 
-    reply = router.handle_message(fake_db, store, ROBIN_ID, "媽媽")
+    reply, keyboard = router.handle_callback_query(fake_db, store, ROBIN_ID, "permission:create")
+    assert keyboard is None
+    assert store.get(ROBIN_ID) == {"flow": "permission_create", "step": "awaiting_family_title"}
 
-    assert store.get(ROBIN_ID) == {"flow": "set_invite_codes", "step": "awaiting_code", "role": "媽媽"}
+    router.handle_message(fake_db, store, ROBIN_ID, "媽媽")
+    assert store.get(ROBIN_ID)["step"] == "awaiting_nickname"
+
+    reply = router.handle_message(fake_db, store, ROBIN_ID, "略過")
+
     assert "媽媽" in reply
+    assert store.get(ROBIN_ID) is None
+    new_user = fake_db.select("users", where="family_title = %s", params=("媽媽",), fetch_one=True)
+    assert new_user is not None
+    invite = fake_db.select(
+        "invite_codes", where="user_id = %s AND is_used = FALSE", params=(new_user["id"],), fetch_one=True
+    )
+    assert invite is not None
+    assert invite["expires_at"] is not None
 
 
-def test_owner_finishing_setup_writes_to_db_via_router(fake_db, monkeypatch):
+def test_permission_disable_flow_deactivates_selected_user(fake_db, monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
+    fake_db.insert(
+        "users",
+        {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False, "is_active": True, "nickname": "爸爸"},
+    )
+    store = ConversationStateStore()
+
+    reply, _keyboard = router.handle_callback_query(fake_db, store, ROBIN_ID, "permission:disable")
+    assert "爸爸" in reply
+
+    router.handle_message(fake_db, store, ROBIN_ID, "1")
+
+    updated = fake_db.select("users", where="telegram_user_id = %s", params=(FAMILY_ID,), fetch_one=True)
+    assert updated["is_active"] is False
+    assert store.get(ROBIN_ID) is None
+
+
+def test_permission_menu_denied_for_non_owner(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+
+    reply, _keyboard = router.handle_callback_query(fake_db, store, FAMILY_ID, "menu:permission")
+
+    assert reply == router._PERMISSION_DENIED_REPLY
+
+
+def test_set_invite_codes_command_no_longer_recognized(fake_db, monkeypatch):
+    """`/set_invite_codes` 已於 2a 移除，Owner 輸入這串文字會直接落入一般聊天核心，不再是專屬指令。"""
     monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
     store = ConversationStateStore()
-    store.set(ROBIN_ID, {"flow": "set_invite_codes", "step": "awaiting_code", "role": "媽媽"})
+    llm_client = _FakeLLMClient(response_text="我不太懂這個指令耶！")
 
-    router.handle_message(fake_db, store, ROBIN_ID, "mom-code")
+    reply = router.handle_message(fake_db, store, ROBIN_ID, "/set_invite_codes", llm_client=llm_client)
 
-    invite = fake_db.select("invite_codes", where="code = %s AND is_used = FALSE", params=("mom-code",), fetch_one=True)
-    assert invite is not None
+    assert reply == "我不太懂這個指令耶！"
+    assert store.get(ROBIN_ID) is None
 
 
 # --- 功能開關（docs/specs/feature-toggles/SPEC.md）---
@@ -176,6 +286,7 @@ def test_family_member_binding_auto_creates_default_toggles(fake_db, monkeypatch
     _seed_pending_invite(fake_db, code="secret123")
     store = ConversationStateStore()
 
+    router.handle_message(fake_db, store, FAMILY_ID, "/start")
     router.handle_message(fake_db, store, FAMILY_ID, "secret123")
 
     bound = fake_db.select("users", where="telegram_user_id = %s", params=(FAMILY_ID,), fetch_one=True)

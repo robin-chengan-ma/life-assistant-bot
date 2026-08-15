@@ -6,7 +6,7 @@ import logging
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from src.bot import auth, body, finance, friend_chat, knowledge, mood, notifications, privacy, templates, toggles
+from src.bot import auth, body, finance, friend_chat, knowledge, menu, mood, notifications, privacy, templates, toggles
 from src.bot import certificate_answer, certificate_quiz, certificate_schedule
 from src.bot import certificate_exam_scores, certificate_goals, certificate_stats
 from src.bot import complaint as complaint_module
@@ -498,47 +498,122 @@ def handle_function(db: CloudSQLClient, llm_client) -> str:
     return llm_client.generate_text(prompt)
 
 
-def start_set_invite_codes(state_store: ConversationStateStore, telegram_user_id: int) -> str:
-    """Robin 觸發 /set_invite_codes：進入設定模式，詢問第一位家人的稱謂。"""
-    state_store.set(telegram_user_id, {"flow": "set_invite_codes", "step": "awaiting_role"})
-    return "請問要設定哪一位家人的稱謂？（例如：爸爸）"
+# ---------------------------------------------------------------------------
+# 權限管理（2026-08-15，Phase 6 第二批 2a，取代舊版 /set_invite_codes，
+# 見 docs/specs/SPEC.md FR-4、FR-4a～FR-4d、docs/ADR/discuss/robinson.md）
+# 選單觸發，callback_data 走 "permission:<action>"；四個操作共用同一組 flow 前綴
+# "permission_<action>"，接上 Phase 6 第一批已寫好的 auth.create_user_and_invite()／
+# auth.resend_passcode()／auth.set_user_active()。
+# ---------------------------------------------------------------------------
+
+_PERMISSION_ACTION_PROMPTS = {
+    "disable": "請問要停用哪一位使用者？請輸入編號：",
+    "enable": "請問要恢復哪一位使用者？請輸入編號：",
+    "resend": "請問要重發通關密碼給哪一位使用者？請輸入編號：",
+}
 
 
-def handle_set_invite_codes_step(
+def start_permission_menu() -> tuple[str, dict]:
+    """FR-4：Owner 專屬「權限管理」選單首頁。不需要 db／state_store，純粹回覆固定選單。"""
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "➕ 建立使用者", "callback_data": "permission:create"}],
+            [{"text": "⛔ 停用使用者", "callback_data": "permission:disable"}],
+            [{"text": "✅ 恢復使用者", "callback_data": "permission:enable"}],
+            [{"text": "🔁 重發通關密碼", "callback_data": "permission:resend"}],
+            [{"text": "🔙 返回主選單", "callback_data": "menu:main"}],
+        ]
+    }
+    return "請選擇要進行的權限管理操作：", keyboard
+
+
+def handle_permission_callback(
+    db: CloudSQLClient,
+    state_store: ConversationStateStore,
+    telegram_user_id: int,
+    action: str,
+) -> tuple[str, dict | None]:
+    """權限管理選單按下其中一個操作按鈕後的分派，開始對應的引導式文字流程。"""
+    if action == "create":
+        state_store.set(telegram_user_id, {"flow": "permission_create", "step": "awaiting_family_title"})
+        return "請問要新增哪一位家人？請輸入家庭稱謂（例如：爸爸）：", None
+
+    if action in ("disable", "enable", "resend"):
+        candidates = [u for u in db.select("users") if not u["is_owner"]]
+        if not candidates:
+            return "目前還沒有任何一般使用者，沒有可以操作的對象喔！", menu.back_to_main_menu_keyboard()
+
+        state_store.set(
+            telegram_user_id,
+            {"flow": f"permission_{action}", "step": "awaiting_target", "candidates": [u["id"] for u in candidates]},
+        )
+        lines = [_PERMISSION_ACTION_PROMPTS[action], ""]
+        for index, user in enumerate(candidates, start=1):
+            status = "啟用中" if user.get("is_active", True) else "已停用"
+            display_name = user.get("nickname") or user.get("family_title") or user["role"]
+            lines.append(f"{index}. {display_name}（{status}）")
+        return "\n".join(lines), None
+
+    raise ValueError(f"未知的權限管理操作：{action}")
+
+
+def handle_permission_step(
     db: CloudSQLClient,
     state_store: ConversationStateStore,
     telegram_user_id: int,
     text: str,
 ) -> str:
-    """依目前對話狀態處理 Robin 在設定模式中輸入的下一句話。"""
+    """依目前對話狀態處理權限管理流程中輸入的下一句話。"""
     state = state_store.get(telegram_user_id)
+    flow = state.get("flow") if state else None
     step = state.get("step") if state else None
 
-    if step == "awaiting_role":
+    if flow == "permission_create":
         if text in _EXIT_PHRASES:
             state_store.clear(telegram_user_id)
-            return "好的，已結束通關密碼設定模式！"
+            return "好的，已結束權限管理模式！"
 
-        state_store.set(telegram_user_id, {"flow": "set_invite_codes", "step": "awaiting_code", "role": text})
-        return f"收到，請輸入『{text}』專屬的通關密碼："
+        if step == "awaiting_family_title":
+            state_store.set(
+                telegram_user_id,
+                {"flow": "permission_create", "step": "awaiting_nickname", "family_title": text},
+            )
+            return f"收到，請問「{text}」的暱稱是？（不需要的話輸入「略過」）"
 
-    if step == "awaiting_code":
-        role = state["role"]
-        user_id = db.insert(
-            "users",
-            {"telegram_user_id": None, "role": role, "family_title": role, "is_owner": False, "is_active": True},
-        )
-        # FR-4b（0083）：invite_codes.expires_at 已改為 NOT NULL，這條舊指令流程也要補上，
-        # 否則 Robin 手動輸入密碼這個既有流程會直接因違反 NOT NULL 而寫入失敗。
-        db.insert("invite_codes", {
-            "code": text,
-            "is_used": False,
-            "user_id": user_id,
-            "expires_at": datetime.now(timezone.utc) + auth.PASSCODE_TTL,
-        })
+        if step == "awaiting_nickname":
+            family_title = state["family_title"]
+            nickname = None if text in {"略過", "skip"} else text
+            result = auth.create_user_and_invite(db, family_title=family_title, nickname=nickname)
+            state_store.clear(telegram_user_id)
+            nickname_line = f"暱稱：{result['nickname']}\n" if result["nickname"] else ""
+            return (
+                f"已建立「{family_title}」！\n"
+                f"{nickname_line}"
+                f"使用者 ID：{result['mobile_user_id']}\n"
+                f"通關密碼：{result['passcode']}\n"
+                "（此密碼僅能使用一次，24 小時內有效，請盡快提供給本人）"
+            )
 
-        state_store.set(telegram_user_id, {"flow": "set_invite_codes", "step": "awaiting_role"})
-        return "已寫入！請問還有其他家人要設定嗎？"
+    if flow in ("permission_disable", "permission_enable", "permission_resend"):
+        if text in _EXIT_PHRASES:
+            state_store.clear(telegram_user_id)
+            return "好的，已結束權限管理模式！"
+
+        candidates = state["candidates"]
+        if not text.isdigit() or not (1 <= int(text) <= len(candidates)):
+            return f"請輸入 1～{len(candidates)} 之間的編號喔！"
+
+        target_user_id = candidates[int(text) - 1]
+        state_store.clear(telegram_user_id)
+
+        if flow == "permission_disable":
+            auth.set_user_active(db, target_user_id, active=False)
+            return "已停用該使用者，Mobile Refresh Token 也一併撤銷了。"
+        if flow == "permission_enable":
+            auth.set_user_active(db, target_user_id, active=True)
+            return "已恢復該使用者，對方需要重新登入或重新綁定。"
+        new_code = auth.resend_passcode(db, target_user_id)
+        return f"已重發通關密碼：{new_code}\n（舊密碼已立即失效，此密碼僅能使用一次，24 小時內有效）"
 
     raise ValueError(f"未知的對話狀態：{state}")
 

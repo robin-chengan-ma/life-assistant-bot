@@ -3,10 +3,13 @@ import re
 
 from submodules.cloudsql.client import CloudSQLClient
 
-from src.bot import auth, chat, commands, image, job_search, system_errors, templates, toggles, voice
+from src.bot import auth, chat, commands, image, job_search, menu, system_errors, templates, toggles, voice
 from src.bot.state import ConversationStateStore
 
 _NOT_BOUND_REPLY = "請輸入通關密碼才能開始使用羅賓森喔！"
+_AWAITING_PASSCODE_REPLY = "請輸入通關密碼："
+_PASSCODE_BIND_FAILED_REPLY = "通關密碼不正確或已失效，請重新輸入，或輸入 /start 重新開始。"
+_PERMISSION_DENIED_REPLY = "無法使用這個功能。"
 
 # 2026-08-01（Step 1.4，robinson SPEC.md FR-14／FR-15）：語音訊息的擋下情境固定文案，
 # 都在下載/上傳/轉文字之前就先擋下，避免浪費 Drive／Groq 額度，見 src/bot/voice.py 模組 docstring。
@@ -30,7 +33,10 @@ _VOICE_TRANSCRIBED_REMINDER = (
     "超過 15 分鐘語音功能就會恢復正常！）"
 )
 
-_SET_INVITE_CODES_TRIGGERS = {"/set_invite_codes", "設定通關密碼"}
+# 2026-08-15（Phase 6 第二批 2a，見 docs/specs/SPEC.md FR-6a）：`/start` 是 FR-6a 定案下
+# 唯一保留的 Slash Command，用於 START 首次驗證及重新顯示主選單；取代舊版 `/set_invite_codes`
+# 的 Owner 建立使用者流程已改為選單驅動，見 commands.start_permission_menu()。
+_START_TRIGGERS = {"/start"}
 # 2026-08-02（Step 1.6，見 robinson SPEC.md FR-20）：Owner 專屬，廣播「我康復了」給所有家人。
 _RECOVERED_TRIGGERS = {"/recovered"}
 _RULE_TRIGGERS = {"/rule", "我要看使用規則"}
@@ -177,6 +183,21 @@ def handle_message(
     text = (text or "").strip()
     is_owner = auth.is_owner(telegram_user_id)
 
+    if text in _START_TRIGGERS:
+        # 2026-08-15（FR-6a）：/start 是唯一保留的 Slash Command，Owner 直接顯示主選單；
+        # 一般使用者若尚未綁定，進入「等待通關密碼」狀態，下一則文字才會被當成密碼驗證
+        # （FR-3：只有按了 START 之後，下一則文字才進入通關密碼驗證）。
+        state_store.clear(telegram_user_id)
+        if is_owner:
+            auth.get_or_create_owner(db, telegram_user_id)
+            return menu.MAIN_MENU_TEXT, menu.build_main_menu_keyboard(is_owner=True)
+
+        user = auth.find_user_by_telegram_id(db, telegram_user_id)
+        if user is None:
+            state_store.set(telegram_user_id, {"flow": "awaiting_passcode"})
+            return _AWAITING_PASSCODE_REPLY
+        return menu.MAIN_MENU_TEXT, menu.build_main_menu_keyboard(is_owner=False)
+
     if is_owner:
         state = state_store.get(telegram_user_id)
         if state is not None:
@@ -185,9 +206,6 @@ def handle_message(
                 llm_client, text_llm_client, image_llm_clients, via_voice, privacy_llm_client, telegram_client,
                 calendar_client,
             )
-
-        if text in _SET_INVITE_CODES_TRIGGERS:
-            return commands.start_set_invite_codes(state_store, telegram_user_id)
 
         # Robin 免通關密碼視為管理者兼使用者，確保他一定有一筆 users 記錄（FR-5）
         owner_row = auth.get_or_create_owner(db, telegram_user_id)
@@ -281,10 +299,14 @@ def handle_message(
     else:
         user = auth.find_user_by_telegram_id(db, telegram_user_id)
         if user is None:
-            if auth.try_bind_invite_code(db, telegram_user_id, text):
-                bound_user = auth.find_user_by_telegram_id(db, telegram_user_id)
-                toggles.ensure_default_toggles(db, bound_user["id"])
-                return templates.APPENDIX_A_TEXT
+            state = state_store.get(telegram_user_id)
+            if state is not None and state.get("flow") == "awaiting_passcode":
+                if auth.try_bind_invite_code(db, telegram_user_id, text):
+                    bound_user = auth.find_user_by_telegram_id(db, telegram_user_id)
+                    toggles.ensure_default_toggles(db, bound_user["id"])
+                    state_store.clear(telegram_user_id)
+                    return templates.APPENDIX_A_TEXT
+                return _PASSCODE_BIND_FAILED_REPLY
             return _NOT_BOUND_REPLY
 
         state = state_store.get(telegram_user_id)
@@ -385,6 +407,47 @@ def handle_message(
         db, llm_client, text_llm_client, state_store, telegram_user_id, user_id, text,
         privacy_llm_client=privacy_llm_client,
     )
+
+
+def handle_callback_query(
+    db: CloudSQLClient,
+    state_store: ConversationStateStore,
+    telegram_user_id: int,
+    data: str,
+) -> tuple[str, dict | None]:
+    """處理按下 Inline Keyboard 按鈕觸發的 callback_query（見 FR-6c：任何選單／callback 都要
+    重新驗證權限，不能只靠「一開始選單沒顯示這顆按鈕」來擋，避免偽造 callback_data 繞過）。
+
+    回傳 `(text, reply_markup)`，`reply_markup` 可能為 `None`（例如權限管理選單分派後的
+    引導式文字提問，本來就不需要再帶按鈕）。
+    """
+    is_owner = auth.is_owner(telegram_user_id)
+
+    if data == "menu:main":
+        state_store.clear(telegram_user_id)
+        return menu.MAIN_MENU_TEXT, menu.build_main_menu_keyboard(is_owner=is_owner)
+
+    if data.startswith("menu:"):
+        key = data[len("menu:") :]
+        if not menu.is_valid_menu_key(key):
+            return menu.MAIN_MENU_TEXT, menu.build_main_menu_keyboard(is_owner=is_owner)
+        if menu.is_owner_only_key(key) and not is_owner:
+            return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
+
+        if key == "rule":
+            return commands.handle_rule(), menu.back_to_main_menu_keyboard()
+        if key == "permission":
+            return commands.start_permission_menu()
+        return menu.not_yet_implemented_reply()
+
+    if data.startswith("permission:"):
+        action = data[len("permission:") :]
+        if not is_owner:
+            return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
+        return commands.handle_permission_callback(db, state_store, telegram_user_id, action)
+
+    # 未知／格式不符的 callback_data（例如過期或偽造），保守導回主選單，不當例外處理。
+    return menu.MAIN_MENU_TEXT, menu.build_main_menu_keyboard(is_owner=is_owner)
 
 
 def _get_identified_user(db: CloudSQLClient, telegram_user_id: int) -> dict | None:
@@ -537,8 +600,9 @@ def _dispatch_active_flow(
 ) -> str:
     """依進行中對話流程的 `flow` 標記分派到對應處理函式（見各 flow 對應 spec 的 ADR）。"""
     flow = state.get("flow")
-    if flow == "set_invite_codes":
-        return commands.handle_set_invite_codes_step(db, state_store, telegram_user_id, text)
+    if flow in ("permission_create", "permission_disable", "permission_enable", "permission_resend"):
+        # 2026-08-15（Phase 6 第二批 2a，FR-4）：Owner 權限管理選單引導式流程。
+        return commands.handle_permission_step(db, state_store, telegram_user_id, text)
     if flow == "pending_user_knowledge":
         # 2026-07-31（ADR-6）：不再無條件把這則訊息當成答案存檔，改由同一次 LLM 呼叫判斷
         # 這是在提供答案、拒絕記錄、還是問了個無關的新問題，見 chat.handle_chat_message。

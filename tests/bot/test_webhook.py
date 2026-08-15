@@ -143,6 +143,23 @@ def test_extract_voice_prefers_voice_when_both_present():
     assert webhook._extract_voice(payload)[1] == "v1"
 
 
+# --- _extract_callback_query：純函式（2026-08-15，Phase 6 第二批 2a）---
+
+
+def test_extract_callback_query_returns_none_when_missing():
+    assert webhook._extract_callback_query({"message": {"from": {"id": 123}, "text": "hi"}}) is None
+
+
+def test_extract_callback_query_returns_none_when_data_missing():
+    payload = {"callback_query": {"id": "cb1", "from": {"id": 123}}}
+    assert webhook._extract_callback_query(payload) is None
+
+
+def test_extract_callback_query_returns_full_tuple():
+    payload = {"callback_query": {"id": "cb1", "from": {"id": 123}, "data": "menu:rule"}}
+    assert webhook._extract_callback_query(payload) == (123, "cb1", "menu:rule")
+
+
 # --- Flask route：mock 掉 DB / Telegram / router，只驗證接線邏輯 ---
 
 @pytest.fixture
@@ -221,6 +238,51 @@ def test_webhook_routes_valid_message_and_sends_reply(client, monkeypatch):
     )
     mock_db_instance.close.assert_called_once()
     mock_telegram_instance.send_text.assert_called_once_with(chat_id=123, text="哈囉！")
+
+
+# --- callback_query（2026-08-15，Phase 6 第二批 2a：按鈕基礎設施）---
+
+
+def test_webhook_routes_callback_query_and_answers_plus_sends_reply(client, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+
+    mock_handle_callback_query = MagicMock(return_value=("使用規則內容", {"inline_keyboard": [[{"text": "🔙", "callback_data": "menu:main"}]]}))
+    monkeypatch.setattr(webhook, "handle_callback_query", mock_handle_callback_query)
+
+    mock_db_instance = MagicMock()
+    monkeypatch.setattr(webhook, "CloudSQLClient", MagicMock(return_value=mock_db_instance))
+
+    mock_telegram_instance = MagicMock()
+    monkeypatch.setattr(webhook, "TelegramClient", MagicMock(return_value=mock_telegram_instance))
+
+    payload = {"callback_query": {"id": "cb1", "from": {"id": 123}, "data": "menu:rule"}}
+    response = client.post("/telegram/webhook", json=payload)
+
+    assert response.status_code == 200
+    mock_handle_callback_query.assert_called_once_with(mock_db_instance, webhook._state_store, 123, "menu:rule")
+    mock_telegram_instance.answer_callback_query.assert_called_once_with("cb1")
+    mock_telegram_instance.send_text.assert_called_once_with(
+        chat_id=123, text="使用規則內容", reply_markup={"inline_keyboard": [[{"text": "🔙", "callback_data": "menu:main"}]]}
+    )
+    mock_db_instance.close.assert_called_once()
+
+
+def test_webhook_callback_query_swallows_unexpected_exception_and_still_answers(client, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+
+    mock_handle_callback_query = MagicMock(side_effect=RuntimeError("boom"))
+    monkeypatch.setattr(webhook, "handle_callback_query", mock_handle_callback_query)
+    monkeypatch.setattr(webhook, "CloudSQLClient", MagicMock(return_value=MagicMock()))
+
+    mock_telegram_instance = MagicMock()
+    monkeypatch.setattr(webhook, "TelegramClient", MagicMock(return_value=mock_telegram_instance))
+
+    payload = {"callback_query": {"id": "cb1", "from": {"id": 123}, "data": "menu:rule"}}
+    response = client.post("/telegram/webhook", json=payload)
+
+    assert response.status_code == 200
+    mock_telegram_instance.answer_callback_query.assert_called_once_with("cb1")
+    mock_telegram_instance.send_text.assert_called_once_with(chat_id=123, text=webhook._EMPTY_REPLY_FALLBACK)
 
 
 # --- 個資遮蔽 LLM 語意層專用 Key（2026-08-02，見 docs/specs/privacy-masking/SPEC.md ADR-1/ADR-2） ---

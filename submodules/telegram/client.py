@@ -55,7 +55,13 @@ class TelegramClient:
         response = call_with_retry(_do_request, is_retryable=_is_retryable_requests_error)
         return response.json()
 
-    def send_text(self, chat_id: int | str, text: str, parse_mode: str | None = None) -> dict:
+    def send_text(
+        self,
+        chat_id: int | str,
+        text: str,
+        parse_mode: str | None = None,
+        reply_markup: dict | None = None,
+    ) -> dict:
         """發送文字訊息。
 
         2026-08-02：預設不帶 `parse_mode`（純文字）。原本預設 `"Markdown"`，但這則訊息的
@@ -63,10 +69,17 @@ class TelegramClient:
         底線、星號沒有成對），一旦格式不符 Telegram 會整則拒收（400 Bad Request），使用者
         完全收不到回覆；純文字傳送不會有這個風險。呼叫端仍可視需要明確傳入 `parse_mode`
         （例如確定內容是自己手寫、格式受控的靜態文案時）。
+
+        2026-08-15（Phase 6 第二批 2a，見 docs/ADR/discuss/robinson.md）：新增可選參數
+        `reply_markup`，用來附上 Inline Keyboard（角色選單矩陣等按鈕選單）。呼叫端傳入
+        Telegram 原生格式的字典（例如 `{"inline_keyboard": [[{"text": "...", "callback_data": "..."}]]}`），
+        `None` 時完全不帶這個欄位，維持既有純文字訊息的行為不變。
         """
         payload = {"chat_id": chat_id, "text": text}
         if parse_mode is not None:
             payload["parse_mode"] = parse_mode
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
         return self.call("sendMessage", payload)
 
     def send_photo(self, chat_id: int | str, photo: str, caption: str = "") -> dict:
@@ -78,6 +91,18 @@ class TelegramClient:
         """發送「正在輸入…」等狀態提示，讓使用者知道 Robinson 正在處理。"""
         payload = {"chat_id": chat_id, "action": action}
         return self.call("sendChatAction", payload)
+
+    def answer_callback_query(self, callback_query_id: str, text: str | None = None) -> dict:
+        """回應使用者按下的 Inline Keyboard 按鈕（Telegram `answerCallbackQuery`）。
+
+        2026-08-15（Phase 6 第二批 2a）：按鈕被按下後 Telegram 客戶端會顯示「處理中」轉圈，
+        直到收到這個 API 的回應為止；即使不需要額外的彈出提示（`text` 留空），還是必須呼叫
+        這支 API 告訴 Telegram「已收到這次按鈕點擊」，否則使用者端會一直卡在轉圈狀態。
+        """
+        payload = {"callback_query_id": callback_query_id}
+        if text is not None:
+            payload["text"] = text
+        return self.call("answerCallbackQuery", payload)
 
     def get_file_bytes(self, file_id: str) -> bytes:
         """下載使用者上傳的檔案（圖片/語音等），回傳原始 bytes。

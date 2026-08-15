@@ -9,7 +9,7 @@ from flask import Blueprint, jsonify, request
 from google.genai import errors as genai_errors
 
 from src.bot import system_errors
-from src.bot.router import handle_message, handle_photo_message, handle_voice_message
+from src.bot.router import handle_callback_query, handle_message, handle_photo_message, handle_voice_message
 from src.bot.state import ConversationStateStore
 from submodules.calendar.client import CalendarClient
 from submodules.cloudsql.client import CloudSQLClient
@@ -422,6 +422,23 @@ def _extract_voice(payload: dict) -> tuple[int, str, int | None, str] | None:
     return telegram_user_id, file_id, media.get("duration"), mime_type
 
 
+def _extract_callback_query(payload: dict) -> tuple[int, str, str] | None:
+    """從 Telegram Update JSON 取出 (telegram_user_id, callback_query_id, data)。
+
+    2026-08-15（Phase 6 第二批 2a，按鈕基礎設施）：按下 Inline Keyboard 按鈕時，Telegram
+    送來的是 `callback_query` 更新（不是 `message`），寫法比照 `extract_message()` 等既有
+    parser：缺少任一必要欄位一律回傳 `None`，交由呼叫端忽略。
+    """
+    callback_query = payload.get("callback_query") or {}
+    from_user = callback_query.get("from") or {}
+    telegram_user_id = from_user.get("id")
+    callback_query_id = callback_query.get("id")
+    data = callback_query.get("data")
+    if telegram_user_id is None or callback_query_id is None or data is None:
+        return None
+    return telegram_user_id, callback_query_id, data
+
+
 def _extract_unsupported_file(payload: dict) -> int | None:
     """偵測目前不支援的檔案類型（文件/影片/貼圖等），有的話回傳寄件者 telegram_user_id。
 
@@ -438,6 +455,42 @@ def _extract_unsupported_file(payload: dict) -> int | None:
     return None
 
 
+def _handle_callback_query_update(callback_extracted: tuple[int, str, str]):
+    """處理按鈕按下的 callback_query 更新（2026-08-15，Phase 6 第二批 2a）。
+
+    跟文字/圖片/語音三種既有訊息類型分開處理：一定要呼叫 `answerCallbackQuery`（見
+    `submodules/telegram/client.py` docstring），否則使用者手機上的 Telegram 客戶端會卡在
+    按鈕轉圈圈的 loading 狀態。這裡刻意走獨立、精簡的 try/except，不重用文字訊息分支那套
+    「一般感冒級／重大疾病級」分級安全網（callback_query 不會呼叫 LLM，失敗模式單純很多），
+    失敗時只記錄 log 並盡量呼叫 answerCallbackQuery 讓按鈕停止轉圈，不觸發 Robin 錯誤私訊。
+    """
+    telegram_user_id, callback_query_id, data = callback_extracted
+    db = None
+    try:
+        db = CloudSQLClient()
+        reply, reply_markup = handle_callback_query(db, _state_store, telegram_user_id, data)
+    except Exception:
+        _logger.exception(
+            "處理 callback_query 時發生未預期例外（telegram_user_id=%s，data=%s）", telegram_user_id, data
+        )
+        reply, reply_markup = _EMPTY_REPLY_FALLBACK, None
+    finally:
+        if db is not None:
+            db.close()
+
+    try:
+        telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
+        telegram_client.answer_callback_query(callback_query_id)
+        if reply_markup is not None:
+            telegram_client.send_text(chat_id=telegram_user_id, text=reply, reply_markup=reply_markup)
+        else:
+            telegram_client.send_text(chat_id=telegram_user_id, text=reply)
+    except Exception:
+        _logger.exception("回覆 callback_query 失敗（telegram_user_id=%s）", telegram_user_id)
+
+    return jsonify({"ok": True}), 200
+
+
 @bot_bp.route("/telegram/webhook", methods=["POST"])
 def telegram_webhook():
     payload = request.get_json(silent=True) or {}
@@ -445,6 +498,12 @@ def telegram_webhook():
     update_id = payload.get("update_id")
     if update_id is not None and _is_duplicate_update(update_id):
         return jsonify({"ok": True}), 200
+
+    callback_extracted = _extract_callback_query(payload)
+    if callback_extracted is not None:
+        if update_id is not None:
+            _mark_update_processed(update_id)
+        return _handle_callback_query_update(callback_extracted)
 
     unsupported_user_id = _extract_unsupported_file(payload)
     photo_extracted = None if unsupported_user_id is not None else _extract_photo(payload)
@@ -494,6 +553,7 @@ def telegram_webhook():
         error_input_summary = _summarize_user_input(text_extracted[1])
 
     reply = _GENERAL_COLD_REPLY
+    reply_markup = None
     db = None
     try:
         db = CloudSQLClient()
@@ -558,11 +618,18 @@ def telegram_webhook():
             # 只有訊息真的落入一般聊天核心時才會被呼叫；其餘指令/對話流程分支不會用到。
             llm_client = LLMClient(api_key=os.environ["GEMINI_API_BOT_KEY"])
             text_llm_client = LLMClient(api_key=os.environ["GEMINI_API_TEXT_KEY"])
-            reply = handle_message(
+            message_result = handle_message(
                 db, _state_store, telegram_user_id, text, llm_client=llm_client, text_llm_client=text_llm_client,
                 privacy_llm_client=_build_privacy_llm_client(), telegram_client=telegram_client,
                 calendar_client=_build_calendar_client(), gdrive_client=_build_gdrive_client_optional(),
             )
+            # 2026-08-15（Phase 6 第二批 2a）：`/start` 與部分選單導覽會回傳 `(text, reply_markup)`
+            # 二元組，其餘既有指令/對話流程分支維持回傳純 `str`，這裡統一拆解成兩個區域變數，
+            # 讓下面的空字串防呆與最終送出都只需要處理一種型別。
+            if isinstance(message_result, tuple):
+                reply, reply_markup = message_result
+            else:
+                reply = message_result
     except Exception as exc:
         # 安全網：任何未預期例外都要在這裡吞掉，改回安全用語並仍然回 200——否則 Flask 會回
         # 500，Telegram 收不到 200 就會自動重送同一則訊息，變成「失敗 → 重試 → 再失敗」的
@@ -583,6 +650,7 @@ def telegram_webhook():
             error_feature,
             telegram_user_id,
         )
+        reply_markup = None
         if _is_llm_failure(exc):
             reply = _MAJOR_ILLNESS_REPLY
             _notify_robin_of_error(error_feature, telegram_user_id, error_input_summary, severity="critical", db=db)
@@ -604,11 +672,17 @@ def telegram_webhook():
             telegram_user_id,
         )
         reply = _EMPTY_REPLY_FALLBACK
+        reply_markup = None
 
     if reply:
         try:
             telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
-            telegram_client.send_text(chat_id=telegram_user_id, text=reply)
+            # 2026-08-15（Phase 6 第二批 2a）：只有真的有選單按鈕時才多帶這個關鍵字參數，維持既有
+            # 「純文字回覆」測試斷言 `send_text(chat_id=..., text=...)` 不需要跟著全部改寫。
+            if reply_markup is not None:
+                telegram_client.send_text(chat_id=telegram_user_id, text=reply, reply_markup=reply_markup)
+            else:
+                telegram_client.send_text(chat_id=telegram_user_id, text=reply)
         except Exception:
             # 傳送失敗（例如 Telegram API 本身出問題）是另一個獨立的失敗模式，不影響前面
             # handle_message 的處理結果，一樣只記錄不往外拋，避免這裡也觸發 Telegram 重試。
