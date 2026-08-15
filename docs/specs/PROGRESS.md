@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-14
+updated: 2026-08-15
 ---
 
 # 開發進度
@@ -12,13 +12,26 @@ updated: 2026-08-14
 
 | 日期 | 對應 FR | 任務內容 | 開發者 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- | --- |
-| 2026-08-14 | FR-64／FR-65 | 修復重要日子家庭成員查詢與求職分析契合度欄位錯置 | Codex | 實作完成（待部署驗收） | 使用者 ID 改由 `users.id` 動態產生；求職 SQL 改讀 `score AS match_score`，同步更新 API／DB／Mobile UX reference，並補伺服器端安全日誌及回歸測試；Python compileall、直接檢查與 diff check 通過，環境缺 pytest／部分依賴 |
-| 2026-08-14 | FR-72a／FR-74／FR-75 | 探索篩選與定位提示、旅遊行程今日標示、重要日子載入相容修正及目標日期同步 | Codex | 實作完成（待實機／部署驗收） | 新增 `0082` 體態／證照目標的重要日子關聯與既有資料回填；重要日子查詢相容舊 occurrence 區間欄位；目標同步 3 項直接測試、Python compileall、TypeScript typecheck、Expo Web export 與 diff check 通過，環境缺 pytest |
-| 2026-08-14 | FR-73／FR-75 | 收藏地址選填、漸進式近似定位及收藏操作按鈕修復 | Codex | 完成（待實機驗收） | 地址定位依精確門牌、道路、城市逐級放寬；無地址可定位區域；以跨平台確認 Modal 取代 Web 不可靠的 `Alert.alert()`；相關後端 39 項測試、TypeScript typecheck 與 Expo Web export 通過 |
-| 2026-08-14 | FR-73～FR-76a | 收藏清單／旅遊行程／探索地圖／成果展示 Phase 5 實作 | Codex | 完成（待實機驗收／migration 套用） | 新增 `0079`、`0080`、生活探索 API／Service、Mobile 行程／探索／成果畫面、記帳行程關聯、Nominatim 地址定位與測試；TypeScript 與 Expo Web export 通過；正式部署前需設定 Nominatim 識別 User-Agent |
-| 2026-08-14 | FR-75 | 完成 Nominatim 地址轉座標、快取、頻率限制及探索重新定位 | Codex | 完成（待部署驗收） | 新收藏由使用者明確按鈕定位；修改地址會清除舊座標，可選擇重新定位；定位失敗仍可保存至無法定位清單；相關後端測試 34 項通過 |
-| 2026-08-14 | FR-73 | 修復 Mobile App 首頁「新增收藏」Modal 在手機窄螢幕跑版 | Codex | 完成（待實機驗收） | 精簡定案欄位並修正選項換行、捲動區與底部按鈕間距，見 `docs/ADR/debug/mobile-app.md` |
-| 2026-08-14 | FR-73～FR-75 | 收藏地點組合選單、固定捲動區、行程目的地過濾、重要日子同步與探索刪除修正 | Codex | 實作完成（待後端測試／實機驗收） | 新增 `0081` 行程重要日子關聯；行程限單一國家／城市且收藏目的地須一致；行程行事曆顯示節日與重要日子；探索刪除改跨平台確認；TypeScript typecheck、Expo Web export、Python compileall 與 diff check 通過，Python 環境缺 pytest |
+| 2026-08-15 | FR-6h／NFR-19 | 補正 Mobile 日期特例並定案 Telegram 重構採漸進式資料遷移，不整庫刪除重建 | Codex | 已定案／待開發 | Mobile 不限今日範圍包含待辦、重要日子、收藏、旅遊、探索、成果；先做唯讀 Schema／引用盤點，必要時採 V2 表回填切換，未執行 Migration 或刪表 |
+| 2026-08-15 | FR-3～FR-6h／FR-9c～FR-9d／FR-20a／FR-72b／NFR-18 | 定案 Telegram 角色選單、帳號安全、歷史 CRUD、統一功能流程、七日查詢、排程通知與 Phase 6 執行順序 | Codex | 已定案／待開發 | 查詢由最終日期往前推 6 天且可跨多模組；Mobile 仍只異動今日生活紀錄，Telegram 負責歷史回補；隱私遮罩改帳號層雙端共用；草稿保留 30 分鐘、功能模式 10 分鐘 |
+| 2026-08-15 | FR-77／NFR-14～NFR-15 | 定案取消功能的路由／資料表清理，以及 backend／mobile／data／submodules 責任分工 | Codex | 已定案／待開發 | 第一批淘汰 complaints、knowledge_base、conversation_logs、conversation_summaries；Mobile 維持根目錄，Telegram 與 LLM 歸後端，獨立爬蟲歸 data，第一階段不開 schemas；AGENTS 已分列實際現況與 Phase 6 目標 |
+| 2026-08-15 | FR-19k | 定案 Owner 錯誤通知的 Telegram／Email／未送達狀態追蹤與系統錯誤管理呈現 | Codex | 已定案／待開發 | Email 成功不重複通知；雙重失敗只保留錯誤紀錄與 Log；不適用一般使用者推播 |
+| 2026-08-15 | FR-1～FR-4（功能開關） | 將技術分享、求職分析、考試成績改為 Robin／Owner 永久專屬，取消非管理者授權與個別排程設計 | Codex | 已定案／待開發 | 一般使用者 Telegram／Mobile 不顯示入口且後端拒絕存取；Mobile 另需同步角色顯示、移除客訴入口、成果候選跨端狀態及系統錯誤送達狀態；既有資料保留 |
+| 2026-08-15 | FR-19h～FR-20／FR-45／FR-72a／FR-74b／FR-76 | 定案 Telegram 主動推播邊界、重要日子統一提醒、成果候選雙端確認，以及 Owner 異常／康復通知規則 | Codex | 已定案／待開發 | 保留待辦、重要日子、月底月報、預算 50%／80%、低頻非同步結果與三項授權功能推播；取消日常紀錄催促及重複操作成功通知 |
+| 2026-08-15 | FR-6c | 定案 Telegram 功能模式切換、10 分鐘逾時、草稿保護與功能名稱確認入口 | Codex | 已定案／待開發 | 權限檢查套用選單、Callback、文字／語音名稱偵測與模式切換 |
+| 2026-08-15 | FR-4～FR-8／FR-10～FR-12 | 停用持久化家庭／個人知識庫、逐則對話與長記憶，改用靜態人格 Prompt 及 10 分鐘記憶體上下文 | Codex | 已定案／待開發 | 對應路由、流程與三張資料表已納入 FR-77 Phase 6 清理；DROP 前仍須完成依賴、備份與回滾審核 |
+| 2026-08-15 | FR-2／FR-9a／FR-9b | 縮限 Telegram 一般對話為個人資料彈性查詢、內容整理分析及功能導引；正式資料異動一律走選單 | Codex | 已定案／待開發 | 持久化知識庫與對話記憶已另行定案停用，只保留 10 分鐘記憶體上下文 |
+| 2026-08-15 | FR-6a／FR-6b | Telegram 除 `/start` 外全面取消 Slash Commands，所有一般與 Owner 操作改由權限化選單及引導式對話 | Codex | 已定案／待開發 | 不保留舊指令相容期；自然語言／語音功能名稱確認入口仍保留 |
+| 2026-08-15 | FR-5／FR-6／FR-56 | Telegram「使用規則」改為固定模板選單並精簡文案；取消 `/function` 與功能總覽／細節追問 | Codex | 已定案／待開發 | 精簡模板沿用於首次綁定歡迎，刪除條目後重新連號 |
+| 2026-08-15 | | 建立新專案與未來新功能的資料模型準則，並明定本專案既有表不因整理目的刪除重建 | Codex | 完成 | 同步 AGENTS、通用 Template 與 DB Schema Reference；純文件治理，未執行 Migration |
+| 2026-08-15 | FR-2～FR-4／FR-60～FR-63 | Telegram 權限管理與使用者建檔重構：系統產生一次性通關密碼、拆分暱稱／家庭稱謂／授權角色，並移除客訴功能 | Codex | 已定案／待開發 | 客訴入口、API、流程與資料表已納入 FR-77 Phase 6 清理；三項特殊功能改為 Robin 專屬；尚未建立 Migration、API、Bot 流程或測試 |
+| 2026-08-14 | FR-64／FR-65 | 修復重要日子家庭成員查詢與求職分析契合度欄位錯置 | Codex | 完成（已部署驗收） | 使用者 ID 改由 `users.id` 動態產生；求職 SQL 改讀 `score AS match_score`；2026-08-15 Robin 已確認正式環境功能正常 |
+| 2026-08-14 | FR-72a／FR-74／FR-75 | 探索篩選與定位提示、旅遊行程今日標示、重要日子載入相容修正及目標日期同步 | Codex | 完成（已部署驗收） | `0082` 體態／證照目標的重要日子關聯與既有資料回填已部署；2026-08-15 Robin 已確認功能正常 |
+| 2026-08-14 | FR-73／FR-75 | 收藏地址選填、漸進式近似定位及收藏操作按鈕修復 | Codex | 完成（已實機驗收） | 地址定位、區域 fallback 與跨平台確認 Modal 已於 2026-08-15 由 Robin 確認正常 |
+| 2026-08-14 | FR-73～FR-76a | 收藏清單／旅遊行程／探索地圖／成果展示 Phase 5 實作 | Codex | 完成（已部署／實機驗收） | `0079`～`0080`、生活探索 API／Service、Mobile 畫面、記帳關聯與 Nominatim 已部署，2026-08-15 Robin 確認功能正常 |
+| 2026-08-14 | FR-75 | 完成 Nominatim 地址轉座標、快取、頻率限制及探索重新定位 | Codex | 完成（已部署驗收） | 正式環境已設定 Nominatim 識別 User-Agent；2026-08-15 Robin 已確認定位與探索功能正常 |
+| 2026-08-14 | FR-73 | 修復 Mobile App 首頁「新增收藏」Modal 在手機窄螢幕跑版 | Codex | 完成（已實機驗收） | 選項換行、捲動區與底部按鈕間距已於 2026-08-15 由 Robin 確認正常 |
+| 2026-08-14 | FR-73～FR-75 | 收藏地點組合選單、固定捲動區、行程目的地過濾、重要日子同步與探索刪除修正 | Codex | 完成（已部署／實機驗收） | `0081` 已部署；組合選單、固定捲動區、目的地過濾、行程行事曆、重要日子同步與探索刪除已於 2026-08-15 確認正常 |
 | 2026-08-14 | FR-69／FR-70／FR-71 | 正式取消 Mobile App 目標與指標設定、功能開關頁及 Robin 專屬排程設定，從 SPEC 與 Roadmap 移除 | Codex | 已取消 | 既有 Telegram 設定流程不受影響；見 DRAFT 與 mobile-app ADR |
 | 2026-08-14 | | 專案開發治理規則統一：AGENTS／Template 補齊文件生命週期、commit 同步、ADR／Reference 規範，並修正 `.claude/` 指令與代理規則漂移 | Codex | 完成 | 純文件治理；不需程式測試 |
 | 2026-07-28 | | 專案緣起：完成外部服務註冊／API 金鑰申請、Telegram Bot 基礎設定，與 Gemini 腦力激盪收斂 PRD 雛形 | Robin | 完成 | Claude Code 協作開始前 |
@@ -330,4 +343,5 @@ updated: 2026-08-14
 
 | 日期 | 版本／範圍 | 環境 | 狀態 | 驗證 |
 | --- | --- | --- | --- | --- |
+| 2026-08-15 | FR-64／FR-65／FR-72a／FR-73～FR-76a | Render＋Vercel 正式環境／Mobile 實體手機 | 完成 | Robin 已確認重要日子與求職分析載入、收藏／旅遊／探索／成果、Nominatim 定位、相關 migration 與 Mobile 實機操作正常 |
 | 2026-08-12 | Step 4.4～4.5 Mobile App 與後端 API | Render＋Vercel 正式環境 | 完成 | 依當日正式上線里程碑紀錄 |

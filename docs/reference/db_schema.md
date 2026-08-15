@@ -1,9 +1,17 @@
 ---
 title: DB Schema
-updated: 2026-08-14
+updated: 2026-08-15
 ---
 
 # DB Schema
+
+## 後續資料模型準則
+
+- 本專案既有正式資料表不因正規化整理而刪除重建；新需求確有需要時，經 SQL 審核後以向前相容 Migration 新增獨立資料表或必要欄位。
+- 每個功能領域使用自己的資料表；可依正規化拆成多張表並使用 Primary Key／Foreign Key 串接，不再把其他功能設定、排程狀態或紀錄塞入 `users`。
+- 新表必須具備直覺且精簡的名稱，並依商業語意採用資料庫層 `NOT NULL`／`CHECK`／`UNIQUE`／Foreign Key 約束；只有真正必填欄位使用 `NOT NULL`，選填、尚未產生或未知值應保留 `NULL`，不得以占位值冒充。每張表仍須具備完整 `COMMENT ON TABLE` 與逐欄 `COMMENT ON COLUMN`。
+- 時間預設與更新優先由 SQL `DEFAULT now()`／Trigger 維護；可推導的年度、月份與彙總資訊優先在查詢時計算，必要時才使用 Generated Column、Expression Index 或 Materialized View。
+- 本節是未來 Schema 的強制規則，不追溯要求破壞既有資料；完整通用規則見根目錄 `AGENTS.md`「Database Schema Design」。
 
 > 技術參考文件，跟著程式碼異動更新，不是決策紀錄（決策放 `docs/ADR/discuss/`）也不是產品規格（放
 > `docs/specs/SPEC.md`）。內容力求簡述：一行講得完就不要展開成段落，需要脈絡時用連結指回

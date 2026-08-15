@@ -53,3 +53,15 @@
 **決策**：新增獨立於 Telegram 的 Email 備援通知管道，只有 Telegram 送達失敗才觸發；實作細節（`submodules/email`、`smtplib`、`GMAIL_USER`/`GMAIL_PASSWORD` 複用）見 `docs/ADR/discuss/submodules-core.md` ADR-11。
 
 **後果**：這個備援機制的涵蓋範圍僅限「私訊 Robin 的錯誤通知」，不涵蓋一般使用者收到的「生病了」安全用語——一般使用者本來就沒有登記 email，這是 Telegram-only 架構的既有限制。
+
+## 2026-08-15 [標籤：使用者] Email 備援送達狀態與錯誤管理呈現
+
+**狀態**：accepted
+
+**背景**：現行 Telegram 私訊 Robin 失敗時會將同一份錯誤內容寄到 `GMAIL_USER`，但寄信成功後沒有保存送達管道與時間；Telegram 恢復後也不會補發。若 Email 也失敗，只剩伺服器 Log，Robin 無法從系統錯誤管理畫面判斷通知是否曾送達。
+
+**決策**：①Email 本身即為 Robin 的備援通知，成功後不得再發送「Email 已寄出」通知，也不在 Telegram 恢復後重複補發同一錯誤。②每筆 Owner 系統錯誤需記錄最後通知方式 `telegram`／`email`／`undelivered` 及最後通知時間。③「系統錯誤管理」須顯示通知方式與送達狀態；Email 成功時標示「已透過 Email 通知」。④Telegram 與 Email 都失敗時標示「未送達」，仍保留錯誤內容供 Owner 之後查看。⑤Email 備援只處理 Robin 專屬系統錯誤，不擴張為一般使用者通知備援。
+
+**理由**：保存通知結果可以確認重要錯誤是否成功送達，又不需要增加第三種通知管道或產生「通知通知已寄出」的循環。
+
+**後果**：實作時需以向前 Migration 擴充 `system_error_reports` 的通知管道與時間欄位，更新錯誤通知 Service、Owner 系統錯誤管理選單、API／DB Reference 與成功、Email fallback、雙重失敗測試。現行 `_send_email_fallback()` 尚未回傳或寫入成功狀態，在完成上述項目前不得宣稱已具備送達追蹤。

@@ -154,6 +154,18 @@ RED（寫失敗的測試）
 4. 安全優先（OWASP Top 10）
 5. 每次實作交代影響範圍和測試狀態
 
+## Database Schema Design（新專案與未來新功能）
+
+1. 每個功能領域使用獨立資料表，不得把不同功能的設定、狀態或紀錄混入 `users`；一個功能可依正規化需要拆成多張表，透過主鍵與外鍵關聯，不得為了追求「一功能一張表」而把不同實體硬塞在同一張表。
+2. 每張表必須有明確的 `PRIMARY KEY`；跨表關聯必須使用具型別一致性的 `FOREIGN KEY`，並依刪除語意明確指定 `ON DELETE` 行為，不得只靠應用程式自行維護關聯完整性。
+3. 表名與欄位名稱必須直覺、易讀、簡短且具語意，避免不明縮寫、功能無關欄位與同義欄位重複存在。
+4. 能由資料庫阻擋的髒資料不得只依賴程式碼驗證：依商業語意選用 `NOT NULL`、`CHECK`、`UNIQUE`、複合唯一約束、外鍵及必要索引。只有真正必填、建立當下必須存在的欄位才使用 `NOT NULL`；選填、尚未產生或「未知」本身有意義的欄位應允許 `NULL`，不得用空字串、`0`、假日期或其他占位值冒充。唯一性規則必須對應真實商業鍵，不能只依賴主鍵避免重複資料。
+5. 每張表都必須使用 `COMMENT ON TABLE` 說明用途，並以 `COMMENT ON COLUMN` 說明每個欄位用途；類型／狀態欄位需列出合法值與語意，外鍵欄位需說明對應資料表。
+6. `created_at` 應由 SQL 使用 `DEFAULT now()` 產生；`updated_at` 應由資料庫 Trigger 或其他資料庫層機制維護。不得由一般應用程式碼自行拼接目前時間作為主要正確性來源。
+7. `year`、`month`、彙總值或其他可由既有欄位推導的資料，原則上不重複儲存；查詢可直接計算時使用 SQL 運算／`EXTRACT`，確有索引、效能或約束需求時才使用 Generated Column、Expression Index 或 Materialized View，並在 Reference 說明理由。
+8. Schema 設計優先使用資料庫原生能力處理資料完整性、預設值、衍生值、唯一性與關聯，不得把可由 SQL 穩定保證的規則硬寫成分散的應用程式邏輯。
+9. Migration 必須同步 Model／Repository、測試與 DB Schema Reference；SQL 需先呈現影響範圍、資料轉換、索引／鎖表風險與回滾策略並取得 Robin 核准。
+
 ---
 
 ## SDD + TDD 整合流程
@@ -298,13 +310,13 @@ RED（寫失敗的測試）
 
 ### 目錄結構慣例（實際現況）
 
-依個人偏好設定的六層選單對照，這個專案目前只用到 backend／mobile／submodules／deploy 四層（沒有獨立 `frontend/`、`data/`）：
+目前程式仍維持根目錄 `main.py`、`src/`、`mobile/` 與 `submodules/`；Phase 6 的目標目錄已定案，但尚未完成實體搬移。執行任務時必須依下表辨識現況，不得因目標架構已定案就引用尚不存在的路徑。
 
 | 資料夾 | 對應六層選單 | 現況 |
 | --- | --- | --- |
 | `src/api/` | `backend/src/api/` | Flask HTTP 路由層，符合規範 |
 | `src/services/` | `backend/src/services/` | 商業邏輯層，符合規範，但只涵蓋部分較新功能 |
-| `src/bot/` | `backend/src/api/` + `services/`（混合，**已知技術債**） | Telegram Bot 路由與指令處理，34 個檔案混雜路由/商業邏輯，尚未拆出 `repositories/`／`schemas/`／`agents/`／`lib/`／`utils/`／`config/`；`commands.py`（210KB）、`router.py`（54KB）是最大兩個待拆檔案；重構決策見 `docs/ADR/discuss/robinson.md` |
+| `src/bot/` | `backend/api/telegram/` + `backend/services/`（混合，**已知技術債**） | Telegram Bot 路由、指令、商業邏輯、Gemini 與部分資料存取混雜；Phase 6 將依責任拆至 `api/telegram/`、`services/`、`repositories/`、`agents/`、`jobs/` 等位置；不得再擴充巨型 `commands.py` 或 `router.py` |
 | `src/migrations/` | `backend/src/repositories/` 的一部分 | 資料庫 schema migration SQL 檔案 |
 | `mobile/` | `mobile/` | Expo / React Native App |
 | `submodules/` | `submodules/` | 已符合規範：`calendar/`、`cloudsql/`、`email/`、`gdrive/`、`job104/`、`llm/`、`newsfeed/`、`retry/`、`telegram/`、`voice/`、`youtube/`，每個都有獨立 `client.py`／`README.md`／`.env.example`／`requirements.txt`，命名對應實際基礎設施（不是 GCP 服務名） |
@@ -314,10 +326,30 @@ RED（寫失敗的測試）
 | `docs/reference/` | — | API／DB Schema 等技術參考文件 |
 | `docs/templates/` | — | 可攜式母版（`AGENTS-TEMPLATE.md` 等），供未來新專案複製使用 |
 
-尚未開的層：`frontend/`（沒有網頁前端）、`data/`（沒有獨立 ETL/Pipeline，分析邏輯算在 `src/services/`）、`agents/`（Gemini 相關 prompt/tool 目前混在 `src/bot/`，重構時要獨立出來）。
+尚未實體建立的層：`backend/`、`data/` 與 `backend/agents/`。目前 Gemini Prompt／Tool 仍混在 `src/bot/`；104 職缺、技術新聞／RSS、YouTube 等資料收集也仍與後端排程耦合。
+
+### Phase 6 目標目錄（已定案／待遷移）
+
+| 目標資料夾 | 責任 |
+| --- | --- |
+| `backend/` | 現有 `main.py` 與 `src/` 的最終歸屬；包含 Mobile HTTP API、Telegram 輸入介面、商業服務、Repository、Gemini Agent、背景 Job、驗證、設定與 Migration |
+| `mobile/` | 維持根目錄平級，不歸入後端；負責 Expo／React Native App |
+| `data/` | 只放可獨立執行的資料收集、解析、清洗、標準化與去重 Pipeline，例如 104、技術新聞／RSS、YouTube；不得放 Telegram 或即時 Gemini 對話 |
+| `submodules/` | 維持根目錄平級，只放跨專案可重用的外部服務 Client，不放專案商業流程 |
+
+後端依賴固定為 `api → services → repositories → DB／外部服務`。Telegram Webhook／選單／Callback 歸 `backend/api/telegram/`；Gemini Prompt／Tool 歸 `backend/agents/`；排程觸發、權限、寫入與推播規則歸 `backend/jobs/`／`services/`。第一階段不建立空的 `schemas/`，欄位驗證依功能放入 `validators/`；只有真的出現跨 API 共用 DTO／序列化需求才新增 Schema 層。
+
+目錄遷移採小步驟進行，不得把取消功能清理、資料表 DROP、`src/bot/` 拆層、根目錄搬移與部署入口切換合成一次不可回退的大改版。正式依據見 `docs/specs/SPEC.md` FR-77／NFR-14～NFR-15 與 `docs/ADR/discuss/robinson.md` 2026-08-15 條目。
 
 ### 覆蓋率與安全要求微調
 
 - 覆蓋率要求維持預設：80%+／認證與安全邏輯（`src/bot/auth.py`、App 登入 `app_auth.py`）100%
 - 敏感資料處理：`.env`／`bcrypt` 雜湊密碼／`PyJWT` token 一律不得 log 明文，錯誤訊息不得洩漏含 token 的完整 URL
 - 額外的 coding convention：<專案特有規範>
+
+### 既有資料表處理原則
+
+- 本專案既有資料表不得只因整理、正規化或美化目的刪除重建；但功能已正式取消且程式、API、排程、測試與外鍵均不再依賴時，必須依 FR-77 以新的向前 Migration 移除不再使用的資料表或欄位。
+- 第一批正式淘汰範圍為 `complaints`、`knowledge_base`、`conversation_logs`、`conversation_summaries`；舊 Migration 保留且不得改寫。執行 DROP 前必須列出資料量、依賴、備份／匯出選項與回滾方式，並再次取得 Robin 明確確認。
+- 正式新需求若確實需要資料結構，仍可在 SQL 審核通過後以向前相容 Migration 新增獨立資料表或必要欄位；不得再為了省事把其他功能欄位繼續塞進 `users`。
+- 上述 Database Schema Design 是下一個新專案及本專案未來新功能的強制準則；既有正式資料只有在功能取消、影響盤點與破壞性操作確認完成後才可移除。

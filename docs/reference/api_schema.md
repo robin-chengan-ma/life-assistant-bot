@@ -18,7 +18,7 @@ updated: 2026-08-14
 > 「羅賓森 Mobile App」區塊，其餘功能全部透過 Telegram 對話觸發，不是真正的 HTTP REST 端點；
 > 只有 Mobile App 對應的 `src/api/` 底下 Flask Blueprint 是對外 HTTP API。② Mobile App 的
 > `app_collections.py`／`app_life_exploration.py` 對應 FR-73～FR-76a；`app_important_days.py`
-> （重要日子設定）已上線但規格仍記錄於 `docs/specs/DRAFT.md`「待討論」區塊，故只有重要日子路由不掛 FR 編號。
+> （重要日子設定）已上線並納入 FR-72a／FR-74b。自訂重要日子的通用 Telegram 發送器尚未實作，現行 API 只負責管理資料與通知設定。
 
 ## 平台核心入口
 
@@ -273,15 +273,14 @@ updated: 2026-08-14
 
 ### 重要日子設定（`src/api/app_important_days.py`，url_prefix `/api/app/important-days`）
 
-> App 端管理介面與資料結構已完成，但 Telegram 提醒推播依當時指示不屬於該輪開發範圍，此功能整體
-> 尚未收錄進 `docs/specs/SPEC.md`，見 `docs/specs/DRAFT.md`「待討論」區塊 2026-08-12 條目。
+> App 端管理介面與資料結構已完成；Telegram 提醒已正式納入 FR-72a／FR-74b，但通用發送器仍屬待開發，不能因事件已寫入 `important_days` 就視為通知已送達。
 
 | 項目 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `GET /api/app/important-days` | 已實作（App 端，規格未定案）（`list_important_days()`） | 無（見 `docs/specs/DRAFT.md` 待討論） | 查詢個人設定的重要日子清單，並附家人使用者名單供選擇對象；名單的 `user_id` 不存於 `users` 表，而是依 FR-65 由 `users.id` 動態格式化為 `user01`、`user10` |
-| `POST /api/app/important-days` | 已實作（App 端，規格未定案）（`create_important_day()`） | 無（見 `docs/specs/DRAFT.md` 待討論） | 新增一筆重要日子設定 |
-| `PATCH /api/app/important-days/<id>` | 已實作（App 端，規格未定案）（`update_important_day()`） | 無（見 `docs/specs/DRAFT.md` 待討論） | 更新一筆重要日子設定 |
-| `DELETE /api/app/important-days/<id>` | 已實作（App 端，規格未定案）（`delete_important_day()`） | 無（見 `docs/specs/DRAFT.md` 待討論） | 刪除一筆重要日子設定 |
+| `GET /api/app/important-days` | 已實作（`list_important_days()`） | FR-72a／FR-74b | 查詢個人設定的重要日子清單，並附家人使用者名單供選擇對象；名單的 `user_id` 不存於 `users` 表，而是依 FR-65 由 `users.id` 動態格式化為 `user01`、`user10` |
+| `POST /api/app/important-days` | 已實作（`create_important_day()`） | FR-72a／FR-74b | 新增一筆重要日子設定 |
+| `PATCH /api/app/important-days/<id>` | 已實作（`update_important_day()`） | FR-72a／FR-74b | 更新一筆重要日子設定 |
+| `DELETE /api/app/important-days/<id>` | 已實作（`delete_important_day()`） | FR-72a／FR-74b | 刪除一筆重要日子設定 |
 
 ## 未分類
 
