@@ -277,6 +277,12 @@ class FakeCloudSQLClient:
             return row.get("background") is not None
         if where == "url = %s":
             return row.get("url") == params[0]
+        # 2026-08-15（Phase 6 第一批，見 SPEC.md FR-4／FR-4b／FR-4c）：權限管理建立使用者、
+        # 通關密碼撞號檢查與 Owner 重發通關密碼的查詢條件。
+        if where == "code = %s":
+            return row.get("code") == params[0]
+        if where == "user_id = %s AND is_used = FALSE":
+            return row.get("user_id") == params[0] and row.get("is_used") is False
 
         raise NotImplementedError(f"FakeCloudSQLClient 尚未支援這個 where 條件：{where}")
 

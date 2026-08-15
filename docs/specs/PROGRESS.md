@@ -24,7 +24,8 @@ updated: 2026-08-15
 | 2026-08-15 | FR-6a／FR-6b | Telegram 除 `/start` 外全面取消 Slash Commands，所有一般與 Owner 操作改由權限化選單及引導式對話 | Codex | 已定案／待開發 | 不保留舊指令相容期；自然語言／語音功能名稱確認入口仍保留 |
 | 2026-08-15 | FR-5／FR-6／FR-56 | Telegram「使用規則」改為固定模板選單並精簡文案；取消 `/function` 與功能總覽／細節追問 | Codex | 已定案／待開發 | 精簡模板沿用於首次綁定歡迎，刪除條目後重新連號 |
 | 2026-08-15 | | 建立新專案與未來新功能的資料模型準則，並明定本專案既有表不因整理目的刪除重建 | Codex | 完成 | 同步 AGENTS、通用 Template 與 DB Schema Reference；純文件治理，未執行 Migration |
-| 2026-08-15 | FR-2～FR-4／FR-60～FR-63 | Telegram 權限管理與使用者建檔重構：系統產生一次性通關密碼、拆分暱稱／家庭稱謂／授權角色，並移除客訴功能 | Codex | 已定案／待開發 | 客訴入口、API、流程與資料表已納入 FR-77 Phase 6 清理；三項特殊功能改為 Robin 專屬；尚未建立 Migration、API、Bot 流程或測試 |
+| 2026-08-15 | FR-2～FR-4／FR-4a～FR-4d | Phase 6 第一批（認證／使用者綁定）：新增 `nickname`／`family_title`／`is_active`、通關密碼 24 小時到期與 5 次錯誤鎖定 30 分鐘、`create_user_and_invite()`／`resend_passcode()`／`set_user_active()` | Claude | 實作完成（待部署驗收） | 範圍刻意只做後端資料模型與核心驗證邏輯，Owner「權限管理」選單化流程延後到下一批（Telegram 選單與狀態機）一起做，避免與選單重構混在同一不可回退批次；`try_bind_invite_code()` 對外行為相容，`router.py` 呼叫端未變動；鎖定計數存 process 記憶體不落地（理由見 db_schema.md 0083 條目）；新增 `tests/bot/test_auth.py` 27 項測試全數通過，環境缺 pytest／psycopg2 待你本機或 CI 覆核 |
+| 2026-08-15 | FR-60～FR-63 | 原「使用者建檔與移除客訴」條目拆分：客訴入口、API、流程與資料表清理保留在 FR-77 Phase 6 統一清理範圍，不併入本批 | Claude | 待開發 | 見 FR-77 那筆任務 |
 | 2026-08-14 | FR-64／FR-65 | 修復重要日子家庭成員查詢與求職分析契合度欄位錯置 | Codex | 完成（已部署驗收） | 使用者 ID 改由 `users.id` 動態產生；求職 SQL 改讀 `score AS match_score`；2026-08-15 Robin 已確認正式環境功能正常 |
 | 2026-08-14 | FR-72a／FR-74／FR-75 | 探索篩選與定位提示、旅遊行程今日標示、重要日子載入相容修正及目標日期同步 | Codex | 完成（已部署驗收） | `0082` 體態／證照目標的重要日子關聯與既有資料回填已部署；2026-08-15 Robin 已確認功能正常 |
 | 2026-08-14 | FR-73／FR-75 | 收藏地址選填、漸進式近似定位及收藏操作按鈕修復 | Codex | 完成（已實機驗收） | 地址定位、區域 fallback 與跨平台確認 Modal 已於 2026-08-15 由 Robin 確認正常 |

@@ -84,14 +84,19 @@ CREATE TABLE users (
     years_of_experience NUMERIC(4,1),                                -- 0053 追加
     expected_salary_min INT,                                         -- 0053 追加
     expected_salary_max INT,                                         -- 0053 追加
-    job_search_last_run_on DATE                                      -- 0053 追加
+    job_search_last_run_on DATE,                                     -- 0053 追加
+    -- 0083 追加：
+    nickname TEXT,                                                   -- FR-4a 暱稱，與家庭稱謂、授權身分分開保存
+    family_title TEXT,                                               -- FR-4a 家庭稱謂（例如「爸爸」），只作顯示用途
+    is_active BOOLEAN NOT NULL DEFAULT TRUE                          -- FR-4d 帳號是否啟用（停用不刪除帳號與資料）
 );
 ```
-`src/migrations/0001_create_users_table.sql`（後續 12 個 migration 陸續 `ALTER TABLE` 新增，見上方註解編號）
+`src/migrations/0001_create_users_table.sql`（後續多個 migration 陸續 `ALTER TABLE` 新增，見上方註解編號；完整清單見各 migration 檔案）
 
 - `telegram_user_id` 允許 NULL：家人設定通關密碼當下就先建立記錄，綁定成功才補上；Postgres `UNIQUE` 允許多筆 NULL 並存
 - `is_owner` 由程式依 `telegram_user_id` 是否等於 `ROBIN_TELEGRAM_TOKEN` 判斷寫入
 - 後續各模組陸續在此表新增個人化設定欄位，皆以「新增可選欄位、不動既有結構」為原則；記帳（monthly_budget／三個去重欄位）對應 FR-41～FR-44a，體態（height_cm／waist_cm）對應 FR-46，生日對應 FR-53，TOEIC（toeic_weekly_question_count／toeic_pipeline_last_run_on）對應 Step 3.2，證照作答提醒／YouTube 週推播去重對應 FR-28／FR-59a，求職五個履歷欄位對應 FR-36；逐欄 `COMMENT ON` 與核准脈絡見對應 migration 檔案
+- **2026-08-15（0083，Phase 6 第一批，FR-4a／FR-4d）**：`role` 欄位過去混用「Robin 標記」與「家人稱謂」兩種語意，新增 `nickname`／`family_title` 分開保存，`role` 保留不刪除（向前相容，尚未有 DROP 排程）；新增 `is_active` 供 Owner 停用／恢復使用者，預設 `TRUE`，停用時程式一併清空 `refresh_token_hash`／`refresh_token_expires_at`（沿用 0062 既有欄位）撤銷 Mobile 存取
 
 ```sql
 CREATE TABLE invite_codes (
@@ -100,11 +105,13 @@ CREATE TABLE invite_codes (
     is_used BOOLEAN NOT NULL DEFAULT FALSE,
     user_id BIGINT NOT NULL REFERENCES users(id),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at TIMESTAMPTZ NOT NULL                                  -- 0083 追加，FR-4b：建立起 24 小時有效
 );
 ```
-`src/migrations/0002_create_invite_codes_table.sql`
+`src/migrations/0002_create_invite_codes_table.sql`、`src/migrations/0083_restructure_user_identity_and_active_status.sql`
 
+- **2026-08-15（0083，FR-4b／FR-4c）**：新增 `expires_at`，歷史未使用密碼一併補上（建立時間 +24 小時）再設為 `NOT NULL`。連續輸入錯誤 5 次鎖定 30 分鐘的計數**不落地存資料庫**，改在 `src/bot/auth.py` 以 process 記憶體字典（key 為 `telegram_user_id`）保存，理由：綁定成功前系統還不知道這個 Telegram 使用者對應哪筆 `users` 記錄，無法把鎖定狀態掛在 `invite_codes` 或 `users` 上；比照既有 NFR-2「Owner 設定對話流狀態存 process 記憶體」的簡化原則，服務重啟會遺失鎖定計數，刻意簡化
 - 不重複存 `role`（已在 `users.role`，透過 `user_id` 查得到）
 - `code UNIQUE` 避免重複；`is_used`＋`updated_at` 記錄是否用過、何時變更，符合一次性使用規則
 </details>
