@@ -524,8 +524,18 @@ def handle_set_invite_codes_step(
 
     if step == "awaiting_code":
         role = state["role"]
-        user_id = db.insert("users", {"telegram_user_id": None, "role": role, "is_owner": False})
-        db.insert("invite_codes", {"code": text, "is_used": False, "user_id": user_id})
+        user_id = db.insert(
+            "users",
+            {"telegram_user_id": None, "role": role, "family_title": role, "is_owner": False, "is_active": True},
+        )
+        # FR-4b（0083）：invite_codes.expires_at 已改為 NOT NULL，這條舊指令流程也要補上，
+        # 否則 Robin 手動輸入密碼這個既有流程會直接因違反 NOT NULL 而寫入失敗。
+        db.insert("invite_codes", {
+            "code": text,
+            "is_used": False,
+            "user_id": user_id,
+            "expires_at": datetime.now(timezone.utc) + auth.PASSCODE_TTL,
+        })
 
         state_store.set(telegram_user_id, {"flow": "set_invite_codes", "step": "awaiting_role"})
         return "已寫入！請問還有其他家人要設定嗎？"
