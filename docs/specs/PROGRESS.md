@@ -2,6 +2,7 @@
 updated: 2026-08-16
 ---
 
+
 # 開發進度
 
 > 本檔案整併自兩份舊紀錄：`docs/specs/_archive/robinson/PROGRESS.md`（Claude Code 協作的產品階段里程碑）與 `docs/specs/_archive/codex.md`（Codex 開發異動紀錄，內容集中在 Mobile App）。
@@ -18,7 +19,8 @@ updated: 2026-08-16
 | 2026-08-15 | FR-3／FR-4／FR-4a～FR-4d／FR-5／FR-6a～FR-6e | Phase 6 第二批 2a 實作完成：Telegram 按鈕基礎設施（`reply_markup`／`answer_callback_query`）、`webhook.py` callback_query 解析與分派、`menu.py` 選單骨架、`/start` 正式實作、Owner 權限管理選單化並移除 `/set_invite_codes` | Claude | 完成（已部署／實機驗收） | 完整設計內容見 `docs/ADR/discuss/robinson.md` 2026-08-15「Phase 6 第二批 2a 實作計畫」及「開工完成」補述；主選單其餘 7 項（日常紀錄／資料查詢／待辦事項／重要日子／收藏與旅遊／成果展示／排程設定）2a 先回覆「功能開發中」，實際邏輯留給 2b 起逐批接上；新增 `tests/bot/test_menu.py`、擴充 `test_router.py`／`test_commands.py`／`test_webhook.py`／`tests/submodules/telegram/test_client.py`，Claude 沙箱 1716 項全過，Robin 本機 1750 項通過／3 項失敗（`test_toeic.py` 因本機未裝 `ffmpeg`，屬既有環境問題，與本批無關）；commit `f623566`，8/15 Robin 已推版；8/15 Robin 已完成實機驗收（/start 首綁流程、主選單 Owner／非 Owner 差異、開發中項目返回按鈕、權限管理建立／停用／恢復／重發密碼、舊指令 /set_invite_codes 已失效） |
 | 2026-08-15 | FR-3～FR-6h | 定案 Phase 6 第二批 2b 起子批次分組順序（風險由低到高，資料查詢與排程設定殿後） | Claude | 已定案／待開發 | 順序：①重要日子②日常紀錄－心情、運動③收藏與旅遊④成果展示⑤待辦事項⑥日常紀錄－飲食⑦日常紀錄－體態⑧日常紀錄－記帳⑨資料查詢（FR-9c/9d）⑩排程設定；決策記錄見 `docs/ADR/discuss/robinson.md` 2026-08-15「Phase 6 第二批 2b 起子批次分組順序」；僅定案順序，未定案各批次實作細節與起始日期，各批仍需個別提出 SDD 實作計畫並等待確認 |
 | 2026-08-15 | FR-6e／FR-6h／FR-72a | Phase 6 第二批 2b（重要日子）實作完成：新檔 `src/bot/important_days.py` 複用既有 `AppImportantDayService`，`router.py` 新增 `menu:important_days`／`important_days:*` callback 分派與對應 flow 分支，`menu.py` 移出開發中名單 | Claude | 完成（已部署／實機驗收） | 完整設計內容見 `docs/ADR/discuss/robinson.md` 2026-08-15「Phase 6 第二批 2b（重要日子）實作計畫」及「開工完成」補述；範圍為 CRUD＋清單顯示，FR-72a 主動提醒發送器留給後續「排程設定」批次；新增 `tests/bot/test_important_days.py`（13 項，獨立 FakeDatabase）；擴充 `tests/bot/conftest.py` 共用假 DB 與 `tests/bot/test_router.py`（4 項整合測試）；`webhook.py` 未異動（2a 的通用 callback 機制可直接沿用）；8/16 Robin 本機執行完整 `python3 -m pytest` 全數通過，並完成 Telegram 實機驗收（新增／清單／編輯／刪除／非 Owner 一般使用者皆正常）；commit `f921230` |
-| 2026-08-16 | FR-47／FR-49／FR-50 | Phase 6 第二批 2c（日常紀錄－心情、運動）實作完成：`menu.py` 新增「日常紀錄」子選單並移出開發中名單，`router.py`／`commands.py` 心情、運動全面改選單觸發（移除舊 Slash Command／文字觸發詞），兩模組皆補上「摘要→二次確認」關卡，查詢清單改按鈕式編輯／刪除 | Claude | 完成（沙箱測試通過，待 Robin 本機驗證與實機驗收） | 完整設計內容見 `docs/ADR/discuss/robinson.md` 2026-08-16「Phase 6 第二批 2c（日常紀錄－心情、運動）實作計畫」及「開工完成」補述；同步移除 `_MOOD_ACTION_CLASSIFY_PROMPT`／`_MOOD_DELETE_CONFIRM_PROMPT`／`_EXERCISE_ACTION_CLASSIFY_PROMPT`／`_EXERCISE_DELETE_CONFIRM_PROMPT` 等 LLM 分類 Prompt，改用明確按鈕；改寫 `tests/bot/test_router.py` 心情 4 項整合測試為按鈕驅動，新增運動 5 項與 `daily_log` 子選單 2 項整合測試，更新 `tests/bot/test_menu.py` 對應斷言；Claude 沙箱還原完整依賴後執行 `tests/` 全數 155 項通過；文件複查發現 FR-47／FR-49 條文原寫死舊指令名稱，已同步更新 `docs/specs/SPEC.md` 對應段落（詳見 ADR「開工完成（2026-08-16 補正）」）；`docs/specs/DRAFT.md`／`docs/reference/` 確認不需異動；尚待 Robin 本機執行 `python3 -m pytest`、commit／push 與 Telegram 實機驗收 |
+| 2026-08-16 | FR-47／FR-49／FR-50 | Phase 6 第二批 2c（日常紀錄－心情、運動）實作完成：`menu.py` 新增「日常紀錄」子選單並移出開發中名單，`router.py`／`commands.py` 心情、運動全面改選單觸發（移除舊 Slash Command／文字觸發詞），兩模組皆補上「摘要→二次確認」關卡，查詢清單改按鈕式編輯／刪除 | Claude | 完成（已部署／實機驗收） | 完整設計內容見 `docs/ADR/discuss/robinson.md` 2026-08-16「Phase 6 第二批 2c（日常紀錄－心情、運動）實作計畫」及「開工完成」補述；同步移除 `_MOOD_ACTION_CLASSIFY_PROMPT`／`_MOOD_DELETE_CONFIRM_PROMPT`／`_EXERCISE_ACTION_CLASSIFY_PROMPT`／`_EXERCISE_DELETE_CONFIRM_PROMPT` 等 LLM 分類 Prompt，改用明確按鈕；改寫 `tests/bot/test_router.py` 心情 4 項整合測試為按鈕驅動，新增運動 5 項與 `daily_log` 子選單 2 項整合測試，更新 `tests/bot/test_menu.py` 對應斷言；Claude 沙箱還原完整依賴後執行 `tests/` 全數 155 項通過；文件複查發現 FR-47／FR-49 條文原寫死舊指令名稱，已同步更新 `docs/specs/SPEC.md` 對應段落（詳見 ADR「開工完成（2026-08-16 補正）」）；`docs/specs/DRAFT.md`／`docs/reference/` 確認不需異動；commit `8d0ba92`，8/16 Robin 已推版（`git log origin/main` 已確認），並完成 Telegram 實機驗收 |
+| 2026-08-16 | FR-6e／FR-6h／FR-73～FR-74a | Phase 6 第二批 2d（收藏與旅遊）實作完成：新檔 `src/bot/collections.py`／`src/bot/trips.py` 複用既有 `AppCollectionService`／`AppLifeExplorationService`，收藏與旅遊一次做完（比照 2c 決策，不拆兩個子批次）；地址定位比照 Mobile 規則，改成「📍 定位地址／⏭ 略過定位」按鈕才呼叫 Nominatim；行程新增支援交通／住宿／飲食／門票／購物／其他六類逐一輸入預估支出；`menu.py` 移出開發中名單，`router.py` 新增 `collections:*`／`trips:*` callback 分派與 `collection`／`collection_delete_confirm`／`trip`／`trip_delete_confirm`／`trip_complete_select` 五個 flow 分支 | Claude | 完成（**尚待 Robin 本機 commit／push／實機驗收**） | 完整設計內容見 `docs/ADR/discuss/robinson.md` 2026-08-16「Phase 6 第二批 2d（收藏與旅遊）實作計畫」及「開工完成」補述；新增 `tests/bot/test_collections.py`（10 項）、`tests/bot/test_trips.py`（8 項），更新 `tests/bot/test_menu.py` 一項斷言，皆用獨立 `FakeDatabase`（服務層驗證邏輯已在 `tests/services/test_app_collections.py`／`test_app_life_exploration.py` 覆蓋，這裡只測 Telegram 流程）；**本批 Claude 沙箱未執行 `pytest`**（與 2b／2c 不同，這次連輕量測試都還沒在沙箱跑過），也**未擴充 `tests/bot/conftest.py`／`tests/bot/test_router.py` 整合測試**，待 Robin 本機執行完整 `python3 -m pytest` 驗證；`docs/specs/SPEC.md`（FR-6e／FR-73～FR-74a 為既有已定案規格，本批純實作）／`docs/reference/api_schema.md`／`db_schema.md`（沒有新增 HTTP 路由或資料表異動）／`docs/specs/DRAFT.md`（無相關項目）確認不需更新 |
 | 2026-08-15 | FR-77／NFR-14～NFR-15 | 定案取消功能的路由／資料表清理，以及 backend／mobile／data／submodules 責任分工 | Codex | 已定案／待開發 | 第一批淘汰 complaints、knowledge_base、conversation_logs、conversation_summaries；Mobile 維持根目錄，Telegram 與 LLM 歸後端，獨立爬蟲歸 data，第一階段不開 schemas；AGENTS 已分列實際現況與 Phase 6 目標 |
 | 2026-08-15 | FR-19k | 定案 Owner 錯誤通知的 Telegram／Email／未送達狀態追蹤與系統錯誤管理呈現 | Codex | 已定案／待開發 | Email 成功不重複通知；雙重失敗只保留錯誤紀錄與 Log；不適用一般使用者推播 |
 | 2026-08-15 | FR-1～FR-4（功能開關） | 將技術分享、求職分析、考試成績改為 Robin／Owner 永久專屬，取消非管理者授權與個別排程設計 | Codex | 已定案／待開發 | 一般使用者 Telegram／Mobile 不顯示入口且後端拒絕存取；Mobile 另需同步角色顯示、移除客訴入口、成果候選跨端狀態及系統錯誤送達狀態；既有資料保留 |
@@ -204,10 +206,11 @@ updated: 2026-08-16
 
 ## Commit 紀錄
 
-> 本表只代表本地 Git commit，不等同於已 push 或已部署。資料來源為 `git log --format="%h|%ad|%s" --date=short`（截至 2026-08-16，本次 PROGRESS 同步 commit 完成後共 137 筆）。git author 全部是 Robin 本人，因此「開發者」欄依 commit 內容與工作階段判斷。
+> 本表只代表本地 Git commit，不等同於已 push 或已部署。資料來源為 `git log --format="%h|%ad|%s" --date=short`（截至 2026-08-16，本次 PROGRESS 同步 commit 完成後共 138 筆）。git author 全部是 Robin 本人，因此「開發者」欄依 commit 內容與工作階段判斷。
 
 | 日期 | 版本 / commit | 異動摘要 | 開發者 |
 | --- | --- | --- | --- |
+| 2026-08-16 | `8d0ba92` | Phase 6 第二批 2c：Telegram 日常紀錄心情、運動全面改選單觸發 | Claude |
 | 2026-08-16 | `f921230` | Phase 6 第二批 2b：Telegram 重要日子選單流程（新增／編輯／刪除／清單） | Claude |
 | 2026-08-15 | `f623566` | Phase 6 第二批 2a：Telegram 按鈕選單與 /start 認證流程 | Claude |
 | 2026-08-15 | `996c603` | 修正 /set_invite_codes 因 0083 NOT NULL 迴歸 | Claude |
@@ -338,6 +341,7 @@ updated: 2026-08-16
 
 | 日期 | Branch／版本 | 遠端 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- |
+| 2026-08-16 | `main`／`8d0ba92` | GitHub | 完成 | 8/16 Robin 已推版（`git log origin/main` 已確認）；同日完成 Telegram 實機驗收 |
 | 2026-08-16 | `main`／`479fae6` | GitHub | 完成 | 8/16 Robin 已推版（含 `f921230`／`479fae6` 兩筆，`git log origin/main` 已確認）；同日完成 Telegram 實機驗收 |
 | 2026-08-15 | `main`／`f623566` | GitHub | 完成 | 8/15 Robin 已推版 |
 | 2026-08-15 | `main`／`996c603` | GitHub | 完成 | 8/15 Robin 已推版 |
@@ -359,6 +363,7 @@ updated: 2026-08-16
 
 | 日期 | 版本／範圍 | 環境 | 狀態 | 驗證 |
 | --- | --- | --- | --- | --- |
+| 2026-08-16 | FR-47／FR-49／FR-50（Phase 6 第二批 2c，commit `8d0ba92`） | Render 正式環境／Telegram 實機 | 完成 | Robin 已確認並完成實機驗收 |
 | 2026-08-15 | FR-3／FR-4／FR-4a～FR-4d／FR-5／FR-6a～FR-6e（Phase 6 第二批 2a，commit `f623566`） | Render 正式環境／Telegram 實機 | 完成 | Robin 已確認 `/start` 首綁與重複顯示主選單、Owner／非 Owner 按鈕差異、開發中項目回主選單按鈕、權限管理建立／停用／恢復／重發密碼四項操作、`/set_invite_codes` 已失效 |
 | 2026-08-15 | FR-2～FR-4a～FR-4d（Phase 6 第一批，Migration 0083） | Render 正式環境／Telegram 實機 | 完成 | Robin 已確認 `/set_invite_codes` 寫入正常、家人 Telegram 帳號輸入通關密碼綁定成功 |
 | 2026-08-15 | FR-64／FR-65／FR-72a／FR-73～FR-76a | Render＋Vercel 正式環境／Mobile 實體手機 | 完成 | Robin 已確認重要日子與求職分析載入、收藏／旅遊／探索／成果、Nominatim 定位、相關 migration 與 Mobile 實機操作正常 |

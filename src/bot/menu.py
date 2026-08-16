@@ -16,6 +16,12 @@
 接上真正邏輯，改回覆第二層子選單（見 `DAILY_LOG_MENU_ITEMS`）；子選單裡的 `mood`／
 `exercise` 這批接上 `commands.py` 既有心情／運動流程（全面改選單觸發、移除舊文字觸發詞，
 並補上摘要→二次確認），`diet`／`body`／`finance` 三項維持「功能開發中」。
+
+2026-08-16（Phase 6 第二批 2d，見 docs/ADR/discuss/robinson.md）：`collections`
+（收藏與旅遊）接上 `src/bot/collections.py`／`src/bot/trips.py` 的真正邏輯，從
+`_NOT_YET_IMPLEMENTED_KEYS` 移除；子選單（收藏清單／新增收藏／旅遊行程）由
+`collections.start_collections_menu()` 直接組出 Inline Keyboard，比照 `important_days`
+的單層選單做法，不另外定義 `*_MENU_ITEMS` 常數。
 """
 
 # key、label 依 FR-6e 定案順序；owner_only 決定這個項目是否只有 Owner 看得到。
@@ -37,7 +43,7 @@ MAIN_MENU_ITEMS = [
 
 # 尚未接上真正邏輯的項目，按下後只回覆固定的「開發中」訊息；2b 起逐批把 key 移出這裡。
 _NOT_YET_IMPLEMENTED_KEYS = {
-    "query", "todo", "collections",
+    "query", "todo",
     "achievements", "schedule", "tech_intel", "job_search", "certificate", "recovered",
 }
 

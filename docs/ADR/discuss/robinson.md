@@ -421,3 +421,24 @@
 **後果**：2c 開工後，`router.py`／`commands.py`／`menu.py` 均會異動；`tests/bot/test_router.py`／`tests/bot/test_menu.py` 同步擴充／改寫。舊的心情／運動 Slash Command 與中文觸發詞（例如 `/mood_journal`、「我想做心情筆記」、「我的心情紀錄」、「我要記錄運動」等）失效後，使用者會收到「我不太懂這個指令耶！」（一般聊天回覆，Telegram 無指令提示），不提供相容期。
 
 **2026-08-16 開工完成**：實作按設計內容①～⑦完成。Claude 於還原完整依賴（`lunarcalendar`／`google-genai`／`google-api-python-client`／`pydub`／`openpyxl`／`beautifulsoup4`／`bcrypt`／`PyJWT` 等）的沙箱中執行完整 `tests/` 測試，155 項全數通過（含既有測試回歸與本批新增／改寫的心情、運動、`daily_log` 子選單測試）。**文件同步檢查（2026-08-16 補正）**：初次檢查誤判 `docs/specs/SPEC.md` 不需更新；覆核後發現 FR-47／FR-49 的條文本身明確寫死 `/log_exercise`／`/mood_journal`／`/backfill_mood`／`/my_mood_journals` 等指令名稱作為入口機制，本批把入口正式改成選單按鈕、移除舊指令且不提供相容期，屬於「已定案需求變更」，已依文件治理規則同步修改 SPEC.md 對應段落（FR-47、FR-49 條文改為描述選單入口與摘要確認關卡，並加回 FR-49 段落的「討論紀錄」連結指向本篇 ADR）；FR-48（飲食）、FR-45／FR-46（體態其餘子項）本批未異動，SPEC.md 維持原文。`docs/specs/DRAFT.md` 「已取消」清單既有 2026-08-15「除 `/start` 外所有 Slash Commands 正式取消」條目已涵蓋本次心情／運動指令移除，不需新增項目。`docs/reference/api_schema.md`／`db_schema.md` 確認不需更新（沒有新增對外 HTTP 路由，沒有新增或異動資料表／Migration，`mood_journals`／`exercise_logs` 沿用既有結構）。`docs/specs/PROGRESS.md` 已同步。尚待 Robin 完成 commit／push 與實機驗收（含新／舊心情、運動紀錄、以 Owner 及一般使用者兩種身分測試）。
+
+### 2026-08-16 補充決策：Phase 6 第二批 2d（收藏與旅遊）實作計畫
+
+**狀態**：accepted（已開工完成，見下方「開工完成」補述）
+
+**背景**：依 2b 起子批次順序，2d 從「收藏與旅遊」開始。盤點發現 `commands.py`／`router.py` 全文搜尋「收藏」「trip」「旅遊」「collection」零命中——跟心情/運動（2c）不同，Telegram 端完全沒有舊 `state.flow`／文字觸發詞可以遷移，是全新流程，沒有相容性包袱。後端 Mobile Service／API 已完整：`AppCollectionService`（收藏 CRUD＋geocode）與 `AppLifeExplorationService`（`list_trips`／`create_trip`／`update_trip`／`delete_trip`／`restore_trip`／`complete_trip`），資料表沿用既有 `collection_items`（migration 0072）／`trips`（0071）／`trip_collection_items`。額外發現 migration `0074_create_trip_itinerary_items.sql` 建的表全文搜尋皆無程式碼使用（對應 FR-74「不提供逐日逐時排程」的既有決策），本批不動它。FR-6e 的「收藏與旅遊」子選單只含收藏＋行程操作；探索地圖（FR-75）是 Mobile 專屬視覺入口、成果展示（FR-76）是獨立主選單項目且已排在 2e，兩者皆不在本批範圍。
+
+Robin 對盤點結果提出的實作計畫做出三項決策：①收藏清單與旅遊行程一次做完，不拆兩個子批次（跟 2c 心情+運動同時做的先例一致）；②地址定位要提供「📍 定位地址」按鈕（比照 Mobile 規則，使用者明確按下才呼叫 Nominatim，不在文字輸入當下自動觸發）；③旅遊行程的預估支出在 Telegram 端要支援分類輸入（交通／住宿／飲食／門票／購物／其他六類逐一輸入，而非只填總額）。
+
+**設計內容**：
+①**新檔 `src/bot/collections.py`**：收藏清單 CRUD，直接呼叫既有 `AppCollectionService`（不重寫驗證邏輯，符合 FR-6h）。新增流程：類型（六選一）→名稱→國家→區域／城市→地址（可略過）→若填地址則彈出「📍 定位地址／⏭ 略過定位」按鈕，成功套用經緯度並顯示精確度標籤，失敗則標記「無法定位」但仍可繼續→參考網址→預估費用→備註→摘要＋確認／取消。編輯採「整筆重新輸入」（比照 2b）；刪除二次確認＋僅按鈕，打字一律視為取消（比照 2b／2c 保守做法）。
+②**新檔 `src/bot/trips.py`**：旅遊行程 CRUD，直接呼叫既有 `AppLifeExplorationService`。新增流程：行程名稱→國家→區域／城市（只列出該目的地有收藏的清單，沒有收藏則中止流程並導引去新增收藏）→從對應收藏多選（切換勾選的 Inline Keyboard，按「✅ 完成選擇」結束）→起訖日期（可整組略過，維持規劃中）→是否同步重要日子→預估支出六分類逐一輸入（皆可略過視為 0）→備註→摘要＋確認。狀態流轉（規劃中／已確認／已完成／已取消）透過清單頁按鈕觸發「快速狀態操作」，直接用行程既有欄位組完整 payload 呼叫 `update_trip()`，不必重新走一次多步驟輸入；「完成行程」另開多選按鈕勾選實際造訪項目，呼叫 `complete_trip()`。
+③**`menu.py`**：`collections` 從 `_NOT_YET_IMPLEMENTED_KEYS` 移除；子選單（收藏清單／新增收藏／旅遊行程）由 `collections.start_collections_menu()` 直接組出 Inline Keyboard，比照 `important_days` 的單層選單做法，不另外定義 `*_MENU_ITEMS` 常數（收藏與行程沒有共用的多步驟輸入欄位可以抽象化）。
+④**`router.py`**：`handle_callback_query()` 新增 `menu:collections`、`collections:<action>`（`list`／`add`／`edit:<id>`／`delete:<id>`／`confirm_delete:<id>`／`geocode`／`skip_geocode`／`confirm_save`）、`trips:<action>`（同構＋`confirm:<id>`／`cancel:<id>`／`complete:<id>`／`complete_toggle:<id>`／`complete_confirm:<id>`／`toggle_item:<id>`／`items_done`／`confirm_save`）前綴分派；`_dispatch_active_flow()` 新增 `collection`／`collection_delete_confirm`／`trip`／`trip_delete_confirm`／`trip_complete_select` 五個 flow 分支。`webhook.py` 不需異動，沿用 2a 通用 callback_query 解析機制。
+⑤**範圍排除**：探索地圖（FR-75）、成果展示（FR-76，已排在 2e）、`trip_itinerary_items` 閒置表，皆不在本批。
+
+**理由**：後端與 Mobile 已經把驗證邏輯與資料模型定案，Telegram 端重寫一遍會違反 FR-6h 兩端一致的要求；收藏與行程一次做完是因為兩者風險特性接近且使用情境高度耦合（行程本來就是「從收藏組出來」），分開做反而會讓「收藏清單」在沒有行程功能配套下體驗不完整，違反「批次內功能一致」的原則（比照 2c 決策的判斷邏輯）；地址定位比照 Mobile 明確觸發規則，是延續既有 FR-75 決策，不是本批新增規則。
+
+**後果**：2d 開工後，`router.py`／`menu.py` 均會異動，新增 `src/bot/collections.py`／`src/bot/trips.py`；`tests/bot/test_collections.py`／`tests/bot/test_trips.py` 新增，`tests/bot/test_menu.py` 補一項斷言。
+
+**2026-08-16 開工完成**：實作按設計內容①～④完成（⑤範圍排除確認未觸碰）。新增 `tests/bot/test_collections.py`（10 項）、`tests/bot/test_trips.py`（8 項），皆用獨立 `FakeDatabase`（服務層驗證邏輯已在 `tests/services/test_app_collections.py`／`test_app_life_exploration.py` 覆蓋，這裡只測 Telegram 對話流程），更新 `tests/bot/test_menu.py` 一項斷言。**與 2b／2c 不同，本批 Claude 沙箱完全沒有執行 `pytest`**（連輕量測試都沒跑），也**沒有擴充 `tests/bot/conftest.py`／`tests/bot/test_router.py` 整合測試**——這兩項是本批相對 2b／2c 明確縮小的範圍，記錄於此供 Robin 決定是否要求補齊。**文件同步檢查**：`docs/specs/SPEC.md` 不動（FR-6e／FR-73～FR-74a 為既有已定案規格，本批純實作，未變更需求或產品行為）；`docs/reference/api_schema.md`／`db_schema.md` 確認不需更新（沒有新增對外 HTTP 路由，`callback_data` 是 Telegram 內部分派字串；沒有新增或異動資料表／Migration，全部沿用既有的 `collection_items`／`trips`／`trip_collection_items`）；`docs/specs/DRAFT.md` 無相關項目需要移動。`docs/specs/PROGRESS.md` 已同步。尚待 Robin 完成本機 `pytest` 驗證、commit／push 與 Telegram 實機驗收。

@@ -44,8 +44,10 @@ def test_is_owner_only_key():
 
 
 def test_is_not_yet_implemented():
-    """2026-08-16（Phase 6 第二批 2c）：daily_log 已接上真正邏輯，從「開發中」名單移除。"""
+    """2026-08-16（Phase 6 第二批 2c／2d）：daily_log、collections 已接上真正邏輯，從
+    「開發中」名單移除。"""
     assert menu.is_not_yet_implemented("daily_log") is False
+    assert menu.is_not_yet_implemented("collections") is False
     assert menu.is_not_yet_implemented("query") is True
     assert menu.is_not_yet_implemented("rule") is False
     assert menu.is_not_yet_implemented("permission") is False

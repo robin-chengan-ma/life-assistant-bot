@@ -3,7 +3,7 @@ import re
 
 from submodules.cloudsql.client import CloudSQLClient
 
-from src.bot import auth, chat, commands, image, important_days, job_search, menu, system_errors, templates, toggles, voice
+from src.bot import auth, chat, collections, commands, image, important_days, job_search, menu, system_errors, templates, toggles, trips, voice
 from src.bot.state import ConversationStateStore
 
 _NOT_BOUND_REPLY = "請輸入通關密碼才能開始使用羅賓森喔！"
@@ -422,6 +422,10 @@ def handle_callback_query(
         if key == "important_days":
             state_store.clear(telegram_user_id)
             return important_days.start_important_days_menu()
+        if key == "collections":
+            # 2026-08-16（Phase 6 第二批 2d，FR-6e）：收藏與旅遊子選單首頁。
+            state_store.clear(telegram_user_id)
+            return collections.start_collections_menu()
         if key == "daily_log":
             state_store.clear(telegram_user_id)
             return menu.DAILY_LOG_MENU_TEXT, menu.build_daily_log_menu_keyboard()
@@ -468,6 +472,76 @@ def handle_callback_query(
             return important_days.handle_confirm_save(db, state_store, telegram_user_id, user["id"])
         # 未知的重要日子子動作，導回子選單而不是整個拋例外，比照其餘 callback 的保守做法。
         return important_days.start_important_days_menu()
+
+    if data.startswith("collections:"):
+        # 2026-08-16（Phase 6 第二批 2d，FR-6e／FR-6h／FR-75）：收藏清單選單與 CRUD 操作。
+        user = _get_identified_user(db, telegram_user_id)
+        if user is None:
+            return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
+        action = data[len("collections:") :]
+        if action == "list":
+            return collections.handle_list(db, user["id"])
+        if action == "add":
+            return collections.start_add(state_store, telegram_user_id)
+        if action.startswith("edit:"):
+            item_id = int(action[len("edit:") :])
+            return collections.start_edit(db, state_store, telegram_user_id, user["id"], item_id), None
+        if action.startswith("delete:"):
+            item_id = int(action[len("delete:") :])
+            return collections.start_delete_confirm(db, state_store, telegram_user_id, user["id"], item_id)
+        if action.startswith("confirm_delete:"):
+            item_id = int(action[len("confirm_delete:") :])
+            return collections.handle_delete(db, state_store, telegram_user_id, user["id"], item_id)
+        if action == "geocode":
+            return collections.handle_geocode_choice(db, state_store, telegram_user_id, True)
+        if action == "skip_geocode":
+            return collections.handle_geocode_choice(db, state_store, telegram_user_id, False)
+        if action == "confirm_save":
+            return collections.handle_confirm_save(db, state_store, telegram_user_id, user["id"])
+        return collections.start_collections_menu()
+
+    if data.startswith("trips:"):
+        # 2026-08-16（Phase 6 第二批 2d，FR-6e／FR-6h／FR-74／FR-74a）：旅遊行程選單與 CRUD 操作。
+        user = _get_identified_user(db, telegram_user_id)
+        if user is None:
+            return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
+        action = data[len("trips:") :]
+        if action == "list":
+            return trips.handle_list(db, user["id"])
+        if action == "add":
+            return trips.start_add(state_store, telegram_user_id), None
+        if action.startswith("edit:"):
+            trip_id = int(action[len("edit:") :])
+            return trips.start_edit(db, state_store, telegram_user_id, user["id"], trip_id), None
+        if action.startswith("delete:"):
+            trip_id = int(action[len("delete:") :])
+            return trips.start_delete_confirm(db, state_store, telegram_user_id, user["id"], trip_id)
+        if action.startswith("confirm_delete:"):
+            trip_id = int(action[len("confirm_delete:") :])
+            return trips.handle_delete(db, state_store, telegram_user_id, user["id"], trip_id)
+        if action.startswith("confirm:"):
+            trip_id = int(action[len("confirm:") :])
+            return trips.handle_set_status(db, user["id"], trip_id, "confirmed")
+        if action.startswith("cancel:"):
+            trip_id = int(action[len("cancel:") :])
+            return trips.handle_set_status(db, user["id"], trip_id, "cancelled")
+        if action.startswith("complete:"):
+            trip_id = int(action[len("complete:") :])
+            return trips.start_complete_select(db, state_store, telegram_user_id, user["id"], trip_id)
+        if action.startswith("complete_toggle:"):
+            collection_id = int(action[len("complete_toggle:") :])
+            return trips.handle_complete_toggle(state_store, telegram_user_id, collection_id)
+        if action.startswith("complete_confirm:"):
+            trip_id = int(action[len("complete_confirm:") :])
+            return trips.handle_complete_confirm(db, state_store, telegram_user_id, user["id"], trip_id)
+        if action.startswith("toggle_item:"):
+            collection_id = int(action[len("toggle_item:") :])
+            return trips.handle_toggle_item(state_store, telegram_user_id, collection_id)
+        if action == "items_done":
+            return trips.handle_items_done(state_store, telegram_user_id)
+        if action == "confirm_save":
+            return trips.handle_confirm_save(db, state_store, telegram_user_id, user["id"])
+        return trips.handle_list(db, user["id"])
 
     if data.startswith("mood:"):
         # 2026-08-16（Phase 6 第二批 2c，FR-6e）：心情選單與清單操作。
@@ -684,6 +758,24 @@ def _dispatch_active_flow(
         return important_days.handle_step(db, state_store, telegram_user_id, user["id"], text)
     if flow == "important_days_delete_confirm":
         return important_days.handle_delete_confirm_text(state_store, telegram_user_id)
+    if flow == "collection":
+        # 2026-08-16（Phase 6 第二批 2d，FR-6e／FR-6h／FR-75）：收藏清單新增／編輯多步驟流程。
+        user = _get_identified_user(db, telegram_user_id)
+        if user is None:
+            return _PERMISSION_DENIED_REPLY
+        return collections.handle_step(db, state_store, telegram_user_id, user["id"], text)
+    if flow == "collection_delete_confirm":
+        return collections.handle_delete_confirm_text(state_store, telegram_user_id)
+    if flow == "trip":
+        # 2026-08-16（Phase 6 第二批 2d，FR-6e／FR-6h／FR-74／FR-74a）：旅遊行程新增／編輯多步驟流程。
+        user = _get_identified_user(db, telegram_user_id)
+        if user is None:
+            return _PERMISSION_DENIED_REPLY
+        return trips.handle_step(db, state_store, telegram_user_id, user["id"], text)
+    if flow == "trip_delete_confirm":
+        return trips.handle_delete_confirm_text(state_store, telegram_user_id)
+    if flow == "trip_complete_select":
+        return trips.handle_complete_select_text(state_store, telegram_user_id)
     if flow == "pending_user_knowledge":
         # 2026-07-31（ADR-6）：不再無條件把這則訊息當成答案存檔，改由同一次 LLM 呼叫判斷
         # 這是在提供答案、拒絕記錄、還是問了個無關的新問題，見 chat.handle_chat_message。
