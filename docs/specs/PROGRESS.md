@@ -13,7 +13,7 @@ updated: 2026-08-16
 
 | 日期 | 對應 FR | 任務內容 | 開發者 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- | --- |
-| 2026-08-16 | FR-31／FR-31a／FR-31b／FR-32／FR-56e／FR-66a | Phase 6 第二批 2f（待辦事項）實作完成：`menu.py` 移出開發中名單，`commands.py` 新增選單「➕ 新增」入口與摘要→二次確認關卡（`pending_todo_confirm_save`），查詢清單改按鈕式標記完成/取消；`router.py` 新增 `menu:todo`／`todo:*` callback 分派與對應 flow 分支，`handle_callback_query()` 補上 `calendar_client` 參數；`webhook.py` 同步補上呼叫端注入；自然語言偵測入口（chat.py）維持不變，跟選單按鈕共用同一套狀態機 | Claude | 完成（尚待 commit） | 完整設計內容見 `docs/ADR/discuss/robinson.md` 2026-08-16「Phase 6 第二批 2f（待辦事項）實作計畫」及「開工完成」補述；改寫 `tests/bot/test_commands.py` 待辦事項區塊、`tests/bot/test_router.py` 待辦事項整合測試，更新 `tests/bot/test_menu.py` 一項斷言；移除舊版 `pending_todo_list_action`／`pending_todo_action_confirm` flow 與 `_TODO_ACTION_CLASSIFY_PROMPT`、`/my_todos`／「我的待辦事項」文字觸發詞（不提供相容期）。**比照 2d／2e，本批 Claude 沙箱未執行 `pytest`**（`commands.py` 依賴鏈過深，沙箱未還原完整依賴，只驗證 `ast.parse` 語法與人工比對既有慣例），尚待 Robin 完成本機 `pytest` 驗證（含全套回歸）、commit／push 與 Telegram 實機驗收 |
+| 2026-08-16 | FR-31／FR-31a／FR-31b／FR-32／FR-56e／FR-66a | Phase 6 第二批 2f（待辦事項）實作完成：`menu.py` 移出開發中名單，`commands.py` 新增選單「➕ 新增」入口與摘要→二次確認關卡（`pending_todo_confirm_save`），查詢清單改按鈕式標記完成/取消；`router.py` 新增 `menu:todo`／`todo:*` callback 分派與對應 flow 分支，`handle_callback_query()` 補上 `calendar_client` 參數；`webhook.py` 同步補上呼叫端注入；自然語言偵測入口（chat.py）維持不變，跟選單按鈕共用同一套狀態機 | Claude | 完成（已 commit／已推版，待部署與 Telegram 實機驗收） | 完整設計內容見 `docs/ADR/discuss/robinson.md` 2026-08-16「Phase 6 第二批 2f（待辦事項）實作計畫」及「開工完成」補述；改寫 `tests/bot/test_commands.py` 待辦事項區塊、`tests/bot/test_router.py` 待辦事項整合測試，更新 `tests/bot/test_menu.py` 一項斷言，並修正 `tests/bot/test_webhook.py` 一項因 `handle_callback_query()` 新增 `calendar_client` 參數造成的迴歸斷言；移除舊版 `pending_todo_list_action`／`pending_todo_action_confirm` flow 與 `_TODO_ACTION_CLASSIFY_PROMPT`、`/my_todos`／「我的待辦事項」文字觸發詞（不提供相容期）。**比照 2d／2e，本批 Claude 沙箱未執行 `pytest`**（`commands.py` 依賴鏈過深，沙箱未還原完整依賴，只驗證 `ast.parse` 語法與人工比對既有慣例）；Robin 本機執行完整 `python3 -m pytest tests/ -q` 1806 passed／3 failed（僅剩既有 `test_toeic.py` `ffmpeg` 環境問題，與本批無關）；commit `eabed3b`（10 files changed, 540 insertions/269 deletions），08/16 Robin 已推版，尚待部署與 Telegram 實機驗收 |
 | 2026-08-16 | — | 純文件治理：AGENTS.md 與 `docs/templates/AGENTS-TEMPLATE.md` 新增「Workflow: Commit → 推版 → 部署後續」，把「commit 指令→版號回報→PROGRESS.md 記錄（push 狀態固定寫『MM/DD Robin已推版』）→第二次 commit 指令→部署後主動提供實機測試步驟」的既有慣例固化成規則 | Claude | 完成 | 使用者要求不用每次重複交代這套流程；兩份檔案同步修改（`Git 與文件同步規則` 補一條指向新 Workflow 的連結、新增完整 Workflow 段落），範本版把「Robin已推版」改成 `<使用者>` 佔位字，保持可攜性；不涉及產品功能，無對應 FR；commit `57619bb`（3 files changed, 52 insertions） |
 | 2026-08-16 | FR-6e／FR-6h／FR-45／FR-76／FR-76a | Phase 6 第二批 2e（成果展示）實作完成：新檔 `src/bot/achievements.py` 複用既有 `AppLifeExplorationService`，`menu.py` 移出開發中名單，`router.py` 新增 `achievements:*` callback 分派與 `achievement` flow 分支；同步修正 SPEC.md FR-45／FR-76 條文，改為描述「開啟成果展示清單才被動掃描候選」的實際機制，Telegram 端刪除改為直接執行、不提供二次確認與復原（與 Mobile App 既有 5 秒復原不同） | Claude | 完成（已 commit，待推版與實機驗收） | 完整設計內容見 `docs/ADR/discuss/robinson.md` 2026-08-16「Phase 6 第二批 2e（成果展示）實作計畫」及「開工完成」補述；新增 `tests/bot/test_achievements.py`（10 項），更新 `tests/bot/test_menu.py` 一項斷言；Claude 沙箱還原 `achievements.py`／`menu.py`／`app_life_exploration.py`／`app_important_days.py`／`geocoding.py` 最小依賴環境後執行 `test_achievements.py`＋`test_menu.py` 共 19 項全過，`router.py` 因依賴鏈過深未在沙箱執行、也未擴充 `tests/bot/conftest.py`／`tests/bot/test_router.py` 整合測試（比照 2d 縮小範圍）。**2026-08-16 Robin 本機驗證**：`test_achievements.py`＋`test_menu.py` 19 項全過；完整 `pytest tests/ -q` 首輪回報 4 項失敗，3 項為既有 `test_toeic.py` `ffmpeg` 環境問題（與本批無關），1 項為 `test_router.py::test_important_days_menu_key_not_in_not_yet_implemented_set` 舊斷言未同步 `achievements` 移出開發中名單（比照 2d 曾發生的同類迴歸），修正該斷言後重跑全套 1796 passed／3 failed（僅剩既有 `ffmpeg` 環境問題）；commit `a400f36`（9 files changed, 536 insertions/12 deletions） |
 | 2026-08-15 | FR-6h／NFR-19 | 補正 Mobile 日期特例並定案 Telegram 重構採漸進式資料遷移，不整庫刪除重建 | Codex | 已定案／待開發 | Mobile 不限今日範圍包含待辦、重要日子、收藏、旅遊、探索、成果；先做唯讀 Schema／引用盤點，必要時採 V2 表回填切換，未執行 Migration 或刪表 |
@@ -211,10 +211,11 @@ updated: 2026-08-16
 
 ## Commit 紀錄
 
-> 本表只代表本地 Git commit，不等同於已 push 或已部署。資料來源為 `git log --format="%h|%ad|%s" --date=short`（截至 2026-08-16，本次 PROGRESS 同步 commit 完成後共 138 筆）。git author 全部是 Robin 本人，因此「開發者」欄依 commit 內容與工作階段判斷。
+> 本表只代表本地 Git commit，不等同於已 push 或已部署。資料來源為 `git log --format="%h|%ad|%s" --date=short`（截至 2026-08-16，本次 PROGRESS 同步 commit 完成後共 146 筆）。git author 全部是 Robin 本人，因此「開發者」欄依 commit 內容與工作階段判斷。
 
 | 日期 | 版本 / commit | 異動摘要 | 開發者 |
 | --- | --- | --- | --- |
+| 2026-08-16 | `eabed3b` | Phase 6 第二批 2f：Telegram 待辦事項選單化（新增按鈕入口與摘要→二次確認、清單改按鈕標記完成/取消） | Claude |
 | 2026-08-16 | `57619bb` | 文件治理：AGENTS.md／AGENTS-TEMPLATE.md 新增「Commit → 推版 → 部署後續」Workflow | Claude |
 | 2026-08-16 | `a400f36` | Phase 6 第二批 2e：Telegram 成果展示選單流程（新增 `src/bot/achievements.py`） | Claude |
 | 2026-08-16 | `f0f7349` | 修復 2c 遺留、與心情運動相關的既有測試（函式簽章/已移除函式未同步） | Claude |
@@ -351,6 +352,7 @@ updated: 2026-08-16
 
 | 日期 | Branch／版本 | 遠端 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- |
+| 2026-08-16 | `main`／`eabed3b` | GitHub | 完成 | 08/16 Robin 已推版 |
 | 2026-08-16 | `main`／`57619bb` | GitHub | 待推版 | 尚待 Robin 推版 |
 | 2026-08-16 | `main`／`a400f36` | GitHub | 完成 | 08/16 Robin已推版 |
 | 2026-08-16 | `main`／`f0f7349` | GitHub | 完成 | 08/16 Robin已推版 |
@@ -378,6 +380,7 @@ updated: 2026-08-16
 
 | 日期 | 版本／範圍 | 環境 | 狀態 | 驗證 |
 | --- | --- | --- | --- | --- |
+| — | FR-31／FR-31a／FR-31b／FR-32／FR-56e／FR-66a（Phase 6 第二批 2f，commit `eabed3b`） | Render 正式環境／Telegram 實機 | 待部署 | 已推版（`main`），尚待 Render 部署與 Robin 完成 Telegram 實機驗收 |
 | 2026-08-16 | FR-47／FR-49／FR-50（Phase 6 第二批 2c，commit `8d0ba92`） | Render 正式環境／Telegram 實機 | 完成 | Robin 已確認並完成實機驗收 |
 | 2026-08-15 | FR-3／FR-4／FR-4a～FR-4d／FR-5／FR-6a～FR-6e（Phase 6 第二批 2a，commit `f623566`） | Render 正式環境／Telegram 實機 | 完成 | Robin 已確認 `/start` 首綁與重複顯示主選單、Owner／非 Owner 按鈕差異、開發中項目回主選單按鈕、權限管理建立／停用／恢復／重發密碼四項操作、`/set_invite_codes` 已失效 |
 | 2026-08-15 | FR-2～FR-4a～FR-4d（Phase 6 第一批，Migration 0083） | Render 正式環境／Telegram 實機 | 完成 | Robin 已確認 `/set_invite_codes` 寫入正常、家人 Telegram 帳號輸入通關密碼綁定成功 |
