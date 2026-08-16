@@ -48,6 +48,13 @@ class FakeCloudSQLClient:
             "job_applications": [],
             # 2026-08-09（見 robinson SPEC.md FR-19j）：系統錯誤記錄與解法追蹤。
             "system_error_reports": [],
+            # 2026-08-15（Phase 6 第二批 2b，見 SPEC.md FR-6e／FR-6h）：重要日子 Telegram 流程，
+            # 直接複用 Mobile App 既有的 AppImportantDayService（見
+            # src/services/app_important_days.py、tests/services/test_app_important_days.py，
+            # 該服務的欄位驗證與序列化邏輯已在那邊完整測試，這裡的假 DB 只需要撐住呼叫介面）。
+            "important_days": [],
+            "important_day_occurrences": [],
+            "important_day_recipients": [],
         }
         self._id_counter = itertools.count(1)
 
@@ -72,6 +79,15 @@ class FakeCloudSQLClient:
                 row.update(data)
                 affected += 1
         return affected
+
+    def execute_query(self, query, params=None):
+        # 2026-08-15（Phase 6 第二批 2b）：AppImportantDayService.list_for_user() 用的是一段
+        # 跨三張表的手寫 JOIN SQL，這裡不重現完整 SQL 語意（該服務的序列化與驗證邏輯已在
+        # tests/services/test_app_important_days.py 完整測試），只回傳空清單讓呼叫介面成立；
+        # 需要驗證清單內容的測試改用 tests/bot/test_important_days.py 自己的 FakeDatabase。
+        if "app_important_days:list" in query:
+            return []
+        raise NotImplementedError(f"FakeCloudSQLClient 尚未支援這段 execute_query：{query[:80]}")
 
     def delete(self, table, where, params):
         if not where:
@@ -286,6 +302,10 @@ class FakeCloudSQLClient:
         # 2026-08-15（Phase 6 第二批 2a，見 SPEC.md FR-4）：權限管理選單建立使用者流程測試查詢。
         if where == "family_title = %s":
             return row.get("family_title") == params[0]
+        # 2026-08-15（Phase 6 第二批 2b，見 SPEC.md FR-6e／FR-6h）：重要日子編輯／刪除前的
+        # 擁有者驗證查詢（見 src/bot/important_days.py start_edit／start_delete_confirm）。
+        if where == "id = %s AND owner_user_id = %s":
+            return row.get("id") == params[0] and row.get("owner_user_id") == params[1]
 
         raise NotImplementedError(f"FakeCloudSQLClient 尚未支援這個 where 條件：{where}")
 

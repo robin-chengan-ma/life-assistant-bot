@@ -3,7 +3,7 @@ import re
 
 from submodules.cloudsql.client import CloudSQLClient
 
-from src.bot import auth, chat, commands, image, job_search, menu, system_errors, templates, toggles, voice
+from src.bot import auth, chat, commands, image, important_days, job_search, menu, system_errors, templates, toggles, voice
 from src.bot.state import ConversationStateStore
 
 _NOT_BOUND_REPLY = "請輸入通關密碼才能開始使用羅賓森喔！"
@@ -438,6 +438,9 @@ def handle_callback_query(
             return commands.handle_rule(), menu.back_to_main_menu_keyboard()
         if key == "permission":
             return commands.start_permission_menu()
+        if key == "important_days":
+            state_store.clear(telegram_user_id)
+            return important_days.start_important_days_menu()
         return menu.not_yet_implemented_reply()
 
     if data.startswith("permission:"):
@@ -445,6 +448,30 @@ def handle_callback_query(
         if not is_owner:
             return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
         return commands.handle_permission_callback(db, state_store, telegram_user_id, action)
+
+    if data.startswith("important_days:"):
+        # 2026-08-15（Phase 6 第二批 2b，FR-6e／FR-6h）：重要日子選單與清單操作。
+        user = _get_identified_user(db, telegram_user_id)
+        if user is None:
+            return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
+        action = data[len("important_days:") :]
+        if action == "list":
+            return important_days.handle_list(db, user["id"])
+        if action == "add":
+            return important_days.start_add(state_store, telegram_user_id), None
+        if action.startswith("edit:"):
+            important_day_id = int(action[len("edit:") :])
+            return important_days.start_edit(db, state_store, telegram_user_id, user["id"], important_day_id), None
+        if action.startswith("delete:"):
+            important_day_id = int(action[len("delete:") :])
+            return important_days.start_delete_confirm(db, state_store, telegram_user_id, user["id"], important_day_id)
+        if action.startswith("confirm_delete:"):
+            important_day_id = int(action[len("confirm_delete:") :])
+            return important_days.handle_delete(db, state_store, telegram_user_id, user["id"], important_day_id)
+        if action == "confirm_save":
+            return important_days.handle_confirm_save(db, state_store, telegram_user_id, user["id"])
+        # 未知的重要日子子動作，導回子選單而不是整個拋例外，比照其餘 callback 的保守做法。
+        return important_days.start_important_days_menu()
 
     # 未知／格式不符的 callback_data（例如過期或偽造），保守導回主選單，不當例外處理。
     return menu.MAIN_MENU_TEXT, menu.build_main_menu_keyboard(is_owner=is_owner)
@@ -603,6 +630,14 @@ def _dispatch_active_flow(
     if flow in ("permission_create", "permission_disable", "permission_enable", "permission_resend"):
         # 2026-08-15（Phase 6 第二批 2a，FR-4）：Owner 權限管理選單引導式流程。
         return commands.handle_permission_step(db, state_store, telegram_user_id, text)
+    if flow == "important_days":
+        # 2026-08-15（Phase 6 第二批 2b，FR-6e／FR-6h）：重要日子新增／編輯多步驟流程。
+        user = _get_identified_user(db, telegram_user_id)
+        if user is None:
+            return _PERMISSION_DENIED_REPLY
+        return important_days.handle_step(db, state_store, telegram_user_id, user["id"], text)
+    if flow == "important_days_delete_confirm":
+        return important_days.handle_delete_confirm_text(state_store, telegram_user_id)
     if flow == "pending_user_knowledge":
         # 2026-07-31（ADR-6）：不再無條件把這則訊息當成答案存檔，改由同一次 LLM 呼叫判斷
         # 這是在提供答案、拒絕記錄、還是問了個無關的新問題，見 chat.handle_chat_message。

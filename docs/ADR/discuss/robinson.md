@@ -357,3 +357,46 @@
 **後果**：2a 開工後，`router.py`／`commands.py`／`webhook.py`／`submodules/telegram/client.py` 均會異動；`/set_invite_codes` 移除後舊指令使用者會收到「指令不存在」提示（Telegram 預設行為），不提供相容期（FR-6a）。2b 起的子批次分組順序待本批完成後再排定。
 
 **2026-08-15 開工完成**：實作按設計內容①～⑥完成（⑦文件同步見本篇與 PROGRESS.md 對應條目，`api_schema.md` 因本批未新增對外 API 路由，確認不需更新）。`src/bot/menu.py`／`tests/bot/test_menu.py` 為新檔，`src/bot/commands.py`／`router.py`／`webhook.py`／`submodules/telegram/client.py` 依設計異動，`tests/bot/conftest.py`／`test_commands.py`／`test_router.py`／`test_webhook.py`／`tests/submodules/telegram/test_client.py` 同步擴充。Claude 沙箱執行完整測試 1716 項全數通過；Robin 本機執行 `python3 -m pytest` 1750 項通過、3 項失敗（`tests/bot/test_toeic.py` 因本機未安裝 `ffmpeg` 導致，屬既有環境問題，與本批異動無關，不列入本批驗收範圍）。尚待 Robin 完成 commit／push 與實機驗收。
+
+### 2026-08-15 補充決策：Phase 6 第二批 2b 起子批次分組順序
+
+**狀態**：accepted
+
+**背景**：2a（按鈕基礎設施＋選單骨架＋認證選單化）已開工完成，前次盤點條目明確將 2b 之後的分組順序留待本批完成後再排定。主選單其餘 7 項（日常紀錄／資料查詢／待辦事項／重要日子／收藏與旅遊／成果展示／排程設定）目前仍回覆「功能開發中」，需要決定逐批遷移既有 85 個 `state.flow` 的順序。
+
+**討論內容**：排序判準有四種候選——風險由低到高、使用頻率優先、沿用 ADR 先前舉例的「記帳→體態→待辦」順序、或先盤點各模組 `state.flow` 數量與欄位複雜度細節再排。Robin 選擇「風險由低到高」為排序判準；另外「資料查詢」（FR-9c／FR-9d 跨模組七日查詢）與「排程設定」因技術上依賴其他模組欄位與通知規則先底定，不受風險排序影響，一律排在最後。「日常紀錄」原為單一主選單項目，但內部飲食／運動／體態／心情／記帳 5 個子類風險落差大（記帳涉及金額、體態涉及多維健康數值，兩者風險明顯高於心情／運動），因此拆成獨立子批次分別排序，不整包一次遷移，符合 2a 決策「批次隔離」原則。
+
+**決策**：2b 起的子批次遷移順序（每批各自獨立測試與實機驗收，逐批遷移對應模組的既有 `state.flow` 並套用統一「摘要→二次確認」結構）：
+1. 重要日子
+2. 日常紀錄－心情、運動
+3. 收藏與旅遊
+4. 成果展示
+5. 待辦事項
+6. 日常紀錄－飲食
+7. 日常紀錄－體態
+8. 日常紀錄－記帳
+9. 資料查詢（FR-9c／FR-9d）
+10. 排程設定
+
+**理由**：重要日子欄位少、無金額或多維健康數值，適合作為「摘要→二次確認」結構落地後的第一個試點；心情、運動同樣欄位單純，接續驗證結構可重複使用；收藏與旅遊、成果展示屬中等複雜度（成果展示另涉跨端雙端確認流程）；待辦事項涉及排程/提醒關聯；飲食欄位較多、資料量較大；體態涉及多維健康數值且需比對既有 Mobile 日期特例規則；記帳涉及金額與最嚴格的草稿保護規則（金額類草稿不得為續存寫入長期資料表），風險最高故放最後一個模組批次；資料查詢與排程設定則因跨模組／跨規則依賴，技術上必須等前面模組欄位與通知規則穩定後才能實作，不受風險排序影響。
+
+**後果**：Phase 6 第二批的批次規劃至此全數排定（2a 已完工，2b～2k 共 10 個子批次依上述順序執行）。各子批次開工前仍須依 SDD 流程個別提出實作計畫並等待 Robin 確認，本次僅定案「順序」，未定案各批次的實作細節、時程或起始日期。
+
+### 2026-08-15 補充決策：Phase 6 第二批 2b（重要日子）實作計畫
+
+**狀態**：accepted（已開工完成，見下方「開工完成」補述）
+
+**背景**：依上述排序，2b 從「重要日子」開始。盤點發現後端服務、資料表、Mobile API 皆已完整（`src/services/app_important_days.py` 全套 CRUD＋驗證、`important_days`／`important_day_occurrences`／`important_day_recipients` 三張表、`src/api/app_important_days.py` Mobile 路由），只有 Telegram 端還沒有選單入口。
+
+**設計內容**：
+①**新檔 `src/bot/important_days.py`**：Telegram 版重要日子流程，直接呼叫既有 `AppImportantDayService`（不重寫驗證邏輯，符合 FR-6h「兩端共用相同欄位、必填、數值範圍、驗證與讀取結果」）。子選單：查看清單／新增／編輯／刪除，比照 2a「摘要→二次確認」結構——多步驟輸入（名稱→重複方式→日期/日期區間→是否全天/時間→提前提醒天數→通知對象→備註）跑完後，先回覆完整摘要文字＋「確認送出／取消」按鈕，按確認才寫入。編輯採「整筆重新輸入」而非逐欄位差異更新（沿用同一組多步驟流程，只是起手多帶 `target_id`），簡化實作複雜度；刪除需二次確認且僅按鈕觸發，使用者若在刪除確認狀態改用打字則直接取消並導回主選單，不落入未知狀態例外。
+②**`menu.py`**：`important_days` 從 `_NOT_YET_IMPLEMENTED_KEYS` 移除。
+③**`router.py`**：`handle_callback_query()` 新增 `menu:important_days` 與 `important_days:<action>` 前綴分派（`list`／`add`／`edit:<id>`／`delete:<id>`／`confirm_delete:<id>`／`confirm_save`）；`_dispatch_active_flow()` 新增 `important_days`（多步驟輸入）與 `important_days_delete_confirm`（按鈕式刪除確認的文字保護網）兩個 flow 分支。`webhook.py` 不需異動——2a 已建好的通用 callback_query 解析與 `(text, reply_markup)` 二元組回傳機制可直接沿用。
+④**範圍排除**：FR-72a 提到的「通用 Telegram 重要日子發送器待重構」（依 `reminder_days_before` 主動推播提醒）不在本批，留給 2b～2k 順序中的「排程設定」批次；本批只做 CRUD 與清單顯示。
+⑤**測試**：新增 `tests/bot/test_important_days.py`（13 項，涵蓋三種重複方式的新增流程、驗證錯誤訊息、清單擁有者權限、刪除確認、編輯流程），使用獨立 `FakeDatabase`（比照 `tests/services/test_app_important_days.py` 寫法，`execute_query` 固定回傳空清單，服務層驗證邏輯已在該檔完整覆蓋，不重複測試）；擴充 `tests/bot/conftest.py` 的共用 `FakeCloudSQLClient`（新增三張表、`id = %s AND owner_user_id = %s` where 條件、`execute_query` 存根）供 `tests/bot/test_router.py` 新增的 4 項整合測試使用（子選單按鈕、一般使用者也能新增（FR-3 非 Owner 專屬）、跨使用者刪除防護、`important_days` 已移出開發中名單）。
+
+**理由**：後端與 Mobile 已經把驗證邏輯與資料模型定案，Telegram 端重寫一遍會違反 FR-6h 兩端一致的要求，也徒增維護成本；「整筆重新輸入」的編輯方式雖然使用體驗不如逐欄位修改，但可以完全複用新增流程的狀態機與驗證，符合本批次「風險最低」的排序理由，逐欄位編輯留待之後有需求時再迭代。
+
+**後果**：往後任何模組批次若也能重用既有 Mobile Service，應優先評估重用而非重寫，比照本批做法。
+
+**2026-08-15 開工完成**：實作按設計內容①～⑤完成。Claude 沙箱以獨立最小依賴環境執行 `tests/bot/test_important_days.py`、`tests/bot/test_menu.py`，13＋8 項全數通過；`tests/bot/test_router.py` 新增的 4 項整合測試因需要完整還原本專案（`google-genai`／`groq`／Google Drive／Telegram 等 submodules）的匯入依賴鏈，沙箱未還原完整依賴，程式碼已寫入但未在沙箱執行，待 Robin 本機執行 `python3 -m pytest` 驗證全套（含既有測試回歸）。**文件同步檢查**：`docs/specs/SPEC.md` 不動（FR-6e／FR-6h／FR-72a 為既有已定案規格，本批只是實作，未變更需求或產品行為）；`docs/reference/api_schema.md`／`db_schema.md` 確認不需更新（本批沒有新增對外 HTTP 路由，`callback_data` 是 Telegram 內部分派字串、不是 API 端點；沒有新增或異動資料表／Migration，全部沿用既有的 `important_days` 三張表）；`docs/specs/DRAFT.md` 無相關項目需要移動。`docs/specs/PROGRESS.md` 已同步。尚待 Robin 完成 commit／push 與實機驗收。

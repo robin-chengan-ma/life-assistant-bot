@@ -2203,3 +2203,74 @@ def test_error_resolution_trigger_ignored_for_non_owner(fake_db, monkeypatch):
     row = fake_db.select("system_error_reports", where="id = %s", params=(report_id,), fetch_one=True)
     assert row["resolution"] is None
     assert reply == "我不太懂這個指令耶！"
+
+
+# --- 重要日子（Phase 6 第二批 2b，見 docs/ADR/discuss/robinson.md，FR-6e／FR-6h）---
+
+
+def test_important_days_menu_key_not_in_not_yet_implemented_set():
+    """2b 應該把 important_days 從 2a 留下的「開發中」名單移除，其餘六項維持不變。"""
+    assert not menu.is_not_yet_implemented("important_days")
+    for key in ("daily_log", "query", "todo", "collections", "achievements", "schedule"):
+        assert menu.is_not_yet_implemented(key)
+
+
+def test_important_days_submenu_shows_list_and_add_buttons(fake_db, monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
+    store = ConversationStateStore()
+
+    reply, keyboard = router.handle_callback_query(fake_db, store, ROBIN_ID, "menu:important_days")
+
+    assert "重要日子" in reply
+    callback_datas = [button["callback_data"] for row in keyboard["inline_keyboard"] for button in row]
+    assert "important_days:list" in callback_datas
+    assert "important_days:add" in callback_datas
+
+
+def test_important_days_add_flow_creates_row_for_general_user(fake_db, monkeypatch):
+    """FR-3：一般使用者（非 Owner）也能直接使用重要日子，不是 Owner 專屬功能。"""
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False, "is_active": True})
+    store = ConversationStateStore()
+
+    reply, keyboard = router.handle_callback_query(fake_db, store, FAMILY_ID, "important_days:add")
+    assert keyboard is None
+    assert "名稱" in reply
+
+    router.handle_message(fake_db, store, FAMILY_ID, "爸爸生日")
+    router.handle_message(fake_db, store, FAMILY_ID, "1")  # 每年固定日期
+    router.handle_message(fake_db, store, FAMILY_ID, "3-5")
+    router.handle_message(fake_db, store, FAMILY_ID, "3-5")
+    router.handle_message(fake_db, store, FAMILY_ID, "是")
+    router.handle_message(fake_db, store, FAMILY_ID, "1")
+    router.handle_message(fake_db, store, FAMILY_ID, "1")  # 只有自己
+    reply, keyboard = router.handle_message(fake_db, store, FAMILY_ID, "略過")
+
+    assert "請確認以下內容" in reply
+    assert keyboard["inline_keyboard"][0][0]["callback_data"] == "important_days:confirm_save"
+
+    reply, _keyboard = router.handle_callback_query(fake_db, store, FAMILY_ID, "important_days:confirm_save")
+
+    assert reply == "已新增重要日子！"
+    row = fake_db.select("important_days", where=None, params=None)
+    assert len(row) == 1
+    assert row[0]["title"] == "爸爸生日"
+
+
+def test_important_days_delete_confirm_only_owner_can_target_own_event(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    owner_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    other_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID_2, "role": "媽媽", "is_owner": False})
+    fake_db.insert("important_days", {
+        "owner_user_id": other_id, "title": "別人的事件", "recurrence_type": "one_time",
+        "event_date": None, "is_all_day": True, "reminder_days_before": 1,
+        "audience_mode": "self", "is_active": True,
+    })
+    important_day_id = fake_db.select("important_days", where=None, params=None)[0]["id"]
+    store = ConversationStateStore()
+
+    reply, keyboard = router.handle_callback_query(
+        fake_db, store, FAMILY_ID, f"important_days:delete:{important_day_id}"
+    )
+
+    assert "找不到" in reply
