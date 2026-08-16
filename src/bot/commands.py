@@ -1127,32 +1127,25 @@ def handle_todo_action_confirm_step(
 
 
 # ---------------------------------------------------------------------------
-# 心情小記（2026-08-02，Step 1.8，見 robinson SPEC.md FR-49、FR-50、FR-56h）
+# 心情小記（2026-08-02，Step 1.8，見 robinson SPEC.md FR-49、FR-50、FR-56h；
+# 2026-08-16 全面改選單觸發＋補摘要確認，Phase 6 第二批 2c，見 docs/ADR/discuss/robinson.md）
 #
-# 流程分三輪（比照 FR-56h 情境範例）：觸發後先問心情分類（pending_mood_category，固定 6 選一，
-# 純字串比對不需要 LLM）→ 問日記內容（pending_mood_content）→ 記錄完成後主動問 FR-50 個人成就
-# 三選一提示（pending_mood_achievement，使用者可用既有的 _EXIT_PHRASES 跳過，不強迫回答）。
-# 全程不需要呼叫 LLM（跟 Step 1.7 待辦事項需要解析模糊時間不同），但日記內容／個人成就都是自由
-# 文字、可能含個資，依 2026-08-02 與 Robin 確認的範圍決策，寫入 `mood_journals` 前一律先過
-# `privacy.mask_text()`，跟一般聊天／圖片說明文字／語音轉文字三個既有入口的防線一致。
+# 流程：選單「😊 心情」→ 新增／補記／查看清單。新增與補記共用 pending_mood_category →
+# pending_mood_content → **pending_mood_confirm**（新增，摘要→二次確認，2c 新增）→ 寫入後
+# 主動問 FR-50 個人成就三選一提示（pending_mood_achievement，使用者可用既有的 _EXIT_PHRASES
+# 跳過，不強迫回答）。`entry_date`／`journal_id` 兩個欄位讓「一般新增」「補記新增」
+# 「編輯既有紀錄」共用同一組 category/content/confirm/achievement 步驟：`entry_date` 決定
+# 寫入哪一天、`journal_id` 是 None 時代表新增（INSERT），非 None 時代表編輯（UPDATE）。
 #
-# 2026-08-02 追加（見 robinson SPEC.md FR-49 補記/更新/刪除擴充）：Robin 提出「記帳、心情小記、
-# 體重、飲食、運動習慣都要有補記、更新、刪除、新增的功能」，心情小記排在最優先實作，其餘三個
-# Phase 2 才做的模組（記帳、體態管理）從一開始就會內建 CRUD，不需要另外補。
+# 查看清單（`handle_list`）直接列出每一筆＋「✏️ 編輯」「🗑 刪除」按鈕（比照 2b 重要日子的
+# `important_days.handle_list()` 作法），不再需要「查詢清單 → 輸入編號 → LLM 判斷要更新還是
+# 刪除」這三段式反問；刪除也改成按鈕二次確認（`mood:confirm_delete:<id>`），移除原本
+# `_MOOD_ACTION_CLASSIFY_PROMPT`／`_MOOD_DELETE_CONFIRM_PROMPT` 這兩個 LLM 分類 Prompt——
+# 選單按鈕本身就是明確意圖，不需要再靠 LLM 猜使用者是要更新還是刪除。
 #
-# 補記走一條新的三輪反問前置流程：pending_mood_backfill_date（先問是哪一天）→ 沿用既有的
-# pending_mood_category → pending_mood_content → pending_mood_achievement，靠 state 裡的
-# `entry_date`／`journal_id` 兩個欄位讓「一般新增」「補記新增」「編輯既有紀錄」共用同一組
-# category/content/achievement 三步驟：`entry_date` 決定寫入哪一天、`journal_id` 是 None 時
-# 代表新增（INSERT），非 None 時代表編輯（UPDATE，見 `handle_mood_action_choice_step`）。
-#
-# 更新/刪除則是「查詢清單 → 選編號 → 更新或刪除 → （更新時）走一次 category/content 流程／
-# （刪除時）簡單一輪 CONFIRM/CANCEL」，整體結構比照 Step 1.7 待辦事項的
-# `start_todo_list`／`handle_todo_list_action_step`／`handle_todo_action_confirm_step`。
-# 刪除確認刻意採用簡單一輪 CONFIRM/CANCEL、不套用 FR-16a 的逐字打字最終確認（2026-08-02 與
-# Robin 確認）：跟待辦事項完成/取消一樣屬於「錯了還能重新補記/修正」的中等風險操作，
-# FR-16a 保留給 `/clean-all-dialog`／`/clean-target-dialog`／主動記知識這三個「一旦錯誤執行
-# 就會大量、跨紀錄地不可逆遺失資料」的高風險流程。
+# 日記內容／個人成就都是自由文字、可能含個資，依 2026-08-02 與 Robin 確認的範圍決策，寫入
+# `mood_journals` 前一律先過 `privacy.mask_text()`，跟一般聊天／圖片說明文字／語音轉文字三個
+# 既有入口的防線一致；摘要確認畫面顯示的也是遮蔽後的內容，避免個資在畫面上重複曝光。
 # ---------------------------------------------------------------------------
 
 _MOOD_BACKFILL_DATE_PARSE_PROMPT = (
@@ -1168,23 +1161,6 @@ _MOOD_BACKFILL_DATE_PARSE_PROMPT = (
 
 _MOOD_BACKFILL_DATE_UNCLEAR_REPLY = "不好意思，我還是不太確定是哪一天，可以再講清楚一點嗎？（例如：昨天、8/1）"
 
-_MOOD_ACTION_CLASSIFY_PROMPT = (
-    "使用者剛被 Robinson 反問要把選定的這筆心情紀錄「更新」還是「刪除」，這是使用者這一則的回覆："
-    "「{text}」。\n"
-    "請判斷使用者的意思，整則回覆只能輸出以下其中一個固定字，不要輸出其他任何文字：\n"
-    "(1) 要更新內容 → UPDATE\n"
-    "(2) 要刪除這筆 → DELETE\n"
-    "(3) 都不是、看不懂、或其實在問別的事 → OTHER"
-)
-
-_MOOD_DELETE_CONFIRM_PROMPT = (
-    "使用者剛被 Robinson 反問「確定要刪除這筆心情紀錄嗎？這個動作沒辦法復原喔！」，這是使用者這一則"
-    "的回覆：「{text}」。\n"
-    "請判斷使用者的意思，整則回覆只能輸出以下其中一個固定字，不要輸出其他任何文字：\n"
-    "(1) 確定要刪除 → CONFIRM\n"
-    "(2) 不要刪除、想取消、或其實在問別的事 → CANCEL"
-)
-
 
 def _parse_date_only(raw: str) -> date | None:
     """把 `_MOOD_BACKFILL_DATE_PARSE_PROMPT` 輸出的 `YYYY-MM-DD` 字串換算成 date；
@@ -1197,8 +1173,21 @@ def _parse_date_only(raw: str) -> date | None:
         return None
 
 
+def start_mood_menu() -> tuple[str, dict]:
+    """主選單「📝 日常紀錄」→「😊 心情」子選單首頁。"""
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "➕ 新增", "callback_data": "mood:new"}],
+            [{"text": "🕐 補記", "callback_data": "mood:backfill"}],
+            [{"text": "📋 查看清單", "callback_data": "mood:list"}],
+            [{"text": "🔙 返回日常紀錄", "callback_data": "menu:daily_log"}],
+        ]
+    }
+    return "心情，請選擇要進行的操作：", keyboard
+
+
 def start_mood_journal(state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
-    """「我想做心情筆記」／`/mood_journal`：開始心情小記流程，先問心情分類（FR-49、FR-56h）。
+    """「➕ 新增」：開始心情小記流程，先問心情分類（FR-49、FR-56h）。
 
     一般（非補記）新增：`entry_date` 固定是今天，`journal_id` 是 None（代表 INSERT）。
     """
@@ -1210,7 +1199,7 @@ def start_mood_journal(state_store: ConversationStateStore, telegram_user_id: in
 
 
 def start_mood_backfill(state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
-    """「我要補記心情」／`/backfill_mood`：開始補記流程，先問要補記哪一天（FR-49 補記擴充）。"""
+    """「🕐 補記」：開始補記流程，先問要補記哪一天（FR-49 補記擴充）。"""
     state_store.set(telegram_user_id, {"flow": "pending_mood_backfill_date", "target_user_id": user_id})
     return "好的，要補記哪一天的心情呢？（例如：昨天、8/1）"
 
@@ -1278,27 +1267,54 @@ def handle_mood_category_step(
 
 
 def handle_mood_content_step(
-    db: CloudSQLClient,
     state_store: ConversationStateStore,
     telegram_user_id: int,
     text: str,
     privacy_llm_client=None,
-) -> str:
-    """處理 `pending_mood_content` 狀態下使用者提供的日記內容，寫入後接著問 FR-50 個人成就。
+) -> tuple[str, dict]:
+    """處理 `pending_mood_content` 狀態下使用者提供的日記內容，先遮蔽個資、組出摘要，回傳
+    確認／取消按鈕，不在這一步直接寫入（2c 新增的摘要→二次確認關卡）。
 
-    `journal_id` 是 None 時新增一筆（`entry_date` 可能是今天或補記的過去日期）；非 None 時代表
-    這是編輯既有紀錄（見 `handle_mood_action_choice_step`），改為 UPDATE、沿用原本的 `entry_date`。
+    `journal_id` 是 None 時代表新增（`entry_date` 可能是今天或補記的過去日期）；非 None 時
+    代表這是編輯既有紀錄，確認後改為 UPDATE、沿用原本的 `entry_date`。
 
     `privacy_llm_client`（見 docs/specs/privacy-masking/SPEC.md FR-4）：日記內容可能含個資，
-    寫入 `mood_journals` 前一律先過 `privacy.mask_text()`；`None` 時優雅降級成只跑免費的 Regex 層。
+    確認畫面與寫入 `mood_journals` 都使用遮蔽後的內容；`None` 時優雅降級成只跑免費的 Regex 層。
     """
     state = state_store.get(telegram_user_id)
+    mood_category = state["mood_category"]
+
+    masked_content, pii_detected = privacy.mask_text(text, privacy_llm_client)
+    state_store.set(telegram_user_id, {**state, "flow": "pending_mood_confirm", "masked_content": masked_content, "pii_detected": pii_detected})
+
+    summary = (
+        "請確認以下內容：\n\n"
+        f"心情：{mood.category_label(mood_category)}\n"
+        f"日記內容：{masked_content}"
+    )
+    if pii_detected:
+        summary += _PII_DETECTED_REMINDER
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "✅ 確認送出", "callback_data": "mood:confirm_save"}],
+            [{"text": "❌ 取消", "callback_data": "menu:daily_log"}],
+        ]
+    }
+    return summary, keyboard
+
+
+def handle_mood_confirm_save(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int) -> str:
+    """`mood:confirm_save`：實際寫入心情小記（新增或編輯），接著問 FR-50 個人成就。"""
+    state = state_store.get(telegram_user_id)
+    if not state or state.get("flow") != "pending_mood_confirm":
+        return "目前沒有進行中的心情紀錄設定。"
+
     target_user_id = state["target_user_id"]
     entry_date = state["entry_date"]
     journal_id = state.get("journal_id")
     mood_category = state["mood_category"]
+    masked_content = state["masked_content"]
 
-    masked_content, pii_detected = privacy.mask_text(text, privacy_llm_client)
     if journal_id is None:
         journal_id = mood.create_mood_journal(db, target_user_id, mood_category, masked_content, entry_date)
     else:
@@ -1308,13 +1324,10 @@ def handle_mood_content_step(
         telegram_user_id,
         {"flow": "pending_mood_achievement", "target_user_id": target_user_id, "journal_id": journal_id},
     )
-    reply = (
+    return (
         "好的，已經紀錄了！要不要順便回顧一下今天：完成了什麼一句話總結／挑一件有感覺的事／"
         "寫下啟發或下次想改變的地方（選一項就好，不想回答也可以輸入「結束」跳過）："
     )
-    if pii_detected:
-        reply += _PII_DETECTED_REMINDER
-    return reply
 
 
 def handle_mood_achievement_step(
@@ -1344,112 +1357,75 @@ def handle_mood_achievement_step(
     return reply
 
 
-def start_mood_list(
-    db: CloudSQLClient,
-    state_store: ConversationStateStore,
-    telegram_user_id: int,
-    user_id: int,
-) -> str:
-    """「我的心情紀錄」／`/my_mood_journals`：列出最近的心情小記，並進入可更新/刪除的模式。"""
+def handle_mood_list(db: CloudSQLClient, user_id: int) -> tuple[str, dict]:
+    """「📋 查看清單」：列出最近的心情小記，每一筆附「✏️ 編輯」「🗑 刪除」按鈕。"""
     journals = mood.list_mood_journals(db, user_id)
-    listing = mood.format_mood_journal_list(journals)
     if not journals:
-        return listing
+        return "目前還沒有任何心情紀錄，可以按「➕ 新增」建立第一筆！", {
+            "inline_keyboard": [[{"text": "🔙 返回日常紀錄", "callback_data": "menu:daily_log"}]]
+        }
 
-    state_store.set(
-        telegram_user_id,
-        {
-            "flow": "pending_mood_list_action",
-            "target_user_id": user_id,
-            "journal_ids": [item["id"] for item in journals],
-        },
-    )
-    return f"{listing}\n\n如果要更新或刪除某一筆，請輸入編號；不需要的話輸入「結束」。"
-
-
-def handle_mood_list_action_step(
-    state_store: ConversationStateStore,
-    telegram_user_id: int,
-    text: str,
-) -> str:
-    """處理 `pending_mood_list_action` 狀態下使用者輸入的編號，選定要更新/刪除的那一筆。"""
-    state = state_store.get(telegram_user_id)
-    if text in _EXIT_PHRASES:
-        state_store.clear(telegram_user_id)
-        return "好的，已結束心情紀錄查詢模式！"
-
-    journal_ids = state["journal_ids"]
-    if not text.isdigit() or not (1 <= int(text) <= len(journal_ids)):
-        return f"請輸入 1～{len(journal_ids)} 之間的編號，或輸入「結束」離開喔！"
-
-    journal_id = journal_ids[int(text) - 1]
-    state_store.set(
-        telegram_user_id,
-        {"flow": "pending_mood_action_choice", "target_user_id": state["target_user_id"], "journal_id": journal_id},
-    )
-    return "要更新這筆還是刪除呢？"
+    listing = mood.format_mood_journal_list(journals)
+    buttons = [
+        [
+            {"text": f"✏️ 編輯 {index}", "callback_data": f"mood:edit:{item['id']}"},
+            {"text": f"🗑 刪除 {index}", "callback_data": f"mood:delete:{item['id']}"},
+        ]
+        for index, item in enumerate(journals, start=1)
+    ]
+    buttons.append([{"text": "🔙 返回日常紀錄", "callback_data": "menu:daily_log"}])
+    return listing, {"inline_keyboard": buttons}
 
 
-def handle_mood_action_choice_step(
-    db: CloudSQLClient,
-    llm_client,
-    state_store: ConversationStateStore,
-    telegram_user_id: int,
-    text: str,
-) -> str:
-    """處理 `pending_mood_action_choice` 狀態下使用者對「要更新這筆還是刪除呢？」的回覆。
-
-    選更新時沿用原本記錄的 `entry_date`（找不到就 fallback 用 `created_at` 換算，理由同
+def start_mood_edit(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int, journal_id: int) -> str:
+    """「✏️ 編輯」：沿用原本記錄的 `entry_date`（找不到就 fallback 用 `created_at` 換算，理由同
     `mood.entry_date_of()`），重新走一次分類/內容兩輪反問，`journal_id` 帶著代表這是編輯而非新增。
     """
-    state = state_store.get(telegram_user_id)
-    journal_id = state["journal_id"]
-    target_user_id = state["target_user_id"]
+    row = db.select("mood_journals", where="id = %s", params=(journal_id,), fetch_one=True)
+    if row is None or row.get("user_id") != user_id:
+        return "找不到這筆心情紀錄，可能已經被刪除了。"
 
-    decision = llm_client.generate_text(_MOOD_ACTION_CLASSIFY_PROMPT.format(text=text)).strip()
-    if decision == "UPDATE":
-        row = db.select("mood_journals", where="id = %s", params=(journal_id,), fetch_one=True)
-        entry_date = row.get("entry_date") or row["created_at"].astimezone(_TAIWAN_TZ).date()
-        state_store.set(
-            telegram_user_id,
-            {
-                "flow": "pending_mood_category",
-                "target_user_id": target_user_id,
-                "entry_date": entry_date,
-                "journal_id": journal_id,
-            },
-        )
-        return "好的，那我們重新選一次心情分類：\n\n" + mood.format_category_prompt()
-    if decision == "DELETE":
-        state_store.set(
-            telegram_user_id,
-            {"flow": "pending_mood_delete_confirm", "target_user_id": target_user_id, "journal_id": journal_id},
-        )
-        return "確定要刪除這筆心情紀錄嗎？這個動作沒辦法復原喔！"
+    entry_date = row.get("entry_date") or row["created_at"].astimezone(_TAIWAN_TZ).date()
+    state_store.set(
+        telegram_user_id,
+        {"flow": "pending_mood_category", "target_user_id": user_id, "entry_date": entry_date, "journal_id": journal_id},
+    )
+    return "好的，那我們重新選一次心情分類：\n\n" + mood.format_category_prompt()
 
+
+def start_mood_delete_confirm(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int, journal_id: int) -> tuple[str, dict]:
+    row = db.select("mood_journals", where="id = %s", params=(journal_id,), fetch_one=True)
+    if row is None or row.get("user_id") != user_id:
+        return "找不到這筆心情紀錄，可能已經被刪除了。", {"inline_keyboard": [[{"text": "🔙 返回日常紀錄", "callback_data": "menu:daily_log"}]]}
+
+    state_store.set(telegram_user_id, {"flow": "mood_delete_confirm", "journal_id": journal_id})
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "✅ 確認刪除", "callback_data": f"mood:confirm_delete:{journal_id}"}],
+            [{"text": "❌ 取消", "callback_data": "mood:list"}],
+        ]
+    }
+    return "確定要刪除這筆心情紀錄嗎？這個動作沒辦法復原喔！", keyboard
+
+
+def handle_mood_delete(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int, journal_id: int) -> str:
+    """`mood:confirm_delete:<id>` 觸發時重新驗證擁有者（FR-6c：callback_data 一律重新驗證權限，
+    不能只靠上一步 `start_mood_delete_confirm` 篩過就假設安全）。"""
     state_store.clear(telegram_user_id)
-    return "不好意思，我不太確定你的意思，這筆心情紀錄維持原狀，你可以再查詢一次心情紀錄清單重新選擇喔！"
-
-
-def handle_mood_delete_confirm_step(
-    db: CloudSQLClient,
-    llm_client,
-    state_store: ConversationStateStore,
-    telegram_user_id: int,
-    text: str,
-) -> str:
-    """處理 `pending_mood_delete_confirm` 狀態下使用者對刪除確認的回覆（簡單一輪 CONFIRM/CANCEL，
-    設計理由見本模組「心情小記」區塊開頭說明）。"""
-    state = state_store.get(telegram_user_id)
-    journal_id = state["journal_id"]
-    state_store.clear(telegram_user_id)
-
-    decision = llm_client.generate_text(_MOOD_DELETE_CONFIRM_PROMPT.format(text=text)).strip()
-    if decision != "CONFIRM":
-        return "好的，這筆心情紀錄保留，沒有刪除！"
-
+    row = db.select("mood_journals", where="id = %s", params=(journal_id,), fetch_one=True)
+    if row is None or row.get("user_id") != user_id:
+        return "找不到這筆心情紀錄，可能已經被刪除了。"
     mood.delete_mood_journal(db, journal_id)
     return "好的，已經刪除這筆心情紀錄了！"
+
+
+def handle_mood_confirm_text(state_store: ConversationStateStore, telegram_user_id: int) -> tuple[str, dict]:
+    """`pending_mood_confirm`／`mood_delete_confirm` 這兩個狀態只接受按鈕操作；使用者改用
+    打字時，比照 `important_days.handle_delete_confirm_text()` 的保守做法，直接結束流程並
+    導回日常紀錄選單，不當成未知狀態拋例外。"""
+    state_store.clear(telegram_user_id)
+    keyboard = {"inline_keyboard": [[{"text": "🔙 返回日常紀錄", "callback_data": "menu:daily_log"}]]}
+    return "這個步驟請用上面的按鈕操作喔，這次先幫你取消了。", keyboard
 
 
 # ---------------------------------------------------------------------------
@@ -2112,8 +2088,10 @@ _WEIGHT_DELETE_CONFIRM_PROMPT = (
     "的回覆：「{text}」。\n請判斷使用者的意思，整則回覆只能輸出以下其中一個固定字，不要輸出其他任何文字：\n"
     "(1) 確定要刪除 → CONFIRM\n(2) 不要刪除、想取消、或其實在問別的事 → CANCEL"
 )
-_EXERCISE_ACTION_CLASSIFY_PROMPT = _WEIGHT_ACTION_CLASSIFY_PROMPT.replace("體重紀錄", "運動紀錄")
-_EXERCISE_DELETE_CONFIRM_PROMPT = _WEIGHT_DELETE_CONFIRM_PROMPT.replace("體重紀錄", "運動紀錄")
+# 2026-08-16（Phase 6 第二批 2c）：運動改選單觸發＋按鈕式編輯／刪除，原本的
+# _EXERCISE_ACTION_CLASSIFY_PROMPT／_EXERCISE_DELETE_CONFIRM_PROMPT（LLM 判斷更新/刪除意圖）
+# 已隨 handle_exercise_action_choice_step／handle_exercise_delete_confirm_step 一併移除，
+# 選單按鈕本身就是明確意圖，不需要再靠 LLM 猜。
 _DIET_ACTION_CLASSIFY_PROMPT = _WEIGHT_ACTION_CLASSIFY_PROMPT.replace("體重紀錄", "飲食紀錄")
 _DIET_DELETE_CONFIRM_PROMPT = _WEIGHT_DELETE_CONFIRM_PROMPT.replace("體重紀錄", "飲食紀錄")
 _GOAL_CANCEL_CONFIRM_PROMPT = (
@@ -2416,8 +2394,21 @@ def handle_weight_delete_confirm_step(db: CloudSQLClient, llm_client, state_stor
 # --- 運動 ---
 
 
+def start_exercise_menu() -> tuple[str, dict]:
+    """主選單「📝 日常紀錄」→「🏃 運動」子選單首頁。"""
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "➕ 新增", "callback_data": "exercise:new"}],
+            [{"text": "🕐 補記", "callback_data": "exercise:backfill"}],
+            [{"text": "📋 查看清單", "callback_data": "exercise:list"}],
+            [{"text": "🔙 返回日常紀錄", "callback_data": "menu:daily_log"}],
+        ]
+    }
+    return "運動，請選擇要進行的操作：", keyboard
+
+
 def start_exercise_log(state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
-    """「我要記錄運動」／`/log_exercise`：開始記錄運動（FR-47），先問項目。"""
+    """「➕ 新增」：開始記錄運動（FR-47），先問項目。"""
     state_store.set(
         telegram_user_id,
         {"flow": "pending_exercise_activity", "target_user_id": user_id, "exercise_date": _now().date(), "exercise_id": None},
@@ -2426,7 +2417,7 @@ def start_exercise_log(state_store: ConversationStateStore, telegram_user_id: in
 
 
 def start_exercise_backfill(state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
-    """「我要補記運動」／`/backfill_exercise`：開始補記流程，先問要補記哪一天（FR-47）。"""
+    """「🕐 補記」：開始補記流程，先問要補記哪一天（FR-47）。"""
     state_store.set(telegram_user_id, {"flow": "pending_exercise_backfill_date", "target_user_id": user_id})
     return "好的，要補記哪一天的運動呢？（例如：昨天、8/1）"
 
@@ -2479,24 +2470,57 @@ def handle_exercise_duration_step(state_store: ConversationStateStore, telegram_
     return "有心率紀錄嗎？有的話告訴我數字，沒有的話輸入「沒有」："
 
 
-def handle_exercise_heart_rate_step(db: CloudSQLClient, llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
-    """處理 `pending_exercise_heart_rate` 狀態下使用者提供的心率（選填），寫入前呼叫 LLM 估算卡路里
-    （FR-47，決策①），估算失敗不擋下整筆紀錄，見 `body.estimate_exercise_calories()`。"""
+def handle_exercise_heart_rate_step(llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str) -> tuple[str, dict]:
+    """處理 `pending_exercise_heart_rate` 狀態下使用者提供的心率（選填），估算卡路里後組出摘要，
+    回傳確認／取消按鈕，不在這一步直接寫入（2c 新增的摘要→二次確認關卡）。估算失敗不擋下整筆
+    紀錄，見 `body.estimate_exercise_calories()`。"""
     state = state_store.get(telegram_user_id)
     heart_rate = None
     if text.strip() not in ("沒有", "不用", "無"):
         heart_rate = _parse_positive_int(text)
         if heart_rate is None:
-            return "不好意思，我沒看懂，麻煩輸入心率數字，或輸入「沒有」跳過："
+            return "不好意思，我沒看懂，麻煩輸入心率數字，或輸入「沒有」跳過：", None
+
+    activity = state["activity"]
+    duration_minutes = state["duration_minutes"]
+    estimated_calories = body.estimate_exercise_calories(llm_client, activity, duration_minutes, heart_rate)
+
+    state_store.set(
+        telegram_user_id,
+        {**state, "flow": "pending_exercise_confirm", "heart_rate": heart_rate, "estimated_calories": estimated_calories},
+    )
+
+    calorie_line = f"{estimated_calories:.0f} 大卡（估算值，不會到很準確）" if estimated_calories is not None else "沒能順利估算"
+    summary = (
+        "請確認以下內容：\n\n"
+        f"項目：{activity}\n"
+        f"時長：{duration_minutes} 分鐘\n"
+        f"心率：{heart_rate if heart_rate is not None else '（無）'}\n"
+        f"消耗熱量：{calorie_line}"
+    )
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "✅ 確認送出", "callback_data": "exercise:confirm_save"}],
+            [{"text": "❌ 取消", "callback_data": "menu:daily_log"}],
+        ]
+    }
+    return summary, keyboard
+
+
+def handle_exercise_confirm_save(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int) -> str:
+    """`exercise:confirm_save`：實際寫入運動紀錄（新增或編輯）。"""
+    state = state_store.get(telegram_user_id)
+    if not state or state.get("flow") != "pending_exercise_confirm":
+        return "目前沒有進行中的運動紀錄設定。"
 
     target_user_id = state["target_user_id"]
     exercise_date = state["exercise_date"]
     exercise_id = state.get("exercise_id")
     activity = state["activity"]
     duration_minutes = state["duration_minutes"]
+    heart_rate = state["heart_rate"]
+    estimated_calories = state["estimated_calories"]
     state_store.clear(telegram_user_id)
-
-    estimated_calories = body.estimate_exercise_calories(llm_client, activity, duration_minutes, heart_rate)
 
     if exercise_id is None:
         body.create_exercise_log(db, target_user_id, activity, duration_minutes, heart_rate, estimated_calories, exercise_date)
@@ -2508,72 +2532,71 @@ def handle_exercise_heart_rate_step(db: CloudSQLClient, llm_client, state_store:
     return "OK，已經幫你記錄好了！這次沒能順利估算消耗的卡路里，不過紀錄已經存好了。"
 
 
-def start_exercise_list(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
-    """「我的運動紀錄」／`/my_exercise_logs`：列出最近的運動紀錄，並進入可更新/刪除的模式。"""
+def handle_exercise_list(db: CloudSQLClient, user_id: int) -> tuple[str, dict]:
+    """「📋 查看清單」：列出最近的運動紀錄，每一筆附「✏️ 編輯」「🗑 刪除」按鈕。"""
     logs = body.list_exercise_logs(db, user_id)
-    listing = body.format_exercise_log_list(logs)
     if not logs:
-        return listing
+        return "目前還沒有任何運動紀錄，可以按「➕ 新增」建立第一筆！", {
+            "inline_keyboard": [[{"text": "🔙 返回日常紀錄", "callback_data": "menu:daily_log"}]]
+        }
+
+    listing = body.format_exercise_log_list(logs)
+    buttons = [
+        [
+            {"text": f"✏️ 編輯 {index}", "callback_data": f"exercise:edit:{item['id']}"},
+            {"text": f"🗑 刪除 {index}", "callback_data": f"exercise:delete:{item['id']}"},
+        ]
+        for index, item in enumerate(logs, start=1)
+    ]
+    buttons.append([{"text": "🔙 返回日常紀錄", "callback_data": "menu:daily_log"}])
+    return listing, {"inline_keyboard": buttons}
+
+
+def start_exercise_edit(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int, exercise_log_id: int) -> str:
+    """「✏️ 編輯」：沿用原本記錄的 `entry_date`，重新走一次項目/時長/心率三輪反問，
+    `exercise_id` 帶著代表這是編輯而非新增。"""
+    row = db.select("exercise_logs", where="id = %s", params=(exercise_log_id,), fetch_one=True)
+    if row is None or row.get("user_id") != user_id:
+        return "找不到這筆運動紀錄，可能已經被刪除了。"
 
     state_store.set(
         telegram_user_id,
-        {"flow": "pending_exercise_list_action", "target_user_id": user_id, "exercise_log_ids": [item["id"] for item in logs]},
+        {"flow": "pending_exercise_activity", "target_user_id": user_id, "exercise_date": row["entry_date"], "exercise_id": exercise_log_id},
     )
-    return f"{listing}\n\n如果要更新或刪除某一筆，請輸入編號；不需要的話輸入「結束」。"
+    return "好的，那我們重新輸入一次，你做了什麼運動呢？"
 
 
-def handle_exercise_list_action_step(state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
-    """處理 `pending_exercise_list_action` 狀態下使用者輸入的編號，選定要更新/刪除的那一筆。"""
-    state = state_store.get(telegram_user_id)
-    if text in _EXIT_PHRASES:
-        state_store.clear(telegram_user_id)
-        return "好的，已結束運動紀錄查詢模式！"
+def start_exercise_delete_confirm(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int, exercise_log_id: int) -> tuple[str, dict]:
+    row = db.select("exercise_logs", where="id = %s", params=(exercise_log_id,), fetch_one=True)
+    if row is None or row.get("user_id") != user_id:
+        return "找不到這筆運動紀錄，可能已經被刪除了。", {"inline_keyboard": [[{"text": "🔙 返回日常紀錄", "callback_data": "menu:daily_log"}]]}
 
-    ids = state["exercise_log_ids"]
-    if not text.isdigit() or not (1 <= int(text) <= len(ids)):
-        return f"請輸入 1～{len(ids)} 之間的編號，或輸入「結束」離開喔！"
-
-    state_store.set(
-        telegram_user_id,
-        {"flow": "pending_exercise_action_choice", "target_user_id": state["target_user_id"], "exercise_log_id": ids[int(text) - 1]},
-    )
-    return "要更新這筆還是刪除呢？"
+    state_store.set(telegram_user_id, {"flow": "exercise_delete_confirm", "exercise_log_id": exercise_log_id})
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "✅ 確認刪除", "callback_data": f"exercise:confirm_delete:{exercise_log_id}"}],
+            [{"text": "❌ 取消", "callback_data": "exercise:list"}],
+        ]
+    }
+    return "確定要刪除這筆運動紀錄嗎？這個動作沒辦法復原喔！", keyboard
 
 
-def handle_exercise_action_choice_step(db: CloudSQLClient, llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
-    """處理 `pending_exercise_action_choice` 狀態下使用者對「要更新這筆還是刪除呢？」的回覆。"""
-    state = state_store.get(telegram_user_id)
-    exercise_log_id = state["exercise_log_id"]
-    target_user_id = state["target_user_id"]
-
-    decision = llm_client.generate_text(_EXERCISE_ACTION_CLASSIFY_PROMPT.format(text=text)).strip()
-    if decision == "UPDATE":
-        row = db.select("exercise_logs", where="id = %s", params=(exercise_log_id,), fetch_one=True)
-        state_store.set(
-            telegram_user_id,
-            {"flow": "pending_exercise_activity", "target_user_id": target_user_id, "exercise_date": row["entry_date"], "exercise_id": exercise_log_id},
-        )
-        return "好的，那我們重新輸入一次，你做了什麼運動呢？"
-    if decision == "DELETE":
-        state_store.set(telegram_user_id, {"flow": "pending_exercise_delete_confirm", "target_user_id": target_user_id, "exercise_log_id": exercise_log_id})
-        return "確定要刪除這筆運動紀錄嗎？這個動作沒辦法復原喔！"
-
+def handle_exercise_delete(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int, exercise_log_id: int) -> str:
+    """`exercise:confirm_delete:<id>` 觸發時重新驗證擁有者（理由同 `handle_mood_delete`）。"""
     state_store.clear(telegram_user_id)
-    return "不好意思，我不太確定你的意思，這筆運動紀錄維持原狀，你可以再查詢一次運動紀錄清單重新選擇喔！"
-
-
-def handle_exercise_delete_confirm_step(db: CloudSQLClient, llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
-    """處理 `pending_exercise_delete_confirm` 狀態下使用者對刪除確認的回覆（簡單一輪 CONFIRM/CANCEL）。"""
-    state = state_store.get(telegram_user_id)
-    exercise_log_id = state["exercise_log_id"]
-    state_store.clear(telegram_user_id)
-
-    decision = llm_client.generate_text(_EXERCISE_DELETE_CONFIRM_PROMPT.format(text=text)).strip()
-    if decision != "CONFIRM":
-        return "好的，這筆運動紀錄保留，沒有刪除！"
-
+    row = db.select("exercise_logs", where="id = %s", params=(exercise_log_id,), fetch_one=True)
+    if row is None or row.get("user_id") != user_id:
+        return "找不到這筆運動紀錄，可能已經被刪除了。"
     body.delete_exercise_log(db, exercise_log_id)
     return "好的，已經刪除這筆運動紀錄了！"
+
+
+def handle_exercise_confirm_text(state_store: ConversationStateStore, telegram_user_id: int) -> tuple[str, dict]:
+    """`pending_exercise_confirm`／`exercise_delete_confirm` 只接受按鈕操作，理由同
+    `handle_mood_confirm_text`。"""
+    state_store.clear(telegram_user_id)
+    keyboard = {"inline_keyboard": [[{"text": "🔙 返回日常紀錄", "callback_data": "menu:daily_log"}]]}
+    return "這個步驟請用上面的按鈕操作喔，這次先幫你取消了。", keyboard
 
 
 # --- 飲食（含飲水） ---

@@ -44,9 +44,27 @@ def test_is_owner_only_key():
 
 
 def test_is_not_yet_implemented():
-    assert menu.is_not_yet_implemented("daily_log") is True
+    """2026-08-16（Phase 6 第二批 2c）：daily_log 已接上真正邏輯，從「開發中」名單移除。"""
+    assert menu.is_not_yet_implemented("daily_log") is False
+    assert menu.is_not_yet_implemented("query") is True
     assert menu.is_not_yet_implemented("rule") is False
     assert menu.is_not_yet_implemented("permission") is False
+
+
+def test_daily_log_menu_items_and_not_yet_implemented_split():
+    assert [item["key"] for item in menu.DAILY_LOG_MENU_ITEMS] == ["mood", "exercise", "diet", "body", "finance"]
+    assert menu.is_valid_daily_log_key("mood") is True
+    assert menu.is_valid_daily_log_key("invalid_key") is False
+    assert menu.is_daily_log_not_yet_implemented("mood") is False
+    assert menu.is_daily_log_not_yet_implemented("exercise") is False
+    for key in ("diet", "body", "finance"):
+        assert menu.is_daily_log_not_yet_implemented(key) is True
+
+
+def test_daily_log_not_yet_implemented_reply_points_back_to_daily_log_menu():
+    text, keyboard = menu.daily_log_not_yet_implemented_reply()
+    assert "開發中" in text
+    assert keyboard["inline_keyboard"][0][0]["callback_data"] == "menu:daily_log"
 
 
 def test_not_yet_implemented_reply_includes_back_button():

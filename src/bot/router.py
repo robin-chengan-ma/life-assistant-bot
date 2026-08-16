@@ -48,12 +48,9 @@ _SET_FAMILY_BIRTHDAY_TRIGGERS = {"/set_family_birthday", "設定家人生日"}
 # 2026-08-02（Step 1.7，見 robinson SPEC.md FR-32）：查詢待辦事項清單，所有使用者皆可用
 # （不像 /set_toggle 是 Owner 專屬），放在 is_owner/非 is_owner 分支都會落到的共用觸發詞區塊。
 _MY_TODOS_TRIGGERS = {"/my_todos", "我的待辦事項"}
-# 2026-08-02（Step 1.8，見 robinson SPEC.md FR-49、FR-56h）：開始心情小記流程，所有使用者皆可用。
-_MOOD_JOURNAL_TRIGGERS = {"/mood_journal", "我想做心情筆記"}
-# 2026-08-02 追加（見 robinson SPEC.md FR-49 補記/更新/刪除擴充）：補記過去日期的心情小記、
-# 查詢並進入可更新/刪除模式，觸發詞設計比照上面 _MOOD_JOURNAL_TRIGGERS／_MY_TODOS_TRIGGERS。
-_MOOD_BACKFILL_TRIGGERS = {"/backfill_mood", "我要補記心情"}
-_MY_MOOD_JOURNALS_TRIGGERS = {"/my_mood_journals", "我的心情紀錄"}
+# 2026-08-16（Phase 6 第二批 2c）：心情小記全面改選單觸發，舊文字觸發詞
+# （/mood_journal、/backfill_mood、/my_mood_journals 等）已移除，入口改為
+# 「📝 日常紀錄」→「😊 心情」子選單，見 menu.py `DAILY_LOG_MENU_ITEMS`。
 # 2026-08-08（Step 3.5，見 robinson SPEC.md FR-51、FR-52、ADR-22）：好友模式陪伴聊天，`friend_mode`
 # 開關 owner_only=False，所有使用者皆可用，放在共用觸發詞區塊；單輪生成完整回覆，不需要對話狀態機。
 _FRIEND_CHAT_TRIGGERS = {"/friend_chat", "陪我聊聊"}
@@ -70,9 +67,9 @@ _SET_WAIST_TRIGGERS = {"/set_waist", "設定腰圍"}
 _LOG_WEIGHT_TRIGGERS = {"/log_weight", "我要記錄體重"}
 _BACKFILL_WEIGHT_TRIGGERS = {"/backfill_weight", "我要補記體重"}
 _MY_WEIGHT_LOGS_TRIGGERS = {"/my_weight_logs", "我的體重紀錄"}
-_LOG_EXERCISE_TRIGGERS = {"/log_exercise", "我要記錄運動"}
-_BACKFILL_EXERCISE_TRIGGERS = {"/backfill_exercise", "我要補記運動"}
-_MY_EXERCISE_LOGS_TRIGGERS = {"/my_exercise_logs", "我的運動紀錄"}
+# 2026-08-16（Phase 6 第二批 2c）：運動全面改選單觸發，舊文字觸發詞
+# （/log_exercise、/backfill_exercise、/my_exercise_logs 等）已移除，入口改為
+# 「📝 日常紀錄」→「🏃 運動」子選單。
 _LOG_DIET_TRIGGERS = {"/log_diet", "我要記錄飲食"}
 _BACKFILL_DIET_TRIGGERS = {"/backfill_diet", "我要補記飲食"}
 _MY_DIET_LOGS_TRIGGERS = {"/my_diet_logs", "我的飲食紀錄"}
@@ -329,15 +326,6 @@ def handle_message(
     if text in _MY_TODOS_TRIGGERS:
         # 2026-08-02（Step 1.7，見 robinson SPEC.md FR-32）：查詢待處理清單並進入可標記完成/取消的模式。
         return commands.start_todo_list(db, state_store, telegram_user_id, user_id)
-    if text in _MOOD_JOURNAL_TRIGGERS:
-        # 2026-08-02（Step 1.8，見 robinson SPEC.md FR-49）：開始心情小記三輪反問流程，先問分類。
-        return commands.start_mood_journal(state_store, telegram_user_id, user_id)
-    if text in _MOOD_BACKFILL_TRIGGERS:
-        # 2026-08-02 追加（FR-49 補記擴充）：補記過去日期的心情小記，先問是哪一天。
-        return commands.start_mood_backfill(state_store, telegram_user_id, user_id)
-    if text in _MY_MOOD_JOURNALS_TRIGGERS:
-        # 2026-08-02 追加（FR-49 更新/刪除擴充）：查詢清單並進入可更新/刪除的模式。
-        return commands.start_mood_list(db, state_store, telegram_user_id, user_id)
     if text in _FRIEND_CHAT_TRIGGERS:
         # 2026-08-08（Step 3.5，見 robinson SPEC.md FR-51、FR-52、ADR-22）：好友模式陪伴聊天，
         # 單次生成完整回覆，不需要對話狀態機。
@@ -369,13 +357,6 @@ def handle_message(
         return commands.start_weight_backfill(state_store, telegram_user_id, user_id)
     if text in _MY_WEIGHT_LOGS_TRIGGERS:
         return commands.start_weight_list(db, state_store, telegram_user_id, user_id)
-    if text in _LOG_EXERCISE_TRIGGERS:
-        # 2026-08-04（FR-47）：開始記錄運動流程，先問項目。
-        return commands.start_exercise_log(state_store, telegram_user_id, user_id)
-    if text in _BACKFILL_EXERCISE_TRIGGERS:
-        return commands.start_exercise_backfill(state_store, telegram_user_id, user_id)
-    if text in _MY_EXERCISE_LOGS_TRIGGERS:
-        return commands.start_exercise_list(db, state_store, telegram_user_id, user_id)
     if text in _LOG_DIET_TRIGGERS:
         # 2026-08-04（FR-48）：開始記錄飲食/飲水流程，先問類型。
         return commands.start_diet_log(state_store, telegram_user_id, user_id)
@@ -441,7 +422,22 @@ def handle_callback_query(
         if key == "important_days":
             state_store.clear(telegram_user_id)
             return important_days.start_important_days_menu()
+        if key == "daily_log":
+            state_store.clear(telegram_user_id)
+            return menu.DAILY_LOG_MENU_TEXT, menu.build_daily_log_menu_keyboard()
         return menu.not_yet_implemented_reply()
+
+    if data.startswith("daily_log:"):
+        # 2026-08-16（Phase 6 第二批 2c，FR-6e）：日常紀錄第二層子選單分派。
+        key = data[len("daily_log:") :]
+        if not menu.is_valid_daily_log_key(key):
+            return menu.DAILY_LOG_MENU_TEXT, menu.build_daily_log_menu_keyboard()
+        state_store.clear(telegram_user_id)
+        if key == "mood":
+            return commands.start_mood_menu()
+        if key == "exercise":
+            return commands.start_exercise_menu()
+        return menu.daily_log_not_yet_implemented_reply()
 
     if data.startswith("permission:"):
         action = data[len("permission:") :]
@@ -472,6 +468,56 @@ def handle_callback_query(
             return important_days.handle_confirm_save(db, state_store, telegram_user_id, user["id"])
         # 未知的重要日子子動作，導回子選單而不是整個拋例外，比照其餘 callback 的保守做法。
         return important_days.start_important_days_menu()
+
+    if data.startswith("mood:"):
+        # 2026-08-16（Phase 6 第二批 2c，FR-6e）：心情選單與清單操作。
+        user = _get_identified_user(db, telegram_user_id)
+        if user is None:
+            return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
+        action = data[len("mood:") :]
+        if action == "list":
+            return commands.handle_mood_list(db, user["id"])
+        if action == "new":
+            return commands.start_mood_journal(state_store, telegram_user_id, user["id"]), None
+        if action == "backfill":
+            return commands.start_mood_backfill(state_store, telegram_user_id, user["id"]), None
+        if action.startswith("edit:"):
+            journal_id = int(action[len("edit:") :])
+            return commands.start_mood_edit(db, state_store, telegram_user_id, user["id"], journal_id), None
+        if action.startswith("delete:"):
+            journal_id = int(action[len("delete:") :])
+            return commands.start_mood_delete_confirm(db, state_store, telegram_user_id, user["id"], journal_id)
+        if action.startswith("confirm_delete:"):
+            journal_id = int(action[len("confirm_delete:") :])
+            return commands.handle_mood_delete(db, state_store, telegram_user_id, user["id"], journal_id), menu.back_to_main_menu_keyboard()
+        if action == "confirm_save":
+            return commands.handle_mood_confirm_save(db, state_store, telegram_user_id), None
+        return commands.start_mood_menu()
+
+    if data.startswith("exercise:"):
+        # 2026-08-16（Phase 6 第二批 2c，FR-6e）：運動選單與清單操作。
+        user = _get_identified_user(db, telegram_user_id)
+        if user is None:
+            return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
+        action = data[len("exercise:") :]
+        if action == "list":
+            return commands.handle_exercise_list(db, user["id"])
+        if action == "new":
+            return commands.start_exercise_log(state_store, telegram_user_id, user["id"]), None
+        if action == "backfill":
+            return commands.start_exercise_backfill(state_store, telegram_user_id, user["id"]), None
+        if action.startswith("edit:"):
+            exercise_log_id = int(action[len("edit:") :])
+            return commands.start_exercise_edit(db, state_store, telegram_user_id, user["id"], exercise_log_id), None
+        if action.startswith("delete:"):
+            exercise_log_id = int(action[len("delete:") :])
+            return commands.start_exercise_delete_confirm(db, state_store, telegram_user_id, user["id"], exercise_log_id)
+        if action.startswith("confirm_delete:"):
+            exercise_log_id = int(action[len("confirm_delete:") :])
+            return commands.handle_exercise_delete(db, state_store, telegram_user_id, user["id"], exercise_log_id), menu.back_to_main_menu_keyboard()
+        if action == "confirm_save":
+            return commands.handle_exercise_confirm_save(db, state_store, telegram_user_id), None
+        return commands.start_exercise_menu()
 
     # 未知／格式不符的 callback_data（例如過期或偽造），保守導回主選單，不當例外處理。
     return menu.MAIN_MENU_TEXT, menu.build_main_menu_keyboard(is_owner=is_owner)
@@ -705,20 +751,18 @@ def _dispatch_active_flow(
         return commands.handle_mood_category_step(state_store, telegram_user_id, text)
     if flow == "pending_mood_content":
         return commands.handle_mood_content_step(
-            db, state_store, telegram_user_id, text, privacy_llm_client=privacy_llm_client
+            state_store, telegram_user_id, text, privacy_llm_client=privacy_llm_client
         )
     if flow == "pending_mood_achievement":
         return commands.handle_mood_achievement_step(
             db, state_store, telegram_user_id, text, privacy_llm_client=privacy_llm_client
         )
-    # 2026-08-02 追加（見 robinson SPEC.md FR-49 更新/刪除擴充）：查詢清單後選編號、決定要更新
-    # 還是刪除，結構比照上面待辦事項的 pending_todo_list_action／pending_todo_action_confirm。
-    if flow == "pending_mood_list_action":
-        return commands.handle_mood_list_action_step(state_store, telegram_user_id, text)
-    if flow == "pending_mood_action_choice":
-        return commands.handle_mood_action_choice_step(db, llm_client, state_store, telegram_user_id, text)
-    if flow == "pending_mood_delete_confirm":
-        return commands.handle_mood_delete_confirm_step(db, llm_client, state_store, telegram_user_id, text)
+    # 2026-08-16（Phase 6 第二批 2c）：摘要確認、刪除確認這兩個狀態只接受按鈕操作，使用者
+    # 打字時直接取消流程導回日常紀錄選單，不再走 LLM 分類（理由見 commands.py 對應函式註解）。
+    if flow == "pending_mood_confirm":
+        return commands.handle_mood_confirm_text(state_store, telegram_user_id)
+    if flow == "mood_delete_confirm":
+        return commands.handle_mood_confirm_text(state_store, telegram_user_id)
     # 2026-08-04（Step 2.1，見 robinson SPEC.md FR-41～FR-44）：記帳多輪對話流，結構比照心情小記
     # 的補記/更新/刪除擴充，見 commands.py「記帳」區塊開頭說明。
     # 2026-08-04 擴充（見 robinson SPEC.md FR-41a）：設定預算改成多輪，見 commands.py 該擴充說明。
@@ -779,13 +823,12 @@ def _dispatch_active_flow(
     if flow == "pending_exercise_duration":
         return commands.handle_exercise_duration_step(state_store, telegram_user_id, text)
     if flow == "pending_exercise_heart_rate":
-        return commands.handle_exercise_heart_rate_step(db, llm_client, state_store, telegram_user_id, text)
-    if flow == "pending_exercise_list_action":
-        return commands.handle_exercise_list_action_step(state_store, telegram_user_id, text)
-    if flow == "pending_exercise_action_choice":
-        return commands.handle_exercise_action_choice_step(db, llm_client, state_store, telegram_user_id, text)
-    if flow == "pending_exercise_delete_confirm":
-        return commands.handle_exercise_delete_confirm_step(db, llm_client, state_store, telegram_user_id, text)
+        return commands.handle_exercise_heart_rate_step(llm_client, state_store, telegram_user_id, text)
+    # 2026-08-16（Phase 6 第二批 2c）：理由同心情小記的 pending_mood_confirm／mood_delete_confirm。
+    if flow == "pending_exercise_confirm":
+        return commands.handle_exercise_confirm_text(state_store, telegram_user_id)
+    if flow == "exercise_delete_confirm":
+        return commands.handle_exercise_confirm_text(state_store, telegram_user_id)
     if flow == "pending_diet_backfill_date":
         return commands.handle_diet_backfill_date_step(llm_client, state_store, telegram_user_id, text)
     if flow == "pending_diet_entry_type":

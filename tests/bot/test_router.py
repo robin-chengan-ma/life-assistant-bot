@@ -767,7 +767,32 @@ def test_my_todos_trigger_lists_and_marks_completed_via_index_selection(fake_db,
     assert fake_db.select("todos", where="id = %s", params=(todo_id,), fetch_one=True)["status"] == "completed"
 
 
-# --- 心情小記（robinson SPEC.md FR-49、FR-50，Step 1.8）---
+# --- 心情小記（robinson SPEC.md FR-49、FR-50；2026-08-16 Phase 6 第二批 2c 改為全選單觸發，
+# 見 docs/ADR/discuss/robinson.md）---
+
+
+def test_daily_log_submenu_shows_mood_and_exercise_buttons(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    store = ConversationStateStore()
+
+    reply, keyboard = router.handle_callback_query(fake_db, store, FAMILY_ID, "menu:daily_log")
+
+    assert reply == menu.DAILY_LOG_MENU_TEXT
+    callback_datas = [button["callback_data"] for row in keyboard["inline_keyboard"] for button in row]
+    assert "daily_log:mood" in callback_datas
+    assert "daily_log:exercise" in callback_datas
+    assert "daily_log:diet" in callback_datas
+
+
+def test_daily_log_diet_still_not_yet_implemented(fake_db, monkeypatch):
+    """diet／body／finance 三項這批不接邏輯，維持「開發中」提示。"""
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    store = ConversationStateStore()
+
+    reply, keyboard = router.handle_callback_query(fake_db, store, FAMILY_ID, "daily_log:diet")
+
+    assert "開發中" in reply
+    assert keyboard["inline_keyboard"][0][0]["callback_data"] == "menu:daily_log"
 
 
 def test_mood_journal_full_flow_records_entry_and_achievement(fake_db, monkeypatch):
@@ -775,7 +800,12 @@ def test_mood_journal_full_flow_records_entry_and_achievement(fake_db, monkeypat
     user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     store = ConversationStateStore()
 
-    reply1 = router.handle_message(fake_db, store, FAMILY_ID, "我想做心情筆記")
+    reply0, keyboard0 = router.handle_callback_query(fake_db, store, FAMILY_ID, "daily_log:mood")
+    assert reply0 == "心情，請選擇要進行的操作："
+    assert keyboard0["inline_keyboard"][0][0]["callback_data"] == "mood:new"
+
+    reply1, keyboard1 = router.handle_callback_query(fake_db, store, FAMILY_ID, "mood:new")
+    assert keyboard1 is None
     assert "請幫我選一個" in reply1
     assert store.get(FAMILY_ID)["flow"] == "pending_mood_category"
 
@@ -783,12 +813,17 @@ def test_mood_journal_full_flow_records_entry_and_achievement(fake_db, monkeypat
     assert reply2 == "給我完整的日記內容："
     assert store.get(FAMILY_ID)["flow"] == "pending_mood_content"
 
-    reply3 = router.handle_message(fake_db, store, FAMILY_ID, "今天很開心")
-    assert "已經紀錄了" in reply3
+    reply3, keyboard3 = router.handle_message(fake_db, store, FAMILY_ID, "今天很開心")
+    assert "請確認以下內容" in reply3
+    assert keyboard3["inline_keyboard"][0][0]["callback_data"] == "mood:confirm_save"
+    assert store.get(FAMILY_ID)["flow"] == "pending_mood_confirm"
+
+    reply4, _keyboard4 = router.handle_callback_query(fake_db, store, FAMILY_ID, "mood:confirm_save")
+    assert "已經紀錄了" in reply4
     assert store.get(FAMILY_ID)["flow"] == "pending_mood_achievement"
 
-    reply4 = router.handle_message(fake_db, store, FAMILY_ID, "完成了一份報告")
-    assert reply4 == "已經幫你記錄好了！"
+    reply5 = router.handle_message(fake_db, store, FAMILY_ID, "完成了一份報告")
+    assert reply5 == "已經幫你記錄好了！"
     assert store.get(FAMILY_ID) is None
 
     rows = fake_db.select("mood_journals", where="user_id = %s AND mood_category = %s", params=(user_id, "happy_excited"))
@@ -802,9 +837,10 @@ def test_mood_journal_achievement_can_be_skipped(fake_db, monkeypatch):
     fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     store = ConversationStateStore()
 
-    router.handle_message(fake_db, store, FAMILY_ID, "/mood_journal")
+    router.handle_callback_query(fake_db, store, FAMILY_ID, "mood:new")
     router.handle_message(fake_db, store, FAMILY_ID, "1")
     router.handle_message(fake_db, store, FAMILY_ID, "今天有點低落")
+    router.handle_callback_query(fake_db, store, FAMILY_ID, "mood:confirm_save")
     reply = router.handle_message(fake_db, store, FAMILY_ID, "結束")
 
     assert reply == "好的，那先這樣吧！"
@@ -812,13 +848,33 @@ def test_mood_journal_achievement_can_be_skipped(fake_db, monkeypatch):
     assert rows[0]["achievement_note"] is None
 
 
-def test_mood_backfill_full_flow_records_entry_with_given_date(fake_db, monkeypatch):
-    """2026-08-02 追加（FR-49 補記擴充）：「我要補記心情」先問哪一天，再走既有分類/內容流程。"""
+def test_mood_journal_confirm_step_rejects_stray_text(fake_db, monkeypatch):
+    """2026-08-16（Phase 6 第二批 2c）：摘要確認這一步只接受按鈕，打字要優雅取消而不是拋例外。"""
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     store = ConversationStateStore()
 
-    reply1 = router.handle_message(fake_db, store, FAMILY_ID, "我要補記心情")
+    router.handle_callback_query(fake_db, store, FAMILY_ID, "mood:new")
+    router.handle_message(fake_db, store, FAMILY_ID, "1")
+    router.handle_message(fake_db, store, FAMILY_ID, "今天有點低落")
+    assert store.get(FAMILY_ID)["flow"] == "pending_mood_confirm"
+
+    reply, keyboard = router.handle_message(fake_db, store, FAMILY_ID, "亂打字")
+
+    assert "請用上面的按鈕" in reply
+    assert keyboard["inline_keyboard"][0][0]["callback_data"] == "menu:daily_log"
+    assert store.get(FAMILY_ID) is None
+    assert fake_db.select("mood_journals") == []
+
+
+def test_mood_backfill_full_flow_records_entry_with_given_date(fake_db, monkeypatch):
+    """2026-08-02 追加（FR-49 補記擴充）：「補記」按鈕先問哪一天，再走既有分類/內容流程。"""
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+
+    reply1, keyboard1 = router.handle_callback_query(fake_db, store, FAMILY_ID, "mood:backfill")
+    assert keyboard1 is None
     assert "哪一天" in reply1
     assert store.get(FAMILY_ID)["flow"] == "pending_mood_backfill_date"
 
@@ -829,6 +885,7 @@ def test_mood_backfill_full_flow_records_entry_with_given_date(fake_db, monkeypa
 
     router.handle_message(fake_db, store, FAMILY_ID, "2")
     router.handle_message(fake_db, store, FAMILY_ID, "那天有點難過")
+    router.handle_callback_query(fake_db, store, FAMILY_ID, "mood:confirm_save")
     reply4 = router.handle_message(fake_db, store, FAMILY_ID, "結束")
 
     assert reply4 == "好的，那先這樣吧！"
@@ -838,11 +895,11 @@ def test_mood_backfill_full_flow_records_entry_with_given_date(fake_db, monkeypa
 
 
 def test_mood_list_update_and_delete_full_flow(fake_db, monkeypatch):
-    """2026-08-02 追加（FR-49 更新/刪除擴充）：「我的心情紀錄」查詢清單、選一筆、更新內容、
-    再查詢一次、選同一筆、刪除。"""
+    """2026-08-02 追加（FR-49 更新/刪除擴充；2026-08-16 改成選單按鈕觸發）：「查看清單」列出、
+    選一筆編輯、再查一次、選同一筆刪除（走摘要確認／刪除確認兩顆按鈕）。"""
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
-    fake_db.insert(
+    journal_id = fake_db.insert(
         "mood_journals",
         {
             "user_id": user_id,
@@ -854,21 +911,18 @@ def test_mood_list_update_and_delete_full_flow(fake_db, monkeypatch):
     )
     store = ConversationStateStore()
 
-    reply1 = router.handle_message(fake_db, store, FAMILY_ID, "我的心情紀錄")
-    assert "更新或刪除" in reply1
-    assert store.get(FAMILY_ID)["flow"] == "pending_mood_list_action"
+    reply1, keyboard1 = router.handle_callback_query(fake_db, store, FAMILY_ID, "mood:list")
+    callback_datas = [button["callback_data"] for row in keyboard1["inline_keyboard"] for button in row]
+    assert f"mood:edit:{journal_id}" in callback_datas
+    assert f"mood:delete:{journal_id}" in callback_datas
 
-    reply2 = router.handle_message(fake_db, store, FAMILY_ID, "1")
-    assert "更新" in reply2 and "刪除" in reply2
-    assert store.get(FAMILY_ID)["flow"] == "pending_mood_action_choice"
-
-    update_llm_client = _FakeLLMClient(response_text="UPDATE")
-    reply3 = router.handle_message(fake_db, store, FAMILY_ID, "我要改內容", llm_client=update_llm_client)
-    assert "重新選一次心情分類" in reply3
+    reply2, _keyboard2 = router.handle_callback_query(fake_db, store, FAMILY_ID, f"mood:edit:{journal_id}")
+    assert "請幫我選一個" in reply2
     assert store.get(FAMILY_ID)["flow"] == "pending_mood_category"
 
     router.handle_message(fake_db, store, FAMILY_ID, "6")
     router.handle_message(fake_db, store, FAMILY_ID, "改過的內容")
+    router.handle_callback_query(fake_db, store, FAMILY_ID, "mood:confirm_save")
     router.handle_message(fake_db, store, FAMILY_ID, "結束")
 
     rows = fake_db.select("mood_journals")
@@ -876,17 +930,168 @@ def test_mood_list_update_and_delete_full_flow(fake_db, monkeypatch):
     assert rows[0]["content"] == "改過的內容"
     assert rows[0]["mood_category"] == "happy_excited"
 
-    router.handle_message(fake_db, store, FAMILY_ID, "我的心情紀錄")
-    router.handle_message(fake_db, store, FAMILY_ID, "1")
-    delete_llm_client = _FakeLLMClient(response_text="DELETE")
-    reply_delete_ask = router.handle_message(fake_db, store, FAMILY_ID, "刪掉", llm_client=delete_llm_client)
+    router.handle_callback_query(fake_db, store, FAMILY_ID, "mood:list")
+    reply_delete_ask, keyboard_delete = router.handle_callback_query(
+        fake_db, store, FAMILY_ID, f"mood:delete:{journal_id}"
+    )
     assert "沒辦法復原" in reply_delete_ask
-    assert store.get(FAMILY_ID)["flow"] == "pending_mood_delete_confirm"
+    assert keyboard_delete["inline_keyboard"][0][0]["callback_data"] == f"mood:confirm_delete:{journal_id}"
+    assert store.get(FAMILY_ID)["flow"] == "mood_delete_confirm"
 
-    confirm_llm_client = _FakeLLMClient(response_text="CONFIRM")
-    reply_deleted = router.handle_message(fake_db, store, FAMILY_ID, "對", llm_client=confirm_llm_client)
+    reply_deleted, _keyboard = router.handle_callback_query(
+        fake_db, store, FAMILY_ID, f"mood:confirm_delete:{journal_id}"
+    )
     assert "已經刪除" in reply_deleted
     assert fake_db.select("mood_journals") == []
+
+
+def test_mood_delete_only_owner_can_target_own_journal(fake_db, monkeypatch):
+    """FR-6c：`mood:delete:<id>`／`mood:confirm_delete:<id>` 都要重新驗證擁有者。"""
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    other_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID_2, "role": "媽媽", "is_owner": False})
+    journal_id = fake_db.insert(
+        "mood_journals",
+        {
+            "user_id": other_id,
+            "mood_category": "sad_down",
+            "content": "別人的心情",
+            "achievement_note": None,
+            "entry_date": date(2026, 8, 1),
+        },
+    )
+    store = ConversationStateStore()
+
+    reply, _keyboard = router.handle_callback_query(fake_db, store, FAMILY_ID, f"mood:delete:{journal_id}")
+    assert "找不到" in reply
+
+
+# --- 運動（robinson SPEC.md FR-47；2026-08-16 Phase 6 第二批 2c 新增選單流程，
+# 見 docs/ADR/discuss/robinson.md）---
+
+
+def test_exercise_new_flow_records_entry_with_confirm_gate(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+
+    reply0, keyboard0 = router.handle_callback_query(fake_db, store, FAMILY_ID, "daily_log:exercise")
+    assert reply0 == "運動，請選擇要進行的操作："
+    assert keyboard0["inline_keyboard"][0][0]["callback_data"] == "exercise:new"
+
+    reply1, keyboard1 = router.handle_callback_query(fake_db, store, FAMILY_ID, "exercise:new")
+    assert keyboard1 is None
+    assert store.get(FAMILY_ID)["flow"] == "pending_exercise_activity"
+
+    reply2 = router.handle_message(fake_db, store, FAMILY_ID, "跑步")
+    assert "多久" in reply2
+    assert store.get(FAMILY_ID)["flow"] == "pending_exercise_duration"
+
+    reply3 = router.handle_message(fake_db, store, FAMILY_ID, "30")
+    assert "心率" in reply3
+    assert store.get(FAMILY_ID)["flow"] == "pending_exercise_heart_rate"
+
+    reply4, keyboard4 = router.handle_message(fake_db, store, FAMILY_ID, "沒有")
+    assert keyboard4["inline_keyboard"][0][0]["callback_data"] == "exercise:confirm_save"
+    assert store.get(FAMILY_ID)["flow"] == "pending_exercise_confirm"
+
+    reply5, _keyboard5 = router.handle_callback_query(fake_db, store, FAMILY_ID, "exercise:confirm_save")
+    assert "已經" in reply5
+    assert store.get(FAMILY_ID) is None
+
+    rows = fake_db.select("exercise_logs", where="user_id = %s", params=(user_id,))
+    assert len(rows) == 1
+    assert rows[0]["activity"] == "跑步"
+    assert rows[0]["duration_minutes"] == 30
+
+
+def test_exercise_confirm_step_rejects_stray_text(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+
+    router.handle_callback_query(fake_db, store, FAMILY_ID, "exercise:new")
+    router.handle_message(fake_db, store, FAMILY_ID, "跑步")
+    router.handle_message(fake_db, store, FAMILY_ID, "30")
+    router.handle_message(fake_db, store, FAMILY_ID, "沒有")
+    assert store.get(FAMILY_ID)["flow"] == "pending_exercise_confirm"
+
+    reply, keyboard = router.handle_message(fake_db, store, FAMILY_ID, "亂打字")
+
+    assert "請用上面的按鈕" in reply
+    assert keyboard["inline_keyboard"][0][0]["callback_data"] == "menu:daily_log"
+    assert store.get(FAMILY_ID) is None
+    assert fake_db.select("exercise_logs") == []
+
+
+def test_exercise_list_edit_and_delete_full_flow(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    exercise_log_id = fake_db.insert(
+        "exercise_logs",
+        {
+            "user_id": user_id,
+            "activity": "游泳",
+            "duration_minutes": 20,
+            "heart_rate": None,
+            "estimated_calories": None,
+            "entry_date": date(2026, 8, 1),
+        },
+    )
+    store = ConversationStateStore()
+
+    reply1, keyboard1 = router.handle_callback_query(fake_db, store, FAMILY_ID, "exercise:list")
+    callback_datas = [button["callback_data"] for row in keyboard1["inline_keyboard"] for button in row]
+    assert f"exercise:edit:{exercise_log_id}" in callback_datas
+    assert f"exercise:delete:{exercise_log_id}" in callback_datas
+
+    router.handle_callback_query(fake_db, store, FAMILY_ID, f"exercise:edit:{exercise_log_id}")
+    assert store.get(FAMILY_ID)["flow"] == "pending_exercise_activity"
+    router.handle_message(fake_db, store, FAMILY_ID, "跑步")
+    router.handle_message(fake_db, store, FAMILY_ID, "45")
+    router.handle_message(fake_db, store, FAMILY_ID, "沒有")
+    router.handle_callback_query(fake_db, store, FAMILY_ID, "exercise:confirm_save")
+
+    rows = fake_db.select("exercise_logs")
+    assert len(rows) == 1
+    assert rows[0]["activity"] == "跑步"
+    assert rows[0]["duration_minutes"] == 45
+
+    router.handle_callback_query(fake_db, store, FAMILY_ID, "exercise:list")
+    reply_delete_ask, keyboard_delete = router.handle_callback_query(
+        fake_db, store, FAMILY_ID, f"exercise:delete:{exercise_log_id}"
+    )
+    assert "沒辦法復原" in reply_delete_ask
+    assert keyboard_delete["inline_keyboard"][0][0]["callback_data"] == f"exercise:confirm_delete:{exercise_log_id}"
+    assert store.get(FAMILY_ID)["flow"] == "exercise_delete_confirm"
+
+    reply_deleted, _keyboard = router.handle_callback_query(
+        fake_db, store, FAMILY_ID, f"exercise:confirm_delete:{exercise_log_id}"
+    )
+    assert "已經刪除" in reply_deleted
+    assert fake_db.select("exercise_logs") == []
+
+
+def test_exercise_delete_only_owner_can_target_own_log(fake_db, monkeypatch):
+    """FR-6c：`exercise:delete:<id>`／`exercise:confirm_delete:<id>` 都要重新驗證擁有者。"""
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    other_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID_2, "role": "媽媽", "is_owner": False})
+    exercise_log_id = fake_db.insert(
+        "exercise_logs",
+        {
+            "user_id": other_id,
+            "activity": "別人的運動",
+            "duration_minutes": 10,
+            "heart_rate": None,
+            "estimated_calories": None,
+            "entry_date": date(2026, 8, 1),
+        },
+    )
+    store = ConversationStateStore()
+
+    reply, _keyboard = router.handle_callback_query(fake_db, store, FAMILY_ID, f"exercise:delete:{exercise_log_id}")
+    assert "找不到" in reply
 
 
 # --- 記帳（robinson SPEC.md FR-41～FR-44，Step 2.1）---
@@ -2209,9 +2414,11 @@ def test_error_resolution_trigger_ignored_for_non_owner(fake_db, monkeypatch):
 
 
 def test_important_days_menu_key_not_in_not_yet_implemented_set():
-    """2b 應該把 important_days 從 2a 留下的「開發中」名單移除，其餘六項維持不變。"""
+    """2b 應該把 important_days 從 2a 留下的「開發中」名單移除；daily_log 之後在 2c 也移除，
+    其餘四項維持不變。"""
     assert not menu.is_not_yet_implemented("important_days")
-    for key in ("daily_log", "query", "todo", "collections", "achievements", "schedule"):
+    assert not menu.is_not_yet_implemented("daily_log")
+    for key in ("query", "todo", "collections", "achievements", "schedule"):
         assert menu.is_not_yet_implemented(key)
 
 

@@ -387,26 +387,28 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 負責�
 **功能性需求**
 - FR-45：三種預警——目標達成通知、依 FR-72a 重要日子設定的期限提醒、BMI 異常提醒；達成時另以 Telegram 固定按鈕詢問是否加入成果展示，不自行建立成果
 - FR-46：`/set_height`、`/log_weight`／`/backfill_weight`／`/my_weight_logs`（合理範圍檢查，超出原地反問）；`/set_waist`（2026-08-08 新增，40～200 公分，僅記錄首次體重時順便詢問一次）
-- FR-47：`/log_exercise`（卡路里 LLM 估算，非 MET 公式）
-- FR-48：`/log_diet`（三大營養素 LLM 拆算，附誤差聲明；飲食目標不做自動達成判斷，只能手動取消）
+- FR-47：Telegram 入口為「日常紀錄」子選單的「🏃 運動」（Phase 6 第二批 2c 起改為選單按鈕觸發，取代原 `/log_exercise`／`/backfill_exercise`／`/my_exercise_logs`，不提供舊指令相容期，決策見 `docs/ADR/discuss/robinson.md` 2026-08-16「Phase 6 第二批 2c」）；新增／補記流程末段先組摘要文字＋「確認送出／取消」按鈕，確認才寫入（卡路里 LLM 估算，非 MET 公式）；清單改按鈕式「編輯／刪除」，刪除需二次確認
+- FR-48：`/log_diet`（三大營養素 LLM 拆算，附誤差聲明；飲食目標不做自動達成判斷，只能手動取消；本項尚未納入 Phase 6 選單化，維持既有 Slash Command 入口，見 Phase 6 第二批 2b 起子批次順序）
 
 **實作階段**
 - Phase 2 Step 2.2：全數完成，661 個測試全過；`src/bot/body.py` 覆蓋率 100%；2026-08-08 腰圍擴充新增 1009 個測試
+- Phase 6 第二批 2c（運動子項，2026-08-16）：入口改選單按鈕並補上摘要→二次確認，155 項測試全過（見 `docs/ADR/discuss/robinson.md` 2026-08-16「Phase 6 第二批 2c」）
 
 ### 心情小記
 
 **狀態**：active
-**討論紀錄**：無獨立 ADR，設計決策已於下方需求段落內註明
+**討論紀錄**：`docs/ADR/discuss/robinson.md` 2026-08-16「Phase 6 第二批 2c（日常紀錄－心情、運動）實作計畫」
 **來源說明**：原記錄於 robinson 母 spec 的 FR-49／FR-50，已於 2026-08-13 併入本文件（其他 6 份 spec 皆未涵蓋）。
 
 **概要**：心情分類（固定 6 選一）→ 日記內容 → 個人成就三選一提示（可跳過），全程純字串比對不需 LLM。
 
 **功能性需求**
-- FR-49：`/mood_journal` 觸發三輪流程；日記內容套用個資遮蔽；`/backfill_mood`（補記過去日期）、`/my_mood_journals`（列表後更新/刪除，刪除採簡單一輪 CONFIRM/CANCEL，不套用 FR-16a）
+- FR-49：Telegram 入口為「日常紀錄」子選單的「😊 心情」（Phase 6 第二批 2c 起改為選單按鈕觸發，取代原 `/mood_journal`／`/backfill_mood`／`/my_mood_journals`，不提供舊指令相容期）；日記內容套用個資遮蔽；輸入完內容後先組摘要文字＋「確認送出／取消」按鈕，確認才寫入；清單改按鈕式「編輯／刪除」，刪除需二次確認（僅按鈕，不再走自由文字 CONFIRM/CANCEL）
 - FR-50：個人成就三選一提示，可跳過不強迫回答
 
 **實作階段**
 - Phase 1 Step 1.8：全數完成，409 個測試全過、覆蓋率 100%；2026-08-02 補記/更新/刪除擴充後 465 個測試全過
+- Phase 6 第二批 2c（2026-08-16）：入口改選單按鈕並補上摘要→二次確認，移除 LLM 意圖分類，155 項測試全過（見 `docs/ADR/discuss/robinson.md` 2026-08-16「Phase 6 第二批 2c」）
 
 ### 好友模式
 
