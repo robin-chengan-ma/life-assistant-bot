@@ -492,6 +492,11 @@ def handle_callback_query(
         if action.startswith("confirm_delete:"):
             item_id = int(action[len("confirm_delete:") :])
             return collections.handle_delete(db, state_store, telegram_user_id, user["id"], item_id)
+        if action.startswith("visit:"):
+            # 2026-08-16（Phase 6 第二批 2d 補修，見 docs/ADR/debug/robinson.md）：標記已造訪，
+            # 不經行程直接把收藏加入探索地圖。
+            item_id = int(action[len("visit:") :])
+            return collections.start_visit(db, state_store, telegram_user_id, user["id"], item_id)
         if action == "geocode":
             return collections.handle_geocode_choice(db, state_store, telegram_user_id, True)
         if action == "skip_geocode":
@@ -766,6 +771,12 @@ def _dispatch_active_flow(
         return collections.handle_step(db, state_store, telegram_user_id, user["id"], text)
     if flow == "collection_delete_confirm":
         return collections.handle_delete_confirm_text(state_store, telegram_user_id)
+    if flow == "collection_visit":
+        # 2026-08-16（Phase 6 第二批 2d 補修，見 docs/ADR/debug/robinson.md）：標記已造訪多步驟流程。
+        user = _get_identified_user(db, telegram_user_id)
+        if user is None:
+            return _PERMISSION_DENIED_REPLY
+        return collections.handle_visit_step(db, state_store, telegram_user_id, user["id"], text)
     if flow == "trip":
         # 2026-08-16（Phase 6 第二批 2d，FR-6e／FR-6h／FR-74／FR-74a）：旅遊行程新增／編輯多步驟流程。
         user = _get_identified_user(db, telegram_user_id)

@@ -12,8 +12,9 @@ from src.bot.state import ConversationStateStore
 
 class FakeDatabase:
     def __init__(self):
-        self.tables = {"collection_items": [], "geocoding_cache": []}
+        self.tables = {"collection_items": [], "geocoding_cache": [], "exploration_events": []}
         self.next_id = 1
+        self.next_event_id = 1
 
     def select(self, table, columns=("*",), where=None, params=None, fetch_one=False):
         rows = list(self.tables[table])
@@ -34,6 +35,9 @@ class FakeDatabase:
             row["id"] = self.next_id
             self.next_id += 1
             row.setdefault("deleted_at", None)
+        elif table == "exploration_events":
+            row["id"] = self.next_event_id
+            self.next_event_id += 1
         self.tables[table].append(row)
         return row.get(returning)
 
@@ -240,3 +244,66 @@ def test_edit_flow_prefills_title_prompt_and_updates_existing_row():
 
     assert reply == "已更新該筆收藏！"
     assert db.tables["collection_items"][0]["title"] == "新名稱"
+
+
+def test_visit_flow_creates_exploration_event_and_marks_status():
+    """2026-08-16 補修（見 docs/ADR/debug/robinson.md）：Telegram 標記已造訪，
+    不經行程也能把收藏加入探索地圖，並帶入收藏既有的座標。"""
+    db = FakeDatabase()
+    db.tables["collection_items"] = [
+        {
+            "id": 1, "user_id": USER_ID, "title": "阿里山", "item_type": "attraction",
+            "country_name": "台灣", "city_name": "嘉義", "address": "阿里山鄉",
+            "latitude": 23.5, "longitude": 120.8, "status": "saved", "deleted_at": None,
+        },
+    ]
+    store = ConversationStateStore()
+
+    text, keyboard = collections.start_visit(db, store, TELEGRAM_USER_ID, USER_ID, 1)
+    assert "阿里山" in text
+    assert store.get(TELEGRAM_USER_ID)["flow"] == "collection_visit"
+
+    text, keyboard = collections.handle_visit_step(db, store, TELEGRAM_USER_ID, USER_ID, "2026-08-10")
+    assert "備註" in text
+
+    reply, _ = collections.handle_visit_step(db, store, TELEGRAM_USER_ID, USER_ID, "略過")
+
+    assert "已標記造訪" in reply
+    assert store.get(TELEGRAM_USER_ID) is None
+    event = db.tables["exploration_events"][0]
+    assert event["collection_item_id"] == 1
+    assert event["latitude"] == 23.5 and event["longitude"] == 120.8
+    assert db.tables["collection_items"][0]["status"] == "visited"
+
+
+def test_visit_flow_today_phrase_uses_current_date():
+    db = FakeDatabase()
+    db.tables["collection_items"] = [
+        {
+            "id": 1, "user_id": USER_ID, "title": "阿里山", "item_type": "attraction",
+            "country_name": "台灣", "city_name": "嘉義", "address": None,
+            "latitude": None, "longitude": None, "status": "saved", "deleted_at": None,
+        },
+    ]
+    store = ConversationStateStore()
+    collections.start_visit(db, store, TELEGRAM_USER_ID, USER_ID, 1)
+
+    text, _ = collections.handle_visit_step(db, store, TELEGRAM_USER_ID, USER_ID, "今天")
+    assert "備註" in text
+
+    reply, _ = collections.handle_visit_step(db, store, TELEGRAM_USER_ID, USER_ID, "略過")
+    assert "已標記造訪" in reply
+    assert db.tables["exploration_events"][0]["latitude"] is None
+
+
+def test_visit_already_visited_item_rejected():
+    db = FakeDatabase()
+    db.tables["collection_items"] = [
+        {"id": 1, "user_id": USER_ID, "title": "已造訪過的地點", "status": "visited", "deleted_at": None},
+    ]
+    store = ConversationStateStore()
+
+    text, keyboard = collections.start_visit(db, store, TELEGRAM_USER_ID, USER_ID, 1)
+
+    assert "已經標記過造訪" in text
+    assert store.get(TELEGRAM_USER_ID) is None

@@ -6,11 +6,18 @@
 
 地址定位比照 Mobile 規則（FR-75）：使用者必須明確按下「📍 定位地址」按鈕才會呼叫
 Nominatim，不在文字輸入當下自動觸發；全部層級失敗仍可保存並標記「無法定位」。
+
+2026-08-16（Phase 6 第二批 2d 補修，見 docs/ADR/debug/robinson.md）：新增「🧭 標記已造訪」
+動作，直接呼叫 `AppLifeExplorationService.visit_collection()`，補上 Telegram 原本漏掉的
+「收藏可不經行程、直接標記已造訪」入口（FR-73「狀態依行程關聯與造訪紀錄自動推導」），
+比照 Mobile 收藏清單卡片上的「標記已造訪」按鈕；標記後才會在探索地圖看到座標標記。
 """
 
 from __future__ import annotations
 
+from datetime import date as _date, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from src.bot import menu
 from src.bot.state import ConversationStateStore
@@ -19,14 +26,21 @@ from src.services.app_collections import (
     CollectionNotFoundError,
     CollectionValidationError,
 )
+from src.services.app_life_exploration import (
+    AppLifeExplorationService,
+    LifeNotFoundError,
+    LifeValidationError,
+)
 from src.services.geocoding import (
     GeocodingError,
     NominatimGeocoder,
 )
 from submodules.cloudsql.client import CloudSQLClient
 
+_TAIWAN_TZ = ZoneInfo("Asia/Taipei")
 _EXIT_PHRASES = {"沒有了", "結束"}
 _SKIP_PHRASES = {"略過", "skip"}
+_TODAY_PHRASES = {"今天", "today"}
 
 _ITEM_TYPE_LABELS = {
     "restaurant": "餐廳",
@@ -43,6 +57,10 @@ _STATUS_LABELS = {"saved": "已收藏", "added_to_trip": "已排入行程", "vis
 
 def _service(db: CloudSQLClient) -> AppCollectionService:
     return AppCollectionService(db, NominatimGeocoder(db))
+
+
+def _life_service(db: CloudSQLClient) -> AppLifeExplorationService:
+    return AppLifeExplorationService(db, NominatimGeocoder(db))
 
 
 # ---------------------------------------------------------------------------
@@ -90,10 +108,13 @@ def handle_list(db: CloudSQLClient, user_id: int) -> tuple[str, dict]:
     buttons = []
     for index, item in enumerate(items, start=1):
         lines.append(_format_list_item(item, index))
-        buttons.append([
+        row = [
             {"text": f"✏️ 編輯 {index}", "callback_data": f"collections:edit:{item['id']}"},
             {"text": f"🗑 刪除 {index}", "callback_data": f"collections:delete:{item['id']}"},
-        ])
+        ]
+        buttons.append(row)
+        if item["status"] != "visited":
+            buttons.append([{"text": f"🧭 標記已造訪 {index}", "callback_data": f"collections:visit:{item['id']}"}])
     buttons.append([{"text": "➕ 新增收藏", "callback_data": "collections:add"}])
     buttons.append([{"text": "🔙 返回", "callback_data": "menu:collections"}])
     return "\n".join(lines), {"inline_keyboard": buttons}
@@ -371,3 +392,71 @@ def handle_confirm_save(db: CloudSQLClient, state_store: ConversationStateStore,
         return f"儲存失敗：{exc}\n請重新從「收藏與旅遊」選單開始設定。", menu.back_to_main_menu_keyboard()
     except CollectionNotFoundError as exc:
         return str(exc), menu.back_to_main_menu_keyboard()
+
+
+# ---------------------------------------------------------------------------
+# 標記已造訪（不經行程，直接把收藏加入探索地圖，見 docs/ADR/debug/robinson.md）
+# ---------------------------------------------------------------------------
+
+def start_visit(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int, item_id: int) -> tuple[str, dict | None]:
+    row = db.select(
+        "collection_items",
+        where="id = %s AND user_id = %s AND deleted_at IS NULL",
+        params=(item_id, user_id),
+        fetch_one=True,
+    )
+    if row is None:
+        return "找不到這筆收藏，可能已經被刪除了。", menu.back_to_main_menu_keyboard()
+    if row.get("status") == "visited":
+        return "這筆收藏已經標記過造訪了。", menu.back_to_main_menu_keyboard()
+
+    state_store.set(
+        telegram_user_id,
+        {"flow": "collection_visit", "step": "awaiting_visited_date", "collection_item_id": item_id, "data": {}},
+    )
+    return f"要把「{row['title']}」標記為已造訪嗎？請輸入造訪日期（YYYY-MM-DD），輸入「今天」使用今天日期：", None
+
+
+def handle_visit_step(
+    db: CloudSQLClient,
+    state_store: ConversationStateStore,
+    telegram_user_id: int,
+    user_id: int,
+    text: str,
+) -> tuple[str, dict | None]:
+    state = state_store.get(telegram_user_id)
+    step = state.get("step")
+    data: dict[str, Any] = state.get("data", {})
+
+    if text in _EXIT_PHRASES:
+        state_store.clear(telegram_user_id)
+        return "好的，已取消標記造訪！", menu.back_to_main_menu_keyboard()
+
+    if step == "awaiting_visited_date":
+        if text.strip() in _TODAY_PHRASES:
+            visited_on = datetime.now(_TAIWAN_TZ).date()
+        else:
+            try:
+                visited_on = _date.fromisoformat(text.strip())
+            except ValueError:
+                return "日期格式不正確，請用「YYYY-MM-DD」，或輸入「今天」：", None
+        data["visited_on"] = visited_on.isoformat()
+        state["step"] = "awaiting_visit_notes"
+        state["data"] = data
+        state_store.set(telegram_user_id, state)
+        return "有想補充的造訪備註嗎？沒有的話請輸入「略過」：", None
+
+    if step == "awaiting_visit_notes":
+        data["notes"] = None if text.strip() in _SKIP_PHRASES else text.strip()
+        item_id = state["collection_item_id"]
+        state_store.clear(telegram_user_id)
+        service = _life_service(db)
+        try:
+            service.visit_collection(item_id, user_id, data)
+        except LifeValidationError as exc:
+            return f"標記失敗：{exc}", menu.back_to_main_menu_keyboard()
+        except LifeNotFoundError as exc:
+            return str(exc), menu.back_to_main_menu_keyboard()
+        return "已標記造訪，探索地圖會顯示這個地點的座標標記（若收藏本身尚未定位成功，仍會列在「無法定位」清單）！", menu.back_to_main_menu_keyboard()
+
+    raise ValueError(f"未知的對話狀態：{state}")

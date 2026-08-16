@@ -2415,10 +2415,11 @@ def test_error_resolution_trigger_ignored_for_non_owner(fake_db, monkeypatch):
 
 def test_important_days_menu_key_not_in_not_yet_implemented_set():
     """2b 應該把 important_days 從 2a 留下的「開發中」名單移除；daily_log 之後在 2c 也移除，
-    其餘四項維持不變。"""
+    collections 在 2d 也移除，其餘三項維持不變。"""
     assert not menu.is_not_yet_implemented("important_days")
     assert not menu.is_not_yet_implemented("daily_log")
-    for key in ("query", "todo", "collections", "achievements", "schedule"):
+    assert not menu.is_not_yet_implemented("collections")
+    for key in ("query", "todo", "achievements", "schedule"):
         assert menu.is_not_yet_implemented(key)
 
 
