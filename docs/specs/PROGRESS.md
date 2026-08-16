@@ -13,7 +13,7 @@ updated: 2026-08-16
 
 | 日期 | 對應 FR | 任務內容 | 開發者 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- | --- |
-| 2026-08-16 | FR-6e／FR-6h／FR-45／FR-76／FR-76a | Phase 6 第二批 2e（成果展示）實作完成：新檔 `src/bot/achievements.py` 複用既有 `AppLifeExplorationService`，`menu.py` 移出開發中名單，`router.py` 新增 `achievements:*` callback 分派與 `achievement` flow 分支；同步修正 SPEC.md FR-45／FR-76 條文，改為描述「開啟成果展示清單才被動掃描候選」的實際機制，Telegram 端刪除改為直接執行、不提供二次確認與復原（與 Mobile App 既有 5 秒復原不同） | Claude | 完成（待 Robin commit／push 與實機驗收） | 完整設計內容見 `docs/ADR/discuss/robinson.md` 2026-08-16「Phase 6 第二批 2e（成果展示）實作計畫」及「開工完成」補述；新增 `tests/bot/test_achievements.py`（10 項），更新 `tests/bot/test_menu.py` 一項斷言；Claude 沙箱還原 `achievements.py`／`menu.py`／`app_life_exploration.py`／`app_important_days.py`／`geocoding.py` 最小依賴環境後執行 `test_achievements.py`＋`test_menu.py` 共 19 項全過，`router.py` 因依賴鏈過深未在沙箱執行、也未擴充 `tests/bot/conftest.py`／`tests/bot/test_router.py` 整合測試（比照 2d 縮小範圍）。**2026-08-16 Robin 本機驗證**：`test_achievements.py`＋`test_menu.py` 19 項全過；完整 `pytest tests/ -q` 回報 4 項失敗，3 項為既有 `test_toeic.py` `ffmpeg` 環境問題（與本批無關），1 項為 `test_router.py::test_important_days_menu_key_not_in_not_yet_implemented_set` 舊斷言未同步 `achievements` 移出開發中名單（比照 2d 曾發生的同類迴歸），已修正該斷言，尚待重新執行全套確認 |
+| 2026-08-16 | FR-6e／FR-6h／FR-45／FR-76／FR-76a | Phase 6 第二批 2e（成果展示）實作完成：新檔 `src/bot/achievements.py` 複用既有 `AppLifeExplorationService`，`menu.py` 移出開發中名單，`router.py` 新增 `achievements:*` callback 分派與 `achievement` flow 分支；同步修正 SPEC.md FR-45／FR-76 條文，改為描述「開啟成果展示清單才被動掃描候選」的實際機制，Telegram 端刪除改為直接執行、不提供二次確認與復原（與 Mobile App 既有 5 秒復原不同） | Claude | 完成（已 commit，待推版與實機驗收） | 完整設計內容見 `docs/ADR/discuss/robinson.md` 2026-08-16「Phase 6 第二批 2e（成果展示）實作計畫」及「開工完成」補述；新增 `tests/bot/test_achievements.py`（10 項），更新 `tests/bot/test_menu.py` 一項斷言；Claude 沙箱還原 `achievements.py`／`menu.py`／`app_life_exploration.py`／`app_important_days.py`／`geocoding.py` 最小依賴環境後執行 `test_achievements.py`＋`test_menu.py` 共 19 項全過，`router.py` 因依賴鏈過深未在沙箱執行、也未擴充 `tests/bot/conftest.py`／`tests/bot/test_router.py` 整合測試（比照 2d 縮小範圍）。**2026-08-16 Robin 本機驗證**：`test_achievements.py`＋`test_menu.py` 19 項全過；完整 `pytest tests/ -q` 首輪回報 4 項失敗，3 項為既有 `test_toeic.py` `ffmpeg` 環境問題（與本批無關），1 項為 `test_router.py::test_important_days_menu_key_not_in_not_yet_implemented_set` 舊斷言未同步 `achievements` 移出開發中名單（比照 2d 曾發生的同類迴歸），修正該斷言後重跑全套 1796 passed／3 failed（僅剩既有 `ffmpeg` 環境問題）；commit `a400f36`（9 files changed, 536 insertions/12 deletions） |
 | 2026-08-15 | FR-6h／NFR-19 | 補正 Mobile 日期特例並定案 Telegram 重構採漸進式資料遷移，不整庫刪除重建 | Codex | 已定案／待開發 | Mobile 不限今日範圍包含待辦、重要日子、收藏、旅遊、探索、成果；先做唯讀 Schema／引用盤點，必要時採 V2 表回填切換，未執行 Migration 或刪表 |
 | 2026-08-15 | FR-3～FR-6h／FR-9c～FR-9d／FR-20a／FR-72b／NFR-18 | 定案 Telegram 角色選單、帳號安全、歷史 CRUD、統一功能流程、七日查詢、排程通知與 Phase 6 執行順序 | Codex | 已定案／待開發 | 查詢由最終日期往前推 6 天且可跨多模組；Mobile 仍只異動今日生活紀錄，Telegram 負責歷史回補；隱私遮罩改帳號層雙端共用；草稿保留 30 分鐘、功能模式 10 分鐘 |
 | 2026-08-15 | FR-3～FR-6h | Phase 6 第二批（Telegram 選單與狀態機）開工前盤點：確認現況無 `/start`、無按鈕基礎設施、`state.flow` 約 85 種、`/set_invite_codes` 移除範圍，並拆出子批次 2a／2b... | Claude | 完成（純盤點與拆批決策，未開工） | 決策記錄見 `docs/ADR/discuss/robinson.md` 2026-08-15「Phase 6 第二批拆批盤點」；2a＝按鈕基礎設施＋選單骨架＋認證選單化（含移除 `/set_invite_codes`），2b 起才逐批遷移既有 85 個 flow |
@@ -213,6 +213,7 @@ updated: 2026-08-16
 
 | 日期 | 版本 / commit | 異動摘要 | 開發者 |
 | --- | --- | --- | --- |
+| 2026-08-16 | `a400f36` | Phase 6 第二批 2e：Telegram 成果展示選單流程（新增 `src/bot/achievements.py`） | Claude |
 | 2026-08-16 | `f0f7349` | 修復 2c 遺留、與心情運動相關的既有測試（函式簽章/已移除函式未同步） | Claude |
 | 2026-08-16 | `9932732` | Phase 6 第二批 2d 補修：Telegram 收藏補上標記已造訪入口，修復探索地圖無法顯示標記 | Claude |
 | 2026-08-16 | `bf715ff` | Phase 6 第二批 2d：Telegram 收藏與旅遊選單流程（新增/bot/collections.py、trips.py） | Claude |
@@ -347,6 +348,7 @@ updated: 2026-08-16
 
 | 日期 | Branch／版本 | 遠端 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- |
+| 2026-08-16 | `main`／`a400f36` | GitHub | 完成 | 08/16 Robin已推版 |
 | 2026-08-16 | `main`／`f0f7349` | GitHub | 完成 | 08/16 Robin已推版 |
 | 2026-08-16 | `main`／`9932732` | GitHub | 完成 | 08/16 Robin已推版 |
 | 2026-08-16 | `main`／`bf715ff` | GitHub | 完成 | 0816 Robin已推版 |
