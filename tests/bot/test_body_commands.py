@@ -134,6 +134,9 @@ def test_weight_list_update_delete_flow(fake_db):
 
 
 def test_exercise_full_log_flow_with_calorie_estimate(fake_db):
+    """2026-08-16（Phase 6 第二批 2c）：運動改為摘要→二次確認關卡，`handle_exercise_heart_rate_step`
+    不帶 `db` 參數、只組摘要，實際寫入要等 `handle_exercise_confirm_save`（`exercise:confirm_save`
+    按鈕），端對端串接見 tests/bot/test_router.py test_exercise_new_flow_records_entry_with_confirm_gate。"""
     store = ConversationStateStore()
     commands.start_exercise_log(store, telegram_user_id=1, user_id=42)
 
@@ -144,7 +147,14 @@ def test_exercise_full_log_flow_with_calorie_estimate(fake_db):
     assert "心率" in reply
 
     llm_client = _FakeLLMClient(response_text="大約 300 大卡")
-    reply = commands.handle_exercise_heart_rate_step(fake_db, llm_client, store, telegram_user_id=1, text="沒有")
+    reply, keyboard = commands.handle_exercise_heart_rate_step(llm_client, store, telegram_user_id=1, text="沒有")
+
+    assert "300 大卡" in reply
+    assert keyboard["inline_keyboard"][0][0]["callback_data"] == "exercise:confirm_save"
+    assert store.get(1)["flow"] == "pending_exercise_confirm"
+    assert fake_db.select("exercise_logs") == []
+
+    reply = commands.handle_exercise_confirm_save(fake_db, store, telegram_user_id=1)
 
     assert "300 大卡" in reply
     assert store.get(1) is None

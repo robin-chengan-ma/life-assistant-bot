@@ -22,8 +22,27 @@
 ②**與本次修復無關的既有失敗（16 項）**：`tests/bot/test_body_commands.py`／`tests/bot/test_body_router.py`／`tests/bot/test_commands.py` 共 16 項失敗，錯誤集中在心情（`mood`）與運動（`exercise`）相關函式——`handle_mood_content_step()`／`handle_exercise_heart_rate_step()` 呼叫時「got multiple values for argument 'telegram_user_id'」（呼叫端與函式簽章的參數順序或關鍵字用法對不上），以及 `commands` 模組已經沒有 `start_mood_list`／`handle_mood_list_action_step`／`handle_mood_action_choice_step`／`handle_mood_delete_confirm_step` 這幾個函式（對照 `docs/ADR/discuss/robinson.md` 2026-08-16「Phase 6 第二批 2c」設計內容⑤，這些函式在 2c 就已經正式移除，改用按鈕 callback 取代）。這些測試檔案本身完全沒有被本次（2d／2d 補修）異動過，判斷是 2c 那批（commit `8d0ba92`）遺留下來、沒有跟著移除或改寫的舊測試——2c 的「開工完成」補述裡記錄「Claude 沙箱還原完整依賴後執行 `tests/` 全數 155 項通過」，跟現在 1801 項裡就有 16 項屬於這個問題的落差，推測 2c 沙箱驗證當時涵蓋的測試範圍或依賴狀態跟 Robin 本機現況不同，實際原因待進一步排查確認，這裡先如實記錄現象與初步比對結果，不做未經查證的根因臆測。
 ③**環境限制、不是程式問題（3 項）**：`tests/bot/test_toeic.py` 3 項因本機沒有安裝 `ffmpeg`（`FileNotFoundError: No such file or directory: 'ffmpeg'`）失敗，這是既有已知環境問題（`docs/specs/PROGRESS.md` 2026-08-14 那筆任務備註已提過同樣狀況），與任何程式碼異動無關。
 
-**根因**：①已修復（見下）；②尚未排查根因，只確認範圍屬於 2c 遺留、與本次 2d／補修無關；③非程式問題，環境缺少 `ffmpeg` 執行檔。
+**根因**：①已修復（見上一段）；②已排查完成（見下）；③非程式問題，環境缺少 `ffmpeg` 執行檔，本次不修復，需要 Robin 自行 `brew install ffmpeg`。
 
-**修復方式**：①已修正 `tests/bot/test_router.py` 該斷言，把 `collections` 從「應維持開發中」清單移到「應確認已移出」清單。②③本次不修復——②需要另外排查是 2c 當時就沒發現，還是後續有其他改動造成，屬於獨立的除錯任務，建議 Robin 另外排時間讓 Claude 或 Codex 專案排查；③需要 Robin 自行 `brew install ffmpeg`（若要在本機跑 TOEIC 語音相關測試）。
+**修復方式**：①已修正 `tests/bot/test_router.py` 該斷言，把 `collections` 從「應維持開發中」清單移到「應確認已移出」清單。
 
-**驗證方式**：Robin 本機重新執行完整 `python3 -m pytest tests/`，確認失敗項目只剩②③兩類（16＋3＝19 項），①的 1 項迴歸已消失。
+## 2026-08-16 補述之二：16 項心情／運動既有測試失敗根因確認與修復
+
+**根因**：確認是 Phase 6 第二批 2c（commit `8d0ba92`）把心情、運動改成「摘要→二次確認」關卡與按鈕式清單/編輯/刪除後，`tests/bot/test_commands.py`／`tests/bot/test_body_commands.py`／`tests/bot/test_body_router.py` 三個測試檔案沒有跟著同步：
+- `handle_mood_content_step()`／`handle_exercise_heart_rate_step()` 2c 之後改成回傳 `(摘要文字, keyboard)`、只組摘要並轉進 `pending_mood_confirm`／`pending_exercise_confirm`，不再直接寫入 DB（要等 `mood:confirm_save`／`exercise:confirm_save` 按鈕觸發 `handle_mood_confirm_save()`／`handle_exercise_confirm_save()` 才真正寫入）；舊測試仍假設呼叫這兩個函式當下就會寫入，且呼叫參數順序／簽章對不上現行版本（`handle_mood_content_step` 少了 `fake_db` 參數；`handle_exercise_heart_rate_step` 少了 `fake_db` 參數）。
+- `start_mood_list`／`handle_mood_list_action_step`／`handle_mood_action_choice_step`／`handle_mood_delete_confirm_step` 確認在 2c 就已經正式移除（改用 `mood:list`／`mood:edit:<id>`／`mood:delete:<id>`／`mood:confirm_delete:<id>` 按鈕 callback 取代），對照 2c 的「開工完成」補述「改寫 `tests/bot/test_router.py` 心情 4 項整合測試為按鈕驅動」，確認 `tests/bot/test_router.py` 當時已經有對應的按鈕驅動整合測試（`test_mood_list_update_and_delete_full_flow()`、`test_mood_delete_only_owner_can_target_own_journal()`），但舊的 `tests/bot/test_commands.py` 直接呼叫這四個函式的測試沒有一併移除，屬於 2c 收尾時遺漏的清理項目。
+- `tests/bot/test_body_router.py` 的 `test_log_exercise_full_flow`／`test_my_exercise_logs_full_flow_delete` 使用舊文字觸發詞「我要記錄運動」／「我的運動紀錄」，2c 已把運動全面改成選單按鈕觸發（`daily_log:exercise` → `exercise:new`／`exercise:list`），這兩句文字觸發詞已經不會被 router 攔截，會落到一般聊天核心處理，因為測試沒帶 `llm_client` 才報 `AttributeError`。
+
+**修復方式**：
+- `tests/bot/test_commands.py`：把 4 項 `handle_mood_content_step` 測試改寫成兩段式——先驗證內容步驟只組摘要、回傳 `pending_mood_confirm` 狀態且不寫入 DB，再呼叫 `handle_mood_confirm_save()` 驗證實際寫入結果（新增／補記日期／編輯既有列／PII 遮蔽內容），涵蓋範圍與修復前相同；刪除呼叫 `start_mood_list`／`handle_mood_list_action_step`／`handle_mood_action_choice_step`／`handle_mood_delete_confirm_step` 這 11 項測試，確認對應流程已由 `tests/bot/test_router.py` 完整覆蓋，沒有測試覆蓋率缺口。
+- `tests/bot/test_body_commands.py`：修正 `test_exercise_full_log_flow_with_calorie_estimate`，`handle_exercise_heart_rate_step` 呼叫拿掉多餘的 `fake_db` 參數並改為兩段式（先驗證摘要與 `pending_exercise_confirm` 狀態，再呼叫 `handle_exercise_confirm_save()` 驗證寫入）。
+- `tests/bot/test_body_router.py`：`test_log_exercise_full_flow` 改用 `router.handle_callback_query(fake_db, store, FAMILY_ID, "daily_log:exercise")` → `"exercise:new"` 進入新增流程，末端改呼叫 `"exercise:confirm_save"`；`test_my_exercise_logs_full_flow_delete` 改用 `"exercise:list"` → `"exercise:delete:<id>"` → `"exercise:confirm_delete:<id>"` 按鈕流程，取代原本的文字觸發詞與 LLM 對話式刪除確認。
+
+**驗證方式**：Claude 沙箱只還原到部分依賴（`from src.bot import auth` 等模組未同步在沙箱內，執行 `pytest` 會在 collection 階段就因 `ImportError: cannot import name 'auth'` 失敗，判斷是沙箱環境本身缺依賴而非程式碼問題），已對三個測試檔案執行 `python3 -m py_compile` 語法檢查通過。Robin 本機執行：
+
+```
+python3 -m pytest tests/bot/test_commands.py tests/bot/test_body_commands.py tests/bot/test_body_router.py -v
+python3 -m pytest tests/ -q
+```
+
+第一輪 `test_body_router.py::test_log_exercise_full_flow` 因忘記拆解 `router.handle_message` 在 `pending_exercise_heart_rate` 這一步回傳的 `(文字, keyboard)` tuple 而失敗一次，已修正（改成 `reply4, _keyboard4 = router.handle_message(...)`）；Robin 重新測試後前者 201 項全過，後者 1787 passed／3 failed（僅剩既有 `ffmpeg` 環境問題，與本次無關），本次修復確認完成。

@@ -156,11 +156,15 @@ def test_my_weight_logs_full_flow_update(fake_db, monkeypatch):
 
 
 def test_log_exercise_full_flow(fake_db, monkeypatch):
+    """2026-08-16（Phase 6 第二批 2c）：運動全面改選單按鈕觸發，舊文字觸發詞「我要記錄運動」已
+    移除，入口改為「📝 日常紀錄」→「🏃 運動」子選單（`daily_log:exercise` → `exercise:new`），
+    新增流程末端也改為摘要→二次確認（`exercise:confirm_save`）。"""
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     store = ConversationStateStore()
 
-    reply1 = router.handle_message(fake_db, store, FAMILY_ID, "我要記錄運動")
+    router.handle_callback_query(fake_db, store, FAMILY_ID, "daily_log:exercise")
+    router.handle_callback_query(fake_db, store, FAMILY_ID, "exercise:new")
     assert store.get(FAMILY_ID)["flow"] == "pending_exercise_activity"
 
     reply2 = router.handle_message(fake_db, store, FAMILY_ID, "跑步")
@@ -170,26 +174,31 @@ def test_log_exercise_full_flow(fake_db, monkeypatch):
     assert store.get(FAMILY_ID)["flow"] == "pending_exercise_heart_rate"
 
     calorie_llm = _FakeLLMClient(response_text="約 300 大卡")
-    reply4 = router.handle_message(fake_db, store, FAMILY_ID, "沒有", llm_client=calorie_llm)
+    reply4, _keyboard4 = router.handle_message(fake_db, store, FAMILY_ID, "沒有", llm_client=calorie_llm)
     assert "300 大卡" in reply4
+    assert store.get(FAMILY_ID)["flow"] == "pending_exercise_confirm"
+
+    reply5, _keyboard5 = router.handle_callback_query(fake_db, store, FAMILY_ID, "exercise:confirm_save")
+    assert "300 大卡" in reply5
     assert store.get(FAMILY_ID) is None
 
 
 def test_my_exercise_logs_full_flow_delete(fake_db, monkeypatch):
+    """2026-08-16（Phase 6 第二批 2c）：舊文字觸發詞「我的運動紀錄」已移除，改由
+    「🏃 運動」子選單的「📋 查看清單」（`exercise:list`）進入，刪除也改為按鈕二次確認
+    （`exercise:delete:<id>` → `exercise:confirm_delete:<id>`），不再走 LLM 對話式確認。"""
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     log_id = commands.body.create_exercise_log(fake_db, user_id, "跑步", 30, None, 300.0, date(2026, 8, 4))
     store = ConversationStateStore()
 
-    router.handle_message(fake_db, store, FAMILY_ID, "我的運動紀錄")
-    router.handle_message(fake_db, store, FAMILY_ID, "1")
+    router.handle_callback_query(fake_db, store, FAMILY_ID, "exercise:list")
 
-    delete_llm = _FakeLLMClient(response_text="DELETE")
-    reply = router.handle_message(fake_db, store, FAMILY_ID, "刪掉", llm_client=delete_llm)
+    reply, keyboard = router.handle_callback_query(fake_db, store, FAMILY_ID, f"exercise:delete:{log_id}")
     assert "沒辦法復原" in reply
+    assert keyboard["inline_keyboard"][0][0]["callback_data"] == f"exercise:confirm_delete:{log_id}"
 
-    confirm_llm = _FakeLLMClient(response_text="CONFIRM")
-    reply = router.handle_message(fake_db, store, FAMILY_ID, "對", llm_client=confirm_llm)
+    reply, _keyboard = router.handle_callback_query(fake_db, store, FAMILY_ID, f"exercise:confirm_delete:{log_id}")
     assert "已經刪除" in reply
     assert fake_db.select("exercise_logs", where="id = %s", params=(log_id,), fetch_one=True) is None
 
