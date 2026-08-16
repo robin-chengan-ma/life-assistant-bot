@@ -3,7 +3,7 @@ import re
 
 from submodules.cloudsql.client import CloudSQLClient
 
-from src.bot import auth, chat, collections, commands, image, important_days, job_search, menu, system_errors, templates, toggles, trips, voice
+from src.bot import achievements, auth, chat, collections, commands, image, important_days, job_search, menu, system_errors, templates, toggles, trips, voice
 from src.bot.state import ConversationStateStore
 
 _NOT_BOUND_REPLY = "請輸入通關密碼才能開始使用羅賓森喔！"
@@ -426,6 +426,10 @@ def handle_callback_query(
             # 2026-08-16（Phase 6 第二批 2d，FR-6e）：收藏與旅遊子選單首頁。
             state_store.clear(telegram_user_id)
             return collections.start_collections_menu()
+        if key == "achievements":
+            # 2026-08-16（Phase 6 第二批 2e，FR-6e）：成果展示子選單首頁。
+            state_store.clear(telegram_user_id)
+            return achievements.start_achievements_menu()
         if key == "daily_log":
             state_store.clear(telegram_user_id)
             return menu.DAILY_LOG_MENU_TEXT, menu.build_daily_log_menu_keyboard()
@@ -547,6 +551,32 @@ def handle_callback_query(
         if action == "confirm_save":
             return trips.handle_confirm_save(db, state_store, telegram_user_id, user["id"])
         return trips.handle_list(db, user["id"])
+
+    if data.startswith("achievements:"):
+        # 2026-08-16（Phase 6 第二批 2e，FR-6e／FR-6h／FR-76／FR-76a）：成果展示選單與
+        # 候選確認操作。候選機制維持被動，開啟清單（action == "list"）時才由
+        # `AppLifeExplorationService.list_achievements()` 內建重新掃描；刪除直接執行，
+        # 沒有二次確認流程（見 achievements.py 模組 docstring）。
+        user = _get_identified_user(db, telegram_user_id)
+        if user is None:
+            return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
+        action = data[len("achievements:") :]
+        if action == "list":
+            return achievements.handle_list(db, user["id"])
+        if action == "add":
+            return achievements.start_add(state_store, telegram_user_id), None
+        if action.startswith("delete:"):
+            achievement_id = int(action[len("delete:") :])
+            return achievements.handle_delete(db, user["id"], achievement_id)
+        if action.startswith("candidate_accept:"):
+            candidate_id = int(action[len("candidate_accept:") :])
+            return achievements.handle_candidate_decision(db, user["id"], candidate_id, True)
+        if action.startswith("candidate_reject:"):
+            candidate_id = int(action[len("candidate_reject:") :])
+            return achievements.handle_candidate_decision(db, user["id"], candidate_id, False)
+        if action == "confirm_save":
+            return achievements.handle_confirm_save(db, state_store, telegram_user_id, user["id"])
+        return achievements.start_achievements_menu()
 
     if data.startswith("mood:"):
         # 2026-08-16（Phase 6 第二批 2c，FR-6e）：心情選單與清單操作。
@@ -787,6 +817,9 @@ def _dispatch_active_flow(
         return trips.handle_delete_confirm_text(state_store, telegram_user_id)
     if flow == "trip_complete_select":
         return trips.handle_complete_select_text(state_store, telegram_user_id)
+    if flow == "achievement":
+        # 2026-08-16（Phase 6 第二批 2e，FR-6e／FR-6h／FR-76）：成果展示手動新增多步驟流程。
+        return achievements.handle_step(state_store, telegram_user_id, text)
     if flow == "pending_user_knowledge":
         # 2026-07-31（ADR-6）：不再無條件把這則訊息當成答案存檔，改由同一次 LLM 呼叫判斷
         # 這是在提供答案、拒絕記錄、還是問了個無關的新問題，見 chat.handle_chat_message。

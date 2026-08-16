@@ -22,6 +22,13 @@
 `_NOT_YET_IMPLEMENTED_KEYS` 移除；子選單（收藏清單／新增收藏／旅遊行程）由
 `collections.start_collections_menu()` 直接組出 Inline Keyboard，比照 `important_days`
 的單層選單做法，不另外定義 `*_MENU_ITEMS` 常數。
+
+2026-08-16（Phase 6 第二批 2e，見 docs/ADR/discuss/robinson.md）：`achievements`
+（成果展示）接上 `src/bot/achievements.py` 的真正邏輯，從 `_NOT_YET_IMPLEMENTED_KEYS`
+移除；子選單（查看成果／新增成果）由 `achievements.start_achievements_menu()` 直接組出
+Inline Keyboard，比照 `collections` 的單層選單做法。候選機制維持被動（開啟清單才重新
+掃描，不在目標達成當下主動推播），刪除採直接刪除、無二次確認、無復原（跟 Mobile App
+既有的 5 秒復原不同，是本批刻意決策）。
 """
 
 # key、label 依 FR-6e 定案順序；owner_only 決定這個項目是否只有 Owner 看得到。
@@ -44,7 +51,7 @@ MAIN_MENU_ITEMS = [
 # 尚未接上真正邏輯的項目，按下後只回覆固定的「開發中」訊息；2b 起逐批把 key 移出這裡。
 _NOT_YET_IMPLEMENTED_KEYS = {
     "query", "todo",
-    "achievements", "schedule", "tech_intel", "job_search", "certificate", "recovered",
+    "schedule", "tech_intel", "job_search", "certificate", "recovered",
 }
 
 # 2026-08-16（Phase 6 第二批 2c）：日常紀錄第二層子選單，`callback_data` 固定格式

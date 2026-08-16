@@ -442,3 +442,27 @@ Robin 對盤點結果提出的實作計畫做出三項決策：①收藏清單�
 **後果**：2d 開工後，`router.py`／`menu.py` 均會異動，新增 `src/bot/collections.py`／`src/bot/trips.py`；`tests/bot/test_collections.py`／`tests/bot/test_trips.py` 新增，`tests/bot/test_menu.py` 補一項斷言。
 
 **2026-08-16 開工完成**：實作按設計內容①～④完成（⑤範圍排除確認未觸碰）。新增 `tests/bot/test_collections.py`（10 項）、`tests/bot/test_trips.py`（8 項），皆用獨立 `FakeDatabase`（服務層驗證邏輯已在 `tests/services/test_app_collections.py`／`test_app_life_exploration.py` 覆蓋，這裡只測 Telegram 對話流程），更新 `tests/bot/test_menu.py` 一項斷言。**與 2b／2c 不同，本批 Claude 沙箱完全沒有執行 `pytest`**（連輕量測試都沒跑），也**沒有擴充 `tests/bot/conftest.py`／`tests/bot/test_router.py` 整合測試**——這兩項是本批相對 2b／2c 明確縮小的範圍，記錄於此供 Robin 決定是否要求補齊。**文件同步檢查**：`docs/specs/SPEC.md` 不動（FR-6e／FR-73～FR-74a 為既有已定案規格，本批純實作，未變更需求或產品行為）；`docs/reference/api_schema.md`／`db_schema.md` 確認不需更新（沒有新增對外 HTTP 路由，`callback_data` 是 Telegram 內部分派字串；沒有新增或異動資料表／Migration，全部沿用既有的 `collection_items`／`trips`／`trip_collection_items`）；`docs/specs/DRAFT.md` 無相關項目需要移動。`docs/specs/PROGRESS.md` 已同步。尚待 Robin 完成本機 `pytest` 驗證、commit／push 與 Telegram 實機驗收。
+
+### 2026-08-16 補充決策：Phase 6 第二批 2e（成果展示）實作計畫
+
+**狀態**：accepted（已開工完成，見下方「開工完成」補述）
+
+**背景**：依 2b 起子批次順序，2e 從「成果展示」開始，2d 已明確排除此範圍。盤點發現跟 2d（收藏與旅遊）情況一致——`commands.py`／`router.py` 全文搜尋「成果」「achievement」只命中 FR-50 心情個人成就提示（`pending_mood_achievement`，2c 已完工的獨立功能，跟成果展示無關），Telegram 端完全沒有舊 `state.flow` 可遷移，是全新流程。後端／Mobile Service／API 已完整：`AppLifeExplorationService`（`list_achievements`／`create_achievement`／`respond_candidate`／`delete_achievement`／`restore_achievement`）與 Migration `0076`＋`0079` 建立的 `user_achievements`／`achievement_candidates` 兩張表。
+
+盤點過程中發現 SPEC.md 現有文字與實際候選機制有落差：FR-45 寫「達成時另以 Telegram 固定按鈕詢問是否加入成果展示」，FR-76 寫「並同步以 Telegram 固定訊息及『加入成果展示／略過』按鈕詢問」，兩者措辭都暗示「候選產生的當下」要主動推播；但 `_refresh_candidates()` 實際只在呼叫 `list_achievements()`（即使用者開啟成果展示清單）時才重新掃描，是「被動」機制，且六種候選類型中只有體重、運動兩種目前在達標當下有現成觸發點（體重在 `body.py` 記錄體重當下，運動借用 `/healthz` 排程），考試、探索、行程、待辦四種完全沒有觸發點。若要做到「當下推播」需同時異動 `body.py`／考試成績登錄／`trips.py`／探索紀錄建立點／`todo.py` 等多個模組，風險特性與範圍已超出「成果展示」單一模組。
+
+Robin 對此提出兩項決策：①推播機制維持被動掃描（使用者開啟成果展示清單時系統才重新掃描候選並列出，不在候選產生當下主動推播），SPEC.md FR-45／FR-76 文字同步修正為符合此機制的措辭；②Telegram 端刪除採直接執行，不提供二次確認與 5 秒復原（跟 Mobile App 既有的二次確認＋5 秒復原不同），因為 Telegram 對話介面沒有「按鈕自動失效」的視覺機制，若要做到「5 秒可復原」只能靠伺服器記錄時間戳事後比對，體驗陽春且徒增複雜度，不如直接刪除來得單純。
+
+**設計內容**：
+①**新檔 `src/bot/achievements.py`**：直接呼叫既有 `AppLifeExplorationService`（不重寫驗證邏輯，符合 FR-6h）。子選單：「📋 查看成果」／「➕ 新增成果」。查看成果先列待確認候選（附「✅ 加入／⏭ 略過」按鈕，對應 `respond_candidate`），再列已建立成果卡片（附「🗑 刪除」按鈕，按下直接呼叫 `delete_achievement()`，無確認流程）；新增成果走多步驟輸入：類別（七選一：體態／考試／運動／探索／旅遊／待辦／其他）→名稱→完成日期→說明（可略過）→照片網址（可略過，Telegram 端不做圖片上傳轉存）→摘要＋確認／取消。
+②**`menu.py`**：`achievements` 從 `_NOT_YET_IMPLEMENTED_KEYS` 移除；子選單由 `achievements.start_achievements_menu()` 直接組出 Inline Keyboard，比照 `collections` 的單層選單做法。
+③**`router.py`**：`handle_callback_query()` 新增 `menu:achievements`、`achievements:<action>`（`list`／`add`／`delete:<id>`／`candidate_accept:<id>`／`candidate_reject:<id>`／`confirm_save`）前綴分派；`_dispatch_active_flow()` 新增 `achievement`（多步驟輸入）一個 flow 分支，不需要刪除確認 flow（刪除直接執行）。
+④**範圍排除**：FR-45／FR-76 描述的「候選產生當下主動推播」不在本批（維持被動掃描，見上述決策①）；成果照片上傳（僅支援貼網址）；`is_pinned`／`is_hidden` 欄位（Mobile 端目前也未使用）。
+
+**理由**：後端與 Mobile 已經把驗證邏輯與資料模型定案，Telegram 端重寫一遍會違反 FR-6h 兩端一致的要求；被動掃描維持現況是因為「當下推播」牽涉多模組且範圍/風險與本批「成果展示選單」性質不同，比照 2d 排除 FR-75 的判斷邏輯；Telegram 刪除不做復原是因為對話介面沒有真正的「按鈕失效」機制，土法煉鋼做出來的體驗也不完整，不如維持簡單直接。
+
+**後果**：2e 開工後，`router.py`／`menu.py` 均會異動，新增 `src/bot/achievements.py`；`tests/bot/test_achievements.py` 新增，`tests/bot/test_menu.py` 補一項斷言。`docs/specs/SPEC.md` FR-45／FR-76 條文同步修正措辭（不是需求內容變更，只是把文字對齊被動掃描的實際機制）。
+
+**2026-08-16 開工完成**：實作按設計內容①～③完成（④範圍排除確認未觸碰）。新增 `tests/bot/test_achievements.py`（10 項），用獨立 `FakeDatabase`（服務層驗證與候選掃描邏輯已在 `tests/services/test_app_life_exploration.py` 覆蓋，這裡只測 Telegram 對話流程），更新 `tests/bot/test_menu.py` 一項斷言。比照 2d，本批 Claude 沙箱在還原 `src/bot/achievements.py`／`src/bot/menu.py`／`src/services/app_life_exploration.py`／`app_important_days.py`／`geocoding.py` 及 `submodules/cloudsql`／`submodules/retry` 最小依賴環境後，執行 `tests/bot/test_achievements.py`＋`tests/bot/test_menu.py` 共 19 項全數通過；`router.py` 因需要完整還原本專案（`google-genai`／`groq`／Google Drive／Telegram 等 submodules）的匯入依賴鏈，沙箱未還原完整依賴，程式碼已寫入但未在沙箱執行，也**沒有擴充 `tests/bot/conftest.py`／`tests/bot/test_router.py` 整合測試**，記錄於此供 Robin 決定是否要求補齊。**文件同步檢查**：`docs/specs/SPEC.md` 已修正 FR-45、FR-76 條文措辭（新增本 ADR 條目連結），FR-76a 不動；`docs/reference/api_schema.md`／`db_schema.md` 確認不需更新（沒有新增對外 HTTP 路由，`callback_data` 是 Telegram 內部分派字串；沒有新增或異動資料表／Migration，全部沿用既有的 `user_achievements`／`achievement_candidates`）；`docs/specs/DRAFT.md` 無相關項目需要移動。`docs/specs/PROGRESS.md` 已同步。
+
+**2026-08-16 Robin 本機驗證**：執行 `pytest tests/bot/test_achievements.py tests/bot/test_menu.py -v` 19 項全過；完整 `pytest tests/ -q` 回報 4 項失敗，其中 3 項是既有 `test_toeic.py` 因本機未裝 `ffmpeg` 的環境問題（與本批無關，歷次批次已知），1 項是 `tests/bot/test_router.py::test_important_days_menu_key_not_in_not_yet_implemented_set`——本批把 `achievements` 移出 `menu.py` 的開發中名單時，這條舊斷言仍把 `achievements` 列在「應維持開發中」的清單裡，屬於 2d 曾發生過的同類迴歸（比照當時做法直接修正斷言，把 `achievements` 從「應維持開發中」移到「應移出名單」）。修正後 Robin 未再重新執行全套，尚待下次驗證確認 1795＋1 項全過。尚待 Robin 完成 commit／push 與 Telegram 實機驗收。
