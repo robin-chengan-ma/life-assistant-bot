@@ -29,6 +29,13 @@
 Inline Keyboard，比照 `collections` 的單層選單做法。候選機制維持被動（開啟清單才重新
 掃描，不在目標達成當下主動推播），刪除採直接刪除、無二次確認、無復原（跟 Mobile App
 既有的 5 秒復原不同，是本批刻意決策）。
+
+2026-08-16（Phase 6 第二批 2f，見 docs/ADR/discuss/robinson.md）：`todo`（待辦事項）
+接上 `src/bot/commands.py` 既有的待辦事項邏輯，從 `_NOT_YET_IMPLEMENTED_KEYS` 移除；
+子選單（查看清單／新增）由 `commands.start_todo_menu()` 直接組出 Inline Keyboard，
+比照 `important_days` 的單層選單做法。新增流程補上摘要→二次確認關卡，查詢清單改為
+按鈕式標記完成/取消；自然語言偵測入口（chat.py，FR-31、FR-56e）維持不變，跟選單
+「➕ 新增」按鈕共用同一套「時間→提醒→行事曆同步→確認」狀態機。
 """
 
 # key、label 依 FR-6e 定案順序；owner_only 決定這個項目是否只有 Owner 看得到。
@@ -50,7 +57,7 @@ MAIN_MENU_ITEMS = [
 
 # 尚未接上真正邏輯的項目，按下後只回覆固定的「開發中」訊息；2b 起逐批把 key 移出這裡。
 _NOT_YET_IMPLEMENTED_KEYS = {
-    "query", "todo",
+    "query",
     "schedule", "tech_intel", "job_search", "certificate", "recovered",
 }
 

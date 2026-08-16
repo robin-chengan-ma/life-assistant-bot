@@ -696,18 +696,27 @@ def handle_toggle_step(
 
 
 # ---------------------------------------------------------------------------
-# 待辦事項（2026-08-02，Step 1.7，見 robinson SPEC.md FR-31、FR-31a、FR-32、FR-56e）
+# 待辦事項（2026-08-02，Step 1.7，見 robinson SPEC.md FR-31、FR-31a、FR-32、FR-56e；
+# 2026-08-16 選單化，Phase 6 第二批 2f，見 docs/ADR/discuss/robinson.md）
 #
-# 新增流程分三輪反問（比照 FR-56e 情境範例）：chat.py 偵測到自然語言描述先問「要不要記錄」
-# （pending_todo_confirm）→ 確定後問「什麼時候」（pending_todo_time，時間還講不清楚時會停留在
-# 原地繼續反問，不會硬存一個猜錯的時間）→ 問「要不要提前 30 分鐘提醒」（pending_todo_reminder），
-# 使用者這一輪回覆後才真正呼叫 todo.create_todo() 寫入，全程沒有 FR-16a 的「逐字打字確認執行」
-# 關卡——新增待辦屬於低風險、可回頭用查詢清單流程取消/完成修正的操作，跟刪除紀錄／寫入知識庫的
-# 風險層級不同，故不比照那三個 flow 額外加上最終確認關卡。
+# 新增有兩個入口，共用同一段「時間→提醒→行事曆同步」多輪反問：
+# ①自然語言偵測（chat.py 偵測到「什麼時候要做什麼事」主動反問，FR-31、FR-56e 既有規格，
+#   2f 決策維持不變）：先問「要不要記錄」（pending_todo_confirm），確認後把使用者原話當
+#   `original_text` 直接進入時間反問；②選單「➕ 新增」按鈕（`todo:new`）：略過「要不要記錄」
+#   這輪（按鈕本身就是明確意圖），改先反問「要記什麼事」（pending_todo_new_content），使用者
+#   這輪回覆存成 `original_text` 後同樣接到時間反問，兩個入口自此共用同一套狀態機。
 #
-# 查詢＋標記完成/取消走另一條路：「我的待辦事項」／`/my_todos` 觸發 start_todo_list()，
-# 選定編號後（pending_todo_list_action）反問要標記完成還是取消，由 LLM 判斷使用者這句話的意思
-# （pending_todo_action_confirm），比照全專案既有的 CONFIRM/CANCEL 單次呼叫慣例。
+# 時間反問（pending_todo_time，時間講不清楚時停留原地繼續反問，不硬存猜錯的時間）→ 提醒反問
+# （pending_todo_reminder）→ 行事曆同步反問（pending_todo_calendar_sync）之後，2f 新增一層
+# 摘要＋「✅ 確認送出／❌ 取消」按鈕（pending_todo_confirm_save，比照 2b～2e 的「摘要→二次確認」
+# 結構），使用者按確認才真正呼叫 `todo.create_todo()` 寫入；打字視為取消，導回待辦事項選單
+# （比照 2b `important_days.handle_delete_confirm_text()` 的保守做法）。
+#
+# 查詢＋標記完成/取消（2f 前）：「我的待辦事項」／`/my_todos` 觸發 start_todo_list()，選定編號
+# 後反問要標記完成還是取消，交給 LLM 判斷使用者這句話的意思。2f 起改成清單每筆附「✅ 完成」
+# 「🚫 取消」按鈕（`todo:complete:<id>`／`todo:cancel:<id>`），取代編號輸入＋LLM 分類這兩輪自由
+# 文字，移除 `_TODO_ACTION_CLASSIFY_PROMPT`；`/my_todos`、「我的待辦事項」文字觸發詞一併移除，
+# 不提供相容期（比照 2c／2d 決策）。
 # ---------------------------------------------------------------------------
 
 _TODO_INTENT_CONFIRM_PROMPT = (
@@ -769,15 +778,6 @@ _TODO_CALENDAR_SYNC_PROMPT = (
 # 而不是零長度事件；區間待辦則直接用 start_at～due_at 當作事件的起訖時間，不套用這個預設值。
 _TODO_CALENDAR_DEFAULT_DURATION = timedelta(minutes=30)
 
-_TODO_ACTION_CLASSIFY_PROMPT = (
-    "使用者剛被 Robinson 反問要把待辦事項「{content}」標記為完成還是取消，這是使用者這一則的回覆："
-    "「{text}」。\n"
-    "請判斷使用者的意思，整則回覆只能輸出以下其中一個固定字，不要輸出其他任何文字：\n"
-    "(1) 標記為已完成 → COMPLETE\n"
-    "(2) 標記為取消 → CANCEL\n"
-    "(3) 都不是、看不懂、或其實在問別的事 → OTHER"
-)
-
 _TODO_TIME_UNCLEAR_REPLY = "不好意思，我還是不太確定時間，可以再講清楚一點嗎？（例如：明天下午三點）"
 
 
@@ -792,6 +792,45 @@ def _current_date_text() -> str:
     依賴對方的私有函式，這裡獨立寫一份最簡版本（只需要日期，不需要星期幾）。"""
     now = _now()
     return f"{now.year}年{now.month}月{now.day}日"
+
+
+def start_todo_menu() -> tuple[str, dict]:
+    """主選單按下「✅ 待辦事項」後的子選單首頁（2f，見模組上方區塊說明）。"""
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "📋 查看清單", "callback_data": "todo:list"}],
+            [{"text": "➕ 新增", "callback_data": "todo:add"}],
+            [{"text": "🔙 返回主選單", "callback_data": "menu:main"}],
+        ]
+    }
+    return "待辦事項，請選擇要進行的操作：", keyboard
+
+
+def start_todo_new(state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
+    """選單「➕ 新增」按鈕觸發：略過自然語言入口的「要不要記錄」這輪反問（按鈕本身就是明確
+    意圖），先問「要記什麼事」，回覆後接到既有的時間反問（`pending_todo_time`）。"""
+    state_store.set(telegram_user_id, {"flow": "pending_todo_new_content", "target_user_id": user_id})
+    return "好的！這筆待辦事項要記什麼事呢？"
+
+
+def handle_todo_new_content_step(
+    state_store: ConversationStateStore,
+    telegram_user_id: int,
+    text: str,
+) -> str:
+    """處理 `pending_todo_new_content` 狀態下使用者輸入的待辦內容，講清楚後接到時間反問。"""
+    state = state_store.get(telegram_user_id)
+    target_user_id = state["target_user_id"]
+
+    content = text.strip()
+    if not content:
+        return "內容不可以是空白，請重新輸入："
+
+    state_store.set(
+        telegram_user_id,
+        {"flow": "pending_todo_time", "target_user_id": target_user_id, "original_text": content},
+    )
+    return "好的，請問是什麼時候呢？"
 
 
 def handle_todo_confirm_step(
@@ -988,6 +1027,26 @@ def _todo_calendar_window(due_at: datetime, start_at: datetime | None) -> tuple[
     return due_at.isoformat(), (due_at + _TODO_CALENDAR_DEFAULT_DURATION).isoformat()
 
 
+def _format_todo_time_summary_line(due_at: datetime, start_at: datetime | None) -> str:
+    """摘要畫面用的時間文字，格式跟 `todo.py`／`_build_todo_time_confirmation_reply` 的
+    `YYYY/MM/DD HH:MM` 表示法一致，方便使用者對照前一輪反問看到的內容。"""
+    if start_at is None:
+        return _format_ymd_hm(due_at)
+    return f"{_format_ymd_hm(start_at)} ～ {_format_ymd_hm(due_at)}"
+
+
+def _todo_summary_text(content: str, due_at: datetime, start_at: datetime | None, remind_before_30min: bool, sync_to_calendar: bool) -> str:
+    reminder_line = "會" if remind_before_30min else "不會"
+    sync_line = "會" if sync_to_calendar else "不會"
+    return (
+        "請確認以下待辦事項內容：\n\n"
+        f"內容：{content}\n"
+        f"時間：{_format_todo_time_summary_line(due_at, start_at)}\n"
+        f"提前 30 分鐘提醒：{reminder_line}\n"
+        f"同步 Google 家庭行事曆：{sync_line}"
+    )
+
+
 def handle_todo_calendar_sync_step(
     db: CloudSQLClient,
     llm_client,
@@ -995,14 +1054,13 @@ def handle_todo_calendar_sync_step(
     telegram_user_id: int,
     text: str,
     calendar_client=None,
-) -> str:
-    """處理 `pending_todo_calendar_sync` 狀態下使用者對「要不要同步到 Google 家庭行事曆」的回覆，
-    這一步才真正寫入 `todos`（FR-66a、ADR-17）。
+) -> tuple[str, dict]:
+    """處理 `pending_todo_calendar_sync` 狀態下使用者對「要不要同步到 Google 家庭行事曆」的回覆。
 
-    同步到 Calendar 是額外的加值功能，任何失敗（`calendar_client` 為 `None`，代表環境變數未設定；
-    或底層 API 呼叫拋例外）都優雅降級為「待辦事項已成功記錄，但沒有出現在 Calendar 上」，不影響
-    待辦事項本身寫入成功、也不把技術細節暴露給使用者，只記警告 log（比照 `webhook._upload_error_log()`
-    的降級哲學）。
+    2026-08-16（Phase 6 第二批 2f）起這一步不再直接寫入 `todos`，改成組出完整摘要＋
+    「✅ 確認送出／❌ 取消」按鈕（`pending_todo_confirm_save`，比照 2b～2e 的「摘要→二次確認」
+    結構），使用者按確認才真正呼叫 `todo.create_todo()`。`calendar_client` 沿用既有的參數位置，
+    實際建立 Calendar 事件延後到 `handle_todo_confirm_save()` 才發生。
     """
     state = state_store.get(telegram_user_id)
     target_user_id = state["target_user_id"]
@@ -1010,10 +1068,63 @@ def handle_todo_calendar_sync_step(
     due_at = state["due_at"]
     start_at = state.get("start_at")
     remind_before_30min = state["remind_before_30min"]
-    state_store.clear(telegram_user_id)
 
     decision = llm_client.generate_text(_TODO_CALENDAR_SYNC_PROMPT.format(text=text)).strip()
     sync_to_calendar = decision == "CONFIRM"
+
+    state_store.set(
+        telegram_user_id,
+        {
+            "flow": "pending_todo_confirm_save",
+            "target_user_id": target_user_id,
+            "content": content,
+            "due_at": due_at,
+            "start_at": start_at,
+            "remind_before_30min": remind_before_30min,
+            "sync_to_calendar": sync_to_calendar,
+        },
+    )
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "✅ 確認送出", "callback_data": "todo:confirm_save"}],
+            [{"text": "❌ 取消", "callback_data": "menu:todo"}],
+        ]
+    }
+    return _todo_summary_text(content, due_at, start_at, remind_before_30min, sync_to_calendar), keyboard
+
+
+def handle_todo_confirm_save_text(state_store: ConversationStateStore, telegram_user_id: int) -> tuple[str, dict]:
+    """`pending_todo_confirm_save` 這個狀態只接受按鈕操作；使用者改用打字時，比照
+    `important_days.handle_delete_confirm_text()` 的保守做法，直接取消流程並導回待辦事項選單。"""
+    state_store.clear(telegram_user_id)
+    return "確認送出請用上面的按鈕操作喔，這次先幫你取消了。", menu.back_to_main_menu_keyboard()
+
+
+def handle_todo_confirm_save(
+    db: CloudSQLClient,
+    state_store: ConversationStateStore,
+    telegram_user_id: int,
+    calendar_client=None,
+) -> tuple[str, dict]:
+    """處理 `pending_todo_confirm_save` 狀態下「✅ 確認送出」按鈕，這一步才真正寫入 `todos`
+    （FR-66a、ADR-17）。
+
+    同步到 Calendar 是額外的加值功能，任何失敗（`calendar_client` 為 `None`，代表環境變數未設定；
+    或底層 API 呼叫拋例外）都優雅降級為「待辦事項已成功記錄，但沒有出現在 Calendar 上」，不影響
+    待辦事項本身寫入成功、也不把技術細節暴露給使用者，只記警告 log（比照
+    `webhook._upload_error_log()` 的降級哲學）。
+    """
+    state = state_store.get(telegram_user_id)
+    if not state or state.get("flow") != "pending_todo_confirm_save":
+        return "目前沒有進行中的待辦事項設定。", menu.back_to_main_menu_keyboard()
+
+    target_user_id = state["target_user_id"]
+    content = state["content"]
+    due_at = state["due_at"]
+    start_at = state.get("start_at")
+    remind_before_30min = state["remind_before_30min"]
+    sync_to_calendar = state["sync_to_calendar"]
+    state_store.clear(telegram_user_id)
 
     todo_id = todo_module.create_todo(
         db, target_user_id, content, due_at, remind_before_30min, start_at=start_at,
@@ -1032,87 +1143,63 @@ def handle_todo_calendar_sync_step(
                 "待辦事項（id=%s）同步到 Google Calendar 失敗，待辦本身已成功記錄不受影響", todo_id
             )
 
-    return "好的，已經幫你記錄好了！"
+    return "好的，已經幫你記錄好了！", menu.back_to_main_menu_keyboard()
 
 
-def start_todo_list(
-    db: CloudSQLClient,
-    state_store: ConversationStateStore,
-    telegram_user_id: int,
-    user_id: int,
-) -> str:
-    """「我的待辦事項」／`/my_todos`：列出目前待處理清單，並進入可標記完成/取消的模式（FR-32）。"""
+def _format_todo_item_when(item: dict) -> str:
+    """跟 `todo.py` 私有函式 `_format_when()` 邏輯一致，這裡獨立寫一份避免跨模組依賴對方的
+    私有成員（比照本模組 `_now()`／`_current_date_text()` 的既有慣例）。"""
+    due_local = item["due_at"].astimezone(_TAIWAN_TZ)
+    start_at = item.get("start_at")
+    if start_at is None:
+        return f"{due_local:%Y/%m/%d %H:%M}"
+    start_local = start_at.astimezone(_TAIWAN_TZ)
+    return f"{start_local:%Y/%m/%d %H:%M} ～ {due_local:%Y/%m/%d %H:%M}"
+
+
+def start_todo_list(db: CloudSQLClient, user_id: int) -> tuple[str, dict]:
+    """「📋 查看清單」：列出目前待處理清單，每筆附「✅ 完成」「🚫 取消」按鈕（FR-32，2f 改按鈕式）。"""
     pending_todos = todo_module.list_pending_todos(db, user_id)
-    listing = todo_module.format_todo_list(pending_todos)
     if not pending_todos:
-        return listing
+        keyboard = {"inline_keyboard": [[{"text": "🔙 返回待辦事項", "callback_data": "menu:todo"}]]}
+        return "目前沒有待辦事項喔！", keyboard
 
-    state_store.set(
-        telegram_user_id,
-        {"flow": "pending_todo_list_action", "target_user_id": user_id, "todo_ids": [t["id"] for t in pending_todos]},
-    )
-    return f"{listing}\n\n如果要標記某一筆為完成或取消，請輸入編號；不需要的話輸入「結束」。"
+    lines = ["這是你目前的待辦事項：", ""]
+    buttons = []
+    for index, item in enumerate(pending_todos, start=1):
+        lines.append(f"{index}. {item['content']}（{_format_todo_item_when(item)}）")
+        buttons.append([
+            {"text": f"✅ 完成 {index}", "callback_data": f"todo:complete:{item['id']}"},
+            {"text": f"🚫 取消 {index}", "callback_data": f"todo:cancel:{item['id']}"},
+        ])
+    buttons.append([{"text": "🔙 返回待辦事項", "callback_data": "menu:todo"}])
+    return "\n".join(lines), {"inline_keyboard": buttons}
 
 
-def handle_todo_list_action_step(
+def handle_todo_status_action(
     db: CloudSQLClient,
-    state_store: ConversationStateStore,
-    telegram_user_id: int,
-    text: str,
-) -> str:
-    """處理 `pending_todo_list_action` 狀態下使用者輸入的編號，選定要標記完成/取消的那一筆。"""
-    state = state_store.get(telegram_user_id)
-    if text in _EXIT_PHRASES:
-        state_store.clear(telegram_user_id)
-        return "好的，已結束待辦事項查詢模式！"
-
-    todo_ids = state["todo_ids"]
-    if not text.isdigit() or not (1 <= int(text) <= len(todo_ids)):
-        return f"請輸入 1～{len(todo_ids)} 之間的編號，或輸入「結束」離開喔！"
-
-    todo_id = todo_ids[int(text) - 1]
-    row = db.select("todos", where="id = %s", params=(todo_id,), fetch_one=True)
-    state_store.set(
-        telegram_user_id,
-        {
-            "flow": "pending_todo_action_confirm",
-            "target_user_id": state["target_user_id"],
-            "todo_id": todo_id,
-            "content": row["content"],
-            "google_calendar_event_id": row.get("google_calendar_event_id"),
-        },
-    )
-    return f"要把「{row['content']}」標記為完成還是取消呢？"
-
-
-def handle_todo_action_confirm_step(
-    db: CloudSQLClient,
-    llm_client,
-    state_store: ConversationStateStore,
-    telegram_user_id: int,
-    text: str,
+    user_id: int,
+    todo_id: int,
+    new_status: str,
     calendar_client=None,
-) -> str:
-    """處理 `pending_todo_action_confirm` 狀態下使用者對完成/取消的回覆（FR-31a）。
+) -> tuple[str, dict]:
+    """處理清單「✅ 完成」／「🚫 取消」按鈕（FR-31a）。
+
+    比照 2b `important_days.handle_delete()` 的做法，重新查一次 `user_id` 比對是否為本人的
+    待辦事項（FR-6c，不假設清單畫面篩過就安全，避免偽造/過期 callback_data 誤傷其他家人的紀錄）。
 
     2026-08-05 起（見 FR-66a、ADR-17）：這筆待辦事項如果當初有同步到 Calendar
     （`google_calendar_event_id` 非空），標記完成/取消時一併刪除對應事件——不管是完成還是取消，
     這筆待辦都不再需要出現在家庭共用行事曆上。刪除失敗（`calendar_client` 為 `None`或 API 例外）
     優雅降級，不影響待辦事項本身的狀態更新。
     """
-    state = state_store.get(telegram_user_id)
-    todo_id = state["todo_id"]
-    content = state["content"]
-    google_calendar_event_id = state.get("google_calendar_event_id")
-    state_store.clear(telegram_user_id)
+    row = db.select("todos", where="id = %s AND user_id = %s", params=(todo_id, user_id), fetch_one=True)
+    if row is None:
+        return "找不到這筆待辦事項，可能已經被處理過了。", menu.back_to_main_menu_keyboard()
 
-    decision = llm_client.generate_text(_TODO_ACTION_CLASSIFY_PROMPT.format(content=content, text=text)).strip()
-    if decision not in ("COMPLETE", "CANCEL"):
-        return "不好意思，我不太確定你的意思，這筆待辦維持原狀，你可以再查詢一次待辦事項清單重新標記喔！"
-
-    new_status = "completed" if decision == "COMPLETE" else "cancelled"
     todo_module.mark_status(db, todo_id, new_status)
 
+    google_calendar_event_id = row.get("google_calendar_event_id")
     if google_calendar_event_id and calendar_client is not None:
         try:
             calendar_client.delete_event(event_id=google_calendar_event_id)
@@ -1123,7 +1210,7 @@ def handle_todo_action_confirm_step(
             )
 
     label = "完成" if new_status == "completed" else "取消"
-    return f"好的，已經把「{content}」標記為{label}囉！"
+    return f"好的，已經把「{row['content']}」標記為{label}囉！", menu.back_to_main_menu_keyboard()
 
 
 # ---------------------------------------------------------------------------

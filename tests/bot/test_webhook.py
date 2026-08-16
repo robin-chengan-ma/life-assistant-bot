@@ -259,7 +259,10 @@ def test_webhook_routes_callback_query_and_answers_plus_sends_reply(client, monk
     response = client.post("/telegram/webhook", json=payload)
 
     assert response.status_code == 200
-    mock_handle_callback_query.assert_called_once_with(mock_db_instance, webhook._state_store, 123, "menu:rule")
+    # 2026-08-16（Phase 6 第二批 2f）起額外注入 calendar_client（見 webhook._build_calendar_client()）。
+    mock_handle_callback_query.assert_called_once_with(
+        mock_db_instance, webhook._state_store, 123, "menu:rule", calendar_client=None
+    )
     mock_telegram_instance.answer_callback_query.assert_called_once_with("cb1")
     mock_telegram_instance.send_text.assert_called_once_with(
         chat_id=123, text="使用規則內容", reply_markup={"inline_keyboard": [[{"text": "🔙", "callback_data": "menu:main"}]]}

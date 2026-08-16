@@ -688,20 +688,41 @@ def test_pending_save_knowledge_confirm_flow_moves_to_final_confirm_via_router(f
 # --- 待辦事項（robinson SPEC.md FR-31、FR-31a、FR-32，Step 1.7）---
 
 
-def test_my_todos_trigger_reports_empty_list(fake_db, monkeypatch):
+def test_todo_menu_key_not_in_not_yet_implemented_set():
+    """2f 應該把 todo 從 2a 留下的「開發中」名單移除，其餘兩項維持不變。"""
+    assert not menu.is_not_yet_implemented("todo")
+    for key in ("query", "schedule"):
+        assert menu.is_not_yet_implemented(key)
+
+
+def test_todo_submenu_shows_list_and_add_buttons(fake_db, monkeypatch):
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     store = ConversationStateStore()
 
-    reply = router.handle_message(fake_db, store, FAMILY_ID, "我的待辦事項")
+    reply, keyboard = router.handle_callback_query(fake_db, store, FAMILY_ID, "menu:todo")
+
+    assert "待辦事項" in reply
+    callback_datas = [button["callback_data"] for row in keyboard["inline_keyboard"] for button in row]
+    assert "todo:list" in callback_datas
+    assert "todo:add" in callback_datas
+
+
+def test_todo_list_reports_empty_list(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+
+    reply, keyboard = router.handle_callback_query(fake_db, store, FAMILY_ID, "todo:list")
 
     assert reply == "目前沒有待辦事項喔！"
-    assert store.get(FAMILY_ID) is None
+    assert keyboard["inline_keyboard"][0][0]["callback_data"] == "menu:todo"
 
 
 def test_todo_full_flow_from_natural_language_to_creation(fake_db, monkeypatch):
-    # 2026-08-02（Step 1.7，見 FR-31、FR-56e 情境範例）：自然語言描述 → 確認要記錄 → 給時間
-    # → 確認提醒設定，全程由 router 正確分派到 chat.py／commands.py。
+    # 2026-08-02（Step 1.7，見 FR-31、FR-56e 情境範例；2026-08-16 Phase 6 第二批 2f 補上摘要→
+    # 二次確認）：自然語言描述 → 確認要記錄 → 給時間 → 確認提醒設定 → 行事曆同步 → 按鈕確認送出，
+    # 全程由 router 正確分派到 chat.py／commands.py。
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     fake_db.insert("knowledge_base", {"category": "general_persona", "user_id": None, "content": "我是羅賓森"})
@@ -731,8 +752,16 @@ def test_todo_full_flow_from_natural_language_to_creation(fake_db, monkeypatch):
     # 2026-08-05（FR-66a、ADR-17）：多一輪同步詢問，這裡選擇不同步（calendar_client 沒有注入時
     # 也要能正常運作，模擬環境變數未設定的優雅降級情境）。
     llm_client.response_text = "CANCEL"
-    reply5 = router.handle_message(fake_db, store, FAMILY_ID, "不用", llm_client=llm_client)
-    assert reply5 == "好的，已經幫你記錄好了！"
+    reply5, keyboard5 = router.handle_message(fake_db, store, FAMILY_ID, "不用", llm_client=llm_client)
+    assert "請確認以下待辦事項內容" in reply5
+    assert "買菜" in reply5
+    assert keyboard5["inline_keyboard"][0][0]["callback_data"] == "todo:confirm_save"
+    assert store.get(FAMILY_ID)["flow"] == "pending_todo_confirm_save"
+    rows = fake_db.select("todos", where="user_id = %s AND status = %s", params=(user_id, "pending"))
+    assert len(rows) == 0  # 還沒真正寫入，要等按下「✅ 確認送出」才寫入
+
+    reply6, _keyboard6 = router.handle_callback_query(fake_db, store, FAMILY_ID, "todo:confirm_save")
+    assert reply6 == "好的，已經幫你記錄好了！"
     assert store.get(FAMILY_ID) is None
 
     rows = fake_db.select("todos", where="user_id = %s AND status = %s", params=(user_id, "pending"))
@@ -742,7 +771,43 @@ def test_todo_full_flow_from_natural_language_to_creation(fake_db, monkeypatch):
     assert rows[0]["sync_to_calendar"] is False
 
 
-def test_my_todos_trigger_lists_and_marks_completed_via_index_selection(fake_db, monkeypatch):
+def test_todo_add_button_skips_confirm_step_and_asks_content(fake_db, monkeypatch):
+    # 2026-08-16（Phase 6 第二批 2f）：選單「➕ 新增」按鈕略過「要不要記錄」這輪反問，
+    # 先問「要記什麼事」，才接到既有的時間反問，跟自然語言入口共用同一套狀態機。
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+
+    reply, keyboard = router.handle_callback_query(fake_db, store, FAMILY_ID, "todo:add")
+    assert keyboard is None
+    assert "要記什麼事" in reply
+    assert store.get(FAMILY_ID)["flow"] == "pending_todo_new_content"
+
+    reply2 = router.handle_message(fake_db, store, FAMILY_ID, "買菜")
+    assert reply2 == "好的，請問是什麼時候呢？"
+    assert store.get(FAMILY_ID) == {"flow": "pending_todo_time", "target_user_id": store.get(FAMILY_ID)["target_user_id"], "original_text": "買菜"}
+
+
+def test_todo_confirm_save_typed_text_cancels_flow(fake_db, monkeypatch):
+    # pending_todo_confirm_save 只接受按鈕，打字比照 2b～2e 的保守做法直接取消並導回主選單。
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+    store.set(FAMILY_ID, {
+        "flow": "pending_todo_confirm_save", "target_user_id": user_id, "content": "買菜",
+        "due_at": datetime(2026, 8, 2, 15, 0, tzinfo=timezone.utc), "start_at": None,
+        "remind_before_30min": True, "sync_to_calendar": False,
+    })
+
+    reply, keyboard = router.handle_message(fake_db, store, FAMILY_ID, "隨便打字")
+
+    assert "先幫你取消了" in reply
+    assert keyboard["inline_keyboard"][0][0]["callback_data"] == "menu:main"
+    assert store.get(FAMILY_ID) is None
+    assert fake_db.select("todos", where="user_id = %s", params=(user_id,)) == []
+
+
+def test_todo_list_marks_completed_via_button(fake_db, monkeypatch):
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     due_at = datetime(2026, 8, 2, 7, 0, tzinfo=timezone.utc)
@@ -752,19 +817,31 @@ def test_my_todos_trigger_lists_and_marks_completed_via_index_selection(fake_db,
     )
     store = ConversationStateStore()
 
-    reply1 = router.handle_message(fake_db, store, FAMILY_ID, "我的待辦事項")
+    reply1, keyboard1 = router.handle_callback_query(fake_db, store, FAMILY_ID, "todo:list")
     assert "買菜" in reply1
-    assert store.get(FAMILY_ID)["flow"] == "pending_todo_list_action"
+    assert keyboard1["inline_keyboard"][0][0]["callback_data"] == f"todo:complete:{todo_id}"
 
-    reply2 = router.handle_message(fake_db, store, FAMILY_ID, "1")
-    assert "買菜" in reply2
-    assert store.get(FAMILY_ID)["flow"] == "pending_todo_action_confirm"
-
-    llm_client = _FakeLLMClient(response_text="COMPLETE")
-    reply3 = router.handle_message(fake_db, store, FAMILY_ID, "做完了", llm_client=llm_client)
-    assert "完成" in reply3
-    assert store.get(FAMILY_ID) is None
+    reply2, _keyboard2 = router.handle_callback_query(fake_db, store, FAMILY_ID, f"todo:complete:{todo_id}")
+    assert "完成" in reply2
     assert fake_db.select("todos", where="id = %s", params=(todo_id,), fetch_one=True)["status"] == "completed"
+
+
+def test_todo_list_rejects_other_users_todo_via_forged_callback(fake_db, monkeypatch):
+    # FR-6c：偽造/過期的 callback_data 想標記別人的待辦事項，重新查一次 user_id 要擋下來。
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    other_user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID_2, "role": "媽媽", "is_owner": False})
+    due_at = datetime(2026, 8, 2, 7, 0, tzinfo=timezone.utc)
+    todo_id = fake_db.insert(
+        "todos",
+        {"user_id": other_user_id, "content": "別人的待辦", "due_at": due_at, "remind_before_30min": False, "status": "pending"},
+    )
+    store = ConversationStateStore()
+
+    reply, _keyboard = router.handle_callback_query(fake_db, store, FAMILY_ID, f"todo:complete:{todo_id}")
+
+    assert "找不到" in reply
+    assert fake_db.select("todos", where="id = %s", params=(todo_id,), fetch_one=True)["status"] == "pending"
 
 
 # --- 心情小記（robinson SPEC.md FR-49、FR-50；2026-08-16 Phase 6 第二批 2c 改為全選單觸發，
@@ -2415,12 +2492,13 @@ def test_error_resolution_trigger_ignored_for_non_owner(fake_db, monkeypatch):
 
 def test_important_days_menu_key_not_in_not_yet_implemented_set():
     """2b 應該把 important_days 從 2a 留下的「開發中」名單移除；daily_log 之後在 2c 也移除，
-    collections 在 2d 也移除，achievements 在 2e 也移除，其餘兩項維持不變。"""
+    collections 在 2d 也移除，achievements 在 2e 也移除，todo 在 2f 也移除，其餘兩項維持不變。"""
     assert not menu.is_not_yet_implemented("important_days")
     assert not menu.is_not_yet_implemented("daily_log")
     assert not menu.is_not_yet_implemented("collections")
     assert not menu.is_not_yet_implemented("achievements")
-    for key in ("query", "todo", "schedule"):
+    assert not menu.is_not_yet_implemented("todo")
+    for key in ("query", "schedule"):
         assert menu.is_not_yet_implemented(key)
 
 

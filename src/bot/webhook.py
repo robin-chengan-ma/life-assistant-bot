@@ -463,12 +463,19 @@ def _handle_callback_query_update(callback_extracted: tuple[int, str, str]):
     按鈕轉圈圈的 loading 狀態。這裡刻意走獨立、精簡的 try/except，不重用文字訊息分支那套
     「一般感冒級／重大疾病級」分級安全網（callback_query 不會呼叫 LLM，失敗模式單純很多），
     失敗時只記錄 log 並盡量呼叫 answerCallbackQuery 讓按鈕停止轉圈，不觸發 Robin 錯誤私訊。
+
+    2026-08-16（Phase 6 第二批 2f）起額外注入 `_build_calendar_client()`：待辦事項的
+    「✅ 確認送出」／「✅ 完成」／「🚫 取消」這幾個 callback 需要建立/刪除 Google Calendar
+    事件，是第一個需要在按鈕流程用到 Calendar 的批次，沿用既有 `_build_calendar_client()`
+    的優雅降級（`None` 時待辦事項照常記錄/更新，只是不會出現在 Calendar 上）。
     """
     telegram_user_id, callback_query_id, data = callback_extracted
     db = None
     try:
         db = CloudSQLClient()
-        reply, reply_markup = handle_callback_query(db, _state_store, telegram_user_id, data)
+        reply, reply_markup = handle_callback_query(
+            db, _state_store, telegram_user_id, data, calendar_client=_build_calendar_client()
+        )
     except Exception:
         _logger.exception(
             "處理 callback_query 時發生未預期例外（telegram_user_id=%s，data=%s）", telegram_user_id, data

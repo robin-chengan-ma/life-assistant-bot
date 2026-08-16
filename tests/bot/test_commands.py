@@ -1013,7 +1013,47 @@ def test_handle_todo_reminder_step_passes_start_at_to_state(fake_db):
     assert state["due_at"] == due_at
 
 
-# --- pending_todo_calendar_sync（FR-66a，2026-08-05，見 ADR-17） ---
+# --- 選單新增入口（2f，見 commands.py 待辦事項區塊說明） ---
+
+
+def test_start_todo_menu_returns_submenu_keyboard():
+    text, keyboard = commands.start_todo_menu()
+
+    assert "待辦事項" in text
+    callback_data = [button["callback_data"] for row in keyboard["inline_keyboard"] for button in row]
+    assert callback_data == ["todo:list", "todo:add", "menu:main"]
+
+
+def test_start_todo_new_asks_content_and_sets_state():
+    store = ConversationStateStore()
+
+    reply = commands.start_todo_new(store, telegram_user_id=1, user_id=42)
+
+    assert "要記什麼事" in reply
+    assert store.get(1) == {"flow": "pending_todo_new_content", "target_user_id": 42}
+
+
+def test_handle_todo_new_content_step_moves_to_time_step():
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_todo_new_content", "target_user_id": 42})
+
+    reply = commands.handle_todo_new_content_step(store, telegram_user_id=1, text="買菜")
+
+    assert reply == "好的，請問是什麼時候呢？"
+    assert store.get(1) == {"flow": "pending_todo_time", "target_user_id": 42, "original_text": "買菜"}
+
+
+def test_handle_todo_new_content_step_rejects_blank_content():
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_todo_new_content", "target_user_id": 42})
+
+    reply = commands.handle_todo_new_content_step(store, telegram_user_id=1, text="   ")
+
+    assert "不可以是空白" in reply
+    assert store.get(1)["flow"] == "pending_todo_new_content"
+
+
+# --- pending_todo_calendar_sync → pending_todo_confirm_save（2f，摘要→二次確認）---
 
 
 def _set_pending_todo_calendar_sync_state(store, **overrides):
@@ -1030,14 +1070,61 @@ def _set_pending_todo_calendar_sync_state(store, **overrides):
     return state
 
 
-def test_handle_todo_calendar_sync_step_creates_todo_without_sync_when_declined(fake_db):
+def test_handle_todo_calendar_sync_step_moves_to_confirm_save_without_writing(fake_db):
     store = ConversationStateStore()
     _set_pending_todo_calendar_sync_state(store)
     llm_client = _FakeLLMClient(response_text="CANCEL")
 
-    reply = commands.handle_todo_calendar_sync_step(fake_db, llm_client, store, telegram_user_id=1, text="不用")
+    reply, keyboard = commands.handle_todo_calendar_sync_step(fake_db, llm_client, store, telegram_user_id=1, text="不用")
+
+    assert "請確認以下待辦事項內容" in reply
+    assert "買菜" in reply
+    assert "同步 Google 家庭行事曆：不會" in reply
+    assert keyboard["inline_keyboard"][0][0]["callback_data"] == "todo:confirm_save"
+    state = store.get(1)
+    assert state["flow"] == "pending_todo_confirm_save"
+    assert state["sync_to_calendar"] is False
+    rows = fake_db.select("todos", where="user_id = %s AND status = %s", params=(42, "pending"))
+    assert len(rows) == 0  # 還沒真正寫入，要等按下「✅ 確認送出」才寫入
+
+
+def test_handle_todo_calendar_sync_step_records_confirmed_sync_choice(fake_db):
+    store = ConversationStateStore()
+    _set_pending_todo_calendar_sync_state(store)
+    llm_client = _FakeLLMClient(response_text="CONFIRM")
+
+    reply, _keyboard = commands.handle_todo_calendar_sync_step(fake_db, llm_client, store, telegram_user_id=1, text="要")
+
+    assert "同步 Google 家庭行事曆：會" in reply
+    assert store.get(1)["sync_to_calendar"] is True
+
+
+def test_handle_todo_confirm_save_text_cancels_and_clears_state():
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_todo_confirm_save", "target_user_id": 42, "content": "買菜"})
+
+    reply, keyboard = commands.handle_todo_confirm_save_text(store, telegram_user_id=1)
+
+    assert "先幫你取消了" in reply
+    assert keyboard == menu.back_to_main_menu_keyboard()
+    assert store.get(1) is None
+
+
+def test_handle_todo_confirm_save_creates_todo_without_sync(fake_db):
+    store = ConversationStateStore()
+    store.set(
+        1,
+        {
+            "flow": "pending_todo_confirm_save", "target_user_id": 42, "content": "買菜",
+            "due_at": commands.datetime(2026, 8, 2, 15, 0, tzinfo=commands._TAIWAN_TZ),
+            "start_at": None, "remind_before_30min": True, "sync_to_calendar": False,
+        },
+    )
+
+    reply, keyboard = commands.handle_todo_confirm_save(fake_db, store, telegram_user_id=1)
 
     assert reply == "好的，已經幫你記錄好了！"
+    assert keyboard == menu.back_to_main_menu_keyboard()
     assert store.get(1) is None
     rows = fake_db.select("todos", where="user_id = %s AND status = %s", params=(42, "pending"))
     assert len(rows) == 1
@@ -1045,16 +1132,20 @@ def test_handle_todo_calendar_sync_step_creates_todo_without_sync_when_declined(
     assert rows[0].get("google_calendar_event_id") is None
 
 
-def test_handle_todo_calendar_sync_step_creates_event_when_confirmed(fake_db):
+def test_handle_todo_confirm_save_creates_event_when_synced(fake_db):
     store = ConversationStateStore()
-    _set_pending_todo_calendar_sync_state(store)
-    llm_client = _FakeLLMClient(response_text="CONFIRM")
+    store.set(
+        1,
+        {
+            "flow": "pending_todo_confirm_save", "target_user_id": 42, "content": "買菜",
+            "due_at": commands.datetime(2026, 8, 2, 15, 0, tzinfo=commands._TAIWAN_TZ),
+            "start_at": None, "remind_before_30min": True, "sync_to_calendar": True,
+        },
+    )
     calendar_client = MagicMock()
     calendar_client.create_event.return_value = "event-abc123"
 
-    reply = commands.handle_todo_calendar_sync_step(
-        fake_db, llm_client, store, telegram_user_id=1, text="要", calendar_client=calendar_client
-    )
+    reply, _keyboard = commands.handle_todo_confirm_save(fake_db, store, telegram_user_id=1, calendar_client=calendar_client)
 
     assert reply == "好的，已經幫你記錄好了！"
     rows = fake_db.select("todos", where="user_id = %s AND status = %s", params=(42, "pending"))
@@ -1067,33 +1158,40 @@ def test_handle_todo_calendar_sync_step_creates_event_when_confirmed(fake_db):
     assert call_kwargs["end"] == "2026-08-02T15:30:00+08:00"  # 單一時間點預設 30 分鐘時長
 
 
-def test_handle_todo_calendar_sync_step_uses_range_window_for_interval_todo(fake_db):
+def test_handle_todo_confirm_save_uses_range_window_for_interval_todo(fake_db):
     store = ConversationStateStore()
-    start_at = commands.datetime(2026, 8, 2, 8, 0, tzinfo=commands._TAIWAN_TZ)
-    due_at = commands.datetime(2026, 8, 5, 17, 0, tzinfo=commands._TAIWAN_TZ)
-    _set_pending_todo_calendar_sync_state(store, content="出差", due_at=due_at, start_at=start_at)
-    llm_client = _FakeLLMClient(response_text="CONFIRM")
+    store.set(
+        1,
+        {
+            "flow": "pending_todo_confirm_save", "target_user_id": 42, "content": "出差",
+            "due_at": commands.datetime(2026, 8, 5, 17, 0, tzinfo=commands._TAIWAN_TZ),
+            "start_at": commands.datetime(2026, 8, 2, 8, 0, tzinfo=commands._TAIWAN_TZ),
+            "remind_before_30min": True, "sync_to_calendar": True,
+        },
+    )
     calendar_client = MagicMock()
     calendar_client.create_event.return_value = "event-xyz"
 
-    commands.handle_todo_calendar_sync_step(
-        fake_db, llm_client, store, telegram_user_id=1, text="要", calendar_client=calendar_client
-    )
+    commands.handle_todo_confirm_save(fake_db, store, telegram_user_id=1, calendar_client=calendar_client)
 
     call_kwargs = calendar_client.create_event.call_args.kwargs
     assert call_kwargs["start"] == "2026-08-02T08:00:00+08:00"
     assert call_kwargs["end"] == "2026-08-05T17:00:00+08:00"
 
 
-def test_handle_todo_calendar_sync_step_skips_event_creation_when_client_is_none(fake_db):
+def test_handle_todo_confirm_save_skips_event_creation_when_client_is_none(fake_db):
     # calendar_client 為 None（環境變數未設定）時優雅降級：待辦仍成功記錄，只是不建立 Calendar 事件。
     store = ConversationStateStore()
-    _set_pending_todo_calendar_sync_state(store)
-    llm_client = _FakeLLMClient(response_text="CONFIRM")
-
-    reply = commands.handle_todo_calendar_sync_step(
-        fake_db, llm_client, store, telegram_user_id=1, text="要", calendar_client=None
+    store.set(
+        1,
+        {
+            "flow": "pending_todo_confirm_save", "target_user_id": 42, "content": "買菜",
+            "due_at": commands.datetime(2026, 8, 2, 15, 0, tzinfo=commands._TAIWAN_TZ),
+            "start_at": None, "remind_before_30min": True, "sync_to_calendar": True,
+        },
     )
+
+    reply, _keyboard = commands.handle_todo_confirm_save(fake_db, store, telegram_user_id=1, calendar_client=None)
 
     assert reply == "好的，已經幫你記錄好了！"
     rows = fake_db.select("todos", where="user_id = %s AND status = %s", params=(42, "pending"))
@@ -1101,17 +1199,21 @@ def test_handle_todo_calendar_sync_step_skips_event_creation_when_client_is_none
     assert rows[0].get("google_calendar_event_id") is None
 
 
-def test_handle_todo_calendar_sync_step_swallows_calendar_exception(fake_db):
+def test_handle_todo_confirm_save_swallows_calendar_exception(fake_db):
     # Calendar API 呼叫失敗不該影響待辦事項已經成功記錄。
     store = ConversationStateStore()
-    _set_pending_todo_calendar_sync_state(store)
-    llm_client = _FakeLLMClient(response_text="CONFIRM")
+    store.set(
+        1,
+        {
+            "flow": "pending_todo_confirm_save", "target_user_id": 42, "content": "買菜",
+            "due_at": commands.datetime(2026, 8, 2, 15, 0, tzinfo=commands._TAIWAN_TZ),
+            "start_at": None, "remind_before_30min": True, "sync_to_calendar": True,
+        },
+    )
     calendar_client = MagicMock()
     calendar_client.create_event.side_effect = RuntimeError("boom")
 
-    reply = commands.handle_todo_calendar_sync_step(
-        fake_db, llm_client, store, telegram_user_id=1, text="要", calendar_client=calendar_client
-    )
+    reply, _keyboard = commands.handle_todo_confirm_save(fake_db, store, telegram_user_id=1, calendar_client=calendar_client)
 
     assert reply == "好的，已經幫你記錄好了！"
     rows = fake_db.select("todos", where="user_id = %s AND status = %s", params=(42, "pending"))
@@ -1119,106 +1221,84 @@ def test_handle_todo_calendar_sync_step_swallows_calendar_exception(fake_db):
     assert rows[0].get("google_calendar_event_id") is None
 
 
-def test_start_todo_list_reports_no_todos_and_does_not_set_state(fake_db):
+def test_handle_todo_confirm_save_without_pending_state_returns_guard_reply():
     store = ConversationStateStore()
 
-    reply = commands.start_todo_list(fake_db, store, telegram_user_id=1, user_id=42)
+    reply, keyboard = commands.handle_todo_confirm_save(None, store, telegram_user_id=1)
 
-    assert reply == "目前沒有待辦事項喔！"
-    assert store.get(1) is None
+    assert reply == "目前沒有進行中的待辦事項設定。"
+    assert keyboard == menu.back_to_main_menu_keyboard()
 
 
-def test_start_todo_list_shows_list_and_sets_pending_action_state(fake_db):
+# --- 查詢清單＋按鈕標記完成/取消（2f，取代舊版編號輸入＋LLM 分類）---
+
+
+def test_start_todo_list_reports_no_todos(fake_db):
+    text, keyboard = commands.start_todo_list(fake_db, user_id=42)
+
+    assert text == "目前沒有待辦事項喔！"
+    assert keyboard["inline_keyboard"][0][0]["callback_data"] == "menu:todo"
+
+
+def test_start_todo_list_shows_list_with_complete_and_cancel_buttons(fake_db):
     due_at = commands.datetime(2026, 8, 2, 15, 0, tzinfo=commands._TAIWAN_TZ)
     todo_id = fake_db.insert(
         "todos",
         {"user_id": 42, "content": "買菜", "due_at": due_at, "remind_before_30min": False, "status": "pending"},
     )
-    store = ConversationStateStore()
 
-    reply = commands.start_todo_list(fake_db, store, telegram_user_id=1, user_id=42)
+    text, keyboard = commands.start_todo_list(fake_db, user_id=42)
 
-    assert "買菜" in reply
-    assert "結束" in reply
-    assert store.get(1) == {"flow": "pending_todo_list_action", "target_user_id": 42, "todo_ids": [todo_id]}
-
-
-def test_handle_todo_list_action_step_exit_phrase_clears_state(fake_db):
-    store = ConversationStateStore()
-    store.set(1, {"flow": "pending_todo_list_action", "target_user_id": 42, "todo_ids": [1]})
-
-    reply = commands.handle_todo_list_action_step(fake_db, store, telegram_user_id=1, text="結束")
-
-    assert store.get(1) is None
-    assert "結束" in reply
+    assert "買菜" in text
+    buttons = keyboard["inline_keyboard"][0]
+    assert buttons[0]["callback_data"] == f"todo:complete:{todo_id}"
+    assert buttons[1]["callback_data"] == f"todo:cancel:{todo_id}"
+    assert keyboard["inline_keyboard"][-1][0]["callback_data"] == "menu:todo"
 
 
-def test_handle_todo_list_action_step_invalid_index_reprompts(fake_db):
-    store = ConversationStateStore()
-    store.set(1, {"flow": "pending_todo_list_action", "target_user_id": 42, "todo_ids": [1]})
-
-    reply = commands.handle_todo_list_action_step(fake_db, store, telegram_user_id=1, text="99")
-
-    assert "編號" in reply
-    assert store.get(1)["flow"] == "pending_todo_list_action"
-
-
-def test_handle_todo_list_action_step_valid_index_moves_to_action_confirm(fake_db):
+def test_handle_todo_status_action_marks_completed(fake_db):
     due_at = commands.datetime(2026, 8, 2, 15, 0, tzinfo=commands._TAIWAN_TZ)
     todo_id = fake_db.insert(
         "todos",
         {"user_id": 42, "content": "買菜", "due_at": due_at, "remind_before_30min": False, "status": "pending"},
     )
-    store = ConversationStateStore()
-    store.set(1, {"flow": "pending_todo_list_action", "target_user_id": 42, "todo_ids": [todo_id]})
 
-    reply = commands.handle_todo_list_action_step(fake_db, store, telegram_user_id=1, text="1")
-
-    assert "買菜" in reply
-    assert store.get(1) == {
-        "flow": "pending_todo_action_confirm",
-        "target_user_id": 42,
-        "todo_id": todo_id,
-        "content": "買菜",
-        "google_calendar_event_id": None,
-    }
-
-
-def test_handle_todo_action_confirm_step_marks_completed(fake_db):
-    due_at = commands.datetime(2026, 8, 2, 15, 0, tzinfo=commands._TAIWAN_TZ)
-    todo_id = fake_db.insert(
-        "todos",
-        {"user_id": 42, "content": "買菜", "due_at": due_at, "remind_before_30min": False, "status": "pending"},
-    )
-    store = ConversationStateStore()
-    store.set(1, {"flow": "pending_todo_action_confirm", "target_user_id": 42, "todo_id": todo_id, "content": "買菜"})
-    llm_client = _FakeLLMClient(response_text="COMPLETE")
-
-    reply = commands.handle_todo_action_confirm_step(fake_db, llm_client, store, telegram_user_id=1, text="做完了")
+    reply, keyboard = commands.handle_todo_status_action(fake_db, user_id=42, todo_id=todo_id, new_status="completed")
 
     assert "完成" in reply
-    assert store.get(1) is None
+    assert keyboard == menu.back_to_main_menu_keyboard()
     assert fake_db.select("todos", where="id = %s", params=(todo_id,), fetch_one=True)["status"] == "completed"
 
 
-def test_handle_todo_action_confirm_step_marks_cancelled(fake_db):
+def test_handle_todo_status_action_marks_cancelled(fake_db):
     due_at = commands.datetime(2026, 8, 2, 15, 0, tzinfo=commands._TAIWAN_TZ)
     todo_id = fake_db.insert(
         "todos",
         {"user_id": 42, "content": "買菜", "due_at": due_at, "remind_before_30min": False, "status": "pending"},
     )
-    store = ConversationStateStore()
-    store.set(1, {"flow": "pending_todo_action_confirm", "target_user_id": 42, "todo_id": todo_id, "content": "買菜"})
-    llm_client = _FakeLLMClient(response_text="CANCEL")
 
-    reply = commands.handle_todo_action_confirm_step(fake_db, llm_client, store, telegram_user_id=1, text="不用了")
+    reply, _keyboard = commands.handle_todo_status_action(fake_db, user_id=42, todo_id=todo_id, new_status="cancelled")
 
     assert "取消" in reply
     assert fake_db.select("todos", where="id = %s", params=(todo_id,), fetch_one=True)["status"] == "cancelled"
 
 
-def test_handle_todo_action_confirm_step_deletes_calendar_event_when_synced(fake_db):
-    # 2026-08-05（FR-66a、ADR-17）：標記完成/取消時，如果這筆待辦當初有同步，要刪除對應事件。
+def test_handle_todo_status_action_rejects_other_users_todo(fake_db):
+    # FR-6c：重新查一次 user_id 比對，不假設清單畫面篩過就安全，避免偽造/過期 callback_data。
+    due_at = commands.datetime(2026, 8, 2, 15, 0, tzinfo=commands._TAIWAN_TZ)
+    todo_id = fake_db.insert(
+        "todos",
+        {"user_id": 999, "content": "別人的待辦", "due_at": due_at, "remind_before_30min": False, "status": "pending"},
+    )
+
+    reply, keyboard = commands.handle_todo_status_action(fake_db, user_id=42, todo_id=todo_id, new_status="completed")
+
+    assert "找不到" in reply
+    assert keyboard == menu.back_to_main_menu_keyboard()
+    assert fake_db.select("todos", where="id = %s", params=(todo_id,), fetch_one=True)["status"] == "pending"
+
+
+def test_handle_todo_status_action_deletes_calendar_event_when_synced(fake_db):
     due_at = commands.datetime(2026, 8, 2, 15, 0, tzinfo=commands._TAIWAN_TZ)
     todo_id = fake_db.insert(
         "todos",
@@ -1227,43 +1307,27 @@ def test_handle_todo_action_confirm_step_deletes_calendar_event_when_synced(fake
             "status": "pending", "sync_to_calendar": True, "google_calendar_event_id": "event-abc123",
         },
     )
-    store = ConversationStateStore()
-    store.set(
-        1,
-        {
-            "flow": "pending_todo_action_confirm", "target_user_id": 42, "todo_id": todo_id,
-            "content": "買菜", "google_calendar_event_id": "event-abc123",
-        },
-    )
-    llm_client = _FakeLLMClient(response_text="COMPLETE")
     calendar_client = MagicMock()
 
-    commands.handle_todo_action_confirm_step(
-        fake_db, llm_client, store, telegram_user_id=1, text="做完了", calendar_client=calendar_client
-    )
+    commands.handle_todo_status_action(fake_db, user_id=42, todo_id=todo_id, new_status="completed", calendar_client=calendar_client)
 
     calendar_client.delete_event.assert_called_once_with(event_id="event-abc123")
 
 
-def test_handle_todo_action_confirm_step_skips_calendar_delete_when_not_synced(fake_db):
+def test_handle_todo_status_action_skips_calendar_delete_when_not_synced(fake_db):
     due_at = commands.datetime(2026, 8, 2, 15, 0, tzinfo=commands._TAIWAN_TZ)
     todo_id = fake_db.insert(
         "todos",
         {"user_id": 42, "content": "買菜", "due_at": due_at, "remind_before_30min": False, "status": "pending"},
     )
-    store = ConversationStateStore()
-    store.set(1, {"flow": "pending_todo_action_confirm", "target_user_id": 42, "todo_id": todo_id, "content": "買菜"})
-    llm_client = _FakeLLMClient(response_text="COMPLETE")
     calendar_client = MagicMock()
 
-    commands.handle_todo_action_confirm_step(
-        fake_db, llm_client, store, telegram_user_id=1, text="做完了", calendar_client=calendar_client
-    )
+    commands.handle_todo_status_action(fake_db, user_id=42, todo_id=todo_id, new_status="completed", calendar_client=calendar_client)
 
     calendar_client.delete_event.assert_not_called()
 
 
-def test_handle_todo_action_confirm_step_swallows_calendar_delete_exception(fake_db):
+def test_handle_todo_status_action_swallows_calendar_delete_exception(fake_db):
     due_at = commands.datetime(2026, 8, 2, 15, 0, tzinfo=commands._TAIWAN_TZ)
     todo_id = fake_db.insert(
         "todos",
@@ -1272,21 +1336,10 @@ def test_handle_todo_action_confirm_step_swallows_calendar_delete_exception(fake
             "status": "pending", "sync_to_calendar": True, "google_calendar_event_id": "event-abc123",
         },
     )
-    store = ConversationStateStore()
-    store.set(
-        1,
-        {
-            "flow": "pending_todo_action_confirm", "target_user_id": 42, "todo_id": todo_id,
-            "content": "買菜", "google_calendar_event_id": "event-abc123",
-        },
-    )
-    llm_client = _FakeLLMClient(response_text="COMPLETE")
     calendar_client = MagicMock()
     calendar_client.delete_event.side_effect = RuntimeError("boom")
 
-    reply = commands.handle_todo_action_confirm_step(
-        fake_db, llm_client, store, telegram_user_id=1, text="做完了", calendar_client=calendar_client
-    )
+    reply, _keyboard = commands.handle_todo_status_action(fake_db, user_id=42, todo_id=todo_id, new_status="completed", calendar_client=calendar_client)
 
     assert "完成" in reply
     assert fake_db.select("todos", where="id = %s", params=(todo_id,), fetch_one=True)["status"] == "completed"
@@ -1655,22 +1708,6 @@ def test_handle_mood_achievement_step_masks_pii_and_adds_reminder(fake_db):
     assert "提醒" in reply
     row = fake_db.select("mood_journals", where="id = %s", params=(journal_id,), fetch_one=True)
     assert row["achievement_note"] == "打給我 [已遮蔽個資]"
-
-
-def test_handle_todo_action_confirm_step_keeps_status_when_unclassifiable(fake_db):
-    due_at = commands.datetime(2026, 8, 2, 15, 0, tzinfo=commands._TAIWAN_TZ)
-    todo_id = fake_db.insert(
-        "todos",
-        {"user_id": 42, "content": "買菜", "due_at": due_at, "remind_before_30min": False, "status": "pending"},
-    )
-    store = ConversationStateStore()
-    store.set(1, {"flow": "pending_todo_action_confirm", "target_user_id": 42, "todo_id": todo_id, "content": "買菜"})
-    llm_client = _FakeLLMClient(response_text="OTHER")
-
-    reply = commands.handle_todo_action_confirm_step(fake_db, llm_client, store, telegram_user_id=1, text="嗯？")
-
-    assert "不太確定" in reply
-    assert fake_db.select("todos", where="id = %s", params=(todo_id,), fetch_one=True)["status"] == "pending"
 
 
 # --- 記帳（2026-08-04，Step 2.1，見 robinson SPEC.md FR-41～FR-44）---

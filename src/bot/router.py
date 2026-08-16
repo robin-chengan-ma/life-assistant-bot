@@ -45,9 +45,9 @@ _MY_TOGGLES_TRIGGERS = {"/my_toggles", "我的功能設定"}
 _SET_TOGGLE_TRIGGERS = {"/set_toggle", "設定家人功能開關"}
 # 2026-08-04（Step 2.3，見 robinson SPEC.md FR-53）：Owner 專屬，補齊家人生日資料，設計比照 /set_toggle。
 _SET_FAMILY_BIRTHDAY_TRIGGERS = {"/set_family_birthday", "設定家人生日"}
-# 2026-08-02（Step 1.7，見 robinson SPEC.md FR-32）：查詢待辦事項清單，所有使用者皆可用
-# （不像 /set_toggle 是 Owner 專屬），放在 is_owner/非 is_owner 分支都會落到的共用觸發詞區塊。
-_MY_TODOS_TRIGGERS = {"/my_todos", "我的待辦事項"}
+# 2026-08-16（Phase 6 第二批 2f）：待辦事項清單查詢全面改選單觸發（「✅ 待辦事項」→「📋 查看
+# 清單」），舊文字觸發詞（/my_todos、「我的待辦事項」）已移除，見 menu.py／commands.py 待辦
+# 事項區塊說明。
 # 2026-08-16（Phase 6 第二批 2c）：心情小記全面改選單觸發，舊文字觸發詞
 # （/mood_journal、/backfill_mood、/my_mood_journals 等）已移除，入口改為
 # 「📝 日常紀錄」→「😊 心情」子選單，見 menu.py `DAILY_LOG_MENU_ITEMS`。
@@ -323,9 +323,6 @@ def handle_message(
         return commands.handle_rule()
     if text in _FUNCTION_TRIGGERS:
         return commands.handle_function(db, llm_client)
-    if text in _MY_TODOS_TRIGGERS:
-        # 2026-08-02（Step 1.7，見 robinson SPEC.md FR-32）：查詢待處理清單並進入可標記完成/取消的模式。
-        return commands.start_todo_list(db, state_store, telegram_user_id, user_id)
     if text in _FRIEND_CHAT_TRIGGERS:
         # 2026-08-08（Step 3.5，見 robinson SPEC.md FR-51、FR-52、ADR-22）：好友模式陪伴聊天，
         # 單次生成完整回覆，不需要對話狀態機。
@@ -395,12 +392,18 @@ def handle_callback_query(
     state_store: ConversationStateStore,
     telegram_user_id: int,
     data: str,
+    calendar_client=None,
 ) -> tuple[str, dict | None]:
     """處理按下 Inline Keyboard 按鈕觸發的 callback_query（見 FR-6c：任何選單／callback 都要
     重新驗證權限，不能只靠「一開始選單沒顯示這顆按鈕」來擋，避免偽造 callback_data 繞過）。
 
     回傳 `(text, reply_markup)`，`reply_markup` 可能為 `None`（例如權限管理選單分派後的
     引導式文字提問，本來就不需要再帶按鈕）。
+
+    `calendar_client`（2026-08-16，Phase 6 第二批 2f，見 robinson SPEC.md FR-66a、ADR-17）：
+    待辦事項「✅ 確認送出」（`todo:confirm_save`）與清單「✅ 完成」「🚫 取消」（`todo:complete:<id>`
+    ／`todo:cancel:<id>`）這三個 callback 會用到；`None` 時優雅降級成「待辦事項照常記錄/更新，
+    但不會出現在 Google Calendar 上」，不影響其餘分支。
     """
     is_owner = auth.is_owner(telegram_user_id)
 
@@ -419,6 +422,10 @@ def handle_callback_query(
             return commands.handle_rule(), menu.back_to_main_menu_keyboard()
         if key == "permission":
             return commands.start_permission_menu()
+        if key == "todo":
+            # 2026-08-16（Phase 6 第二批 2f，FR-6e）：待辦事項子選單首頁。
+            state_store.clear(telegram_user_id)
+            return commands.start_todo_menu()
         if key == "important_days":
             state_store.clear(telegram_user_id)
             return important_days.start_important_days_menu()
@@ -452,6 +459,28 @@ def handle_callback_query(
         if not is_owner:
             return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
         return commands.handle_permission_callback(db, state_store, telegram_user_id, action)
+
+    if data.startswith("todo:"):
+        # 2026-08-16（Phase 6 第二批 2f，FR-6e／FR-31／FR-31a／FR-32／FR-66a）：待辦事項選單、
+        # 清單標記完成/取消、新增流程最後一輪的摘要確認。
+        user = _get_identified_user(db, telegram_user_id)
+        if user is None:
+            return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
+        action = data[len("todo:") :]
+        if action == "list":
+            return commands.start_todo_list(db, user["id"])
+        if action == "add":
+            return commands.start_todo_new(state_store, telegram_user_id, user["id"]), None
+        if action.startswith("complete:"):
+            todo_id = int(action[len("complete:") :])
+            return commands.handle_todo_status_action(db, user["id"], todo_id, "completed", calendar_client=calendar_client)
+        if action.startswith("cancel:"):
+            todo_id = int(action[len("cancel:") :])
+            return commands.handle_todo_status_action(db, user["id"], todo_id, "cancelled", calendar_client=calendar_client)
+        if action == "confirm_save":
+            return commands.handle_todo_confirm_save(db, state_store, telegram_user_id, calendar_client=calendar_client)
+        # 未知的待辦事項子動作，導回子選單而不是整個拋例外，比照其餘 callback 的保守做法。
+        return commands.start_todo_menu()
 
     if data.startswith("important_days:"):
         # 2026-08-15（Phase 6 第二批 2b，FR-6e／FR-6h）：重要日子選單與清單操作。
@@ -859,8 +888,13 @@ def _dispatch_active_flow(
         return commands.handle_clean_target_dialog_final_confirm_step(
             db, state_store, telegram_user_id, text, via_voice
         )
-    # 2026-08-02（Step 1.7，見 robinson SPEC.md FR-31、FR-31a、FR-32）：待辦事項新增（三輪反問）
-    # 與查詢清單後標記完成/取消，各自對應的 flow 分派，見 commands.py 模組內「待辦事項」區塊說明。
+    # 2026-08-02（Step 1.7，見 robinson SPEC.md FR-31、FR-31a、FR-32）：待辦事項新增（時間→提醒→
+    # 行事曆同步→摘要確認）與查詢清單後標記完成/取消，各自對應的 flow 分派，見 commands.py
+    # 模組內「待辦事項」區塊說明；2026-08-16（Phase 6 第二批 2f）新增選單按鈕入口
+    # （`pending_todo_new_content`）與摘要確認關卡（`pending_todo_confirm_save`），查詢清單改
+    # 按鈕式標記完成/取消，移除 `pending_todo_list_action`／`pending_todo_action_confirm`。
+    if flow == "pending_todo_new_content":
+        return commands.handle_todo_new_content_step(state_store, telegram_user_id, text)
     if flow == "pending_todo_confirm":
         return commands.handle_todo_confirm_step(db, llm_client, state_store, telegram_user_id, text)
     if flow == "pending_todo_time":
@@ -868,16 +902,12 @@ def _dispatch_active_flow(
     if flow == "pending_todo_reminder":
         return commands.handle_todo_reminder_step(db, llm_client, state_store, telegram_user_id, text)
     if flow == "pending_todo_calendar_sync":
-        # 2026-08-05（FR-66a、ADR-17）：新增待辦事項流程的最後一輪，確定後才真正寫入 todos。
+        # 2026-08-05（FR-66a、ADR-17）：新增待辦事項流程倒數第二輪，這一輪之後才進入摘要確認。
         return commands.handle_todo_calendar_sync_step(
             db, llm_client, state_store, telegram_user_id, text, calendar_client=calendar_client
         )
-    if flow == "pending_todo_list_action":
-        return commands.handle_todo_list_action_step(db, state_store, telegram_user_id, text)
-    if flow == "pending_todo_action_confirm":
-        return commands.handle_todo_action_confirm_step(
-            db, llm_client, state_store, telegram_user_id, text, calendar_client=calendar_client
-        )
+    if flow == "pending_todo_confirm_save":
+        return commands.handle_todo_confirm_save_text(state_store, telegram_user_id)
     # 2026-08-02（Step 1.8，見 robinson SPEC.md FR-49、FR-50）：心情小記三輪反問流程，全程不需要
     # LLM（固定分類選單＋自由文字直接記錄），只有內容/成就這兩輪需要 privacy_llm_client 做個資遮蔽。
     if flow == "pending_mood_backfill_date":
