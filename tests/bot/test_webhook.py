@@ -259,9 +259,19 @@ def test_webhook_routes_callback_query_and_answers_plus_sends_reply(client, monk
     response = client.post("/telegram/webhook", json=payload)
 
     assert response.status_code == 200
-    # 2026-08-16（Phase 6 第二批 2f）起額外注入 calendar_client（見 webhook._build_calendar_client()）。
+    # 2026-08-16（Phase 6 第二批 2f）起額外注入 calendar_client（見 webhook._build_calendar_client()）；
+    # 2026-08-16（全站語音確認機制）起額外注入 llm_client／text_llm_client／image_llm_clients
+    # （見 webhook._build_bot_llm_clients_optional()，測試沒設對應環境變數時優雅降級成 None／[]）／
+    # privacy_llm_client／telegram_client／gdrive_client，供 `voice_confirm:accept` 這個 callback 使用。
     mock_handle_callback_query.assert_called_once_with(
-        mock_db_instance, webhook._state_store, 123, "menu:rule", calendar_client=None
+        mock_db_instance, webhook._state_store, 123, "menu:rule",
+        calendar_client=None,
+        llm_client=None,
+        text_llm_client=None,
+        image_llm_clients=[],
+        privacy_llm_client=None,
+        telegram_client=mock_telegram_instance,
+        gdrive_client=None,
     )
     mock_telegram_instance.answer_callback_query.assert_called_once_with("cb1")
     mock_telegram_instance.send_text.assert_called_once_with(

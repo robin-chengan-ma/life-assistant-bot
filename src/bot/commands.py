@@ -2687,180 +2687,391 @@ def handle_exercise_confirm_text(state_store: ConversationStateStore, telegram_u
 
 
 # --- 飲食（含飲水） ---
+#
+# 2026-08-16（Phase 6 第二批 2g，見 docs/ADR/discuss/robinson.md「Phase 6 第二批 2g」）：
+# 全面改選單觸發，取代原 `/log_diet`／`/backfill_diet`／`/my_diet_logs`，不提供舊指令相容期。
+# 飲食（`food`）、飲水（`water`）比照 Mobile App 的 single-daily 設計，同一天各自只能有一筆，
+# 已有的話新增流程會導向查看清單的編輯功能；新增流程改成先問飲水、再問食物（各自可跳過），
+# 食物內容支援文字／照片兩種輸入方式，算完營養素後可選擇沿用 AI 估算或自己填寫
+# （`nutrition_source`），最後組摘要走「確認送出／取消」關卡才真的寫入。
 
 
-def start_diet_log(state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
-    """「我要記錄飲食」／`/log_diet`：開始記錄飲食/飲水（FR-48），先問類型。"""
-    state_store.set(
-        telegram_user_id,
-        {"flow": "pending_diet_entry_type", "target_user_id": user_id, "diet_date": _now().date(), "diet_id": None},
-    )
-    return body.format_diet_entry_type_prompt()
+def _diet_menu_keyboard() -> dict:
+    return {
+        "inline_keyboard": [
+            [{"text": "➕ 新增", "callback_data": "diet:new"}],
+            [{"text": "🕐 補記", "callback_data": "diet:backfill"}],
+            [{"text": "📋 查看清單", "callback_data": "diet:list"}],
+            [{"text": "🔙 返回日常紀錄", "callback_data": "menu:daily_log"}],
+        ]
+    }
+
+
+def start_diet_menu() -> tuple[str, dict]:
+    """「🍚 飲食」子選單首頁：➕ 新增／🕐 補記／📋 查看清單／🔙 返回。"""
+    return "飲食紀錄，請選擇要做什麼：", _diet_menu_keyboard()
+
+
+def _diet_entries_for_date(db: CloudSQLClient, user_id: int, entry_date: date) -> dict:
+    """查出某使用者某一天已存在的食物／飲水紀錄（single-daily，最多各一筆），回傳
+    `{"food": row_or_None, "water": row_or_None}`，供新增流程判斷要問哪些題目。"""
+    rows = db.select("diet_logs", where="user_id = %s AND entry_date = %s", params=(user_id, entry_date))
+    return {
+        "food": next((row for row in rows if row["entry_type"] == "food"), None),
+        "water": next((row for row in rows if row["entry_type"] == "water"), None),
+    }
+
+
+def _start_diet_new_for_date(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int, diet_date: date) -> tuple[str, dict]:
+    """依指定日期（今天或補記日期）判斷食物／飲水各自是否已記過，決定新增流程要問哪些題目
+    （FR-48，比照 Mobile App single-daily 設計）。"""
+    existing = _diet_entries_for_date(db, user_id, diet_date)
+    base_state = {
+        "target_user_id": user_id, "diet_date": diet_date,
+        "water_ml": None, "food_description": None, "food_nutrition_source": None, "food_macros": None,
+    }
+
+    if existing["food"] is not None and existing["water"] is not None:
+        return (
+            "你今天已經記過飲食和飲水囉，要修改的話請用『📋 查看清單』裡的編輯功能喔！",
+            {"inline_keyboard": [[{"text": "📋 查看清單", "callback_data": "diet:list"}], [{"text": "🔙 返回日常紀錄", "callback_data": "menu:daily_log"}]]},
+        )
+    if existing["water"] is not None:
+        # 飲水已記過，跳過飲水提問，直接問食物。
+        state_store.set(telegram_user_id, {**base_state, "flow": "pending_diet_food_choice"})
+        return "要記錄食物嗎？", {"inline_keyboard": [[{"text": "✅ 要", "callback_data": "diet:food_yes"}, {"text": "❌ 不用", "callback_data": "diet:food_no"}]]}
+    if existing["food"] is not None:
+        # 食物已記過，跳過食物提問，直接問飲水。
+        state_store.set(telegram_user_id, {**base_state, "flow": "pending_diet_water_choice"})
+        return "要記錄飲水嗎？", {"inline_keyboard": [[{"text": "✅ 要", "callback_data": "diet:water_yes"}, {"text": "❌ 不用", "callback_data": "diet:water_no"}]]}
+
+    state_store.set(telegram_user_id, {**base_state, "flow": "pending_diet_water_choice"})
+    return "要記錄飲水嗎？", {"inline_keyboard": [[{"text": "✅ 要", "callback_data": "diet:water_yes"}, {"text": "❌ 不用", "callback_data": "diet:water_no"}]]}
+
+
+def start_diet_log(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> tuple[str, dict]:
+    """`diet:new`：開始記錄今天的飲食/飲水（FR-48）。"""
+    return _start_diet_new_for_date(db, state_store, telegram_user_id, user_id, _now().date())
 
 
 def start_diet_backfill(state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
-    """「我要補記飲食」／`/backfill_diet`：開始補記流程，先問要補記哪一天（FR-48）。"""
+    """`diet:backfill`：開始補記流程，先問要補記哪一天（FR-48）。"""
     state_store.set(telegram_user_id, {"flow": "pending_diet_backfill_date", "target_user_id": user_id})
-    return "好的，要補記哪一天的飲食呢？（例如：昨天、8/1）"
+    return "好的，那我們補記一下，請問是哪一天呢？"
 
 
-def handle_diet_backfill_date_step(llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
-    """處理 `pending_diet_backfill_date` 狀態下使用者提供的日期描述，講清楚後接著問飲食/飲水類型。"""
+def handle_diet_backfill_date_step(db: CloudSQLClient, llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str | tuple[str, dict]:
+    """處理 `pending_diet_backfill_date` 狀態下使用者提供的日期描述，講清楚後依該日期判斷要問
+    哪些題目（沿用 `_start_diet_new_for_date()`）。"""
     state = state_store.get(telegram_user_id)
     target_user_id = state["target_user_id"]
-
-    parsed = _parse_key_value_block(
-        llm_client.generate_text(
-            _BACKFILL_DATE_PARSE_PROMPT.format(feature_label="飲食", date_reply=text, current_date_text=_current_date_text())
-        )
-    )
-    if parsed.get("STATUS") != "CLEAR":
-        return _BACKFILL_DATE_UNCLEAR_REPLY
-
+    parsed = _parse_date_description(llm_client, text)
     diet_date = _parse_date_only(parsed.get("DATE", ""))
     if diet_date is None:
-        return _BACKFILL_DATE_UNCLEAR_REPLY
+        return "不好意思，我沒看懂是哪一天，可以再說清楚一點嗎？（例如：8/1、昨天、上週三）"
     if diet_date > _now().date():
-        return "不能補記還沒發生的未來日期喔，麻煩再講一次要補記哪一天！"
+        return "補記的日期不能是未來喔，麻煩重新輸入！"
 
-    state_store.set(
-        telegram_user_id,
-        {"flow": "pending_diet_entry_type", "target_user_id": target_user_id, "diet_date": diet_date, "diet_id": None},
-    )
-    return body.format_diet_entry_type_prompt()
+    return _start_diet_new_for_date(db, state_store, telegram_user_id, target_user_id, diet_date)
 
 
-def handle_diet_entry_type_step(state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
-    """處理 `pending_diet_entry_type` 狀態下使用者選擇的類型（飲食/飲水），分流到不同下一步。"""
+def handle_diet_water_choice_step(state_store: ConversationStateStore, telegram_user_id: int, action: str) -> tuple[str, dict]:
+    """`diet:water_yes`／`diet:water_no`：要不要記錄飲水。"""
     state = state_store.get(telegram_user_id)
-    entry_type = body.resolve_diet_entry_type(text)
-    if entry_type is None:
-        return "不好意思，我沒看懂，麻煩從下面選一個喔：\n\n" + body.format_diet_entry_type_prompt()
-
-    if entry_type == "food":
-        state_store.set(telegram_user_id, {**state, "flow": "pending_diet_description", "entry_type": entry_type})
-        return "好的，那你吃了什麼呢？可以描述食物內容（例如：雞胸肉便當一份）："
-
-    state_store.set(telegram_user_id, {**state, "flow": "pending_diet_water_amount", "entry_type": entry_type})
-    return "好的，喝了多少水呢？（毫升，例如：500）"
+    if action == "water_yes":
+        state_store.set(telegram_user_id, {**state, "flow": "pending_diet_water_amount"})
+        return "好的，這次喝了多少毫升的水呢？", None
+    return _advance_to_food_choice(state_store, telegram_user_id, state)
 
 
-def handle_diet_description_step(db: CloudSQLClient, llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str, privacy_llm_client=None) -> str:
-    """處理 `pending_diet_description` 狀態下使用者提供的食物內容，呼叫 LLM 拆算三大營養素與熱量
-    （FR-48，決策②），估算失敗不擋下整筆紀錄；務必附上 FR-17c 估算誤差聲明。"""
-    state = state_store.get(telegram_user_id)
-    description, pii_detected = privacy.mask_text(text, privacy_llm_client)
-
-    target_user_id = state["target_user_id"]
-    diet_date = state["diet_date"]
-    diet_id = state.get("diet_id")
-    state_store.clear(telegram_user_id)
-
-    macros = body.estimate_diet_macros(llm_client, description)
-
-    if diet_id is None:
-        body.create_diet_log(db, target_user_id, "food", description, diet_date, macros=macros)
-    else:
-        body.delete_diet_log(db, diet_id)
-        body.create_diet_log(db, target_user_id, "food", description, diet_date, macros=macros)
-
-    reply = "好的，已經幫你記錄好了！" + body.format_diet_macro_note(macros)
-    if pii_detected:
-        reply += _PII_DETECTED_REMINDER
-    return reply
+def _advance_to_food_choice(state_store: ConversationStateStore, telegram_user_id: int, state: dict) -> tuple[str, dict]:
+    if state.get("diet_id") is not None:
+        # 編輯流程：這筆本來就只會是 food 或 water 其中一種，不重問另一項，直接結摘要。
+        return handle_diet_build_summary(state_store, telegram_user_id)
+    state_store.set(telegram_user_id, {**state, "flow": "pending_diet_food_choice"})
+    return "要記錄食物嗎？", {"inline_keyboard": [[{"text": "✅ 要", "callback_data": "diet:food_yes"}, {"text": "❌ 不用", "callback_data": "diet:food_no"}]]}
 
 
-def handle_diet_water_amount_step(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
-    """處理 `pending_diet_water_amount` 狀態下使用者提供的飲水量（毫升）。"""
+def handle_diet_water_amount_step(state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str | tuple[str, dict]:
+    """處理 `pending_diet_water_amount` 狀態下使用者提供的飲水量（毫升），問完接著判斷要不要
+    再問食物（編輯流程則直接結摘要，見 `_advance_to_food_choice()`）。"""
     state = state_store.get(telegram_user_id)
     water_ml = _parse_positive_int(text)
     if water_ml is None:
-        return "不好意思，我沒看懂，麻煩輸入一個正整數（毫升），例如：500"
+        return "不好意思，我沒看懂，麻煩輸入正整數的毫升數："
+
+    state = {**state, "water_ml": water_ml}
+    state_store.set(telegram_user_id, state)
+    return _advance_to_food_choice(state_store, telegram_user_id, state)
+
+
+def handle_diet_food_choice_step(state_store: ConversationStateStore, telegram_user_id: int, action: str) -> tuple[str, dict]:
+    """`diet:food_yes`／`diet:food_no`：要不要記錄食物。"""
+    state = state_store.get(telegram_user_id)
+    if action == "food_yes":
+        state_store.set(telegram_user_id, {**state, "flow": "pending_diet_food_input_mode"})
+        return "食物內容要用文字輸入還是傳照片呢？", {
+            "inline_keyboard": [[{"text": "📝 文字", "callback_data": "diet:food_text"}, {"text": "📷 照片", "callback_data": "diet:food_photo"}]]
+        }
+    return handle_diet_build_summary(state_store, telegram_user_id)
+
+
+def handle_diet_food_input_mode_step(state_store: ConversationStateStore, telegram_user_id: int, action: str) -> str | tuple[str, dict]:
+    """`diet:food_text`／`diet:food_photo`：食物內容要用文字還是照片輸入。"""
+    state = state_store.get(telegram_user_id)
+    if action == "food_photo":
+        state_store.set(telegram_user_id, {**state, "flow": "pending_diet_photo"})
+        return "請傳一張食物的照片給我：", None
+    state_store.set(telegram_user_id, {**state, "flow": "pending_diet_description"})
+    return "請輸入食物內容：", None
+
+
+def handle_diet_description_step(state_store: ConversationStateStore, telegram_user_id: int, text: str) -> tuple[str, dict]:
+    """處理 `pending_diet_description` 狀態下使用者提供的食物內容（文字輸入或語音轉出來的文字
+    皆可），套用個資遮蔽後接著問要 AI 估算還是自己填寫營養素。"""
+    state = state_store.get(telegram_user_id)
+    description, _detected = privacy.mask_text(text.strip())
+    if not description:
+        return "不好意思，內容好像是空的，麻煩重新輸入食物內容：", None
+
+    state = {**state, "flow": "pending_diet_nutrition_source", "food_description": description}
+    state_store.set(telegram_user_id, state)
+    return "營養素怎麼算？", {
+        "inline_keyboard": [[{"text": "🤖 AI 估算", "callback_data": "diet:nutrition_ai"}, {"text": "✍️ 我要自己填", "callback_data": "diet:nutrition_manual"}]]
+    }
+
+
+def handle_diet_photo_wait_step(state_store: ConversationStateStore, telegram_user_id: int) -> tuple[str, dict]:
+    """`pending_diet_photo` 狀態下收到的是文字（含語音轉出來的文字）而不是照片——這一步要傳
+    照片，文字在這裡沒有意義，提醒使用者並提供「改用文字輸入」的退路，避免卡住。"""
+    state = state_store.get(telegram_user_id)
+    state_store.set(telegram_user_id, {**state, "flow": "pending_diet_food_input_mode"})
+    return "這一步要傳照片喔，如果想改用文字輸入食物內容，請按下面按鈕：", {
+        "inline_keyboard": [[{"text": "📝 改用文字輸入", "callback_data": "diet:food_text"}]]
+    }
+
+
+def handle_diet_photo_message(db: CloudSQLClient, llm_client, state_store: ConversationStateStore, telegram_user_id: int, image_bytes: bytes, mime_type: str) -> str | tuple[str, dict]:
+    """`pending_diet_photo` 狀態下收到照片：複用 Mobile App 既有的
+    `src/services/app_diet_photo.recognize_diet_photo()` 辨識邏輯，把辨識出的內容＋不確定項目
+    貼出來讓使用者確認或修正。"""
+    import base64
+
+    from src.services import app_diet_photo
+
+    state = state_store.get(telegram_user_id)
+
+    try:
+        result = app_diet_photo.recognize_diet_photo(llm_client, base64.b64encode(image_bytes).decode("ascii"), mime_type)
+    except app_diet_photo.DietPhotoError as exc:
+        return str(exc)
+
+    state_store.set(
+        telegram_user_id,
+        {**state, "flow": "pending_diet_photo_confirm", "food_description": result["description"]},
+    )
+    lines = [f"我看到的內容是：{result['description']}"]
+    if result["uncertain_items"]:
+        lines.append("")
+        lines.append("有幾個地方不太確定：")
+        lines.extend(f"- {item}" for item in result["uncertain_items"])
+    lines.append("")
+    lines.append("如果沒問題請回覆「好的」，需要修改的話請直接輸入完整正確的內容：")
+    return "\n".join(lines)
+
+
+def handle_diet_photo_confirm_step(state_store: ConversationStateStore, telegram_user_id: int, text: str) -> tuple[str, dict]:
+    """處理 `pending_diet_photo_confirm` 狀態下使用者的確認／修正回覆。"""
+    state = state_store.get(telegram_user_id)
+    text = text.strip()
+    if text not in ("好的", "OK", "ok", "確認", "沒問題"):
+        description, _detected = privacy.mask_text(text)
+        if not description:
+            return "不好意思，內容好像是空的，麻煩重新輸入完整的食物內容：", None
+        state = {**state, "food_description": description}
+
+    state = {**state, "flow": "pending_diet_nutrition_source"}
+    state_store.set(telegram_user_id, state)
+    return "營養素怎麼算？", {
+        "inline_keyboard": [[{"text": "🤖 AI 估算", "callback_data": "diet:nutrition_ai"}, {"text": "✍️ 我要自己填", "callback_data": "diet:nutrition_manual"}]]
+    }
+
+
+def handle_diet_nutrition_source_step(llm_client, state_store: ConversationStateStore, telegram_user_id: int, action: str) -> str | tuple[str, dict]:
+    """`diet:nutrition_ai`／`diet:nutrition_manual`：營養素要 AI 估算還是自己填寫。"""
+    state = state_store.get(telegram_user_id)
+    if action == "nutrition_manual":
+        state_store.set(telegram_user_id, {**state, "flow": "pending_diet_manual_macros"})
+        return "請依序輸入熱量（大卡）、蛋白質（g）、碳水化合物（g）、脂肪（g），用逗號分隔，例如：650,30,80,20", None
+
+    macros = body.estimate_diet_macros(llm_client, state["food_description"])
+    state = {**state, "food_nutrition_source": "ai", "food_macros": macros}
+    state_store.set(telegram_user_id, state)
+    return handle_diet_build_summary(state_store, telegram_user_id)
+
+
+def _parse_manual_macros(text: str) -> dict | None:
+    """解析人工填寫的「熱量,蛋白質,碳水,脂肪」四個數字，範圍比照 migration 0078 的 CHECK 限制
+    （熱量 1～10000、三大營養素各 0～1000）；格式或範圍不對回傳 None。"""
+    parts = [part.strip() for part in text.split(",")]
+    if len(parts) != 4:
+        return None
+    try:
+        calories, protein, carbs, fat = (float(part) for part in parts)
+    except ValueError:
+        return None
+    if not (0 < calories <= 10000):
+        return None
+    if not all(0 <= value <= 1000 for value in (protein, carbs, fat)):
+        return None
+    return {"estimated_calories": calories, "protein_g": protein, "carbs_g": carbs, "fat_g": fat}
+
+
+def handle_diet_manual_macros_step(state_store: ConversationStateStore, telegram_user_id: int, text: str) -> tuple[str, dict]:
+    """處理 `pending_diet_manual_macros` 狀態下使用者輸入的四個數字。"""
+    state = state_store.get(telegram_user_id)
+    macros = _parse_manual_macros(text)
+    if macros is None:
+        return "請確認四個數字都有填、格式正確再試一次（熱量 1～10000、三大營養素 0～1000，用逗號分隔）：", None
+
+    state = {**state, "food_nutrition_source": "manual", "food_macros": macros}
+    state_store.set(telegram_user_id, state)
+    return handle_diet_build_summary(state_store, telegram_user_id)
+
+
+def handle_diet_build_summary(state_store: ConversationStateStore, telegram_user_id: int) -> tuple[str, dict]:
+    """把 state 裡目前收集到的飲水／食物內容組成摘要，進入 `pending_diet_confirm` 二次確認關卡。
+    兩項都沒有記的話不寫入，直接回到日常紀錄選單。"""
+    state = state_store.get(telegram_user_id)
+    water_ml = state.get("water_ml")
+    description = state.get("food_description")
+    macros = state.get("food_macros")
+    nutrition_source = state.get("food_nutrition_source")
+
+    if water_ml is None and description is None:
+        state_store.clear(telegram_user_id)
+        return "這次沒有要記錄的內容喔！", {"inline_keyboard": [[{"text": "🔙 返回日常紀錄", "callback_data": "menu:daily_log"}]]}
+
+    lines = ["請確認以下內容：", ""]
+    if water_ml is not None:
+        lines.append(f"飲水：{water_ml} 毫升")
+    if description is not None:
+        lines.append(f"食物：{description}")
+        source_label = "AI 估算" if nutrition_source == "ai" else "人工填寫"
+        lines.append(f"營養素來源：{source_label}")
+        lines.append(body.format_diet_macro_note(macros, nutrition_source=nutrition_source or "ai"))
+
+    state_store.set(telegram_user_id, {**state, "flow": "pending_diet_confirm"})
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "✅ 確認送出", "callback_data": "diet:confirm_save"}],
+            [{"text": "❌ 取消", "callback_data": "menu:daily_log"}],
+        ]
+    }
+    return "\n".join(lines), keyboard
+
+
+def handle_diet_confirm_save(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int) -> str:
+    """`diet:confirm_save`：實際寫入這次收集到的飲水／食物紀錄（新增或編輯）。"""
+    state = state_store.get(telegram_user_id)
+    if not state or state.get("flow") != "pending_diet_confirm":
+        return "目前沒有進行中的飲食紀錄設定。"
 
     target_user_id = state["target_user_id"]
     diet_date = state["diet_date"]
     diet_id = state.get("diet_id")
+    water_ml = state.get("water_ml")
+    description = state.get("food_description")
+    macros = state.get("food_macros")
+    nutrition_source = state.get("food_nutrition_source")
     state_store.clear(telegram_user_id)
 
-    if diet_id is None:
-        body.create_diet_log(db, target_user_id, "water", "飲水", diet_date, water_ml=water_ml)
-    else:
+    saved = []
+    if diet_id is not None:
+        # 編輯流程：這筆紀錄本來就只會是 food 或 water 其中一種，用「刪除舊列＋新增」達成更新。
         body.delete_diet_log(db, diet_id)
+    if water_ml is not None:
         body.create_diet_log(db, target_user_id, "water", "飲水", diet_date, water_ml=water_ml)
+        saved.append("飲水")
+    if description is not None:
+        body.create_diet_log(db, target_user_id, "food", description, diet_date, macros=macros, nutrition_source=nutrition_source or "ai")
+        saved.append("飲食")
 
-    return f"好的，已經幫你記錄喝水 {water_ml} 毫升囉！"
+    return f"OK，已經幫你記錄好了！這次記錄的{'、'.join(saved)}都存好囉！"
 
 
-def start_diet_list(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
-    """「我的飲食紀錄」／`/my_diet_logs`：列出最近的飲食/飲水紀錄，並進入可更新/刪除的模式。"""
+def start_diet_list(db: CloudSQLClient, user_id: int) -> tuple[str, dict]:
+    """`diet:list`：列出最近的飲食/飲水紀錄，每一筆附「✏️ 編輯」「🗑 刪除」按鈕。"""
     logs = body.list_diet_logs(db, user_id)
-    listing = body.format_diet_log_list(logs)
     if not logs:
-        return listing
+        return "目前還沒有任何飲食紀錄，可以按「➕ 新增」建立第一筆！", {
+            "inline_keyboard": [[{"text": "🔙 返回日常紀錄", "callback_data": "menu:daily_log"}]]
+        }
 
-    state_store.set(
-        telegram_user_id,
-        {"flow": "pending_diet_list_action", "target_user_id": user_id, "diet_log_ids": [item["id"] for item in logs]},
-    )
-    return f"{listing}\n\n如果要更新或刪除某一筆，請輸入編號；不需要的話輸入「結束」。"
-
-
-def handle_diet_list_action_step(state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
-    """處理 `pending_diet_list_action` 狀態下使用者輸入的編號，選定要更新/刪除的那一筆。"""
-    state = state_store.get(telegram_user_id)
-    if text in _EXIT_PHRASES:
-        state_store.clear(telegram_user_id)
-        return "好的，已結束飲食紀錄查詢模式！"
-
-    ids = state["diet_log_ids"]
-    if not text.isdigit() or not (1 <= int(text) <= len(ids)):
-        return f"請輸入 1～{len(ids)} 之間的編號，或輸入「結束」離開喔！"
-
-    state_store.set(
-        telegram_user_id,
-        {"flow": "pending_diet_action_choice", "target_user_id": state["target_user_id"], "diet_log_id": ids[int(text) - 1]},
-    )
-    return "要更新這筆還是刪除呢？"
+    listing = body.format_diet_log_list(logs)
+    buttons = [
+        [
+            {"text": f"✏️ 編輯 {index}", "callback_data": f"diet:edit:{item['id']}"},
+            {"text": f"🗑 刪除 {index}", "callback_data": f"diet:delete:{item['id']}"},
+        ]
+        for index, item in enumerate(logs, start=1)
+    ]
+    buttons.append([{"text": "🔙 返回日常紀錄", "callback_data": "menu:daily_log"}])
+    return listing, {"inline_keyboard": buttons}
 
 
-def handle_diet_action_choice_step(db: CloudSQLClient, llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
-    """處理 `pending_diet_action_choice` 狀態下使用者對「要更新這筆還是刪除呢？」的回覆。
+def start_diet_edit(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int, diet_log_id: int) -> tuple[str, dict]:
+    """「✏️ 編輯」：這筆紀錄本來就只會是 `food` 或 `water` 其中一種，不重問「要不要記另一項」，
+    直接依 `entry_type` 跳進對應子流程；沿用原本的 `entry_date`，`diet_id` 帶著代表這是編輯。"""
+    row = db.select("diet_logs", where="id = %s", params=(diet_log_id,), fetch_one=True)
+    if row is None or row.get("user_id") != user_id:
+        return "找不到這筆飲食紀錄，可能已經被刪除了。", {"inline_keyboard": [[{"text": "🔙 返回日常紀錄", "callback_data": "menu:daily_log"}]]}
 
-    選更新時重新走一次「選類型→內容/毫升數」，`diet_id` 帶著代表這是編輯（實作上用刪除舊列＋
-    新增新列完成，理由是食物內容一旦改變，營養拆算本來就得重新呼叫 LLM，跟直接 UPDATE 沒有效率差異）。
-    """
-    state = state_store.get(telegram_user_id)
-    diet_log_id = state["diet_log_id"]
-    target_user_id = state["target_user_id"]
+    base_state = {
+        "target_user_id": user_id, "diet_date": row["entry_date"], "diet_id": diet_log_id,
+        "water_ml": None, "food_description": None, "food_nutrition_source": None, "food_macros": None,
+    }
+    if row["entry_type"] == "water":
+        state_store.set(telegram_user_id, {**base_state, "flow": "pending_diet_water_amount"})
+        return "好的，那我們重新輸入一次，這次喝了多少毫升的水呢？", None
 
-    decision = llm_client.generate_text(_DIET_ACTION_CLASSIFY_PROMPT.format(text=text)).strip()
-    if decision == "UPDATE":
-        row = db.select("diet_logs", where="id = %s", params=(diet_log_id,), fetch_one=True)
-        state_store.set(
-            telegram_user_id,
-            {"flow": "pending_diet_entry_type", "target_user_id": target_user_id, "diet_date": row["entry_date"], "diet_id": diet_log_id},
-        )
-        return "好的，那我們重新選一次：\n\n" + body.format_diet_entry_type_prompt()
-    if decision == "DELETE":
-        state_store.set(telegram_user_id, {"flow": "pending_diet_delete_confirm", "target_user_id": target_user_id, "diet_log_id": diet_log_id})
-        return "確定要刪除這筆飲食紀錄嗎？這個動作沒辦法復原喔！"
+    state_store.set(telegram_user_id, {**base_state, "flow": "pending_diet_food_input_mode"})
+    return "好的，那我們重新輸入一次，食物內容要用文字輸入還是傳照片呢？", {
+        "inline_keyboard": [[{"text": "📝 文字", "callback_data": "diet:food_text"}, {"text": "📷 照片", "callback_data": "diet:food_photo"}]]
+    }
 
+
+def start_diet_delete_confirm(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int, diet_log_id: int) -> tuple[str, dict]:
+    row = db.select("diet_logs", where="id = %s", params=(diet_log_id,), fetch_one=True)
+    if row is None or row.get("user_id") != user_id:
+        return "找不到這筆飲食紀錄，可能已經被刪除了。", {"inline_keyboard": [[{"text": "🔙 返回日常紀錄", "callback_data": "menu:daily_log"}]]}
+
+    state_store.set(telegram_user_id, {"flow": "diet_delete_confirm", "diet_log_id": diet_log_id})
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "✅ 確認刪除", "callback_data": f"diet:confirm_delete:{diet_log_id}"}],
+            [{"text": "❌ 取消", "callback_data": "diet:list"}],
+        ]
+    }
+    return "確定要刪除這筆飲食紀錄嗎？這個動作沒辦法復原喔！", keyboard
+
+
+def handle_diet_delete(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int, diet_log_id: int) -> str:
+    """`diet:confirm_delete:<id>` 觸發時重新驗證擁有者（理由同 `handle_exercise_delete`）。"""
     state_store.clear(telegram_user_id)
-    return "不好意思，我不太確定你的意思，這筆飲食紀錄維持原狀，你可以再查詢一次飲食紀錄清單重新選擇喔！"
-
-
-def handle_diet_delete_confirm_step(db: CloudSQLClient, llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
-    """處理 `pending_diet_delete_confirm` 狀態下使用者對刪除確認的回覆（簡單一輪 CONFIRM/CANCEL）。"""
-    state = state_store.get(telegram_user_id)
-    diet_log_id = state["diet_log_id"]
-    state_store.clear(telegram_user_id)
-
-    decision = llm_client.generate_text(_DIET_DELETE_CONFIRM_PROMPT.format(text=text)).strip()
-    if decision != "CONFIRM":
-        return "好的，這筆飲食紀錄保留，沒有刪除！"
-
+    row = db.select("diet_logs", where="id = %s", params=(diet_log_id,), fetch_one=True)
+    if row is None or row.get("user_id") != user_id:
+        return "找不到這筆飲食紀錄，可能已經被刪除了。"
     body.delete_diet_log(db, diet_log_id)
     return "好的，已經刪除這筆飲食紀錄了！"
+
+
+def handle_diet_confirm_text(state_store: ConversationStateStore, telegram_user_id: int) -> tuple[str, dict]:
+    """`pending_diet_confirm`／`diet_delete_confirm` 只接受按鈕操作，理由同
+    `handle_exercise_confirm_text`。"""
+    state_store.clear(telegram_user_id)
+    keyboard = {"inline_keyboard": [[{"text": "🔙 返回日常紀錄", "callback_data": "menu:daily_log"}]]}
+    return "這個步驟請用上面的按鈕操作喔，這次先幫你取消了。", keyboard
 
 
 # --- 體態目標（三個子功能共用） ---

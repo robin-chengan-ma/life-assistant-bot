@@ -262,6 +262,26 @@ def _build_privacy_llm_client() -> LLMClient | None:
     return LLMClient(api_key=api_key)
 
 
+def _build_bot_llm_clients_optional() -> tuple[LLMClient | None, LLMClient | None, list[LLMClient]]:
+    """建立 callback_query 分支選配的一般聊天／長記憶／影像辨識 Client（2026-08-16，全站語音
+    確認機制）。
+
+    比照 `_build_privacy_llm_client()`／`_build_gdrive_client_optional()` 的優雅降級慣例：
+    絕大多數 callback（選單導覽、按鈕操作）完全用不到 LLM，只有 `voice_confirm:accept` 接回
+    自由聊天或某些 pending flow 時才需要，所以不比照文字/語音訊息分支用 `os.environ[...]`
+    強制要求，缺少對應環境變數時回傳 `None`／空清單，不會讓整個 callback_query 處理流程因為
+    這幾把 Key 沒設好而失敗（`handle_callback_query()` 對應分支會再各自優雅降級）。
+    """
+    bot_key = os.environ.get("GEMINI_API_BOT_KEY")
+    text_key = os.environ.get("GEMINI_API_TEXT_KEY")
+    image_key1 = os.environ.get("GEMINI_API_IMAGE_KEY1")
+    image_key2 = os.environ.get("GEMINI_API_IMAGE_KEY2")
+    llm_client = LLMClient(api_key=bot_key) if bot_key else None
+    text_llm_client = LLMClient(api_key=text_key) if text_key else None
+    image_llm_clients = [LLMClient(api_key=key) for key in (image_key1, image_key2) if key]
+    return llm_client, text_llm_client, image_llm_clients
+
+
 def _build_gdrive_client_optional() -> GDriveClient | None:
     """建立文字訊息分支選配的 GDriveClient（見 robinson SPEC.md FR-35e）。
 
@@ -468,13 +488,26 @@ def _handle_callback_query_update(callback_extracted: tuple[int, str, str]):
     「✅ 確認送出」／「✅ 完成」／「🚫 取消」這幾個 callback 需要建立/刪除 Google Calendar
     事件，是第一個需要在按鈕流程用到 Calendar 的批次，沿用既有 `_build_calendar_client()`
     的優雅降級（`None` 時待辦事項照常記錄/更新，只是不會出現在 Calendar 上）。
+
+    2026-08-16（全站語音確認機制）起額外注入 `llm_client`／`text_llm_client`／`privacy_llm_client`／
+    `telegram_client`／`gdrive_client`：`voice_confirm:accept` 這個 callback 要接回轉錄前原本
+    卡在的任何流程（甚至是自由聊天），需要跟文字訊息分支同一套完整 Client；其餘既有 callback
+    分支都不會用到這幾個參數，不影響原本的行為與失敗模式。
     """
     telegram_user_id, callback_query_id, data = callback_extracted
     db = None
     try:
         db = CloudSQLClient()
+        llm_client, text_llm_client, image_llm_clients = _build_bot_llm_clients_optional()
         reply, reply_markup = handle_callback_query(
-            db, _state_store, telegram_user_id, data, calendar_client=_build_calendar_client()
+            db, _state_store, telegram_user_id, data,
+            calendar_client=_build_calendar_client(),
+            llm_client=llm_client,
+            text_llm_client=text_llm_client,
+            image_llm_clients=image_llm_clients,
+            privacy_llm_client=_build_privacy_llm_client(),
+            telegram_client=TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"]),
+            gdrive_client=_build_gdrive_client_optional(),
         )
     except Exception:
         _logger.exception(
@@ -603,7 +636,7 @@ def telegram_webhook():
             # 所以也需要一般聊天核心用的兩把 Key（同下方文字分支）。
             llm_client = LLMClient(api_key=os.environ["GEMINI_API_BOT_KEY"])
             text_llm_client = LLMClient(api_key=os.environ["GEMINI_API_TEXT_KEY"])
-            reply = handle_voice_message(
+            voice_result = handle_voice_message(
                 db,
                 _state_store,
                 telegram_user_id,
@@ -619,6 +652,13 @@ def telegram_webhook():
                 privacy_llm_client=_build_privacy_llm_client(),
                 calendar_client=_build_calendar_client(),
             )
+            # 2026-08-16（全站語音確認機制）：轉錄成功時 `handle_voice_message()` 回傳
+            # `(text, reply_markup)` 二元組（貼出轉錄文字＋確認按鈕），比照下方文字訊息分支
+            # 同一套拆解方式；其餘提早擋下的分支仍是純 `str`。
+            if isinstance(voice_result, tuple):
+                reply, reply_markup = voice_result
+            else:
+                reply = voice_result
         else:
             _, text = text_extracted
             # 一般問答用的 Key（見 docs/specs/chat-core/SPEC.md ADR-12）與長記憶摘要用的 Key（ADR-3），

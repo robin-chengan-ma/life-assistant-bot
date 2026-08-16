@@ -179,29 +179,49 @@ def test_handle_exercise_duration_step_invalid_reprompts(fake_db):
 
 def test_diet_food_flow_estimates_macros(fake_db):
     store = ConversationStateStore()
-    commands.start_diet_log(store, telegram_user_id=1, user_id=42)
+    reply, _keyboard = commands.start_diet_log(fake_db, store, telegram_user_id=1, user_id=42)
+    assert "飲水" in reply
 
-    reply = commands.handle_diet_entry_type_step(store, telegram_user_id=1, text="1")
+    reply, _keyboard = commands.handle_diet_water_choice_step(store, telegram_user_id=1, action="water_no")
+    assert "食物" in reply
+
+    reply, _keyboard = commands.handle_diet_food_choice_step(store, telegram_user_id=1, action="food_yes")
+    assert "文字" in reply
+
+    reply, _keyboard = commands.handle_diet_food_input_mode_step(store, telegram_user_id=1, action="food_text")
     assert "食物內容" in reply
 
-    llm_client = _FakeLLMClient(response_text="CALORIES: 320\nPROTEIN: 20\nCARBS: 40\nFAT: 10")
-    reply = commands.handle_diet_description_step(fake_db, llm_client, store, telegram_user_id=1, text="雞胸肉便當")
+    reply, _keyboard = commands.handle_diet_description_step(store, telegram_user_id=1, text="雞胸肉便當")
+    assert "營養素" in reply
 
+    llm_client = _FakeLLMClient(response_text="CALORIES: 320\nPROTEIN: 20\nCARBS: 40\nFAT: 10")
+    reply, _keyboard = commands.handle_diet_nutrition_source_step(llm_client, store, telegram_user_id=1, action="nutrition_ai")
     assert "熱量約 320 大卡" in reply
     assert "估算值" in reply
+
+    reply = commands.handle_diet_confirm_save(fake_db, store, telegram_user_id=1)
+    assert "記錄好" in reply
     row = fake_db.select("diet_logs", where="user_id = %s", params=(42,))[0]
     assert row["description"] == "雞胸肉便當"
     assert row["estimated_calories"] == 320.0
+    assert row["nutrition_source"] == "ai"
 
 
 def test_diet_water_flow(fake_db):
     store = ConversationStateStore()
-    commands.start_diet_log(store, telegram_user_id=1, user_id=42)
-    commands.handle_diet_entry_type_step(store, telegram_user_id=1, text="2")
+    commands.start_diet_log(fake_db, store, telegram_user_id=1, user_id=42)
 
-    reply = commands.handle_diet_water_amount_step(fake_db, store, telegram_user_id=1, text="500")
+    reply, _keyboard = commands.handle_diet_water_choice_step(store, telegram_user_id=1, action="water_yes")
+    assert "毫升" in reply
 
+    reply, _keyboard = commands.handle_diet_water_amount_step(store, telegram_user_id=1, text="500")
+    assert "食物" in reply
+
+    reply, _keyboard = commands.handle_diet_food_choice_step(store, telegram_user_id=1, action="food_no")
     assert "500 毫升" in reply
+
+    reply = commands.handle_diet_confirm_save(fake_db, store, telegram_user_id=1)
+    assert "記錄好" in reply
     row = fake_db.select("diet_logs", where="user_id = %s", params=(42,))[0]
     assert row["entry_type"] == "water"
     assert row["water_ml"] == 500

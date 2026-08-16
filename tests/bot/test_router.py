@@ -861,15 +861,28 @@ def test_daily_log_submenu_shows_mood_and_exercise_buttons(fake_db, monkeypatch)
     assert "daily_log:diet" in callback_datas
 
 
-def test_daily_log_diet_still_not_yet_implemented(fake_db, monkeypatch):
-    """diet／body／finance 三項這批不接邏輯，維持「開發中」提示。"""
+def test_daily_log_body_still_not_yet_implemented(fake_db, monkeypatch):
+    """body／finance 這批不接邏輯，維持「開發中」提示（diet 已於 2026-08-16 Phase 6 第二批 2g
+    接上真正邏輯，改由 test_log_diet_food_full_flow／test_log_diet_water_full_flow 涵蓋）。"""
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    store = ConversationStateStore()
+
+    reply, keyboard = router.handle_callback_query(fake_db, store, FAMILY_ID, "daily_log:body")
+
+    assert "開發中" in reply
+    assert keyboard["inline_keyboard"][0][0]["callback_data"] == "menu:daily_log"
+
+
+def test_daily_log_diet_starts_diet_menu(fake_db, monkeypatch):
+    """2026-08-16（Phase 6 第二批 2g）：diet 已接上真正邏輯，`daily_log:diet` 進入飲食子選單。"""
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     store = ConversationStateStore()
 
     reply, keyboard = router.handle_callback_query(fake_db, store, FAMILY_ID, "daily_log:diet")
 
-    assert "開發中" in reply
-    assert keyboard["inline_keyboard"][0][0]["callback_data"] == "menu:daily_log"
+    assert "飲食紀錄" in reply
+    callback_datas = [button["callback_data"] for row in keyboard["inline_keyboard"] for button in row]
+    assert "diet:new" in callback_datas
 
 
 def test_mood_journal_full_flow_records_entry_and_achievement(fake_db, monkeypatch):
@@ -1730,14 +1743,20 @@ def test_handle_voice_message_allows_voice_again_after_lockout_expires(fake_db, 
     voice.mark_duration_violation(lockout_store, FAMILY_ID, now=datetime.now(timezone.utc) - timedelta(minutes=16))
     voice_client = _FakeVoiceClient(response_text="/rule")
 
-    reply = router.handle_voice_message(
+    reply, keyboard = router.handle_voice_message(
         fake_db, store, FAMILY_ID, "voice789", 30,
         _FakeTelegramClient(b"raw-ogg"), _FakeGDriveClient(), voice_client,
         voice_lockout_store=lockout_store,
     )
 
-    assert reply == templates.APPENDIX_A_TEXT + router._VOICE_TRANSCRIBED_REMINDER
+    # 2026-08-16（全站語音確認機制）：轉錄成功先貼出文字＋確認按鈕，不直接分派；
+    # 按下「✅ 正確，繼續」後才真的接回原本流程並拿到最終回覆。
+    assert "/rule" in reply
+    assert keyboard["inline_keyboard"][0][0]["callback_data"] == "voice_confirm:accept"
     assert voice_client.last_audio_bytes == b"raw-ogg"
+
+    final_reply, _final_keyboard = router.handle_callback_query(fake_db, store, FAMILY_ID, "voice_confirm:accept")
+    assert final_reply == templates.APPENDIX_A_TEXT
 
 
 def test_handle_voice_message_does_not_enforce_lockout_when_store_not_provided(fake_db, monkeypatch):
@@ -1748,12 +1767,16 @@ def test_handle_voice_message_does_not_enforce_lockout_when_store_not_provided(f
     store = ConversationStateStore()
     voice_client = _FakeVoiceClient(response_text="/rule")
 
-    reply = router.handle_voice_message(
+    reply, keyboard = router.handle_voice_message(
         fake_db, store, FAMILY_ID, "voice999", 30,
         _FakeTelegramClient(b"raw-ogg"), _FakeGDriveClient(), voice_client,
     )
 
-    assert reply == templates.APPENDIX_A_TEXT + router._VOICE_TRANSCRIBED_REMINDER
+    assert "/rule" in reply
+    assert keyboard["inline_keyboard"][0][0]["callback_data"] == "voice_confirm:accept"
+
+    final_reply, _final_keyboard = router.handle_callback_query(fake_db, store, FAMILY_ID, "voice_confirm:accept")
+    assert final_reply == templates.APPENDIX_A_TEXT
 
 
 def test_handle_voice_message_rejects_within_correction_window(fake_db, monkeypatch):
@@ -1788,18 +1811,23 @@ def test_handle_voice_message_transcribes_and_routes_as_text(fake_db, monkeypatc
     telegram_client = _FakeTelegramClient(b"raw-ogg-bytes")
     voice_client = _FakeVoiceClient(response_text="/rule")
 
-    reply = router.handle_voice_message(
+    reply, keyboard = router.handle_voice_message(
         fake_db, store, FAMILY_ID, "voice123", 30,
         telegram_client, _FakeGDriveClient(), voice_client,
     )
 
-    # 轉出來的文字（"/rule"）比照一般文字訊息，走完整的指令分派；後面附註 FR-15 修正窗口提醒
-    assert reply == templates.APPENDIX_A_TEXT + router._VOICE_TRANSCRIBED_REMINDER
+    # 2026-08-16（全站語音確認機制）：轉錄成功先貼出文字＋確認按鈕請使用者確認，不直接分派。
+    assert "/rule" in reply
+    assert keyboard["inline_keyboard"][0][0]["callback_data"] == "voice_confirm:accept"
     assert telegram_client.last_file_id == "voice123"
     assert voice_client.last_audio_bytes == b"raw-ogg-bytes"
     rows = fake_db.select("media_uploads")
     assert len(rows) == 1
     assert rows[0]["media_type"] == "audio"
+
+    # 按下「✅ 正確，繼續」後，轉出來的文字（"/rule"）比照一般文字訊息，走完整的指令分派。
+    final_reply, _final_keyboard = router.handle_callback_query(fake_db, store, FAMILY_ID, "voice_confirm:accept")
+    assert final_reply == templates.APPENDIX_A_TEXT
 
 
 def test_handle_voice_message_masks_pii_in_transcribed_text_before_logging(fake_db, monkeypatch):
@@ -1812,12 +1840,19 @@ def test_handle_voice_message_masks_pii_in_transcribed_text_before_logging(fake_
     voice_client = _FakeVoiceClient(response_text="我的手機是 0912345678")
     llm_client = _FakeLLMClient(response_text="收到！")
 
-    reply = router.handle_voice_message(
+    reply, keyboard = router.handle_voice_message(
         fake_db, store, FAMILY_ID, "voice123", 30,
         telegram_client, _FakeGDriveClient(), voice_client, llm_client=llm_client,
     )
 
-    assert "0912345678" not in reply
+    # 轉錄文字本身（含個資）會先原封不動貼出來讓使用者確認是否聽對，這一步還沒進到
+    # handle_message() 的遮蔽邏輯，所以這裡不斷言遮蔽；遮蔽發生在使用者按下確認之後。
+    assert keyboard["inline_keyboard"][0][0]["callback_data"] == "voice_confirm:accept"
+
+    final_reply, _final_keyboard = router.handle_callback_query(
+        fake_db, store, FAMILY_ID, "voice_confirm:accept", llm_client=llm_client
+    )
+    assert "0912345678" not in final_reply
     logs = fake_db.select("conversation_logs", where="user_id = %s", params=(user_id,))
     assert logs[0]["content"] == "我的手機是 [已遮蔽個資]"
 
@@ -1844,29 +1879,47 @@ def test_handle_voice_message_works_for_owner(fake_db, monkeypatch):
     store = ConversationStateStore()
     voice_client = _FakeVoiceClient(response_text="/rule")
 
-    reply = router.handle_voice_message(
+    reply, keyboard = router.handle_voice_message(
         fake_db, store, ROBIN_ID, "voice999", 30,
         _FakeTelegramClient(b"raw-ogg"), _FakeGDriveClient(), voice_client,
     )
 
-    assert reply == templates.APPENDIX_A_TEXT + router._VOICE_TRANSCRIBED_REMINDER
+    assert "/rule" in reply
+    assert keyboard["inline_keyboard"][0][0]["callback_data"] == "voice_confirm:accept"
+
+    final_reply, _final_keyboard = router.handle_callback_query(fake_db, store, ROBIN_ID, "voice_confirm:accept")
+    assert final_reply == templates.APPENDIX_A_TEXT
     owner_row = fake_db.select("users", where="telegram_user_id = %s", params=(ROBIN_ID,), fetch_one=True)
     assert owner_row is not None
 
 
-def test_handle_voice_message_clears_stale_pending_flow_first(fake_db, monkeypatch):
+def test_handle_voice_message_preserves_stale_pending_flow_as_resume_state(fake_db, monkeypatch):
+    """2026-08-16（全站語音確認機制）：語音進來前若卡在某個未完成流程，先貼出轉錄文字請使用者
+    確認「聽對了嗎」，原本卡住的流程原封不動保留成 `resume_state`，不會被語音蓋掉／憑空清掉；
+    使用者確認後才照這個流程接回（沿用既有 `pending_user_knowledge` 判斷邏輯，見
+    `test_pending_user_knowledge_flow_treats_unrelated_new_question_normally_via_router`）。"""
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
-    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     store = ConversationStateStore()
-    store.set(FAMILY_ID, {"flow": "pending_user_knowledge", "target_user_id": 1})
-    voice_client = _FakeVoiceClient(response_text="/rule")
+    store.set(
+        FAMILY_ID,
+        {"flow": "pending_user_knowledge", "target_user_id": user_id, "original_question": "陳東東是誰"},
+    )
+    voice_client = _FakeVoiceClient(response_text="吳凱吉是誰")
+    llm_client = _FakeLLMClient(response_text="吳凱吉是 Robin 的妹夫喔！")
 
-    reply = router.handle_voice_message(
+    reply, keyboard = router.handle_voice_message(
         fake_db, store, FAMILY_ID, "voice123", 30,
         _FakeTelegramClient(b"raw-ogg"), _FakeGDriveClient(), voice_client,
     )
 
-    assert reply == templates.APPENDIX_A_TEXT + router._VOICE_TRANSCRIBED_REMINDER
+    assert "吳凱吉是誰" in reply
+    assert keyboard["inline_keyboard"][0][0]["callback_data"] == "voice_confirm:accept"
+
+    final_reply, _final_keyboard = router.handle_callback_query(
+        fake_db, store, FAMILY_ID, "voice_confirm:accept", llm_client=llm_client
+    )
+    assert final_reply == "吳凱吉是 Robin 的妹夫喔！"
     assert store.get(FAMILY_ID) is None
 
 

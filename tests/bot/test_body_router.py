@@ -204,19 +204,37 @@ def test_my_exercise_logs_full_flow_delete(fake_db, monkeypatch):
 
 
 def test_log_diet_food_full_flow(fake_db, monkeypatch):
+    """2026-08-16（Phase 6 第二批 2g）：飲食全面改選單按鈕觸發，舊文字觸發詞「我要記錄飲食」已
+    移除，入口改為「📝 日常紀錄」→「🍚 飲食」子選單（`daily_log:diet` → `diet:new`），新增流程
+    改成先問飲水（跳過）再問食物，末端也改為摘要→二次確認（`diet:confirm_save`）。"""
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     store = ConversationStateStore()
 
-    router.handle_message(fake_db, store, FAMILY_ID, "我要記錄飲食")
-    assert store.get(FAMILY_ID)["flow"] == "pending_diet_entry_type"
+    router.handle_callback_query(fake_db, store, FAMILY_ID, "daily_log:diet")
+    router.handle_callback_query(fake_db, store, FAMILY_ID, "diet:new")
+    assert store.get(FAMILY_ID)["flow"] == "pending_diet_water_choice"
 
-    router.handle_message(fake_db, store, FAMILY_ID, "飲食")
+    router.handle_callback_query(fake_db, store, FAMILY_ID, "diet:water_no")
+    assert store.get(FAMILY_ID)["flow"] == "pending_diet_food_choice"
+
+    router.handle_callback_query(fake_db, store, FAMILY_ID, "diet:food_yes")
+    assert store.get(FAMILY_ID)["flow"] == "pending_diet_food_input_mode"
+
+    router.handle_callback_query(fake_db, store, FAMILY_ID, "diet:food_text")
     assert store.get(FAMILY_ID)["flow"] == "pending_diet_description"
 
+    router.handle_message(fake_db, store, FAMILY_ID, "雞胸肉便當")
+    assert store.get(FAMILY_ID)["flow"] == "pending_diet_nutrition_source"
+
     macro_llm = _FakeLLMClient(response_text="CALORIES: 320\nPROTEIN: 20\nCARBS: 40\nFAT: 10")
-    reply = router.handle_message(fake_db, store, FAMILY_ID, "雞胸肉便當", llm_client=macro_llm)
+    reply, _keyboard = router.handle_callback_query(fake_db, store, FAMILY_ID, "diet:nutrition_ai", llm_client=macro_llm)
     assert "熱量約 320 大卡" in reply
+    assert store.get(FAMILY_ID)["flow"] == "pending_diet_confirm"
+
+    reply, _keyboard = router.handle_callback_query(fake_db, store, FAMILY_ID, "diet:confirm_save")
+    assert "記錄好" in reply
+    assert store.get(FAMILY_ID) is None
     row = fake_db.select("diet_logs", where="user_id = %s", params=(user_id,))[0]
     assert row["description"] == "雞胸肉便當"
 
@@ -226,11 +244,20 @@ def test_log_diet_water_full_flow(fake_db, monkeypatch):
     fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     store = ConversationStateStore()
 
-    router.handle_message(fake_db, store, FAMILY_ID, "我要記錄飲食")
-    router.handle_message(fake_db, store, FAMILY_ID, "飲水")
-    reply = router.handle_message(fake_db, store, FAMILY_ID, "500")
+    router.handle_callback_query(fake_db, store, FAMILY_ID, "daily_log:diet")
+    router.handle_callback_query(fake_db, store, FAMILY_ID, "diet:new")
+    router.handle_callback_query(fake_db, store, FAMILY_ID, "diet:water_yes")
+    assert store.get(FAMILY_ID)["flow"] == "pending_diet_water_amount"
 
+    reply, _keyboard = router.handle_message(fake_db, store, FAMILY_ID, "500")
+    assert store.get(FAMILY_ID)["flow"] == "pending_diet_food_choice"
+
+    reply, _keyboard = router.handle_callback_query(fake_db, store, FAMILY_ID, "diet:food_no")
     assert "500 毫升" in reply
+    assert store.get(FAMILY_ID)["flow"] == "pending_diet_confirm"
+
+    reply, _keyboard = router.handle_callback_query(fake_db, store, FAMILY_ID, "diet:confirm_save")
+    assert "記錄好" in reply
     assert store.get(FAMILY_ID) is None
 
 

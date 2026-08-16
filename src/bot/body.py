@@ -55,11 +55,6 @@ _BMI_CATEGORIES: list[tuple[float, str]] = [
 ]
 _BMI_SEVERE_LABEL = "重度肥胖"
 
-# FR-48 飲食紀錄類型：食物需要營養拆算，飲水只記錄毫升數。
-DIET_ENTRY_TYPES: list[tuple[str, str]] = [("food", "飲食"), ("water", "飲水")]
-_DIET_TYPE_LABEL_BY_CODE = dict(DIET_ENTRY_TYPES)
-_DIET_TYPE_CODE_BY_LABEL = {label: code for code, label in DIET_ENTRY_TYPES}
-
 # FR-46～FR-48 體態目標三種類型（決策④）。
 GOAL_TYPES: list[tuple[str, str]] = [("weight", "體重"), ("exercise", "運動"), ("diet", "飲食")]
 _GOAL_TYPE_LABEL_BY_CODE = dict(GOAL_TYPES)
@@ -303,25 +298,6 @@ def format_exercise_log_list(logs: list[dict]) -> str:
 # ---------------------------------------------------------------------------
 
 
-def format_diet_entry_type_prompt() -> str:
-    """組出讓使用者選擇要記錄飲食還是飲水的編號清單文字。"""
-    lines = ["要記錄飲食還是飲水呢？", ""]
-    for index, (_, label) in enumerate(DIET_ENTRY_TYPES, start=1):
-        lines.append(f"{index}. {label}")
-    return "\n".join(lines)
-
-
-def resolve_diet_entry_type(text: str) -> str | None:
-    """把使用者輸入解析成飲食紀錄類型代碼；接受編號或直接輸入「飲食」「飲水」。"""
-    text = text.strip()
-    if text.isdigit():
-        index = int(text)
-        if 1 <= index <= len(DIET_ENTRY_TYPES):
-            return DIET_ENTRY_TYPES[index - 1][0]
-        return None
-    return _DIET_TYPE_CODE_BY_LABEL.get(text)
-
-
 def estimate_diet_macros(llm_client, description: str) -> dict:
     """呼叫 LLM 拆算這份食物大約的三大營養素與熱量（決策②）。回傳
     `{"estimated_calories", "protein_g", "carbs_g", "fat_g"}`，任何一項解析不到就是 None
@@ -356,9 +332,13 @@ def create_diet_log(
     entry_date: date,
     water_ml: int | None = None,
     macros: dict | None = None,
+    nutrition_source: str = "ai",
 ) -> int:
     """新增一筆飲食/飲水紀錄（FR-48），回傳新建列的 id。`macros` 只有 `entry_type == "food"` 時
-    才需要傳（`estimate_diet_macros()` 的回傳值），飲水紀錄一律傳 None。"""
+    才需要傳（`estimate_diet_macros()` 的回傳值，或使用者自己填寫的四個數字），飲水紀錄一律傳
+    None。`nutrition_source`（2026-08-16，Phase 6 第二批 2g）：`entry_type == "food"` 時依
+    使用者選擇的 `"ai"`／`"manual"` 傳入；飲水紀錄一律寫死 `"manual"`（沿用 migration 0078
+    對飲水的既有慣例）。"""
     macros = macros or {}
     return db.insert(
         "diet_logs",
@@ -367,7 +347,7 @@ def create_diet_log(
             "entry_type": entry_type,
             "description": description,
             "water_ml": water_ml,
-            "nutrition_source": "ai" if entry_type == "food" else "manual",
+            "nutrition_source": nutrition_source if entry_type == "food" else "manual",
             "estimated_calories": macros.get("estimated_calories"),
             "protein_g": macros.get("protein_g"),
             "carbs_g": macros.get("carbs_g"),
@@ -404,8 +384,10 @@ def format_diet_log_list(logs: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def format_diet_macro_note(macros: dict) -> str:
-    """組出記錄飲食後附加的營養拆算＋估算免責聲明（FR-17c／FR-48）。"""
+def format_diet_macro_note(macros: dict, nutrition_source: str = "ai") -> str:
+    """組出記錄飲食後附加的營養拆算文案（FR-17c／FR-48）。`nutrition_source`（2026-08-16，
+    Phase 6 第二批 2g）：`"ai"` 附上估算免責聲明；`"manual"` 是使用者自己填的數字，不是估算，
+    改用平鋪直敘的文案，不加「可能會有誤差」這句。"""
     calories, protein, carbs, fat = (
         macros.get("estimated_calories"), macros.get("protein_g"), macros.get("carbs_g"), macros.get("fat_g")
     )
@@ -413,14 +395,16 @@ def format_diet_macro_note(macros: dict) -> str:
         return "這份餐點的營養成分這次沒能順利估算出來，不過已經幫你記錄好內容了！"
     parts = []
     if calories is not None:
-        parts.append(f"熱量約 {calories:.0f} 大卡")
+        parts.append(f"熱量{'約 ' if nutrition_source == 'ai' else ''}{calories:.0f} 大卡")
     if protein is not None:
-        parts.append(f"蛋白質約 {protein:.0f} 克")
+        parts.append(f"蛋白質{'約 ' if nutrition_source == 'ai' else ''}{protein:.0f} 克")
     if carbs is not None:
-        parts.append(f"碳水化合物約 {carbs:.0f} 克")
+        parts.append(f"碳水化合物{'約 ' if nutrition_source == 'ai' else ''}{carbs:.0f} 克")
     if fat is not None:
-        parts.append(f"脂肪約 {fat:.0f} 克")
-    return "、".join(parts) + "，這是估算值，可能會有誤差，僅供參考喔！"
+        parts.append(f"脂肪{'約 ' if nutrition_source == 'ai' else ''}{fat:.0f} 克")
+    if nutrition_source == "ai":
+        return "、".join(parts) + "，這是估算值，可能會有誤差，僅供參考喔！"
+    return "、".join(parts) + "（這是你自己填寫的數字）"
 
 
 # ---------------------------------------------------------------------------

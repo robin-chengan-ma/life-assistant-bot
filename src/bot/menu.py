@@ -36,6 +36,15 @@ Inline Keyboard，比照 `collections` 的單層選單做法。候選機制維�
 比照 `important_days` 的單層選單做法。新增流程補上摘要→二次確認關卡，查詢清單改為
 按鈕式標記完成/取消；自然語言偵測入口（chat.py，FR-31、FR-56e）維持不變，跟選單
 「➕ 新增」按鈕共用同一套「時間→提醒→行事曆同步→確認」狀態機。
+
+2026-08-16（Phase 6 第二批 2g，見 docs/ADR/discuss/robinson.md）：`diet`（飲食）接上
+`src/bot/commands.py` 改寫過的飲食/飲水邏輯，從 `_DAILY_LOG_NOT_YET_IMPLEMENTED_KEYS`
+移除；`body`／`finance` 維持「功能開發中」。飲食／飲水比照 Mobile App 的 single-daily
+設計（同一天各自只能一筆），新增流程先問飲水再問食物（各自可跳過，已有紀錄的項目
+直接跳過提問），食物內容支援文字／照片兩種輸入方式，並可選擇沿用 AI 估算或自己填寫
+三大營養素與熱量；同批也把全站語音功能改成「轉錄成功先貼出文字給使用者確認，確認後
+才接回原本流程」（見 `router.py` 的 `pending_voice_confirm`／`voice_confirm:accept`），
+影響範圍不限於飲食，也涵蓋既有的心情／運動／待辦等語音入口。
 """
 
 # key、label 依 FR-6e 定案順序；owner_only 決定這個項目是否只有 Owner 看得到。
@@ -71,7 +80,9 @@ DAILY_LOG_MENU_ITEMS = [
     {"key": "finance", "label": "💰 記帳"},
 ]
 
-_DAILY_LOG_NOT_YET_IMPLEMENTED_KEYS = {"diet", "body", "finance"}
+# 2026-08-16（Phase 6 第二批 2g）：`diet`（飲食）接上真正邏輯，移出開發中名單；`body`／
+# `finance` 維持「功能開發中」，留給後續子批次。
+_DAILY_LOG_NOT_YET_IMPLEMENTED_KEYS = {"body", "finance"}
 
 DAILY_LOG_MENU_TEXT = "日常紀錄，請選擇要記錄的項目："
 

@@ -70,9 +70,9 @@ _MY_WEIGHT_LOGS_TRIGGERS = {"/my_weight_logs", "我的體重紀錄"}
 # 2026-08-16（Phase 6 第二批 2c）：運動全面改選單觸發，舊文字觸發詞
 # （/log_exercise、/backfill_exercise、/my_exercise_logs 等）已移除，入口改為
 # 「📝 日常紀錄」→「🏃 運動」子選單。
-_LOG_DIET_TRIGGERS = {"/log_diet", "我要記錄飲食"}
-_BACKFILL_DIET_TRIGGERS = {"/backfill_diet", "我要補記飲食"}
-_MY_DIET_LOGS_TRIGGERS = {"/my_diet_logs", "我的飲食紀錄"}
+# 2026-08-16（Phase 6 第二批 2g）：飲食全面改選單觸發，舊文字觸發詞
+# （/log_diet、/backfill_diet、/my_diet_logs 等）已移除，入口改為
+# 「📝 日常紀錄」→「🍚 飲食」子選單。
 _SET_BODY_GOAL_TRIGGERS = {"/set_body_goal", "我要設定體態管理目標"}
 _MY_BODY_GOALS_TRIGGERS = {"/my_body_goals", "我的體態目標"}
 # 2026-08-08（Step 3.3，見 robinson SPEC.md FR-27、FR-26 決策 5）：證照題庫作答與彈性排程調整，
@@ -354,13 +354,6 @@ def handle_message(
         return commands.start_weight_backfill(state_store, telegram_user_id, user_id)
     if text in _MY_WEIGHT_LOGS_TRIGGERS:
         return commands.start_weight_list(db, state_store, telegram_user_id, user_id)
-    if text in _LOG_DIET_TRIGGERS:
-        # 2026-08-04（FR-48）：開始記錄飲食/飲水流程，先問類型。
-        return commands.start_diet_log(state_store, telegram_user_id, user_id)
-    if text in _BACKFILL_DIET_TRIGGERS:
-        return commands.start_diet_backfill(state_store, telegram_user_id, user_id)
-    if text in _MY_DIET_LOGS_TRIGGERS:
-        return commands.start_diet_list(db, state_store, telegram_user_id, user_id)
     if text in _SET_BODY_GOAL_TRIGGERS:
         # 2026-08-04（FR-46～FR-48）：設定體態管理目標，先問類型。
         return commands.start_body_goal(state_store, telegram_user_id, user_id)
@@ -393,6 +386,12 @@ def handle_callback_query(
     telegram_user_id: int,
     data: str,
     calendar_client=None,
+    llm_client=None,
+    text_llm_client=None,
+    image_llm_clients: list | None = None,
+    privacy_llm_client=None,
+    telegram_client=None,
+    gdrive_client=None,
 ) -> tuple[str, dict | None]:
     """處理按下 Inline Keyboard 按鈕觸發的 callback_query（見 FR-6c：任何選單／callback 都要
     重新驗證權限，不能只靠「一開始選單沒顯示這顆按鈕」來擋，避免偽造 callback_data 繞過）。
@@ -404,8 +403,36 @@ def handle_callback_query(
     待辦事項「✅ 確認送出」（`todo:confirm_save`）與清單「✅ 完成」「🚫 取消」（`todo:complete:<id>`
     ／`todo:cancel:<id>`）這三個 callback 會用到；`None` 時優雅降級成「待辦事項照常記錄/更新，
     但不會出現在 Google Calendar 上」，不影響其餘分支。
+
+    `llm_client`／`text_llm_client`／`image_llm_clients`／`privacy_llm_client`／`telegram_client`／
+    `gdrive_client`（2026-08-16，全站語音確認機制）：只有 `voice_confirm:accept` 這個 callback
+    會用到——使用者確認語音轉錄內容正確後，要接回原本卡在的流程（可能是任何一個既有 pending
+    flow，甚至是自由聊天），因此需要跟文字訊息分支一樣完整的一套 Client；其餘既有 callback
+    分支都不需要，`None` 時不影響。呼叫端（webhook.py）比照文字訊息分支注入。
     """
     is_owner = auth.is_owner(telegram_user_id)
+
+    if data == "voice_confirm:accept":
+        # 2026-08-16（全站語音確認機制）：使用者按下「✅ 正確，繼續」，把轉錄前的
+        # `resume_state` 還原回去，改用轉錄出來的文字接回原本流程（或自由聊天）。
+        state = state_store.get(telegram_user_id)
+        if state is None or state.get("flow") != "pending_voice_confirm":
+            return menu.MAIN_MENU_TEXT, menu.build_main_menu_keyboard(is_owner=is_owner)
+        resume_state = state.get("resume_state")
+        transcribed_text = state.get("transcribed_text", "")
+        if resume_state is None:
+            state_store.clear(telegram_user_id)
+        else:
+            state_store.set(telegram_user_id, resume_state)
+        result = handle_message(
+            db, state_store, telegram_user_id, transcribed_text,
+            llm_client=llm_client, text_llm_client=text_llm_client, image_llm_clients=image_llm_clients,
+            via_voice=True, privacy_llm_client=privacy_llm_client, telegram_client=telegram_client,
+            calendar_client=calendar_client, gdrive_client=gdrive_client,
+        )
+        if isinstance(result, tuple):
+            return result
+        return result, None
 
     if data == "menu:main":
         state_store.clear(telegram_user_id)
@@ -452,6 +479,9 @@ def handle_callback_query(
             return commands.start_mood_menu()
         if key == "exercise":
             return commands.start_exercise_menu()
+        if key == "diet":
+            # 2026-08-16（Phase 6 第二批 2g）。
+            return commands.start_diet_menu()
         return menu.daily_log_not_yet_implemented_reply()
 
     if data.startswith("permission:"):
@@ -657,6 +687,39 @@ def handle_callback_query(
             return commands.handle_exercise_confirm_save(db, state_store, telegram_user_id), None
         return commands.start_exercise_menu()
 
+    if data.startswith("diet:"):
+        # 2026-08-16（Phase 6 第二批 2g，FR-6e／FR-48）：飲食/飲水選單與新增流程操作。
+        user = _get_identified_user(db, telegram_user_id)
+        if user is None:
+            return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
+        action = data[len("diet:") :]
+        if action == "list":
+            return commands.start_diet_list(db, user["id"])
+        if action == "new":
+            return commands.start_diet_log(db, state_store, telegram_user_id, user["id"])
+        if action == "backfill":
+            return commands.start_diet_backfill(state_store, telegram_user_id, user["id"]), None
+        if action in ("water_yes", "water_no"):
+            return commands.handle_diet_water_choice_step(state_store, telegram_user_id, action)
+        if action in ("food_yes", "food_no"):
+            return commands.handle_diet_food_choice_step(state_store, telegram_user_id, action)
+        if action in ("food_text", "food_photo"):
+            return commands.handle_diet_food_input_mode_step(state_store, telegram_user_id, action)
+        if action in ("nutrition_ai", "nutrition_manual"):
+            return commands.handle_diet_nutrition_source_step(llm_client, state_store, telegram_user_id, action)
+        if action.startswith("edit:"):
+            diet_log_id = int(action[len("edit:") :])
+            return commands.start_diet_edit(db, state_store, telegram_user_id, user["id"], diet_log_id)
+        if action.startswith("delete:"):
+            diet_log_id = int(action[len("delete:") :])
+            return commands.start_diet_delete_confirm(db, state_store, telegram_user_id, user["id"], diet_log_id)
+        if action.startswith("confirm_delete:"):
+            diet_log_id = int(action[len("confirm_delete:") :])
+            return commands.handle_diet_delete(db, state_store, telegram_user_id, user["id"], diet_log_id), menu.back_to_main_menu_keyboard()
+        if action == "confirm_save":
+            return commands.handle_diet_confirm_save(db, state_store, telegram_user_id), None
+        return commands.start_diet_menu()
+
     # 未知／格式不符的 callback_data（例如過期或偽造），保守導回主選單，不當例外處理。
     return menu.MAIN_MENU_TEXT, menu.build_main_menu_keyboard(is_owner=is_owner)
 
@@ -685,12 +748,23 @@ def handle_photo_message(
     `src/bot/image.py` 的商業邏輯處理。若使用者原本卡在某個未完成的對話流程（例如上一輪的
     圖片澄清問答還沒回答完就又傳了新圖片），直接以新圖片覆蓋、清除舊流程狀態，避免卡死。
 
+    2026-08-16（Phase 6 第二批 2g）：**例外**——如果使用者正卡在 `pending_diet_photo`（飲食
+    子選單「📷 照片」輸入方式，等待傳照片），這張照片要走 `commands.handle_diet_photo_message()`
+    複用 `src/services/app_diet_photo.py` 的飲食辨識邏輯，而不是落入下面這套一般圖片分析
+    （FR-17），這兩套是不同的商業邏輯，不能混用。
+
     `privacy_llm_client`（2026-08-02，見 docs/specs/privacy-masking/SPEC.md FR-5）：透傳給
     `image.handle_image_message()`，用來在 `caption` 送進 Gemini 前先做個資遮蔽。
     """
     user = _get_identified_user(db, telegram_user_id)
     if user is None:
         return _NOT_BOUND_REPLY
+
+    current_state = state_store.get(telegram_user_id)
+    if current_state is not None and current_state.get("flow") == "pending_diet_photo":
+        image_bytes = telegram_client.get_file_bytes(file_id)
+        llm_client = image_llm_clients[0] if image_llm_clients else None
+        return commands.handle_diet_photo_message(db, llm_client, state_store, telegram_user_id, image_bytes, "image/jpeg")
 
     state_store.clear(telegram_user_id)
 
@@ -724,8 +798,13 @@ def handle_voice_message(
     voice_lockout_store: ConversationStateStore | None = None,
     privacy_llm_client=None,
     calendar_client=None,
-) -> str:
+) -> str | tuple[str, dict | None]:
     """處理使用者傳來的語音/音檔訊息（對應 robinson SPEC.md FR-14、FR-15、FR-17、ADR-12、ADR-13）。
+
+    2026-08-16（全站語音確認機制）：轉錄成功時回傳 `(text, keyboard)` 二元組（貼出轉錄文字＋
+    「✅ 正確，繼續」按鈕），比照 `handle_callback_query()` 的回傳慣例；其餘提早擋下的分支
+    （未綁定、鎖定中、超過長度限制、修正窗口內）維持回傳純 `str`，呼叫端（webhook.py）需要
+    比照文字訊息分支用 `isinstance(x, tuple)` 拆解。
 
     涵蓋 Telegram 的 `voice`（錄音鍵語音訊息）與 `audio`（使用者上傳的音檔）兩種類型，
     FR-17 承諾「圖片與音檔」都支援，不限定只有錄音鍵那種；`mime_type` 由呼叫端
@@ -733,10 +812,16 @@ def handle_voice_message(
     Drive 副檔名與轉錄請求格式（見 src/bot/voice.py 模組 docstring）。
 
     FR-14（10 分鐘上限）／FR-15（15 分鐘修正窗口）刻意排在下載語音檔之前檢查，通過後才
-    下載、上傳 Drive、記錄 media_uploads、呼叫 Groq Whisper 轉文字。轉出來的文字不會
-    另外走一套獨立流程，而是直接當成使用者「打字輸入」，呼叫既有的 `handle_message()`
-    走完整的指令/pending flow/一般聊天分派——這是 Step 1.4 刻意的架構選擇：語音只負責
-    「變成文字」，「文字要怎麼處理」全部復用既有邏輯，不重複。
+    下載、上傳 Drive、記錄 media_uploads、呼叫 Groq Whisper 轉文字。
+
+    2026-08-16（全站語音確認機制，見 docs/ADR/discuss/voice-safety.md）：轉出來的文字**不會**
+    再直接當成使用者「打字輸入」丟進 `handle_message()`——語音辨識結果可能跟使用者實際講的
+    內容有落差，這裡改成先把轉錄文字貼出來、附一顆「✅ 正確，繼續」按鈕請使用者確認；使用者
+    按下按鈕（`handle_callback_query()` 的 `voice_confirm:accept`）或直接打字修正
+    （`_dispatch_active_flow()` 的 `pending_voice_confirm` 分支）之後，才會用「使用者確認過的
+    文字」接回原本卡在的流程（或自由聊天），下游 `handle_message()`／各 pending flow 完全不用
+    改，這是 Step 1.4 沿用至今的核心架構選擇：語音只負責「變成文字」，「文字要怎麼處理」全部
+    復用既有邏輯；2026-08-16 起多插了一輪「文字先給使用者確認過」的關卡。
 
     2026-08-02（FR-16a）：如果目前卡在 `_FINAL_CONFIRM_FLOWS` 這幾個「最終執行確認」狀態，
     語音一定會被拒絕（這一步只接受打字），所以**在下載/轉錄之前就直接短路回覆**，比照
@@ -776,23 +861,29 @@ def handle_voice_message(
     if voice.is_within_correction_window(db, user["id"]):
         return _VOICE_CORRECTION_WINDOW_REPLY
 
-    # 比照 handle_photo_message：新語音訊息直接覆蓋任何未完成的舊流程狀態，避免卡死。
-    state_store.clear(telegram_user_id)
-
     voice_bytes = telegram_client.get_file_bytes(file_id)
     transcribed_text = voice.transcribe_and_upload(
         db, gdrive_client, voice_client, user["id"], user["role"], voice_bytes, mime_type=mime_type
     )
 
-    # via_voice=True（FR-16a）：讓其餘一般聊天/指令分派也能識別這則訊息是語音轉出來的（目前只有
-    # pending_*_final_confirm 這幾個 flow 會用到，其餘分支不受影響）。
-    reply = handle_message(
-        db, state_store, telegram_user_id, transcribed_text,
-        llm_client=llm_client, text_llm_client=text_llm_client, via_voice=True,
-        privacy_llm_client=privacy_llm_client, calendar_client=calendar_client,
+    # 2026-08-16（全站語音確認機制，見 docs/ADR/discuss/voice-safety.md）：語音辨識結果可能跟
+    # 使用者實際講的內容有落差，轉錄成功後不直接當成輸入內容送進 handle_message()，而是先
+    # 貼出轉錄文字讓使用者確認。`resume_state` 保留「轉錄前」使用者原本卡在的狀態（可能是
+    # 某個 pending flow，也可能是 None＝純自由聊天），使用者確認或改用文字修正後，
+    # 才照這個狀態接回（見 `_dispatch_active_flow()` 的 `pending_voice_confirm` 分支與
+    # `handle_callback_query()` 的 `voice_confirm:accept` 分支）。這裡刻意排在
+    # `state_store.clear()` 之前才讀出 `current_state`（本函式最上方已讀出，尚未被覆蓋）。
+    state_store.set(
+        telegram_user_id,
+        {"flow": "pending_voice_confirm", "resume_state": current_state, "transcribed_text": transcribed_text},
     )
-    # 2026-08-02：主動附註 FR-15 修正窗口提醒，見上方 _VOICE_TRANSCRIBED_REMINDER 說明。
-    return reply + _VOICE_TRANSCRIBED_REMINDER
+    reply = (
+        f"我聽到的內容是：\n\n「{transcribed_text}」\n\n"
+        "請問這樣正確嗎？如果正確請按下面按鈕；如果不正確，請直接用文字打出正確內容送出"
+        "（這次先別再用語音喔）：" + _VOICE_TRANSCRIBED_REMINDER
+    )
+    keyboard = {"inline_keyboard": [[{"text": "✅ 正確，繼續", "callback_data": "voice_confirm:accept"}]]}
+    return reply, keyboard
 
 
 def _dispatch_active_flow(
@@ -811,6 +902,24 @@ def _dispatch_active_flow(
 ) -> str:
     """依進行中對話流程的 `flow` 標記分派到對應處理函式（見各 flow 對應 spec 的 ADR）。"""
     flow = state.get("flow")
+    if flow == "pending_voice_confirm":
+        # 2026-08-16（全站語音確認機制）：使用者對著「請問這樣正確嗎？」直接打字（而不是按
+        # 「✅ 正確，繼續」），視為用打字修正剛剛聽錯的內容——把狀態還原成語音進來之前
+        # 原本卡在的 `resume_state`（可能是某個 pending flow，也可能是 None＝自由聊天），
+        # 再用這次打的文字重新呼叫 `handle_message()`，效果等同於使用者一開始就用打字回答；
+        # `via_voice=False`：這是使用者親自打的字，不是語音轉出來的，`_FINAL_CONFIRM_FLOWS`
+        # 這類只接受打字的關卡也應該正常放行。
+        resume_state = state.get("resume_state")
+        if resume_state is None:
+            state_store.clear(telegram_user_id)
+        else:
+            state_store.set(telegram_user_id, resume_state)
+        return handle_message(
+            db, state_store, telegram_user_id, text,
+            llm_client=llm_client, text_llm_client=text_llm_client, image_llm_clients=image_llm_clients,
+            via_voice=False, privacy_llm_client=privacy_llm_client, telegram_client=telegram_client,
+            calendar_client=calendar_client,
+        )
     if flow in ("permission_create", "permission_disable", "permission_enable", "permission_resend"):
         # 2026-08-15（Phase 6 第二批 2a，FR-4）：Owner 權限管理選單引導式流程。
         return commands.handle_permission_step(db, state_store, telegram_user_id, text)
@@ -995,22 +1104,27 @@ def _dispatch_active_flow(
         return commands.handle_exercise_confirm_text(state_store, telegram_user_id)
     if flow == "exercise_delete_confirm":
         return commands.handle_exercise_confirm_text(state_store, telegram_user_id)
+    # 2026-08-16（Phase 6 第二批 2g）：飲食/飲水全面改選單觸發＋摘要→二次確認，見
+    # commands.py「飲食（含飲水）」區塊模組註解。
     if flow == "pending_diet_backfill_date":
-        return commands.handle_diet_backfill_date_step(llm_client, state_store, telegram_user_id, text)
-    if flow == "pending_diet_entry_type":
-        return commands.handle_diet_entry_type_step(state_store, telegram_user_id, text)
-    if flow == "pending_diet_description":
-        return commands.handle_diet_description_step(
-            db, llm_client, state_store, telegram_user_id, text, privacy_llm_client=privacy_llm_client
-        )
+        return commands.handle_diet_backfill_date_step(db, llm_client, state_store, telegram_user_id, text)
     if flow == "pending_diet_water_amount":
-        return commands.handle_diet_water_amount_step(db, state_store, telegram_user_id, text)
-    if flow == "pending_diet_list_action":
-        return commands.handle_diet_list_action_step(state_store, telegram_user_id, text)
-    if flow == "pending_diet_action_choice":
-        return commands.handle_diet_action_choice_step(db, llm_client, state_store, telegram_user_id, text)
-    if flow == "pending_diet_delete_confirm":
-        return commands.handle_diet_delete_confirm_step(db, llm_client, state_store, telegram_user_id, text)
+        return commands.handle_diet_water_amount_step(state_store, telegram_user_id, text)
+    if flow == "pending_diet_description":
+        return commands.handle_diet_description_step(state_store, telegram_user_id, text)
+    if flow == "pending_diet_photo":
+        # 這一步要傳照片，收到文字（含語音轉出來的文字）代表使用者這次沒有傳照片，提醒並
+        # 提供改用文字輸入的退路，見 commands.handle_diet_photo_wait_step()。
+        return commands.handle_diet_photo_wait_step(state_store, telegram_user_id)
+    if flow == "pending_diet_photo_confirm":
+        return commands.handle_diet_photo_confirm_step(state_store, telegram_user_id, text)
+    if flow == "pending_diet_manual_macros":
+        return commands.handle_diet_manual_macros_step(state_store, telegram_user_id, text)
+    # 2026-08-16（Phase 6 第二批 2g）：這幾個按鈕關卡只接受按鈕操作，理由同
+    # pending_exercise_confirm／exercise_delete_confirm。
+    if flow in ("pending_diet_water_choice", "pending_diet_food_choice", "pending_diet_food_input_mode",
+                "pending_diet_nutrition_source", "pending_diet_confirm", "diet_delete_confirm"):
+        return commands.handle_diet_confirm_text(state_store, telegram_user_id)
     if flow == "pending_goal_type":
         return commands.handle_goal_type_step(state_store, telegram_user_id, text)
     if flow == "pending_goal_weight_value":

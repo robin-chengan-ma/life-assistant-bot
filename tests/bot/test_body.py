@@ -191,15 +191,6 @@ def test_format_exercise_log_list_empty():
 # --- 飲食/飲水 ---
 
 
-def test_resolve_diet_entry_type_accepts_index_and_label():
-    assert body.resolve_diet_entry_type("1") == "food"
-    assert body.resolve_diet_entry_type("2") == "water"
-    assert body.resolve_diet_entry_type("飲食") == "food"
-    assert body.resolve_diet_entry_type("飲水") == "water"
-    assert body.resolve_diet_entry_type("0") is None
-    assert body.resolve_diet_entry_type("其他") is None
-
-
 def test_estimate_diet_macros_parses_all_fields():
     llm_client = Mock()
     llm_client.generate_text.return_value = "CALORIES: 320\nPROTEIN: 20\nCARBS: 40\nFAT: 10"
@@ -384,12 +375,6 @@ def test_check_weight_goal_achieved_gaining_weight(fake_db):
 def test_check_weight_goal_achieved_ignores_goals_without_target(fake_db):
     body.create_goal(fake_db, 1, "weight", "純紀錄，沒有明確目標值")
     assert body.check_weight_goal_achieved(fake_db, 1, 50.0) is None
-
-
-def test_format_diet_entry_type_prompt_lists_both_types():
-    text = body.format_diet_entry_type_prompt()
-    assert "1. 飲食" in text
-    assert "2. 飲水" in text
 
 
 def test_format_goal_type_prompt_lists_all_types():
