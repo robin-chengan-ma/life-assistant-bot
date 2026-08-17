@@ -223,6 +223,7 @@ updated: 2026-08-17
 
 | 日期 | 版本 / commit | 異動摘要 | 開發者 |
 | --- | --- | --- | --- |
+| 2026-08-17 | `27c8476` | 批次3＋批次3補做：六模組目標泛化＋🎯目標追蹤新選單，含記帳/收藏清單 Calendar 同步、飲食目標自動達成判斷、考試成績自動達成判斷 | Claude |
 | 2026-08-17 | `a6fd474` | Phase 6 第二批 2h：運動紀錄改版（批次2，FR-47／FR-47a），新增全域運動類別表與兩段式同義詞合併，Telegram Bot／Mobile App 同步改版 | Claude |
 | 2026-08-16 | `eabed3b` | Phase 6 第二批 2f：Telegram 待辦事項選單化（新增按鈕入口與摘要→二次確認、清單改按鈕標記完成/取消） | Claude |
 | 2026-08-16 | `57619bb` | 文件治理：AGENTS.md／AGENTS-TEMPLATE.md 新增「Commit → 推版 → 部署後續」Workflow | Claude |
