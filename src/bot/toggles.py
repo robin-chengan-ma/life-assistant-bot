@@ -3,9 +3,8 @@
 負責：補齊新使用者的預設開關資料、查詢/切換開關狀態、組出給使用者看的文字清單。
 不處理任何 Telegram 對話流程（那是 src/bot/commands.py 的責任），保持這個模組是純粹的資料操作。
 """
-from submodules.cloudsql.client import CloudSQLClient
-
 from src.bot import templates
+from submodules.cloudsql.client import CloudSQLClient
 
 # feature_toggles.feature_key 的 CHECK 限制只有這 8 個模組，不含「客訴回饋」
 # （客訴是固定入口，不是可關閉的功能，見 docs/specs/feature-toggles/SPEC.md FR-3）。

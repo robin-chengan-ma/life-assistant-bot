@@ -231,7 +231,14 @@ RED（寫失敗的測試）
 1. 開發時全程嚴格遵守本檔（AGENTS.md）與 `.claude/` 規則；非 trivial 任務一律先跑
    Workflow: SDD，維持 SPEC.md／DRAFT.md／PROGRESS.md／ADR（discuss／debug）／reference
    同步更新的習慣，不需使用者重複提醒。
-2. 測試通過後，摘要本次異動（檔案清單、邏輯重點、測試結果），提供 `git add` + `git commit`
+2. 測試通過後、提交前，先跑一次靜態檢查：`ruff check .`（涵蓋不到完整依賴鏈、跑不了 `pytest`
+   的情況下，至少對本次異動到的檔案跑）。`ast.parse` 只驗證語法樹合法，抓不到「呼叫到根本
+   沒定義的名稱／函式」這類語法合法、但一執行就 `NameError` 的手誤；`ruff check .` 預設規則
+   即包含 pyflakes 的 undefined-name（F821）等檢查，能在沒辦法跑完整測試時當最後一道防線
+   （見 `docs/ADR/debug/robinson.md` 2026-08-16「飲食補記日期解析 NameError」：`ast.parse`
+   語法驗證與 1805 項 `pytest` 都沒抓到，一路漏到實機驗收才發現，事後用 `ruff check .`／
+   `pyflakes` 掃過 `src/bot/`／`src/services/` 全部檔案確認沒有其他同類問題）。有警告先修，
+   確認乾淨後才摘要本次異動（檔案清單、邏輯重點、測試結果），提供 `git add` + `git commit`
    指令給使用者執行（commit message 依「Commit Message」既有格式），不自行執行 `git push`。
 3. 使用者回報 commit 版號後，立即同步 PROGRESS.md：
    - 「Commit 紀錄」表新增一列（日期、短版 hash、異動摘要、開發者）。

@@ -15,7 +15,8 @@ Nominatim，不在文字輸入當下自動觸發；全部層級失敗仍可保�
 
 from __future__ import annotations
 
-from datetime import date as _date, datetime
+from datetime import date as _date
+from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 

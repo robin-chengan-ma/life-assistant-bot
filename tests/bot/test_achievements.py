@@ -188,6 +188,6 @@ def test_delete_requires_ownership():
         {"id": 1, "user_id": 10, "title": "別人的成果", "deleted_at": None},
     ]
 
-    text, keyboard = achievements.handle_delete(db, USER_ID, 1)
+    text, _keyboard = achievements.handle_delete(db, USER_ID, 1)
 
     assert "找不到" in text

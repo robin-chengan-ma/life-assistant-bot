@@ -1,0 +1,5 @@
+[lint.isort]
+# 明確指定專案內部套件（src／submodules）為 first-party，避免不同機器／不同 venv 下
+# ruff 對「什麼算 local 套件」判斷不一致，導致同一份程式碼在不同環境跑出不同的 I001
+# 排序建議（2026-08-17 發現：Robin 本機與 sandbox 版本相同，但排序建議不一致）。
+known-first-party = ["src", "submodules"]

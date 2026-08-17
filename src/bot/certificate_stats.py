@@ -77,10 +77,14 @@ def format_daily_period_summary(exam_type: str, start_date: date, end_date: date
     lines = [
         f"📊 「{exam_type}」{period_text} 成效",
         "",
-        f"這段期間總共測驗 {stats['total_answered']} 題，答對 {stats['total_correct']} 題，"
-        f"有作答的 {stats['active_days']} 天平均每天答對 {stats['avg_correct_per_active_day']:.1f} 題。",
-        f"你最常出錯的地方是{_label_question_type(stats['most_wrong_type'])}，"
-        f"最常答對的地方是{_label_question_type(stats['most_correct_type'])}。",
+        (
+            f"這段期間總共測驗 {stats['total_answered']} 題，答對 {stats['total_correct']} 題，"
+            f"有作答的 {stats['active_days']} 天平均每天答對 {stats['avg_correct_per_active_day']:.1f} 題。"
+        ),
+        (
+            f"你最常出錯的地方是{_label_question_type(stats['most_wrong_type'])}，"
+            f"最常答對的地方是{_label_question_type(stats['most_correct_type'])}。"
+        ),
     ]
     if stats["inactive_dates"]:
         dates_text = "、".join(f"{d.month}/{d.day}" for d in stats["inactive_dates"])

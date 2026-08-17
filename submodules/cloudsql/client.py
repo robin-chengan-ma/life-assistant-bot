@@ -14,8 +14,9 @@ update / delete）維持穩定；未來若要換成其他 PostgreSQL 相容服�
 - update() / delete() 都強制要求 where，禁止無條件更新或刪除整張表。
 """
 import os
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
-from typing import Any, Iterable, Iterator
+from typing import Any
 
 from psycopg2 import pool as pg_pool
 from psycopg2.extensions import connection as PgConnection
@@ -63,13 +64,12 @@ class CloudSQLClient:
         if where:
             query += f" WHERE {where}"
 
-        with self._get_connection() as conn:
-            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-                cursor.execute(query, params or ())
-                if fetch_one:
-                    row = cursor.fetchone()
-                    return dict(row) if row else None
-                return [dict(row) for row in cursor.fetchall()]
+        with self._get_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute(query, params or ())
+            if fetch_one:
+                row = cursor.fetchone()
+                return dict(row) if row else None
+            return [dict(row) for row in cursor.fetchall()]
 
     def insert(self, table: str, data: dict[str, Any], returning: str = "id") -> Any:
         """新增一筆資料，回傳 returning 欄位的值（預設回傳主鍵 id）。"""
@@ -82,25 +82,23 @@ class CloudSQLClient:
             f"RETURNING {returning}"
         )
 
-        with self._get_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(query, values)
-                result = cursor.fetchone()
-                return result[0] if result else None
+        with self._get_connection() as conn, conn.cursor() as cursor:
+            cursor.execute(query, values)
+            result = cursor.fetchone()
+            return result[0] if result else None
 
     def update(self, table: str, data: dict[str, Any], where: str, params: tuple) -> int:
         """更新資料，回傳受影響的資料筆數；where 必填，避免整張表被誤改。"""
         if not where:
             raise ValueError("update() 必須提供 where 條件，禁止無條件更新整張表")
 
-        set_clause = ", ".join([f"{column} = %s" for column in data.keys()])
+        set_clause = ", ".join([f"{column} = %s" for column in data])
         query = f"UPDATE {table} SET {set_clause} WHERE {where}"
         values = list(data.values()) + list(params)
 
-        with self._get_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(query, values)
-                return cursor.rowcount
+        with self._get_connection() as conn, conn.cursor() as cursor:
+            cursor.execute(query, values)
+            return cursor.rowcount
 
     def delete(self, table: str, where: str, params: tuple) -> int:
         """刪除資料，回傳受影響的資料筆數；where 必填，避免整張表被清空。"""
@@ -109,10 +107,9 @@ class CloudSQLClient:
 
         query = f"DELETE FROM {table} WHERE {where}"
 
-        with self._get_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(query, params)
-                return cursor.rowcount
+        with self._get_connection() as conn, conn.cursor() as cursor:
+            cursor.execute(query, params)
+            return cursor.rowcount
 
     def execute(self, query: str, params: tuple | None = None) -> None:
         """執行任意 SQL 語句（不回傳資料列），主要供 DDL 使用（CREATE TABLE / ALTER TABLE 等）。
@@ -134,12 +131,11 @@ class CloudSQLClient:
         `cursor.execute()` 時，psycopg2 完全不解析 `%`，query 會被當成純字串原封不動送出，
         這才是「執行任意信任字串常數」該有的行為。
         """
-        with self._get_connection() as conn:
-            with conn.cursor() as cursor:
-                if params is None:
-                    cursor.execute(query)
-                else:
-                    cursor.execute(query, params)
+        with self._get_connection() as conn, conn.cursor() as cursor:
+            if params is None:
+                cursor.execute(query)
+            else:
+                cursor.execute(query, params)
 
     def execute_query(self, query: str, params: tuple | None = None) -> list[dict[str, Any]]:
         """執行任意「會回傳資料列」的 SQL 語句（SELECT 類），回傳結果列。
@@ -155,10 +151,9 @@ class CloudSQLClient:
         **2026-08-08**：`params` 為 `None` 時同樣不帶第二個參數呼叫 `cursor.execute()`，理由
         同 `execute()` 的說明——避免字面 `%` 字元被誤判成參數佔位符。
         """
-        with self._get_connection() as conn:
-            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-                if params is None:
-                    cursor.execute(query)
-                else:
-                    cursor.execute(query, params)
-                return [dict(row) for row in cursor.fetchall()]
+        with self._get_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            if params is None:
+                cursor.execute(query)
+            else:
+                cursor.execute(query, params)
+            return [dict(row) for row in cursor.fetchall()]

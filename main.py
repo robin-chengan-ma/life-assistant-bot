@@ -7,8 +7,8 @@ from flask import Flask, jsonify
 from src.api.app_analytics import app_analytics_bp
 from src.api.app_auth import app_bp
 from src.api.app_collections import app_collections_bp
-from src.api.app_life_exploration import app_life_exploration_bp
 from src.api.app_important_days import app_important_days_bp
+from src.api.app_life_exploration import app_life_exploration_bp
 from src.bot import monitoring
 from src.bot.webhook import bot_bp
 
@@ -69,10 +69,9 @@ def _check_todo_pushes() -> None:
     if not (os.environ.get("DATABASE_URL") and os.environ.get("TELEGRAM_BOT_TOKEN")):
         return
 
+    from src.bot import todo
     from submodules.cloudsql.client import CloudSQLClient
     from submodules.telegram.client import TelegramClient
-
-    from src.bot import todo
 
     db = CloudSQLClient()
     try:
@@ -97,10 +96,9 @@ def _check_finance_alerts() -> None:
     if not (os.environ.get("DATABASE_URL") and os.environ.get("TELEGRAM_BOT_TOKEN")):
         return
 
+    from src.bot import finance
     from submodules.cloudsql.client import CloudSQLClient
     from submodules.telegram.client import TelegramClient
-
-    from src.bot import finance
 
     db = CloudSQLClient()
     try:
@@ -122,10 +120,9 @@ def _check_finance_reminders() -> None:
     if not (os.environ.get("DATABASE_URL") and os.environ.get("TELEGRAM_BOT_TOKEN")):
         return
 
+    from src.bot import finance
     from submodules.cloudsql.client import CloudSQLClient
     from submodules.telegram.client import TelegramClient
-
-    from src.bot import finance
 
     db = CloudSQLClient()
     try:
@@ -147,10 +144,9 @@ def _check_finance_monthly_report() -> None:
     if not (os.environ.get("DATABASE_URL") and os.environ.get("TELEGRAM_BOT_TOKEN")):
         return
 
+    from src.bot import finance
     from submodules.cloudsql.client import CloudSQLClient
     from submodules.telegram.client import TelegramClient
-
-    from src.bot import finance
 
     db = CloudSQLClient()
     try:
@@ -173,10 +169,9 @@ def _check_body_goal_alerts() -> None:
     if not (os.environ.get("DATABASE_URL") and os.environ.get("TELEGRAM_BOT_TOKEN")):
         return
 
+    from src.bot import body
     from submodules.cloudsql.client import CloudSQLClient
     from submodules.telegram.client import TelegramClient
-
-    from src.bot import body
 
     db = CloudSQLClient()
     try:
@@ -228,10 +223,9 @@ def _check_important_notifications() -> None:
     if not (os.environ.get("DATABASE_URL") and os.environ.get("TELEGRAM_BOT_TOKEN")):
         return
 
+    from src.bot import notifications
     from submodules.cloudsql.client import CloudSQLClient
     from submodules.telegram.client import TelegramClient
-
-    from src.bot import notifications
 
     db = CloudSQLClient()
     try:
@@ -587,5 +581,5 @@ def health_check():
 _run_startup_migrations()
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
+    port = int(os.environ.get("PORT", "8080"))
     app.run(host="0.0.0.0", port=port)

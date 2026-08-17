@@ -2,7 +2,10 @@ import pytest
 from flask import Flask
 
 from src.services.app_auth import AuthenticatedUser
-from src.services.app_collections import CollectionNotFoundError, CollectionValidationError
+from src.services.app_collections import (
+    CollectionNotFoundError,
+    CollectionValidationError,
+)
 
 
 class FakeDatabase:

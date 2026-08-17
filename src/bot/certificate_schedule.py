@@ -26,7 +26,6 @@ from datetime import date, timedelta
 from src.bot import certificate_quiz
 from submodules.cloudsql.client import CloudSQLClient
 
-
 # --- 「今天已生成批次」的清理 ---
 
 

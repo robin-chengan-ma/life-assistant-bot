@@ -82,7 +82,7 @@ def _normalize_url(raw_url: str) -> str:
     `link.job` 其實本來就是完整網址，這裡繼續保留只是當一層防呆，避免哪天格式又變回相對路徑。"""
     if not raw_url:
         return ""
-    if raw_url.startswith("http://") or raw_url.startswith("https://"):
+    if raw_url.startswith(("http://", "https://")):
         return raw_url
     return _BASE_URL + (raw_url if raw_url.startswith("/") else f"/{raw_url}")
 

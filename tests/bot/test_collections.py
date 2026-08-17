@@ -188,7 +188,7 @@ def test_delete_requires_ownership():
     ]
     store = ConversationStateStore()
 
-    text, keyboard = collections.start_delete_confirm(db, store, TELEGRAM_USER_ID, USER_ID, 1)
+    text, _keyboard = collections.start_delete_confirm(db, store, TELEGRAM_USER_ID, USER_ID, 1)
 
     assert "找不到" in text
     assert store.get(TELEGRAM_USER_ID) is None
@@ -215,7 +215,7 @@ def test_delete_confirm_state_ignores_typed_text_and_cancels():
     store = ConversationStateStore()
     store.set(TELEGRAM_USER_ID, {"flow": "collection_delete_confirm", "target_id": 1})
 
-    text, keyboard = collections.handle_delete_confirm_text(store, TELEGRAM_USER_ID)
+    text, _keyboard = collections.handle_delete_confirm_text(store, TELEGRAM_USER_ID)
 
     assert "請用上面的按鈕" in text
     assert store.get(TELEGRAM_USER_ID) is None
@@ -259,11 +259,11 @@ def test_visit_flow_creates_exploration_event_and_marks_status():
     ]
     store = ConversationStateStore()
 
-    text, keyboard = collections.start_visit(db, store, TELEGRAM_USER_ID, USER_ID, 1)
+    text, _keyboard = collections.start_visit(db, store, TELEGRAM_USER_ID, USER_ID, 1)
     assert "阿里山" in text
     assert store.get(TELEGRAM_USER_ID)["flow"] == "collection_visit"
 
-    text, keyboard = collections.handle_visit_step(db, store, TELEGRAM_USER_ID, USER_ID, "2026-08-10")
+    text, _keyboard = collections.handle_visit_step(db, store, TELEGRAM_USER_ID, USER_ID, "2026-08-10")
     assert "備註" in text
 
     reply, _ = collections.handle_visit_step(db, store, TELEGRAM_USER_ID, USER_ID, "略過")
@@ -303,7 +303,7 @@ def test_visit_already_visited_item_rejected():
     ]
     store = ConversationStateStore()
 
-    text, keyboard = collections.start_visit(db, store, TELEGRAM_USER_ID, USER_ID, 1)
+    text, _keyboard = collections.start_visit(db, store, TELEGRAM_USER_ID, USER_ID, 1)
 
     assert "已經標記過造訪" in text
     assert store.get(TELEGRAM_USER_ID) is None

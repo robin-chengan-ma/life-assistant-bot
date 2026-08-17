@@ -72,7 +72,7 @@ def test_send_text_sends_correct_envelope_and_body(monkeypatch):
 
 
 def test_send_text_propagates_smtp_exception(monkeypatch):
-    mock_smtp_ssl_cls, mock_server = _patch_smtp_ssl(monkeypatch)
+    _mock_smtp_ssl_cls, mock_server = _patch_smtp_ssl(monkeypatch)
     mock_server.login.side_effect = RuntimeError("535 Authentication failed")
 
     client = EmailClient(username="you@gmail.com", password="wrong-password")

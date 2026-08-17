@@ -3,7 +3,6 @@ from datetime import date
 
 from src.bot import certificate_goals
 
-
 # --- get_goal / set_goal ---
 
 

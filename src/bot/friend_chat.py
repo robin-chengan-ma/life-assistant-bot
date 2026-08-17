@@ -28,11 +28,10 @@ FR-51（心情趨勢改文字/emoji 摘要，不做圖表，見 ADR-22 決策 1�
 from datetime import date, timedelta
 from zoneinfo import ZoneInfo
 
-from submodules.cloudsql.client import CloudSQLClient
-
 from src.bot import certificate_stats, finance, mood, toggles
 from src.bot import todo as todo_module
 from src.bot.body import list_diet_logs, list_exercise_logs, list_weight_logs
+from submodules.cloudsql.client import CloudSQLClient
 
 _TAIWAN_TZ = ZoneInfo("Asia/Taipei")
 

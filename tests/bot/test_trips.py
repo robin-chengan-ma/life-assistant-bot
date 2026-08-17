@@ -167,7 +167,7 @@ def test_no_matching_collections_aborts_flow():
 
     _run_step(db, store, "沒有收藏的行程")
     _run_step(db, store, "日本")
-    text, keyboard = _run_step(db, store, "東京")
+    text, _keyboard = _run_step(db, store, "東京")
 
     assert "沒有任何收藏項目" in text
     assert store.get(TELEGRAM_USER_ID) is None
@@ -178,7 +178,7 @@ def test_exit_phrase_clears_state():
     store = ConversationStateStore()
     trips.start_add(store, TELEGRAM_USER_ID)
 
-    text, keyboard = _run_step(db, store, "沒有了")
+    text, _keyboard = _run_step(db, store, "沒有了")
 
     assert "已結束旅遊行程設定" in text
     assert store.get(TELEGRAM_USER_ID) is None
@@ -187,7 +187,7 @@ def test_exit_phrase_clears_state():
 def test_handle_list_empty_suggests_collections():
     db = FakeDatabase()
 
-    text, keyboard = trips.handle_list(db, USER_ID)
+    text, _keyboard = trips.handle_list(db, USER_ID)
 
     assert "還沒有任何旅遊行程" in text
 
@@ -204,7 +204,7 @@ def test_handle_set_status_confirms_trip():
         },
     ]
 
-    text, keyboard = trips.handle_set_status(db, USER_ID, 1, "confirmed")
+    text, _keyboard = trips.handle_set_status(db, USER_ID, 1, "confirmed")
 
     assert "已確認" in text
     assert db.tables["trips"][0]["status"] == "confirmed"
@@ -230,7 +230,7 @@ def test_delete_confirm_state_ignores_typed_text_and_cancels():
     store = ConversationStateStore()
     store.set(TELEGRAM_USER_ID, {"flow": "trip_delete_confirm", "target_id": 1})
 
-    text, keyboard = trips.handle_delete_confirm_text(store, TELEGRAM_USER_ID)
+    text, _keyboard = trips.handle_delete_confirm_text(store, TELEGRAM_USER_ID)
 
     assert "請用上面的按鈕" in text
     assert store.get(TELEGRAM_USER_ID) is None
@@ -240,7 +240,7 @@ def test_complete_select_state_ignores_typed_text_and_cancels():
     store = ConversationStateStore()
     store.set(TELEGRAM_USER_ID, {"flow": "trip_complete_select", "data": {"trip_id": 1, "_candidates": [], "_selected_ids": []}})
 
-    text, keyboard = trips.handle_complete_select_text(store, TELEGRAM_USER_ID)
+    text, _keyboard = trips.handle_complete_select_text(store, TELEGRAM_USER_ID)
 
     assert "請用上面的按鈕" in text
     assert store.get(TELEGRAM_USER_ID) is None

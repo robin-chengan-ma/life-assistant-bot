@@ -93,7 +93,7 @@ def dashboard():
     try:
         db = CloudSQLClient()
         return jsonify(_build_analytics(db).dashboard(g.app_user)), 200
-    except Exception:  # noqa: BLE001 - HTTP 邊界不得洩漏資料庫或程式細節
+    except Exception:
         _logger.exception("載入 Mobile App 首頁資料失敗")
         return _unexpected_error()
     finally:
@@ -148,7 +148,7 @@ def analytics(module_key: str):
         return jsonify({"message": str(exc)}), 409
     except ForbiddenModuleError as exc:
         return jsonify({"message": str(exc)}), 403
-    except Exception:  # noqa: BLE001 - HTTP 邊界不得洩漏資料庫或程式細節
+    except Exception:
         _logger.exception("載入 Mobile App %s 分析失敗", module_key)
         return _unexpected_error()
     finally:

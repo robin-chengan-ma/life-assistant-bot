@@ -11,7 +11,8 @@
 from __future__ import annotations
 
 import re
-from datetime import date, datetime, time as time_cls
+from datetime import date, datetime
+from datetime import time as time_cls
 from typing import Any
 
 from src.bot import menu
@@ -190,7 +191,10 @@ def _parse_full_date(text: str, label: str) -> date:
 
 def _parse_hhmm(text: str) -> time_cls:
     try:
-        return datetime.strptime(text.strip(), "%H:%M").time()
+        # ruff（DTZ007）誤判：這裡只是借用 strptime 解析「HH:MM」格式，最後只取 .time()
+        # 丟棄日期部分，回傳的是不含時區概念的單純鐘面時刻（例如「每天 19:30 提醒」），
+        # 不是某個時區下的具體時間點，加時區資訊沒有意義。
+        return datetime.strptime(text.strip(), "%H:%M").time()  # noqa: DTZ007
     except ValueError as exc:
         raise ImportantDayValidationError("時間格式不正確，請用「HH:MM」，例如 19:30") from exc
 

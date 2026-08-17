@@ -341,7 +341,7 @@ def handle_step(
             state["_budget_index"] = index
             state["data"] = data
             state_store.set(telegram_user_id, state)
-            next_field, next_label = _BUDGET_STEPS[index]
+            _next_field, next_label = _BUDGET_STEPS[index]
             return f"請輸入預估支出－{next_label}（新台幣，選填，沒有的話請輸入「略過」）：", None
         state["step"] = "awaiting_notes"
         state["data"] = data

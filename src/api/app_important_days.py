@@ -38,7 +38,7 @@ def list_important_days():
         db = CloudSQLClient()
         service = _service(db)
         return jsonify({"items": service.list_for_user(g.app_user.database_id), "users": service.family_users()}), 200
-    except Exception:  # noqa: BLE001
+    except Exception:
         _logger.exception("載入 Mobile App 重要日子失敗")
         return jsonify({"message": "重要日子目前無法載入，請稍後再試"}), 503
     finally:

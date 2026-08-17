@@ -6,7 +6,6 @@ from PIL import Image
 from src.bot import commands, menu, router, templates, voice
 from src.bot.state import ConversationStateStore
 
-
 ROBIN_ID = 8263904025
 FAMILY_ID = 555
 FAMILY_ID_2 = 556
@@ -1001,7 +1000,7 @@ def test_mood_list_update_and_delete_full_flow(fake_db, monkeypatch):
     )
     store = ConversationStateStore()
 
-    reply1, keyboard1 = router.handle_callback_query(fake_db, store, FAMILY_ID, "mood:list")
+    _reply1, keyboard1 = router.handle_callback_query(fake_db, store, FAMILY_ID, "mood:list")
     callback_datas = [button["callback_data"] for row in keyboard1["inline_keyboard"] for button in row]
     assert f"mood:edit:{journal_id}" in callback_datas
     assert f"mood:delete:{journal_id}" in callback_datas
@@ -1069,7 +1068,7 @@ def test_exercise_new_flow_records_entry_with_confirm_gate(fake_db, monkeypatch)
     assert reply0 == "運動，請選擇要進行的操作："
     assert keyboard0["inline_keyboard"][0][0]["callback_data"] == "exercise:new"
 
-    reply1, keyboard1 = router.handle_callback_query(fake_db, store, FAMILY_ID, "exercise:new")
+    _reply1, keyboard1 = router.handle_callback_query(fake_db, store, FAMILY_ID, "exercise:new")
     assert keyboard1 is None
     assert store.get(FAMILY_ID)["flow"] == "pending_exercise_activity"
 
@@ -1081,7 +1080,7 @@ def test_exercise_new_flow_records_entry_with_confirm_gate(fake_db, monkeypatch)
     assert "心率" in reply3
     assert store.get(FAMILY_ID)["flow"] == "pending_exercise_heart_rate"
 
-    reply4, keyboard4 = router.handle_message(fake_db, store, FAMILY_ID, "沒有")
+    _reply4, keyboard4 = router.handle_message(fake_db, store, FAMILY_ID, "沒有")
     assert keyboard4["inline_keyboard"][0][0]["callback_data"] == "exercise:confirm_save"
     assert store.get(FAMILY_ID)["flow"] == "pending_exercise_confirm"
 
@@ -1130,7 +1129,7 @@ def test_exercise_list_edit_and_delete_full_flow(fake_db, monkeypatch):
     )
     store = ConversationStateStore()
 
-    reply1, keyboard1 = router.handle_callback_query(fake_db, store, FAMILY_ID, "exercise:list")
+    _reply1, keyboard1 = router.handle_callback_query(fake_db, store, FAMILY_ID, "exercise:list")
     callback_datas = [button["callback_data"] for row in keyboard1["inline_keyboard"] for button in row]
     assert f"exercise:edit:{exercise_log_id}" in callback_datas
     assert f"exercise:delete:{exercise_log_id}" in callback_datas
@@ -1840,7 +1839,7 @@ def test_handle_voice_message_masks_pii_in_transcribed_text_before_logging(fake_
     voice_client = _FakeVoiceClient(response_text="我的手機是 0912345678")
     llm_client = _FakeLLMClient(response_text="收到！")
 
-    reply, keyboard = router.handle_voice_message(
+    _reply, keyboard = router.handle_voice_message(
         fake_db, store, FAMILY_ID, "voice123", 30,
         telegram_client, _FakeGDriveClient(), voice_client, llm_client=llm_client,
     )
@@ -1997,7 +1996,7 @@ def _seed_certificate_question_for_router(fake_db, **overrides):
 
 def _seed_certificate_assignment_for_router(fake_db, user_id, **overrides):
     row = {
-        "user_id": user_id, "exam_type": "ielts", "assigned_date": date.today(),
+        "user_id": user_id, "exam_type": "ielts", "assigned_date": commands._now().date(),
         "certificate_question_id": None, "vocab_question_id": None, "is_review": False,
     }
     row.update(overrides)
@@ -2074,7 +2073,7 @@ def test_adjust_quiz_schedule_spread_confirm_dispatches_through_router(fake_db, 
     store = ConversationStateStore()
     router.handle_message(fake_db, store, ROBIN_ID, "調整出題排程")
     spread_llm_client = _FakeLLMClient(response_text="INTENT: SPREAD")
-    proposal_reply = router.handle_message(fake_db, store, ROBIN_ID, "平攤到最近幾天", llm_client=spread_llm_client)
+    router.handle_message(fake_db, store, ROBIN_ID, "平攤到最近幾天", llm_client=spread_llm_client)
     assert store.get(ROBIN_ID)["flow"] == "pending_quiz_schedule_spread_confirm"
 
     confirm_llm_client = _FakeLLMClient(response_text="STATUS: CONFIRM")
@@ -2105,7 +2104,7 @@ def test_log_exam_score_trigger_and_flow_dispatches_through_router(fake_db, monk
     assert "應考" in ask_date
 
     llm_client = _FakeLLMClient(response_text="STATUS: CLEAR\nDATE: 2026-08-01")
-    ask_score = router.handle_message(fake_db, store, ROBIN_ID, "8/1", llm_client=llm_client)
+    router.handle_message(fake_db, store, ROBIN_ID, "8/1", llm_client=llm_client)
     assert store.get(ROBIN_ID)["flow"] == "pending_exam_score_value"
 
     confirm_reply = router.handle_message(fake_db, store, ROBIN_ID, "850 分")
@@ -2136,7 +2135,7 @@ def test_set_certificate_goal_trigger_and_flow_dispatches_through_router(fake_db
     fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
     store = ConversationStateStore()
 
-    ask_exam_type = router.handle_message(fake_db, store, ROBIN_ID, "設定證照目標")
+    router.handle_message(fake_db, store, ROBIN_ID, "設定證照目標")
     assert store.get(ROBIN_ID)["flow"] == "pending_certificate_goal_exam_type"
 
     ask_target_date = router.handle_message(fake_db, store, ROBIN_ID, "toeic")
@@ -2175,7 +2174,7 @@ def test_certificate_advice_trigger_single_candidate_dispatches_through_router(f
         {
             "user_id": owner_row, "certificate_question_id": 1, "vocab_question_id": None,
             "exam_type": "toeic", "question_type": "write", "is_correct": True,
-            "answered_on": date.today(), "assignment_id": None,
+            "answered_on": commands._now().date(), "assignment_id": None,
         },
     )
     store = ConversationStateStore()
@@ -2274,7 +2273,7 @@ def test_friend_chat_trigger_dispatches_through_router_for_owner(fake_db, monkey
     owner_row = fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
     fake_db.insert(
         "mood_journals",
-        {"user_id": owner_row, "mood_category": "happy_excited", "content": "今天不錯", "entry_date": date.today()},
+        {"user_id": owner_row, "mood_category": "happy_excited", "content": "今天不錯", "entry_date": commands._now().date()},
     )
     store = ConversationStateStore()
     llm_client = _FakeLLMClient(response_text="主任最近心情看起來不錯耶，繼續保持喔！")
@@ -2599,7 +2598,7 @@ def test_important_days_add_flow_creates_row_for_general_user(fake_db, monkeypat
 
 def test_important_days_delete_confirm_only_owner_can_target_own_event(fake_db, monkeypatch):
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
-    owner_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     other_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID_2, "role": "媽媽", "is_owner": False})
     fake_db.insert("important_days", {
         "owner_user_id": other_id, "title": "別人的事件", "recurrence_type": "one_time",
@@ -2609,7 +2608,7 @@ def test_important_days_delete_confirm_only_owner_can_target_own_event(fake_db, 
     important_day_id = fake_db.select("important_days", where=None, params=None)[0]["id"]
     store = ConversationStateStore()
 
-    reply, keyboard = router.handle_callback_query(
+    reply, _keyboard = router.handle_callback_query(
         fake_db, store, FAMILY_ID, f"important_days:delete:{important_day_id}"
     )
 

@@ -86,10 +86,9 @@ privacy-masking SPEC.md FR-7），因為那支指令本來就需要讓使用者�
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from submodules.cloudsql.client import CloudSQLClient
-
 from src.bot import auth, knowledge, memory, privacy, templates
 from src.bot.state import ConversationStateStore
+from submodules.cloudsql.client import CloudSQLClient
 
 # 2026-08-02（privacy-masking SPEC.md FR-4）：偵測到疑似個資時附加在回覆最後的固定提醒文案。
 _PII_DETECTED_REMINDER = (

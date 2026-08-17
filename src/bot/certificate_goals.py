@@ -120,8 +120,10 @@ def _format_stats_text(stats: dict | None) -> str:
 
     accuracy = stats["total_correct"] / stats["total_answered"] * 100
     lines = [
-        f"最近測驗 {stats['total_answered']} 題，答對 {stats['total_correct']} 題（正確率約 {accuracy:.0f}%），"
-        f"有作答的 {stats['active_days']} 天平均每天答對 {stats['avg_correct_per_active_day']:.1f} 題。"
+        (
+            f"最近測驗 {stats['total_answered']} 題，答對 {stats['total_correct']} 題（正確率約 {accuracy:.0f}%），"
+            f"有作答的 {stats['active_days']} 天平均每天答對 {stats['avg_correct_per_active_day']:.1f} 題。"
+        )
     ]
     if stats["most_wrong_type"]:
         lines.append(f"最常出錯的題型是「{stats['most_wrong_type']}」。")

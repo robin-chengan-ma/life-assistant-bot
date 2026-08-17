@@ -6,8 +6,9 @@ import os
 import re
 import threading
 import time
+from collections.abc import Callable
 from decimal import Decimal, InvalidOperation
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
 
 import requests
 
@@ -92,11 +93,11 @@ class NominatimGeocoder:
         country_name = _text(payload.get("country_name"), "國家", 100)
         attempts: list[tuple[str, str]] = []
         if address:
-            attempts.append((", ".join((address, city_name, country_name)), "exact"))
+            attempts.append((f"{address}, {city_name}, {country_name}", "exact"))
             road = _road_fallback(address, city_name, country_name)
             if road:
-                attempts.append((", ".join((road, city_name, country_name)), "road"))
-        attempts.append((", ".join((city_name, country_name)), "city"))
+                attempts.append((f"{road}, {city_name}, {country_name}", "road"))
+        attempts.append((f"{city_name}, {country_name}", "city"))
 
         seen: set[str] = set()
         for query_text, precision in attempts:
@@ -140,9 +141,9 @@ class NominatimGeocoder:
             longitude = Decimal(str(result["lon"]))
         except (KeyError, InvalidOperation, ValueError) as exc:
             raise GeocodingUnavailableError("地址定位服務回傳座標不正確") from exc
-        if not latitude.is_finite() or not Decimal("-90") <= latitude <= Decimal("90"):
+        if not latitude.is_finite() or not Decimal(-90) <= latitude <= Decimal(90):
             raise GeocodingUnavailableError("地址定位服務回傳座標不正確")
-        if not longitude.is_finite() or not Decimal("-180") <= longitude <= Decimal("180"):
+        if not longitude.is_finite() or not Decimal(-180) <= longitude <= Decimal(180):
             raise GeocodingUnavailableError("地址定位服務回傳座標不正確")
         return {
             "query_key": query_key,

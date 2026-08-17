@@ -9,7 +9,12 @@ from flask import Blueprint, jsonify, request
 from google.genai import errors as genai_errors
 
 from src.bot import system_errors
-from src.bot.router import handle_callback_query, handle_message, handle_photo_message, handle_voice_message
+from src.bot.router import (
+    handle_callback_query,
+    handle_message,
+    handle_photo_message,
+    handle_voice_message,
+)
 from src.bot.state import ConversationStateStore
 from submodules.calendar.client import CalendarClient
 from submodules.cloudsql.client import CloudSQLClient

@@ -227,7 +227,7 @@ def test_delete_requires_ownership():
     ]
     store = ConversationStateStore()
 
-    text, keyboard = important_days.start_delete_confirm(db, store, TELEGRAM_USER_ID, USER_ID, 1)
+    text, _keyboard = important_days.start_delete_confirm(db, store, TELEGRAM_USER_ID, USER_ID, 1)
 
     assert "找不到" in text
     assert store.get(TELEGRAM_USER_ID) is None
@@ -240,7 +240,7 @@ def test_delete_confirm_then_execute_removes_row():
     ]
     store = ConversationStateStore()
 
-    text, keyboard = important_days.start_delete_confirm(db, store, TELEGRAM_USER_ID, USER_ID, 1)
+    text, _keyboard = important_days.start_delete_confirm(db, store, TELEGRAM_USER_ID, USER_ID, 1)
     assert "確定要刪除" in text
     assert store.get(TELEGRAM_USER_ID)["flow"] == "important_days_delete_confirm"
 
@@ -255,7 +255,7 @@ def test_delete_confirm_state_ignores_typed_text_and_cancels():
     store = ConversationStateStore()
     store.set(TELEGRAM_USER_ID, {"flow": "important_days_delete_confirm", "target_id": 1})
 
-    text, keyboard = important_days.handle_delete_confirm_text(store, TELEGRAM_USER_ID)
+    text, _keyboard = important_days.handle_delete_confirm_text(store, TELEGRAM_USER_ID)
 
     assert "請用上面的按鈕" in text
     assert store.get(TELEGRAM_USER_ID) is None
@@ -297,7 +297,7 @@ def test_reminder_days_out_of_range_rejected():
     _run_step(db, store, "1-1")
     _run_step(db, store, "是")
 
-    text, keyboard = _run_step(db, store, "400")
+    text, _keyboard = _run_step(db, store, "400")
 
     assert "0～365" in text
     assert store.get(TELEGRAM_USER_ID)["step"] == "awaiting_reminder_days"

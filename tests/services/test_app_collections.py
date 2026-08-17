@@ -74,7 +74,7 @@ def test_create_normalizes_collection_values_and_uses_fixed_defaults():
     assert row["user_id"] == 1
     assert row["currency_code"] == "TWD"
     assert row["status"] == "saved"
-    assert row["estimated_cost"] == Decimal("1200")
+    assert row["estimated_cost"] == Decimal(1200)
     assert "priority" not in row
     assert "desired_date" not in row
     assert "administrative_area" not in row

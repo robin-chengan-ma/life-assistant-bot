@@ -1,10 +1,24 @@
 """統一路由：依身分、對話狀態、文字內容，分派到對應處理函式。"""
 import re
 
-from submodules.cloudsql.client import CloudSQLClient
-
-from src.bot import achievements, auth, chat, collections, commands, image, important_days, job_search, menu, system_errors, templates, toggles, trips, voice
+from src.bot import (
+    achievements,
+    auth,
+    chat,
+    collections,
+    commands,
+    image,
+    important_days,
+    job_search,
+    menu,
+    system_errors,
+    templates,
+    toggles,
+    trips,
+    voice,
+)
 from src.bot.state import ConversationStateStore
+from submodules.cloudsql.client import CloudSQLClient
 
 _NOT_BOUND_REPLY = "請輸入通關密碼才能開始使用羅賓森喔！"
 _AWAITING_PASSCODE_REPLY = "請輸入通關密碼："

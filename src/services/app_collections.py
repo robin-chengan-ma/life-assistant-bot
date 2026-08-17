@@ -190,8 +190,8 @@ class AppCollectionService:
             raise CollectionValidationError("請輸入區域／城市")
         address = _optional_text(payload.get("address"), "地址", 500)
 
-        latitude = _optional_decimal(payload.get("latitude"), "緯度", Decimal("-90"), Decimal("90"))
-        longitude = _optional_decimal(payload.get("longitude"), "經度", Decimal("-180"), Decimal("180"))
+        latitude = _optional_decimal(payload.get("latitude"), "緯度", Decimal(-90), Decimal(90))
+        longitude = _optional_decimal(payload.get("longitude"), "經度", Decimal(-180), Decimal(180))
         if (latitude is None) != (longitude is None):
             raise CollectionValidationError("地圖座標必須同時包含緯度與經度")
 
@@ -210,7 +210,7 @@ class AppCollectionService:
             "longitude": longitude,
             "source_url": source_url,
             "estimated_cost": _optional_decimal(
-                payload.get("estimated_cost"), "預估費用", Decimal("0"), Decimal("9999999999.99")
+                payload.get("estimated_cost"), "預估費用", Decimal(0), Decimal("9999999999.99")
             ),
             "currency_code": "TWD",
             "notes": _optional_text(payload.get("notes"), "備註", 2000),

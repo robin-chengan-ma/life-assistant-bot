@@ -1,9 +1,13 @@
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 import pytest
 
-from src.services.app_life_exploration import AppLifeExplorationService, LifeValidationError
+from src.services.app_life_exploration import (
+    AppLifeExplorationService,
+    LifeValidationError,
+)
 
 
 class FakeDatabase:
@@ -58,7 +62,7 @@ def test_create_trip_links_collection_and_derives_total_budget():
     db = FakeDatabase()
     result = AppLifeExplorationService(db).create_trip(1, trip_payload())
     assert result["id"] == 10
-    assert db.tables["trips"][0]["budget_amount"] == Decimal("3000")
+    assert db.tables["trips"][0]["budget_amount"] == Decimal(3000)
     assert db.tables["trip_collection_items"][0]["collection_item_id"] == 2
     assert db.tables["collection_items"][0]["status"] == "added_to_trip"
 
@@ -101,7 +105,9 @@ def test_manual_achievement_requires_category_and_date():
     service = AppLifeExplorationService(FakeDatabase())
     with pytest.raises(LifeValidationError):
         service.create_achievement(1, {"category": "other", "title": "學會料理", "completed_on": "錯誤"})
-    result = service.create_achievement(1, {"category": "other", "title": "學會料理", "completed_on": date.today().isoformat()})
+    result = service.create_achievement(
+        1, {"category": "other", "title": "學會料理", "completed_on": datetime.now(ZoneInfo("Asia/Taipei")).date().isoformat()}
+    )
     assert result["message"] == "成果已建立"
 
 

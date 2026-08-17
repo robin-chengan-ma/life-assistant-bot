@@ -82,10 +82,10 @@ def _money(value: Any, label: str) -> Decimal | None:
     if isinstance(value, bool):
         raise LifeValidationError(f"{label}格式不正確")
     try:
-        parsed = Decimal(str(value)).quantize(Decimal("1"))
+        parsed = Decimal(str(value)).quantize(Decimal(1))
     except (InvalidOperation, ValueError) as exc:
         raise LifeValidationError(f"{label}格式不正確") from exc
-    if not parsed.is_finite() or parsed < 0 or parsed > Decimal("9999999999"):
+    if not parsed.is_finite() or parsed < 0 or parsed > Decimal(9999999999):
         raise LifeValidationError(f"{label}超出允許範圍")
     return parsed
 
@@ -541,7 +541,7 @@ class AppLifeExplorationService:
         for row in completed_trips:
             self._ensure_candidate(
                 user_id, f"trip:{row['id']}", "trip", f"完成旅遊行程：{row['title']}",
-                "已完成一趟旅遊行程", row.get("end_date") or date.today(), "trip", row["id"],
+                "已完成一趟旅遊行程", row.get("end_date") or datetime.now(_TAIWAN_TZ).date(), "trip", row["id"],
             )
         goals = self._db.execute_query(
             "SELECT id, target_description, updated_at::date AS completed_on FROM body_goals WHERE user_id = %s AND status = 'achieved'",
@@ -595,7 +595,7 @@ class AppLifeExplorationService:
                 if count >= threshold:
                     self._ensure_candidate(
                         user_id, f"{label}:{threshold}", category, f"{label} {threshold} 次",
-                        f"已達成 {label} {threshold} 次", date.today(), source_type, None,
+                        f"已達成 {label} {threshold} 次", datetime.now(_TAIWAN_TZ).date(), source_type, None,
                     )
 
     def _ensure_candidate(

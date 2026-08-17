@@ -88,7 +88,10 @@ def _parse_pub_date(pub_date_text: str | None) -> datetime | None:
         return parsed_dt
 
     try:
-        naive_dt = datetime.strptime(pub_date_text.strip(), _NAIVE_LOCAL_PUB_DATE_FORMAT)
+        # ruff（DTZ007）看不到下一行才 replace(tzinfo=...)，誤判成「裸用未帶時區的
+        # datetime」；這裡刻意先解析出無時區的 naive datetime，再於下一行明確補上
+        # _TAIWAN_TZ（見本函式 docstring），本來就是正確處理，不需要真的改寫。
+        naive_dt = datetime.strptime(pub_date_text.strip(), _NAIVE_LOCAL_PUB_DATE_FORMAT)  # noqa: DTZ007
     except ValueError:
         return None
     return naive_dt.replace(tzinfo=_TAIWAN_TZ)

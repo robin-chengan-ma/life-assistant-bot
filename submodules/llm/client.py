@@ -8,6 +8,7 @@ generate_with_image）維持穩定；未來若要換成其他供應商或新增�
 """
 import time
 from collections import deque
+from typing import ClassVar
 
 from google import genai
 from google.genai import errors as genai_errors
@@ -68,7 +69,7 @@ class LLMClient:
     （目前 `webhook.py` 就是這樣用），只要 `api_key` 相同，節流計數仍會正確地跨請求累積。
     """
 
-    _call_history_by_key: dict[str, "deque[float]"] = {}
+    _call_history_by_key: ClassVar[dict[str, "deque[float]"]] = {}
 
     def __init__(
         self,

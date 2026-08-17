@@ -1,6 +1,4 @@
 """src/bot/commands.py 的 start_friend_chat 單元測試（對應 robinson SPEC.md FR-51、FR-52，ADR-22）。"""
-from datetime import date
-
 from src.bot import commands, mood
 
 
@@ -16,7 +14,7 @@ class _FakeLLMClient:
 
 def test_start_friend_chat_uses_user_role_and_returns_llm_reply(fake_db):
     user_id = fake_db.insert("users", {"telegram_user_id": 1, "role": "媽媽", "is_owner": False})
-    mood.create_mood_journal(fake_db, user_id, "happy_excited", "今天很開心", date.today())
+    mood.create_mood_journal(fake_db, user_id, "happy_excited", "今天很開心", commands._now().date())
     llm_client = _FakeLLMClient(response_text="媽媽最近心情不錯耶！")
 
     reply = commands.start_friend_chat(fake_db, llm_client, user_id)

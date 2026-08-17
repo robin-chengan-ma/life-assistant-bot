@@ -118,7 +118,7 @@ def test_backfill_weight_full_flow(fake_db, monkeypatch):
     assert store.get(FAMILY_ID)["flow"] == "pending_weight_backfill_date"
 
     date_llm = _FakeLLMClient(response_text="STATUS: CLEAR\nDATE: 2026-08-01")
-    reply2 = router.handle_message(fake_db, store, FAMILY_ID, "8/1", llm_client=date_llm)
+    router.handle_message(fake_db, store, FAMILY_ID, "8/1", llm_client=date_llm)
     assert store.get(FAMILY_ID)["weight_date"] == date(2026, 8, 1)
 
     reply3 = router.handle_message(fake_db, store, FAMILY_ID, "80")
@@ -137,11 +137,11 @@ def test_my_weight_logs_full_flow_update(fake_db, monkeypatch):
     assert "80.0 公斤" in reply1
     assert store.get(FAMILY_ID)["flow"] == "pending_weight_list_action"
 
-    reply2 = router.handle_message(fake_db, store, FAMILY_ID, "1")
+    router.handle_message(fake_db, store, FAMILY_ID, "1")
     assert store.get(FAMILY_ID)["flow"] == "pending_weight_action_choice"
 
     update_llm = _FakeLLMClient(response_text="UPDATE")
-    reply3 = router.handle_message(fake_db, store, FAMILY_ID, "改一下", llm_client=update_llm)
+    router.handle_message(fake_db, store, FAMILY_ID, "改一下", llm_client=update_llm)
     assert store.get(FAMILY_ID) == {
         "flow": "pending_weight_value", "target_user_id": user_id, "weight_date": date(2026, 8, 1), "weight_id": log_id,
     }
@@ -167,10 +167,10 @@ def test_log_exercise_full_flow(fake_db, monkeypatch):
     router.handle_callback_query(fake_db, store, FAMILY_ID, "exercise:new")
     assert store.get(FAMILY_ID)["flow"] == "pending_exercise_activity"
 
-    reply2 = router.handle_message(fake_db, store, FAMILY_ID, "跑步")
+    router.handle_message(fake_db, store, FAMILY_ID, "跑步")
     assert store.get(FAMILY_ID)["flow"] == "pending_exercise_duration"
 
-    reply3 = router.handle_message(fake_db, store, FAMILY_ID, "30")
+    router.handle_message(fake_db, store, FAMILY_ID, "30")
     assert store.get(FAMILY_ID)["flow"] == "pending_exercise_heart_rate"
 
     calorie_llm = _FakeLLMClient(response_text="約 300 大卡")

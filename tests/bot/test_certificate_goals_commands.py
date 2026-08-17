@@ -133,7 +133,6 @@ def test_handle_certificate_goal_target_score_step_skip(fake_db):
     state_store = ConversationStateStore()
     commands.start_set_certificate_goal(fake_db, state_store, 999, 1)
     commands.handle_certificate_goal_exam_type_step(state_store, 999, "toeic")
-    llm_client = _FakeLLMClient("STATUS: UNCLEAR")
     state = state_store.get(999)
     state["flow"] = "pending_certificate_goal_target_score"
     state["target_date"] = None
