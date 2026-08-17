@@ -13,6 +13,7 @@ updated: 2026-08-17
 
 | 日期 | 對應 FR | 任務內容 | 開發者 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- | --- |
+| 2026-08-17 | FR-47／FR-47a | 運動紀錄改版（批次2）實作完成：新增 `exercise_categories` 全域類別表（migration 0084，同批清空舊 `exercise_logs` 並改結構）；`body.py` 新增 `list_exercise_categories()`／`find_or_create_exercise_category()`（正規化比對＋LLM 語意判斷兩段式同義詞合併），改寫 `create_exercise_log()`／`update_exercise_log()`／`format_exercise_log_list()`；`commands.py`／`router.py` 運動流程全面改版為選類別→時長→心率（可跳過）→補充內容（可跳過）→AI／人工熱量二選一→摘要確認；`app_records.py` 同步改寫 exercise 驗證邏輯（`category_id`／`custom_category`／`use_ai_calorie`），新增 `GET /api/app/exercise-categories`（`app_analytics.py`）；Mobile `RecordModal.tsx` 改用 `SearchableSelect` 動態載入類別，移除雙頁籤與重訓特殊分支 | Claude | 完成（已 commit `a6fd474`，尚未推版） | 完整設計內容見 `docs/ADR/discuss/robinson.md` 2026-08-17「運動紀錄改版（批次2）實作完成」；沿用批次1「打包整個 repo 進雲端沙箱、安裝完整依賴、跑滿整套測試」流程（本機 `device_bash` 仍無網路），**不是只做語法驗證**；完整 `python3 -m pytest -q`：1844 passed（原 1842 baseline 全過，新增 2 項運動類別測試，改寫既有運動相關測試約 15 項）；`ruff check .` 全過；Mobile 端 `npx tsc --noEmit` 型別檢查通過（前端未設定 lint／單元測試 script）；`docs/reference/db_schema.md`／`api_schema.md` 已同步；commit 已完成（`a6fd474`），push 待 Robin 親自執行 |
 | 2026-08-17 | FR-45／FR-46 | Phase 6 第二批 2h（日常紀錄－體態）批次1實作完成：`body.py` 合理範圍收斂（身高 140～200 公分、腰圍 50～150 公分、體重新增上限 150 公斤）並新增動態範圍文案函式、`get_body_summary()`／`format_body_summary()`、`update_goal()`／`get_goal()`；`commands.py` 刪除六個舊指令（`/set_height`／`/set_waist`／`/log_weight`／`/backfill_weight`／`/my_weight_logs`／`/set_body_goal`），全面改選單按鈕＋摘要→二次確認，體重歷史清單改按鈕式編輯/刪除；目標子流程重寫成 `body:goal:*` 運動/飲食/體態三入口共用，支援多筆並存＋編輯/刪除；`menu.py` 把 `body` 移出開發中名單；`router.py` 新增 `body:*`／`_dispatch_body_goal_callback()` 分派，`_FINAL_CONFIRM_FLOWS` 新增 6 個新摘要確認 flow（涵蓋全站語音確認機制） | Claude | 完成（已 commit，尚未推版） | 完整設計內容見 `docs/ADR/discuss/robinson.md` 2026-08-17「日常紀錄－體態（Phase 6 第二批 2h）實作完成」；本批因 Cowork 沙箱本機無網路裝不了套件，改用「打包整個 repo 進雲端沙箱、安裝完整依賴、跑滿整套測試」流程，**不是只做語法驗證**；完整 `python3 -m pytest -q`：1842 passed（原 1809 baseline 全過，新增/改寫 33 項體態相關測試）；`ruff check .` 全過；改寫 `tests/bot/test_body.py`／`test_body_commands.py`（大幅重寫）／`test_body_router.py`（大幅重寫）／`test_menu.py`／`test_router.py`；`docs/reference/` 未異動（本批未變更 DB Schema／API）；commit `30c5303`（11 files changed, 1400 insertions/614 deletions），push／部署狀態待 Robin 執行 `git push` 與實際部署後回補 |
 | 2026-08-16 | FR-48 | 修復飲食補記日期解析 NameError（2g 部署後實機驗收發現）：`handle_diet_backfill_date_step()` 呼叫了不存在的 `_parse_date_description()`，輸入「昨天」等補記日期時直接噴錯 | Claude | 完成（已部署／實機驗收） | 根因與修復細節見 `docs/ADR/debug/robinson.md` 2026-08-16「飲食補記日期解析 NameError」；改用既有 `_parse_key_value_block`＋`_parse_date_only` 解析流程；新增 `tests/bot/test_body_commands.py` 回歸測試；順帶用 `pyflakes` 掃過 `src/bot/`／`src/services/` 全部模組確認無同類「呼叫未定義名稱」問題；commit `fb5e4e2`，Robin 已推版並完成 Telegram 實機驗收（新增今天飲食紀錄→補記昨天→輸入「昨天」正常） |
 | 2026-08-17 | — | 純程式品質治理：清除 `ruff check .` 檢出的 99 個既有警告，並把「commit 前跑 `ruff check .`」記錄為固定開發慣例 | Claude | 完成（已部署） | 起因是上一筆飲食補記 NameError（`ast.parse` 語法檢查抓不到「呼叫未定義名稱」，靜態 Lint 才抓得到），Robin 要求記錄慣例並開獨立任務清掉既有警告；新增 `ruff.toml` 明確鎖定 isort `known-first-party = ["src", "submodules"]`（過程中發現同一 ruff 版本在 Robin 本機與 Claude 沙箱因無設定檔而判斷不一致，導致排序建議兩邊對不上，加了設定檔後才穩定一致）；`requirements-dev.txt` 新增 `ruff`；`AGENTS.md`／`docs/templates/AGENTS-TEMPLATE.md` 新增對應開發慣例段落；修正內容含 import 排序、7 處 `date.today()` 改時區感知寫法（DTZ011，均改用專案既有 `_TAIWAN_TZ`／`commands._now()` 模式）、2 處 DTZ007 經人工覆核確認為誤判改加 `# noqa` 註解說明（`important_days.py::_parse_hhmm()` 只取鐘面時刻與時區無關、`newsfeed/client.py::_parse_pub_date()` 下一行即補時區），其餘 RUF059／F841／RUF012／FLY002／FURB157／PIE810／ISC004／SIM117／SIM118 等規則修正，共 35+ 檔案；驗證：`ast.parse`／`pyflakes`／`ruff check .` 全過，Robin 本機 `pytest tests/ -q` 1806 passed／3 failed（僅既有 `test_toeic.py` 缺 `ffmpeg` 環境問題，與本次異動無關）；commit `6bd7540`，Robin 已推版（純程式品質改動，無對外行為變化，不需個別實機驗收） |
@@ -220,6 +221,7 @@ updated: 2026-08-17
 
 | 日期 | 版本 / commit | 異動摘要 | 開發者 |
 | --- | --- | --- | --- |
+| 2026-08-17 | `a6fd474` | Phase 6 第二批 2h：運動紀錄改版（批次2，FR-47／FR-47a），新增全域運動類別表與兩段式同義詞合併，Telegram Bot／Mobile App 同步改版 | Claude |
 | 2026-08-16 | `eabed3b` | Phase 6 第二批 2f：Telegram 待辦事項選單化（新增按鈕入口與摘要→二次確認、清單改按鈕標記完成/取消） | Claude |
 | 2026-08-16 | `57619bb` | 文件治理：AGENTS.md／AGENTS-TEMPLATE.md 新增「Commit → 推版 → 部署後續」Workflow | Claude |
 | 2026-08-16 | `a400f36` | Phase 6 第二批 2e：Telegram 成果展示選單流程（新增 `src/bot/achievements.py`） | Claude |
@@ -357,6 +359,7 @@ updated: 2026-08-17
 
 | 日期 | Branch／版本 | 遠端 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- |
+| 2026-08-17 | `main`／`a6fd474` | GitHub | 待推版 | 尚待 Robin 推版（本地環境無網路，且依規範 push 一律由 Robin 親自執行） |
 | 2026-08-16 | `main`／`eabed3b` | GitHub | 完成 | 08/16 Robin 已推版 |
 | 2026-08-16 | `main`／`57619bb` | GitHub | 待推版 | 尚待 Robin 推版 |
 | 2026-08-16 | `main`／`a400f36` | GitHub | 完成 | 08/16 Robin已推版 |
