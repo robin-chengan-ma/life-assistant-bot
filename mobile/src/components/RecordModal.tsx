@@ -7,16 +7,16 @@ import { Image, Modal, ScrollView, StyleSheet, TextInput } from "react-native";
 import { AppPressable as Pressable } from "@/components/AppPressable";
 import { AppText as Text } from "@/components/AppText";
 import { AppView as View } from "@/components/AppView";
+import { SearchableSelect } from "@/components/SearchableSelect";
 import { TimePickerField } from "@/components/TimePickerField";
 import { useAppPreferences } from "@/context/AppPreferencesContext";
 import { ApiError } from "@/services/authApi";
-import { calculateDietNutrition, createRecord, getAnalytics, recognizeDietPhoto, updateRecord, type AuthRequest, type DietNutrition, type RecordItem, type RecordKind, type TodoAnalytics } from "@/services/analyticsApi";
+import { calculateDietNutrition, createRecord, getAnalytics, getExerciseCategories, recognizeDietPhoto, updateRecord, type AuthRequest, type DietNutrition, type ExerciseCategory, type RecordItem, type RecordKind, type TodoAnalytics } from "@/services/analyticsApi";
 import { getTrips, type Trip } from "@/services/lifeExplorationApi";
 import { calendarImportantDaySummary, IMPORTANT_DAY_COLOR } from "@/utils/calendarLabels";
 
 const EXPENSE = ["餐飲", "交通", "購物", "居住", "娛樂", "醫療", "其他"];
 const INCOME = ["薪資", "獎金", "其他"];
-const EXERCISE = ["跑步", "健走", "騎自行車", "游泳", "重訓", "打球", "瑜伽", "其他"];
 const MOODS = [
   ["happy_excited", "🥳 高興／興奮"], ["calm_relaxed", "😌 平靜／放鬆"], ["neutral", "🙂 普通／平淡"],
   ["tired_burned_out", "🫠 疲憊／厭世"], ["sad_down", "😢 難過／低落"], ["angry_anxious", "😡 生氣／焦慮"],
@@ -57,13 +57,13 @@ export function RecordModal({ authorizedRequest, defaults, initial, kind, onClos
   const [amount, setAmount] = useState("");
   const [tripId, setTripId] = useState<number | null>(null);
   const [availableTrips, setAvailableTrips] = useState<Trip[]>([]);
-  const [activity, setActivity] = useState("跑步");
-  const [customActivity, setCustomActivity] = useState("");
+  const [activity, setActivity] = useState("");
+  const [exerciseCategories, setExerciseCategories] = useState<ExerciseCategory[]>([]);
   const [duration, setDuration] = useState("");
   const [heartRate, setHeartRate] = useState("");
-  const [exerciseInputMode, setExerciseInputMode] = useState<"time" | "calories">("time");
+  const [exerciseNote, setExerciseNote] = useState("");
+  const [exerciseUseAi, setExerciseUseAi] = useState(true);
   const [exerciseCalories, setExerciseCalories] = useState("");
-  const [trainingDetails, setTrainingDetails] = useState("");
   const [waterMl, setWaterMl] = useState("");
   const [weight, setWeight] = useState("");
   const [waist, setWaist] = useState("");
@@ -97,14 +97,12 @@ export function RecordModal({ authorizedRequest, defaults, initial, kind, onClos
     setType(initialType); setCategory(String(source?.category ?? (initialType === "income" ? "薪資" : "餐飲")));
     setAmount(source?.amount == null ? "" : String(source.amount));
     setTripId(typeof source?.trip_id === "number" ? source.trip_id : null);
-    const oldActivity = String(source?.activity ?? "跑步");
-    setActivity(EXERCISE.includes(oldActivity) ? oldActivity : "其他");
-    setCustomActivity(EXERCISE.includes(oldActivity) ? "" : oldActivity);
+    setActivity(String(source?.activity ?? exerciseCategories[0]?.name ?? ""));
     setDuration(source?.duration_minutes == null ? "" : String(source.duration_minutes));
     setHeartRate(source?.heart_rate == null ? "" : String(source.heart_rate));
-    setExerciseInputMode(source?.input_mode === "calories" ? "calories" : "time");
+    setExerciseNote(source?.note == null ? "" : String(source.note));
+    setExerciseUseAi(source?.calorie_source !== "manual");
     setExerciseCalories(source?.estimated_calories == null ? "" : String(source.estimated_calories));
-    setTrainingDetails(source?.training_details == null ? "" : String(source.training_details));
     setWaterMl(source?.water_ml == null ? "" : String(source.water_ml));
     setWeight(source?.weight_kg == null ? "" : String(source.weight_kg));
     setWaist(source?.waist_cm == null ? "" : String(source.waist_cm));
@@ -126,13 +124,20 @@ export function RecordModal({ authorizedRequest, defaults, initial, kind, onClos
       fat_g: source.fat_g == null ? null : Number(source.fat_g),
     });
     setCalendarMonth((kind === "todo" ? localDate(initial?.due_at) : today()).slice(0, 7));
-  }, [initial, defaults, kind, source, visible]);
+  }, [initial, defaults, kind, source, visible, exerciseCategories]);
 
   useEffect(() => {
     if (!visible || kind !== "finance") return;
     void getTrips(authorizedRequest)
       .then((result) => setAvailableTrips(result.trips.filter((trip) => trip.status !== "cancelled")))
       .catch(() => setAvailableTrips([]));
+  }, [authorizedRequest, kind, visible]);
+
+  useEffect(() => {
+    if (!visible || kind !== "exercise") return;
+    void getExerciseCategories(authorizedRequest)
+      .then((result) => setExerciseCategories(result.categories))
+      .catch(() => setExerciseCategories([]));
   }, [authorizedRequest, kind, visible]);
 
   useEffect(() => {
@@ -163,22 +168,25 @@ export function RecordModal({ authorizedRequest, defaults, initial, kind, onClos
         } } : {}),
       };
     }
-    if (kind === "exercise") return {
-      activity,
-      custom_activity: customActivity,
-      input_mode: exerciseInputMode,
-      duration_minutes: exerciseInputMode === "time" ? Number(duration) : null,
-      heart_rate: exerciseInputMode === "time" && heartRate ? Number(heartRate) : null,
-      calories: exerciseInputMode === "calories" ? Number(exerciseCalories) : null,
-      training_details: exerciseInputMode === "time" && activity === "重訓" ? trainingDetails : null,
-    };
+    if (kind === "exercise") {
+      const matchedCategory = exerciseCategories.find((item) => item.name === activity.trim());
+      return {
+        category_id: matchedCategory ? matchedCategory.id : null,
+        custom_category: matchedCategory ? null : activity.trim(),
+        duration_minutes: duration ? Number(duration) : null,
+        heart_rate: heartRate ? Number(heartRate) : null,
+        note: exerciseNote.trim() ? exerciseNote.trim() : null,
+        use_ai_calorie: exerciseUseAi,
+        calories: exerciseUseAi ? null : Number(exerciseCalories),
+      };
+    }
     if (kind === "weight") return {
       height_cm: height ? Number(height) : editing ? null : source?.height_cm ?? null,
       weight_kg: weight ? Number(weight) : source?.weight_kg ?? null,
       waist_cm: waist ? Number(waist) : editing ? null : source?.waist_cm ?? null,
     };
     return { mood_category: mood, content };
-  }, [activity, amount, category, content, customActivity, date, dietCalories, dietCarbs, dietFat, dietNutrition, dietProtein, duration, editing, endDate, exerciseCalories, exerciseInputMode, heartRate, height, kind, mood, nutritionMode, source, time, todoStatus, trainingDetails, tripId, type, waist, waterMl, weight]);
+  }, [activity, amount, category, content, date, dietCalories, dietCarbs, dietFat, dietNutrition, dietProtein, duration, editing, endDate, exerciseCalories, exerciseCategories, exerciseNote, exerciseUseAi, heartRate, height, kind, mood, nutritionMode, source, time, todoStatus, tripId, type, waist, waterMl, weight]);
 
   const validate = (): string | null => {
     if (kind === "todo" && (!content.trim() || !/^\d{2}:\d{2}$/.test(time))) return "請完整輸入執行日期、時間與內容";
@@ -191,10 +199,9 @@ export function RecordModal({ authorizedRequest, defaults, initial, kind, onClos
       if (!dietCalories || calories < 1 || calories > 10000) return "飲食熱量僅能輸入 1 到 10,000 大卡";
       if ([dietFat, dietCarbs, dietProtein].some((value) => value === "") || macros.some((value) => !Number.isFinite(value) || value < 0 || value > 1000)) return "脂肪、碳水化合物與蛋白質皆須輸入 0 到 1,000.0 公克";
     }
-    if (kind === "exercise" && activity === "其他" && !customActivity.trim()) return "請輸入運動名稱";
-    if (kind === "exercise" && exerciseInputMode === "time" && (!duration || Number(duration) <= 0)) return "請輸入大於 0 的持續時間";
-    if (kind === "exercise" && exerciseInputMode === "time" && activity === "重訓" && !trainingDetails.trim()) return "請描述重訓的強度與組數";
-    if (kind === "exercise" && exerciseInputMode === "calories" && (!exerciseCalories || Number(exerciseCalories) < 1 || Number(exerciseCalories) > 5000)) return "消耗熱量僅能輸入 1 到 5,000 大卡";
+    if (kind === "exercise" && !activity.trim()) return "請選擇運動類別";
+    if (kind === "exercise" && (!duration || Number(duration) <= 0)) return "請輸入大於 0 的持續時間";
+    if (kind === "exercise" && !exerciseUseAi && (!exerciseCalories || Number(exerciseCalories) < 1 || Number(exerciseCalories) > 5000)) return "消耗熱量僅能輸入 1 到 5,000 大卡";
     if (kind === "weight" && (payload.weight_kg == null || Number(payload.weight_kg) < 40 || Number(payload.weight_kg) > 150)) return "體重僅能輸入 40.0 到 150.0 公斤";
     if (kind === "weight" && payload.height_cm != null && (Number(payload.height_cm) < 140 || Number(payload.height_cm) > 200)) return "身高僅能輸入 140.0 到 200.0 公分";
     if (kind === "weight" && payload.waist_cm != null && (Number(payload.waist_cm) < 50 || Number(payload.waist_cm) > 150)) return "腰圍僅能輸入 50.0 到 150.0 公分";
@@ -296,8 +303,8 @@ export function RecordModal({ authorizedRequest, defaults, initial, kind, onClos
     } finally { mutationInFlight.current = false; setSaving(false); }
   };
 
-  const clear = () => { setContent(""); setAmount(""); setDuration(""); setHeartRate(""); setExerciseCalories(""); setTrainingDetails(""); setWaterMl(""); setDietCalories(""); setDietProtein(""); setDietCarbs(""); setDietFat(""); setHeight(""); setWeight(""); setWaist(""); setCustomActivity(""); setDietImageUri(null); setDietImageBase64(null); setDietUncertainItems([]); setDietNutrition(null); setError(null); };
-  const confirmText = kind === "todo" ? `${date} ～ ${endDate} ${time}｜${content}｜${TODO_STATUSES.find(([value]) => value === todoStatus)?.[1]}` : kind === "finance" ? `${type === "income" ? "收入" : "支出"}｜${category}｜${Math.round(Number(amount))} 元` : kind === "diet" ? `${content}${waterMl ? `｜飲水 ${waterMl} 毫升` : ""}｜${nutritionMode === "ai" ? "AI 估算" : "人工輸入"}` : kind === "exercise" ? `${activity === "其他" ? customActivity : activity}｜${exerciseInputMode === "time" ? `${duration} 分鐘${heartRate ? `｜心率 ${heartRate}` : ""}` : `${Math.round(Number(exerciseCalories))} 大卡`}` : kind === "weight" ? `身高 ${payload.height_cm ?? source?.height_cm ?? "尚無紀錄"} 公分｜體重 ${payload.weight_kg} 公斤｜腰圍 ${payload.waist_cm ?? source?.waist_cm ?? "尚無紀錄"} 公分` : `${MOODS.find(([code]) => code === mood)?.[1] ?? "心情"}${content ? `｜${content}` : ""}`;
+  const clear = () => { setContent(""); setAmount(""); setDuration(""); setHeartRate(""); setExerciseCalories(""); setExerciseNote(""); setExerciseUseAi(true); setWaterMl(""); setDietCalories(""); setDietProtein(""); setDietCarbs(""); setDietFat(""); setHeight(""); setWeight(""); setWaist(""); setDietImageUri(null); setDietImageBase64(null); setDietUncertainItems([]); setDietNutrition(null); setError(null); };
+  const confirmText = kind === "todo" ? `${date} ～ ${endDate} ${time}｜${content}｜${TODO_STATUSES.find(([value]) => value === todoStatus)?.[1]}` : kind === "finance" ? `${type === "income" ? "收入" : "支出"}｜${category}｜${Math.round(Number(amount))} 元` : kind === "diet" ? `${content}${waterMl ? `｜飲水 ${waterMl} 毫升` : ""}｜${nutritionMode === "ai" ? "AI 估算" : "人工輸入"}` : kind === "exercise" ? `${activity}｜${duration} 分鐘${heartRate ? `｜心率 ${heartRate}` : ""}｜${exerciseUseAi ? "AI 估算熱量" : `${Math.round(Number(exerciseCalories))} 大卡`}` : kind === "weight" ? `身高 ${payload.height_cm ?? source?.height_cm ?? "尚無紀錄"} 公分｜體重 ${payload.weight_kg} 公斤｜腰圍 ${payload.waist_cm ?? source?.waist_cm ?? "尚無紀錄"} 公分` : `${MOODS.find(([code]) => code === mood)?.[1] ?? "心情"}${content ? `｜${content}` : ""}`;
 
   return <Modal animationType="fade" onRequestClose={onClose} transparent visible={visible}><View style={styles.backdrop}><View style={styles.card}><Pressable accessibilityLabel="關閉" disabled={saving} onPress={onClose} style={styles.close}><MaterialCommunityIcons color={colors.textMuted} name="close" size={25} /></Pressable><ScrollView contentContainerStyle={styles.content}>
     <View style={styles.titleRow}><Text style={styles.title}>{editing ? `編輯${TITLE[kind].replace(/^記錄今日|^新增/, "")}` : TITLE[kind]}</Text></View>
@@ -317,7 +324,7 @@ export function RecordModal({ authorizedRequest, defaults, initial, kind, onClos
           {dietImageBase64 && error ? <View style={styles.actions}><Button disabled={saving} label={saving ? "重試中…" : "使用原照片重試"} onPress={() => void recognizeSelectedDietPhoto(dietImageBase64, dietImageMimeType, dietImageUri ?? "")} secondary /></View> : null}
         </>}
       </> : null}
-      {kind === "exercise" ? <><Text style={styles.label}>類別</Text><Options options={EXERCISE.map((value) => [value, value])} selected={activity} setSelected={setActivity} />{activity === "其他" ? <Field label="其他運動名稱" onChange={setCustomActivity} placeholder="請輸入運動名稱" value={customActivity} /> : null}<Text style={styles.label}>輸入方式</Text><Options options={[["time", "時間"], ["calories", "熱量"]]} selected={exerciseInputMode} setSelected={(value) => setExerciseInputMode(value as "time" | "calories")} />{exerciseInputMode === "time" ? <><Field inputMode="numeric" label="持續時間（分鐘）" onChange={(value) => setDuration(value.replace(/\D/g, ""))} placeholder="請輸入數字" value={duration} /><Field inputMode="numeric" label="心率（bpm）" onChange={(value) => setHeartRate(value.replace(/\D/g, ""))} placeholder="請輸入數字" value={heartRate} />{activity === "重訓" ? <Field label="強度與組數" multiline onChange={setTrainingDetails} placeholder="請描述訓練內容..." value={trainingDetails} /> : null}</> : <Field inputMode="decimal" label="消耗熱量（大卡）" onChange={(value) => setExerciseCalories(value.replace(/[^0-9.]/g, ""))} placeholder="請輸入數字" value={exerciseCalories} />}</> : null}
+      {kind === "exercise" ? <><SearchableSelect label="類別" onChange={setActivity} options={exerciseCategories.map((item) => item.name)} placeholder="請選擇或輸入新的運動類別" value={activity} /><Field inputMode="numeric" label="持續時間（分鐘）" onChange={(value) => setDuration(value.replace(/\D/g, ""))} placeholder="請輸入數字" value={duration} /><Field inputMode="numeric" label="心率（bpm，選填）" onChange={(value) => setHeartRate(value.replace(/\D/g, ""))} placeholder="請輸入數字" value={heartRate} /><Field label="補充內容（選填）" multiline onChange={setExerciseNote} placeholder="請描述詳細內容..." value={exerciseNote} /><Text style={styles.label}>是否交由 AI 計算消耗熱量？</Text><Options options={[["ai", "是，使用 AI"], ["manual", "否，人工輸入"]]} selected={exerciseUseAi ? "ai" : "manual"} setSelected={(value) => setExerciseUseAi(value === "ai")} />{exerciseUseAi ? null : <Field inputMode="decimal" label="消耗熱量（大卡）" onChange={(value) => setExerciseCalories(value.replace(/[^0-9.]/g, ""))} placeholder="請輸入數字" value={exerciseCalories} />}</> : null}
       {kind === "weight" ? <><Field inputMode="decimal" label="已量測身高值（公分）" onChange={(value) => setHeight(value.replace(/[^0-9.]/g, ""))} placeholder="填入 140 公分至 200 公分範圍內的數值" value={height} /><Field inputMode="decimal" label="已量測體重值（公斤）" onChange={(value) => setWeight(value.replace(/[^0-9.]/g, ""))} placeholder="填入 40 公斤至 150 公斤範圍內的數值" value={weight} /><Field inputMode="decimal" label="已量測腰圍值（公分）" onChange={(value) => setWaist(value.replace(/[^0-9.]/g, ""))} placeholder="填入 50 公分至 150 公分範圍內的數值" value={waist} /></> : null}
       {kind === "mood" ? <><Text style={styles.label}>類別</Text><Options options={MOODS.map(([code, label]) => [code, label])} selected={mood} setSelected={setMood} /><Field label="有沒有要分享的內容呢？" multiline onChange={setContent} placeholder="有話想說嗎？" value={content} /></> : null}
       {kind !== "todo" ? <Text style={styles.hint}>Mobile App 僅提供今日紀錄；若需回補其他日期，請使用 Telegram。</Text> : null}

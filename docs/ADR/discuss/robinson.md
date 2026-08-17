@@ -625,3 +625,77 @@ Robin 追加要求「語音辨識結果可能跟使用者實際講的內容有�
 - 目標編輯完全不碰 Calendar 同步設定，沿用建立當下的選擇
 - 目標刪除確認取消時導回的清單固定不篩選類型（`body:goal:list:-:<source>`），不記得原本篩選
   的 `goal_type`，屬於次要 UX 簡化，不影響功能正確性
+
+## 2026-08-17 運動紀錄改版（批次2）實作完成
+
+**狀態**：accepted（取代上方「運動紀錄改版（批次2）已定案細節」段落 pending 狀態；批次3
+六模組目標泛化仍為 pending，維持原狀）
+
+**背景**：批次2「運動紀錄改版」依 2026-08-17 前置討論定案細節開工，實作前另外提出一份完整
+SDD 計畫給 Robin 確認（同義詞合併機制、類別是否全域共用、Telegram 選填欄位跳過方式三項待
+確認），Robin 選擇「正規化比對＋LLM 語意判斷兩段式」「全域共用」「文字 skip 或按鈕⏭跳過
+皆可」三個推薦方案。
+
+**設計內容**：
+①**資料庫**（`src/migrations/0084_redesign_exercise_categories.sql`）：新增全域共用的
+`exercise_categories` 表（`id`／`name`／`normalized_name` UNIQUE／`created_at`），種子既有
+7 個固定類別；`TRUNCATE exercise_logs` 後改結構——新增 `category_id`（FK，NOT NULL）／
+`note`（取代 `training_details`），`duration_minutes` 恢復 `NOT NULL`，移除 `input_mode`／
+`training_details` 欄位與對應 CHECK，`calorie_source` 保留但語意單純化為「ai／manual」二選一。
+②**`src/bot/body.py`**：新增 `list_exercise_categories()`／`find_or_create_exercise_category()`
+（兩段式同義詞合併：先 `normalized_name` 精確比對，沒命中才組既有類別清單請 LLM 判斷
+是否為同義詞，仍沒命中或 LLM 失敗才新增一筆）；`estimate_exercise_calories()` 參數
+`training_details` 改名 `note`，任何類別都會參考（不再限定重訓）；`create_exercise_log()`／
+`update_exercise_log()` 改吃 `category_id`／`note`／`calorie_source` 等新欄位；
+`format_exercise_log_list()` 統一格式，不再區分時間／熱量兩種顯示樣式。
+③**`src/bot/commands.py`**：運動新增/補記/編輯流程全面重寫為「選類別（既有全域類別按鈕＋
+➕其他）→時長（必填）→心率（選填，可輸入 skip 或按⏭跳過）→補充內容（選填，同樣可跳過）→
+是否交由 AI 估算熱量（按鈕二選一，人工模式才問熱量數字）→摘要確認」；新增
+`start_exercise_category_custom()`／`handle_exercise_category_custom_step()`（呼叫同義詞
+合併）、`handle_exercise_skip_heart_rate()`／`handle_exercise_skip_note()`、
+`handle_exercise_calorie_ai_choice()`／`handle_exercise_calorie_manual_choice()`等新函式；
+移除 `handle_exercise_activity_step()`，`start_exercise_edit()` 改回從選類別開始（理由同
+批次1「三種類型介面完全對稱、都重新走一次輸入」的簡化決策）。
+④**`src/bot/router.py`**：`exercise:` callback 分派新增 `cat:<id>`／`cat:other`／
+`skip:heart_rate`／`skip:note`／`calorie:ai`／`calorie:manual` 六組動作；文字 flow 分派
+新增 `pending_exercise_category_custom`／`pending_exercise_note`／
+`pending_exercise_calories_manual`，`pending_exercise_category`／
+`pending_exercise_calorie_choice` 併入既有「只接受按鈕操作」的取消清單。
+⑤**`src/services/app_records.py`**：`exercise` 驗證分支改吃 `category_id`（既有類別）或
+`custom_category`（新增，走同義詞合併）＋ `use_ai_calorie` 布林值；移除寫死的
+`_EXERCISE_CATEGORIES` 集合；`_fingerprint()` 重複偵測改用 `category_id`／`note`／
+`calorie_source` 等新欄位。
+⑥**`src/api/app_analytics.py`**：新增 `GET /api/app/exercise-categories`（`require_access_token`）
+回傳全域類別清單。
+⑦**Mobile App**（`mobile/src/components/RecordModal.tsx`、
+`mobile/src/services/analyticsApi.ts`）：移除寫死的 `EXERCISE` 類別陣列、`exerciseInputMode`
+雙頁籤與 `trainingDetails` 重訓特殊分支；類別改用既有 `SearchableSelect` 元件（跟 FR-73
+收藏清單國家/城市選單同一套）動態載入 `/api/app/exercise-categories`；表單改成持續時間
+（必填）／心率（選填）／補充內容（選填）＋「是否交由 AI 計算消耗熱量？」開關，關閉時顯示
+熱量輸入框（沿用 1～5,000 大卡限制）。
+
+**理由**：`activity` 欄位保留為 denormalized 快照（寫入當下複製自
+`exercise_categories.name`），避免 `app_analytics.py` 既有 `STRING_AGG(DISTINCT activity, ...)`
+查詢與 Telegram/Mobile 清單顯示都要多一層 JOIN；`category_id` 才是類別管理與同義詞合併的
+權威來源。同義詞合併採兩段式而非單純字串比對，是因為使用者輸入「重量訓練」「重訓」這類同義詞
+很常見，純字串比對會產生大量重複類別；LLM 失敗一律降級為新增（不擋下紀錄流程），比照既有
+`estimate_exercise_calories()` 的容錯風格。
+
+**執行結果（2026-08-17，程式碼完成＋測試綠燈，尚未 commit）**：沿用批次1同樣的「整包 repo
+打包 tar 進雲端沙箱、裝好完整依賴鏈跑滿整套測試」流程（本機 `device_bash` 仍連不到網路，見
+`docs/ADR/debug/robinson.md`「Sandbox network limits」）。完整 `python3 -m pytest -q`：
+**1844 個測試全過**（原本 1842 個 baseline 全過，新增 2 個運動類別相關測試案例，改寫既有
+運動相關測試約 15 個）；`ruff check .` 全過；Mobile 端額外執行 `npx tsc --noEmit` 通過型別
+檢查（未執行前端 lint／單元測試，專案未設定對應 script）。異動檔案：
+`src/bot/body.py`、`src/bot/commands.py`、`src/bot/router.py`、`src/api/app_analytics.py`、
+`src/services/app_records.py`、`src/migrations/0084_redesign_exercise_categories.sql`、
+`mobile/src/components/RecordModal.tsx`、`mobile/src/services/analyticsApi.ts`、
+`tests/bot/conftest.py`、`tests/bot/test_body.py`、`tests/bot/test_body_commands.py`、
+`tests/bot/test_body_router.py`、`tests/bot/test_router.py`、`tests/bot/test_friend_chat.py`、
+`tests/services/test_app_records.py`、`docs/specs/SPEC.md`、`docs/specs/PROGRESS.md`、
+`docs/reference/db_schema.md`、`docs/reference/api_schema.md`。
+
+**已知的刻意簡化（未來若要調整需另外討論）**：
+- 類別清單目前不做分頁／常用排序，全部列出按鈕；使用者變多、自訂類別暴增時另外討論
+- `exercise_categories` 沒有「刪除／合併既有類別」的管理介面，這批不做
+- 運動編輯改回從選類別開始重新走一次完整輸入，不支援只改單一欄位（理由同批次1同類決策）

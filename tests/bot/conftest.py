@@ -26,6 +26,7 @@ class FakeCloudSQLClient:
             "budget_overrides": [],
             "body_weight_logs": [],
             "exercise_logs": [],
+            "exercise_categories": [],
             "diet_logs": [],
             "body_goals": [],
             "important_notifications_log": [],
@@ -306,6 +307,10 @@ class FakeCloudSQLClient:
         # 擁有者驗證查詢（見 src/bot/important_days.py start_edit／start_delete_confirm）。
         if where == "id = %s AND owner_user_id = %s":
             return row.get("id") == params[0] and row.get("owner_user_id") == params[1]
+        # 2026-08-17（FR-47a，批次2）：運動類別同義詞合併查詢
+        # （見 src/bot/body.py find_or_create_exercise_category()）。
+        if where == "normalized_name = %s":
+            return row.get("normalized_name") == params[0]
 
         raise NotImplementedError(f"FakeCloudSQLClient 尚未支援這個 where 條件：{where}")
 

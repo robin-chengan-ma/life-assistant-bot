@@ -100,7 +100,7 @@ def test_todo_provider_no_data_returns_none(fake_db):
 
 def test_body_provider_combines_weight_exercise_diet(fake_db):
     body.create_weight_log(fake_db, 1, 65.5, _TODAY)
-    body.create_exercise_log(fake_db, 1, "跑步", 30, None, 250.0, _TODAY)
+    body.create_exercise_log(fake_db, 1, 1, "跑步", 30, None, None, "ai", 250.0, _TODAY)
     body.create_diet_log(fake_db, 1, "food", "雞胸肉便當", _TODAY)
 
     summary = friend_chat._body_provider(fake_db, 1, _TODAY)

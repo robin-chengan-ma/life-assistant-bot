@@ -356,7 +356,8 @@ CREATE TABLE budget_overrides (
 | 資料表 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
 | `body_weight_logs` | 已建立 | FR-46 | 體重歷史紀錄，`weight_kg >= 40` 為最後防線檢查 |
-| `exercise_logs` | 已建立 | FR-47、FR-64 | 運動紀錄支援時間 AI 估算與人工熱量雙模式，並保留來源及重訓內容 |
+| `exercise_categories` | 已建立 | FR-47a | 全域共用運動類別表，新增自訂類別採正規化比對＋LLM 語意判斷兩段式同義詞合併 |
+| `exercise_logs` | 已建立 | FR-47／FR-47a、FR-64 | 運動紀錄單一表單（時長必填／心率選填／補充內容選填），消耗熱量可選 AI 估算或人工輸入 |
 | `diet_logs` | 已建立 | FR-48、FR-64 | 飲食與飲水共用一表，營養數值可由 AI 估算或人工輸入並保留來源 |
 | `body_goals` | 已建立 | FR-45～FR-48／FR-72a | 體重/運動/飲食三子功能共用一表（`goal_type` 區分）；`important_day_id` 連結期限事件 |
 
@@ -380,25 +381,47 @@ CREATE INDEX idx_body_weight_logs_user_id ON body_weight_logs (user_id);
 - 身高「初始設定、變動才修正」放 `users.height_cm`（腰圍 `waist_cm` 比照，2026-08-08 新增，範圍 40～200 較寬鬆因僅供參考）；體重「有量才記」需獨立多筆歷史表
 
 ```sql
+CREATE TABLE exercise_categories (
+    id BIGSERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    normalized_name TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX idx_exercise_categories_normalized_name ON exercise_categories (normalized_name);
+
 CREATE TABLE exercise_logs (
     id BIGSERIAL PRIMARY KEY,
     user_id BIGINT NOT NULL REFERENCES users(id),
+    category_id BIGINT NOT NULL REFERENCES exercise_categories(id),
     activity TEXT NOT NULL,
     duration_minutes INT NOT NULL CHECK (duration_minutes > 0),
     heart_rate INT,
-    estimated_calories NUMERIC(6,1),
-    entry_date DATE NOT NULL,
     note TEXT,
+    estimated_calories NUMERIC(6,1),
+    calorie_source TEXT NOT NULL CHECK (calorie_source IN ('ai', 'manual')),
+    entry_date DATE NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_exercise_logs_user_id ON exercise_logs (user_id);
+CREATE INDEX idx_exercise_logs_category_id ON exercise_logs (category_id);
 ```
-`src/migrations/0025_create_exercise_logs_table.sql`
+`src/migrations/0025_create_exercise_logs_table.sql`（原始建表）、
+`src/migrations/0078_add_mobile_record_input_sources.sql`（曾新增 `input_mode`／`calorie_source`／
+`training_details`，已於下方 migration 移除前兩者之外的欄位並整併）、
+`src/migrations/0084_redesign_exercise_categories.sql`（2026-08-17，FR-47a，批次2：新增
+`exercise_categories` 全域類別表並種子既有固定類別；清空舊 `exercise_logs` 資料後改結構——
+`duration_minutes` 恢復必填、新增 `category_id`／`note`、移除 `input_mode`／`training_details`，
+`calorie_source` 保留但語意改為單純的「AI 估算／人工輸入」二選一，不再跟「時間／熱量」雙頁籤
+綁定）
 
-- 卡路里用 LLM 估算而非 MET 公式；估算失敗時允許 NULL，不擋下整筆紀錄；`activity` 自由文字（項目差異太大無法窮舉）
-- `0078_add_mobile_record_input_sources.sql` 將 `duration_minutes` 改為可空，新增 `input_mode`、
-  `calorie_source`、`training_details` 與範圍檢查；人工熱量模式不呼叫 LLM。
+- 卡路里用 LLM 估算而非 MET 公式；估算失敗時允許 NULL，不擋下整筆紀錄
+- `activity` 是類別名稱的 denormalized 快照（寫入當下複製自 `exercise_categories.name`），方便
+  清單顯示與既有分析查詢（`app_analytics.py` 的 `STRING_AGG(DISTINCT activity, ...)`）不用額外
+  JOIN；`category_id` 才是類別管理與同義詞合併的權威來源
+- `exercise_categories` 全域共用（不分使用者），新增自訂類別時先做正規化字串比對（trim／全形轉
+  半形／大小寫統一），沒命中才呼叫 LLM 判斷是否為既有類別的同義詞，仍沒命中才新增一筆，LLM 失敗
+  一律降級為新增，見 `src/bot/body.py find_or_create_exercise_category()`
 
 ```sql
 CREATE TABLE diet_logs (

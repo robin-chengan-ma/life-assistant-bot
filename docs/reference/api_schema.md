@@ -232,9 +232,10 @@ updated: 2026-08-15
 | `POST /api/app/body/weight-logs` | 已實作（`create_weight_log()`） | FR-64a | App 端手動輸入體重（取代已移除的藍牙體重計整合方案），40～150 公斤範圍檢查，複用 `src/bot/body.py::create_weight_log()` |
 | `POST /api/app/diet/recognize-photo` | 已實作（`recognize_diet_image()`） | FR-64 | 飲食照片辨識（LLM Vision），App 端專屬能力，Telegram 端沒有對應路由 |
 | `POST /api/app/diet/calculate-nutrition` | 已實作（`calculate_diet_image_nutrition()`） | FR-64 | 依確認後的飲食描述計算三大營養素，App 端專屬能力 |
-| `POST /api/app/records/<kind>` | 已實作（`create_record()`） | FR-64、FR-68～FR-74a | 泛用記錄新增；`diet` 支援 `nutrition_source=ai/manual` 與人工營養數值，`exercise` 支援 `input_mode=time/calories`、`training_details`，`finance` 可選填本人有效的 `trip_id`；重複紀錄預設擋下，可帶 `allow_duplicate` 略過檢查 |
+| `POST /api/app/records/<kind>` | 已實作（`create_record()`） | FR-64、FR-68～FR-74a | 泛用記錄新增；`diet` 支援 `nutrition_source=ai/manual` 與人工營養數值，`exercise`（2026-08-17，FR-47a，批次2）支援 `category_id`（既有類別）或 `custom_category`（新增全域類別，同義詞合併見 `body.find_or_create_exercise_category()`）＋ `use_ai_calorie` 布林值決定熱量來源，`finance` 可選填本人有效的 `trip_id`；重複紀錄預設擋下，可帶 `allow_duplicate` 略過檢查 |
 | `PATCH /api/app/records/<kind>/<id>` | 已實作（`update_record()`） | FR-64、FR-68～FR-74a | 泛用記錄更新，沿用飲食／運動輸入來源欄位及記帳行程關聯；歷史（過去）紀錄的異動限制見 `HistoricalRecordError` |
 | `DELETE /api/app/records/<kind>/<id>` | 已實作（`delete_record()`） | FR-68～FR-72 | 泛用記錄刪除 |
+| `GET /api/app/exercise-categories` | 已實作（`list_exercise_categories()`） | FR-47a | 全域共用運動類別清單，供 Mobile App 表單類別下拉選單使用 |
 
 ### 收藏清單（`src/api/app_collections.py`，url_prefix `/api/app/collections`）
 

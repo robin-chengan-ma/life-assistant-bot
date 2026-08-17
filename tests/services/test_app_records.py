@@ -35,6 +35,12 @@ class FakeDatabase:
             rows = [row for row in rows if row["user_id"] == user_id and row["entry_date"] == entry_date]
             if entry_type:
                 rows = [row for row in rows if row.get("entry_type") == entry_type[0]]
+        elif where == "id = %s":
+            (record_id,) = params
+            rows = [row for row in rows if row["id"] == record_id]
+        elif where == "normalized_name = %s":
+            (normalized,) = params
+            rows = [row for row in rows if row.get("normalized_name") == normalized]
         return rows[0] if fetch_one and rows else None if fetch_one else rows
 
     def insert(self, table, data, returning="id"):
@@ -265,65 +271,70 @@ def test_exercise_manual_calories_rounds_and_does_not_call_llm():
         def generate_text(self, prompt):
             raise AssertionError("人工輸入不應呼叫 Gemini")
 
-    db = FakeDatabase()
+    db = FakeDatabase({"exercise_categories": [{"id": 1, "name": "跑步", "normalized_name": "跑步"}]})
     AppRecordService(db, llm_client=FailingLlm(), now=NOW).create(
         "exercise",
         1,
-        {"activity": "跑步", "input_mode": "calories", "calories": 320.5},
+        {"category_id": 1, "duration_minutes": 30, "use_ai_calorie": False, "calories": 320.5},
     )
 
     saved = db.inserted[0][1]
-    assert saved["input_mode"] == "calories"
+    assert saved["activity"] == "跑步"
     assert saved["calorie_source"] == "manual"
     assert saved["estimated_calories"] == 321
-    assert saved["duration_minutes"] is None
-    assert saved["heart_rate"] is None
+    assert saved["duration_minutes"] == 30
 
 
 @pytest.mark.parametrize("calories", [0, 5001])
 def test_exercise_manual_calories_enforces_range(calories):
+    db = FakeDatabase({"exercise_categories": [{"id": 1, "name": "跑步", "normalized_name": "跑步"}]})
     with pytest.raises(RecordValidationError, match="消耗熱量"):
-        AppRecordService(FakeDatabase(), now=NOW).create(
+        AppRecordService(db, now=NOW).create(
             "exercise",
             1,
-            {"activity": "跑步", "input_mode": "calories", "calories": calories},
+            {"category_id": 1, "duration_minutes": 30, "use_ai_calorie": False, "calories": calories},
         )
 
 
-def test_strength_time_mode_requires_details_and_passes_them_to_ai(monkeypatch):
+def test_exercise_ai_calorie_passes_note_and_custom_category_merges(monkeypatch):
     captured = {}
 
-    def fake_estimate(_llm, activity, duration, heart_rate, training_details=None):
-        captured.update(
-            activity=activity,
-            duration=duration,
-            heart_rate=heart_rate,
-            training_details=training_details,
-        )
+    def fake_estimate(_llm, activity, duration, heart_rate, note=None):
+        captured.update(activity=activity, duration=duration, heart_rate=heart_rate, note=note)
         return 280
 
     monkeypatch.setattr("src.services.app_records.body.estimate_exercise_calories", fake_estimate)
-    with pytest.raises(RecordValidationError, match="強度與組數"):
-        AppRecordService(FakeDatabase(), llm_client=object(), now=NOW).create(
-            "exercise",
-            1,
-            {"activity": "重訓", "input_mode": "time", "duration_minutes": 45},
-        )
+
+    def fake_find_or_create(_db, _llm, name):
+        captured["custom_name"] = name
+        return {"id": 42, "name": name, "normalized_name": name}
+
+    monkeypatch.setattr("src.services.app_records.body.find_or_create_exercise_category", fake_find_or_create)
 
     db = FakeDatabase()
     AppRecordService(db, llm_client=object(), now=NOW).create(
         "exercise",
         1,
         {
-            "activity": "重訓",
-            "input_mode": "time",
+            "custom_category": "重量訓練",
             "duration_minutes": 45,
-            "training_details": "深蹲 60 公斤 5 組，每組 8 下",
+            "note": "深蹲 60 公斤 5 組，每組 8 下",
         },
     )
 
-    assert captured["training_details"] == "深蹲 60 公斤 5 組，每組 8 下"
+    assert captured["custom_name"] == "重量訓練"
+    assert captured["note"] == "深蹲 60 公斤 5 組，每組 8 下"
+    assert db.inserted[0][1]["category_id"] == 42
+    assert db.inserted[0][1]["activity"] == "重量訓練"
     assert db.inserted[0][1]["calorie_source"] == "ai"
+    assert db.inserted[0][1]["estimated_calories"] == 280
+
+
+def test_exercise_requires_category_selection():
+    with pytest.raises(RecordValidationError, match="運動類別"):
+        AppRecordService(FakeDatabase(), now=NOW).create(
+            "exercise", 1, {"duration_minutes": 30}
+        )
 
 
 def test_weight_accepts_optional_waist_and_preserves_existing_waist_when_cleared():
@@ -376,7 +387,7 @@ def test_weight_rejects_invalid_waist(waist_cm):
     "kind,payload",
     [
         ("finance", {"type": "expense", "category": "薪資", "amount": 100}),
-        ("exercise", {"activity": "其他", "custom_activity": "", "duration_minutes": 30}),
+        ("exercise", {"category_id": None, "custom_category": "", "duration_minutes": 30}),
         ("weight", {"weight_kg": 151}),
         ("mood", {"mood_category": "unknown", "content": ""}),
     ],

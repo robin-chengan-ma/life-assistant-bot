@@ -667,6 +667,9 @@ def handle_callback_query(
 
     if data.startswith("exercise:"):
         # 2026-08-16（Phase 6 第二批 2c，FR-6e）：運動選單與清單操作。
+        # 2026-08-17（FR-47a，批次2）：新增類別選擇（cat:<id>／cat:other）、選填欄位跳過
+        # （skip:heart_rate／skip:note）與熱量來源二選一（calorie:ai／calorie:manual）三組
+        # callback，見 commands.py「運動」區塊模組註解。
         user = _get_identified_user(db, telegram_user_id)
         if user is None:
             return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
@@ -674,18 +677,31 @@ def handle_callback_query(
         if action == "list":
             return commands.handle_exercise_list(db, user["id"])
         if action == "new":
-            return commands.start_exercise_log(state_store, telegram_user_id, user["id"]), None
+            return commands.start_exercise_log(db, state_store, telegram_user_id, user["id"])
         if action == "backfill":
             return commands.start_exercise_backfill(state_store, telegram_user_id, user["id"]), None
         if action.startswith("edit:"):
             exercise_log_id = int(action[len("edit:") :])
-            return commands.start_exercise_edit(db, state_store, telegram_user_id, user["id"], exercise_log_id), None
+            return commands.start_exercise_edit(db, state_store, telegram_user_id, user["id"], exercise_log_id)
         if action.startswith("delete:"):
             exercise_log_id = int(action[len("delete:") :])
             return commands.start_exercise_delete_confirm(db, state_store, telegram_user_id, user["id"], exercise_log_id)
         if action.startswith("confirm_delete:"):
             exercise_log_id = int(action[len("confirm_delete:") :])
             return commands.handle_exercise_delete(db, state_store, telegram_user_id, user["id"], exercise_log_id), menu.back_to_main_menu_keyboard()
+        if action == "cat:other":
+            return commands.start_exercise_category_custom(state_store, telegram_user_id), None
+        if action.startswith("cat:"):
+            category_id = int(action[len("cat:") :])
+            return commands.handle_exercise_category_choice(db, state_store, telegram_user_id, category_id)
+        if action == "skip:heart_rate":
+            return commands.handle_exercise_skip_heart_rate(state_store, telegram_user_id)
+        if action == "skip:note":
+            return commands.handle_exercise_skip_note(state_store, telegram_user_id)
+        if action == "calorie:ai":
+            return commands.handle_exercise_calorie_ai_choice(llm_client, state_store, telegram_user_id)
+        if action == "calorie:manual":
+            return commands.handle_exercise_calorie_manual_choice(state_store, telegram_user_id)
         if action == "confirm_save":
             return commands.handle_exercise_confirm_save(db, state_store, telegram_user_id), None
         if action == "goal":
@@ -1176,17 +1192,25 @@ def _dispatch_active_flow(
     if flow in ("pending_body_height_confirm", "pending_body_waist_confirm", "pending_body_weight_confirm", "body_weight_delete_confirm"):
         return commands.handle_body_confirm_text(state_store, telegram_user_id)
     if flow == "pending_exercise_backfill_date":
-        return commands.handle_exercise_backfill_date_step(llm_client, state_store, telegram_user_id, text)
-    if flow == "pending_exercise_activity":
-        return commands.handle_exercise_activity_step(state_store, telegram_user_id, text)
+        return commands.handle_exercise_backfill_date_step(db, llm_client, state_store, telegram_user_id, text)
+    if flow == "pending_exercise_category_custom":
+        return commands.handle_exercise_category_custom_step(db, llm_client, state_store, telegram_user_id, text)
     if flow == "pending_exercise_duration":
         return commands.handle_exercise_duration_step(state_store, telegram_user_id, text)
     if flow == "pending_exercise_heart_rate":
-        return commands.handle_exercise_heart_rate_step(llm_client, state_store, telegram_user_id, text)
-    # 2026-08-16（Phase 6 第二批 2c）：理由同心情小記的 pending_mood_confirm／mood_delete_confirm。
-    if flow == "pending_exercise_confirm":
-        return commands.handle_exercise_confirm_text(state_store, telegram_user_id)
-    if flow == "exercise_delete_confirm":
+        return commands.handle_exercise_heart_rate_step(state_store, telegram_user_id, text)
+    if flow == "pending_exercise_note":
+        return commands.handle_exercise_note_step(state_store, telegram_user_id, text)
+    if flow == "pending_exercise_calories_manual":
+        return commands.handle_exercise_calories_manual_step(state_store, telegram_user_id, text)
+    # 2026-08-16（Phase 6 第二批 2c）／2026-08-17（FR-47a，批次2）：這幾個關卡只接受按鈕操作，
+    # 理由同心情小記的 pending_mood_confirm／mood_delete_confirm。
+    if flow in (
+        "pending_exercise_category",
+        "pending_exercise_calorie_choice",
+        "pending_exercise_confirm",
+        "exercise_delete_confirm",
+    ):
         return commands.handle_exercise_confirm_text(state_store, telegram_user_id)
     # 2026-08-16（Phase 6 第二批 2g）：飲食/飲水全面改選單觸發＋摘要→二次確認，見
     # commands.py「飲食（含飲水）」區塊模組註解。

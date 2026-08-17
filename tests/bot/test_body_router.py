@@ -192,25 +192,32 @@ def test_body_voice_message_blocked_at_final_confirm_flows(fake_db, monkeypatch)
 
 
 def test_log_exercise_full_flow(fake_db, monkeypatch):
-    """2026-08-16（Phase 6 第二批 2c）：運動全面改選單按鈕觸發，舊文字觸發詞「我要記錄運動」已
-    移除，入口改為「📝 日常紀錄」→「🏃 運動」子選單（`daily_log:exercise` → `exercise:new`），
-    新增流程末端也改為摘要→二次確認（`exercise:confirm_save`）。"""
+    """2026-08-17（FR-47a，批次2）：運動改版後全面改選單按鈕觸發，入口為「📝 日常紀錄」→
+    「🏃 運動」子選單（`daily_log:exercise` → `exercise:new`），流程改成選類別→時長→心率
+    （跳過）→補充內容（跳過）→AI 估算熱量→摘要→二次確認（`exercise:confirm_save`）。"""
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    category_id = fake_db.insert("exercise_categories", {"name": "跑步", "normalized_name": "跑步"})
     store = ConversationStateStore()
 
     router.handle_callback_query(fake_db, store, FAMILY_ID, "daily_log:exercise")
     router.handle_callback_query(fake_db, store, FAMILY_ID, "exercise:new")
-    assert store.get(FAMILY_ID)["flow"] == "pending_exercise_activity"
+    assert store.get(FAMILY_ID)["flow"] == "pending_exercise_category"
 
-    router.handle_message(fake_db, store, FAMILY_ID, "跑步")
+    router.handle_callback_query(fake_db, store, FAMILY_ID, f"exercise:cat:{category_id}")
     assert store.get(FAMILY_ID)["flow"] == "pending_exercise_duration"
 
     router.handle_message(fake_db, store, FAMILY_ID, "30")
     assert store.get(FAMILY_ID)["flow"] == "pending_exercise_heart_rate"
 
+    router.handle_callback_query(fake_db, store, FAMILY_ID, "exercise:skip:heart_rate")
+    assert store.get(FAMILY_ID)["flow"] == "pending_exercise_note"
+
+    router.handle_callback_query(fake_db, store, FAMILY_ID, "exercise:skip:note")
+    assert store.get(FAMILY_ID)["flow"] == "pending_exercise_calorie_choice"
+
     calorie_llm = _FakeLLMClient(response_text="約 300 大卡")
-    reply4, _keyboard4 = router.handle_message(fake_db, store, FAMILY_ID, "沒有", llm_client=calorie_llm)
+    reply4, _keyboard4 = router.handle_callback_query(fake_db, store, FAMILY_ID, "exercise:calorie:ai", llm_client=calorie_llm)
     assert "300 大卡" in reply4
     assert store.get(FAMILY_ID)["flow"] == "pending_exercise_confirm"
 
@@ -225,7 +232,8 @@ def test_my_exercise_logs_full_flow_delete(fake_db, monkeypatch):
     （`exercise:delete:<id>` → `exercise:confirm_delete:<id>`），不再走 LLM 對話式確認。"""
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
-    log_id = commands.body.create_exercise_log(fake_db, user_id, "跑步", 30, None, 300.0, date(2026, 8, 4))
+    category_id = fake_db.insert("exercise_categories", {"name": "跑步", "normalized_name": "跑步"})
+    log_id = commands.body.create_exercise_log(fake_db, user_id, category_id, "跑步", 30, None, None, "ai", 300.0, date(2026, 8, 4))
     store = ConversationStateStore()
 
     router.handle_callback_query(fake_db, store, FAMILY_ID, "exercise:list")

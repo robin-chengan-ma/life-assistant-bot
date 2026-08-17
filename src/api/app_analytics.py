@@ -217,6 +217,23 @@ def create_weight_log():
             db.close()
 
 
+@app_analytics_bp.get("/exercise-categories")
+@require_access_token
+def list_exercise_categories():
+    """FR-47a（批次2）：全域共用運動類別清單，供 Mobile App 表單的類別下拉選單使用。"""
+    db = None
+    try:
+        db = CloudSQLClient()
+        categories = body.list_exercise_categories(db)
+        return jsonify({"categories": [{"id": item["id"], "name": item["name"]} for item in categories]}), 200
+    except Exception:
+        _logger.exception("載入運動類別清單失敗")
+        return _unexpected_error()
+    finally:
+        if db is not None:
+            db.close()
+
+
 @app_analytics_bp.post("/diet/recognize-photo")
 @require_access_token
 def recognize_diet_image():

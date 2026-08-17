@@ -312,6 +312,12 @@ export function calculateDietNutrition(
   return request("/api/app/diet/calculate-nutrition", { method: "POST", body: JSON.stringify(payload) });
 }
 
+export type ExerciseCategory = { id: number; name: string };
+
+export function getExerciseCategories(request: AuthRequest): Promise<{ categories: ExerciseCategory[] }> {
+  return request("/api/app/exercise-categories");
+}
+
 export function getImportantDays(request: AuthRequest): Promise<{ items: ImportantDay[]; users: ImportantDayUser[] }> {
   return request("/api/app/important-days");
 }

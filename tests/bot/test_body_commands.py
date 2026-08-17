@@ -349,20 +349,28 @@ def test_handle_body_confirm_text_only_accepts_buttons(fake_db):
 
 
 def test_exercise_full_log_flow_with_calorie_estimate(fake_db):
-    """2026-08-16（Phase 6 第二批 2c）：運動改為摘要→二次確認關卡，`handle_exercise_heart_rate_step`
-    不帶 `db` 參數、只組摘要，實際寫入要等 `handle_exercise_confirm_save`（`exercise:confirm_save`
-    按鈕），端對端串接見 tests/bot/test_router.py test_exercise_new_flow_records_entry_with_confirm_gate。"""
+    """2026-08-17（FR-47a，批次2）：運動改版後的完整流程——選類別（既有按鈕）→時長→心率
+    （跳過）→補充內容（跳過）→AI 估算熱量→摘要→二次確認，實際寫入要等
+    `handle_exercise_confirm_save`（`exercise:confirm_save` 按鈕），端對端串接見
+    tests/bot/test_router.py test_exercise_new_flow_records_entry_with_confirm_gate。"""
+    category_id = fake_db.insert("exercise_categories", {"name": "跑步", "normalized_name": "跑步"})
     store = ConversationStateStore()
-    commands.start_exercise_log(store, telegram_user_id=1, user_id=42)
+    commands.start_exercise_log(fake_db, store, telegram_user_id=1, user_id=42)
 
-    reply = commands.handle_exercise_activity_step(store, telegram_user_id=1, text="跑步")
+    reply, _keyboard = commands.handle_exercise_category_choice(fake_db, store, telegram_user_id=1, category_id=category_id)
     assert "多久" in reply
 
-    reply = commands.handle_exercise_duration_step(store, telegram_user_id=1, text="30")
+    reply, _keyboard = commands.handle_exercise_duration_step(store, telegram_user_id=1, text="30")
     assert "心率" in reply
 
+    reply, _keyboard = commands.handle_exercise_skip_heart_rate(store, telegram_user_id=1)
+    assert "補充" in reply
+
+    reply, keyboard = commands.handle_exercise_skip_note(store, telegram_user_id=1)
+    assert "AI 估算" in keyboard["inline_keyboard"][0][0]["text"]
+
     llm_client = _FakeLLMClient(response_text="大約 300 大卡")
-    reply, keyboard = commands.handle_exercise_heart_rate_step(llm_client, store, telegram_user_id=1, text="沒有")
+    reply, keyboard = commands.handle_exercise_calorie_ai_choice(llm_client, store, telegram_user_id=1)
 
     assert "300 大卡" in reply
     assert keyboard["inline_keyboard"][0][0]["callback_data"] == "exercise:confirm_save"
@@ -375,15 +383,19 @@ def test_exercise_full_log_flow_with_calorie_estimate(fake_db):
     assert store.get(1) is None
     row = fake_db.select("exercise_logs", where="user_id = %s", params=(42,))[0]
     assert row["activity"] == "跑步"
+    assert row["category_id"] == category_id
     assert row["duration_minutes"] == 30
     assert row["heart_rate"] is None
+    assert row["note"] is None
+    assert row["calorie_source"] == "ai"
     assert row["estimated_calories"] == 300.0
 
 
 def test_handle_exercise_duration_step_invalid_reprompts(fake_db):
+    category_id = fake_db.insert("exercise_categories", {"name": "跑步", "normalized_name": "跑步"})
     store = ConversationStateStore()
-    store.set(1, {"flow": "pending_exercise_activity", "target_user_id": 42, "exercise_date": date(2026, 8, 4), "exercise_id": None})
-    commands.handle_exercise_activity_step(store, telegram_user_id=1, text="跑步")
+    store.set(1, {"flow": "pending_exercise_category", "target_user_id": 42, "exercise_date": date(2026, 8, 4), "exercise_id": None})
+    commands.handle_exercise_category_choice(fake_db, store, telegram_user_id=1, category_id=category_id)
 
     reply = commands.handle_exercise_duration_step(store, telegram_user_id=1, text="不知道")
     assert "正整數" in reply

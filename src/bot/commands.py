@@ -2593,6 +2593,61 @@ def handle_body_confirm_text(state_store: ConversationStateStore, telegram_user_
 
 
 # --- 運動 ---
+#
+# 2026-08-17（FR-47a，批次2，見 docs/ADR/discuss/robinson.md）：全面改版，取代原本「時間／熱量」
+# 雙頁籤設計。新流程：選類別（既有全域類別按鈕＋「➕ 其他」新增，同義詞合併見
+# `body.find_or_create_exercise_category()`）→ 時長（必填）→ 心率（選填，可輸入「skip」或按
+# 「⏭ 跳過」）→ 補充內容（選填，取代原本只有重訓才有的「強度與組數」欄位，同樣可跳過）→ 是否
+# 交由 AI 估算消耗熱量（按鈕二選一）→（人工模式才問）消耗熱量 → 摘要＋確認送出/取消。
+
+
+def _exercise_category_keyboard(db: CloudSQLClient) -> dict:
+    """組出類別選擇按鈕（既有全域類別＋「➕ 其他」新增）。"""
+    categories = body.list_exercise_categories(db)
+    buttons = [[{"text": item["name"], "callback_data": f"exercise:cat:{item['id']}"}] for item in categories]
+    buttons.append([{"text": "➕ 其他", "callback_data": "exercise:cat:other"}])
+    return {"inline_keyboard": buttons}
+
+
+def _exercise_category_prompt(db: CloudSQLClient) -> tuple[str, dict]:
+    return "好的，這次做了什麼運動呢？請選擇類別：", _exercise_category_keyboard(db)
+
+
+def _exercise_skip_keyboard(callback_data: str) -> dict:
+    return {"inline_keyboard": [[{"text": "⏭ 跳過", "callback_data": callback_data}]]}
+
+
+def _exercise_confirm_summary(state: dict, calorie_source: str, estimated_calories: float | None) -> tuple[str, dict]:
+    if estimated_calories is not None:
+        source_note = "（估算值，不會到很準確）" if calorie_source == "ai" else "（人工輸入）"
+        calorie_line = f"{estimated_calories:.0f} 大卡{source_note}"
+    else:
+        calorie_line = "沒能順利估算"
+    summary = (
+        "請確認以下內容：\n\n"
+        f"類別：{state['activity']}\n"
+        f"時長：{state['duration_minutes']} 分鐘\n"
+        f"心率：{state['heart_rate'] if state.get('heart_rate') is not None else '（無）'}\n"
+        f"補充內容：{state.get('note') or '（無）'}\n"
+        f"消耗熱量：{calorie_line}"
+    )
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "✅ 確認送出", "callback_data": "exercise:confirm_save"}],
+            [{"text": "❌ 取消", "callback_data": "menu:daily_log"}],
+        ]
+    }
+    return summary, keyboard
+
+
+def _exercise_calorie_choice_prompt() -> tuple[str, dict]:
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "🤖 AI 估算", "callback_data": "exercise:calorie:ai"}],
+            [{"text": "✍️ 人工輸入", "callback_data": "exercise:calorie:manual"}],
+        ]
+    }
+    return "是否要交由 AI 估算消耗熱量呢？", keyboard
 
 
 def start_exercise_menu() -> tuple[str, dict]:
@@ -2611,13 +2666,13 @@ def start_exercise_menu() -> tuple[str, dict]:
     return "運動，請選擇要進行的操作：", keyboard
 
 
-def start_exercise_log(state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
-    """「➕ 新增」：開始記錄運動（FR-47），先問項目。"""
+def start_exercise_log(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> tuple[str, dict]:
+    """「➕ 新增」：開始記錄運動（FR-47／FR-47a），先選類別。"""
     state_store.set(
         telegram_user_id,
-        {"flow": "pending_exercise_activity", "target_user_id": user_id, "exercise_date": _now().date(), "exercise_id": None},
+        {"flow": "pending_exercise_category", "target_user_id": user_id, "exercise_date": _now().date(), "exercise_id": None},
     )
-    return "好的，你做了什麼運動呢？"
+    return _exercise_category_prompt(db)
 
 
 def start_exercise_backfill(state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
@@ -2626,8 +2681,10 @@ def start_exercise_backfill(state_store: ConversationStateStore, telegram_user_i
     return "好的，要補記哪一天的運動呢？（例如：昨天、8/1）"
 
 
-def handle_exercise_backfill_date_step(llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
-    """處理 `pending_exercise_backfill_date` 狀態下使用者提供的日期描述，講清楚後接著問運動項目。"""
+def handle_exercise_backfill_date_step(
+    db: CloudSQLClient, llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str
+) -> str | tuple[str, dict]:
+    """處理 `pending_exercise_backfill_date` 狀態下使用者提供的日期描述，講清楚後接著問類別。"""
     state = state_store.get(telegram_user_id)
     target_user_id = state["target_user_id"]
 
@@ -2647,68 +2704,148 @@ def handle_exercise_backfill_date_step(llm_client, state_store: ConversationStat
 
     state_store.set(
         telegram_user_id,
-        {"flow": "pending_exercise_activity", "target_user_id": target_user_id, "exercise_date": exercise_date, "exercise_id": None},
+        {"flow": "pending_exercise_category", "target_user_id": target_user_id, "exercise_date": exercise_date, "exercise_id": None},
     )
-    return "好的，你做了什麼運動呢？"
+    return _exercise_category_prompt(db)
 
 
-def handle_exercise_activity_step(state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
-    """處理 `pending_exercise_activity` 狀態下使用者提供的運動項目（自由文字）。"""
+def handle_exercise_category_choice(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, category_id: int) -> tuple[str, dict]:
+    """按鈕選擇既有類別（`exercise:cat:<id>`）。"""
     state = state_store.get(telegram_user_id)
-    activity = text.strip()
-    if not activity:
-        return "不好意思，我沒看懂，麻煩告訴我運動項目是什麼呢？"
+    if not state or state.get("flow") != "pending_exercise_category":
+        return "目前沒有進行中的運動紀錄設定。", menu.back_to_main_menu_keyboard()
+    category = db.select("exercise_categories", where="id = %s", params=(category_id,), fetch_one=True)
+    if category is None:
+        return "找不到這個運動類別，麻煩重新選擇：", _exercise_category_keyboard(db)
+    state_store.set(
+        telegram_user_id,
+        {**state, "flow": "pending_exercise_duration", "category_id": category["id"], "activity": category["name"]},
+    )
+    return "運動了多久呢？（分鐘，例如：30）", None
 
-    state_store.set(telegram_user_id, {**state, "flow": "pending_exercise_duration", "activity": activity})
+
+def start_exercise_category_custom(state_store: ConversationStateStore, telegram_user_id: int) -> str:
+    """按下「➕ 其他」（`exercise:cat:other`）：改問自訂類別名稱。"""
+    state = state_store.get(telegram_user_id)
+    state_store.set(telegram_user_id, {**state, "flow": "pending_exercise_category_custom"})
+    return "好的，請告訴我這個運動的名稱："
+
+
+def handle_exercise_category_custom_step(
+    db: CloudSQLClient, llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str
+) -> str:
+    """處理 `pending_exercise_category_custom` 狀態下使用者輸入的自訂類別名稱，走同義詞合併
+    （FR-47a，見 `body.find_or_create_exercise_category()`）後併入既有或新建類別。"""
+    state = state_store.get(telegram_user_id)
+    name = text.strip()
+    if not name:
+        return "不好意思，我沒看懂，麻煩告訴我這個運動的名稱："
+    category = body.find_or_create_exercise_category(db, llm_client, name)
+    state_store.set(
+        telegram_user_id,
+        {**state, "flow": "pending_exercise_duration", "category_id": category["id"], "activity": category["name"]},
+    )
     return "運動了多久呢？（分鐘，例如：30）"
 
 
-def handle_exercise_duration_step(state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
-    """處理 `pending_exercise_duration` 狀態下使用者提供的運動時長（分鐘）。"""
+def handle_exercise_duration_step(state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str | tuple[str, dict]:
+    """處理 `pending_exercise_duration` 狀態下使用者提供的運動時長（分鐘，必填）。"""
     state = state_store.get(telegram_user_id)
     duration = _parse_positive_int(text)
     if duration is None:
         return "不好意思，我沒看懂，麻煩輸入一個正整數（分鐘），例如：30"
 
     state_store.set(telegram_user_id, {**state, "flow": "pending_exercise_heart_rate", "duration_minutes": duration})
-    return "有心率紀錄嗎？有的話告訴我數字，沒有的話輸入「沒有」："
+    return (
+        "有心率紀錄嗎？有的話告訴我數字，沒有的話輸入「skip」或按下方「⏭ 跳過」：",
+        _exercise_skip_keyboard("exercise:skip:heart_rate"),
+    )
 
 
-def handle_exercise_heart_rate_step(llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str) -> tuple[str, dict]:
-    """處理 `pending_exercise_heart_rate` 狀態下使用者提供的心率（選填），估算卡路里後組出摘要，
-    回傳確認／取消按鈕，不在這一步直接寫入（2c 新增的摘要→二次確認關卡）。估算失敗不擋下整筆
-    紀錄，見 `body.estimate_exercise_calories()`。"""
+def handle_exercise_heart_rate_step(state_store: ConversationStateStore, telegram_user_id: int, text: str) -> tuple[str, dict]:
+    """處理 `pending_exercise_heart_rate` 狀態下使用者提供的心率（選填）。"""
     state = state_store.get(telegram_user_id)
     heart_rate = None
-    if text.strip() not in ("沒有", "不用", "無"):
+    if text.strip().lower() not in ("skip", "沒有", "不用", "無"):
         heart_rate = _parse_positive_int(text)
         if heart_rate is None:
-            return "不好意思，我沒看懂，麻煩輸入心率數字，或輸入「沒有」跳過：", None
+            return "不好意思，我沒看懂，麻煩輸入心率數字，或輸入「skip」跳過：", _exercise_skip_keyboard("exercise:skip:heart_rate")
 
-    activity = state["activity"]
-    duration_minutes = state["duration_minutes"]
-    estimated_calories = body.estimate_exercise_calories(llm_client, activity, duration_minutes, heart_rate)
+    state_store.set(telegram_user_id, {**state, "flow": "pending_exercise_note", "heart_rate": heart_rate})
+    return (
+        "要補充什麼內容嗎？（例如強度、組數等，選填）輸入內容，或輸入「skip」／按下方「⏭ 跳過」：",
+        _exercise_skip_keyboard("exercise:skip:note"),
+    )
 
+
+def handle_exercise_skip_heart_rate(state_store: ConversationStateStore, telegram_user_id: int) -> tuple[str, dict]:
+    """按鈕「⏭ 跳過」心率（`exercise:skip:heart_rate`）。"""
+    state = state_store.get(telegram_user_id)
+    if not state or state.get("flow") != "pending_exercise_heart_rate":
+        return "目前沒有進行中的運動紀錄設定。", menu.back_to_main_menu_keyboard()
+    state_store.set(telegram_user_id, {**state, "flow": "pending_exercise_note", "heart_rate": None})
+    return (
+        "要補充什麼內容嗎？（例如強度、組數等，選填）輸入內容，或輸入「skip」／按下方「⏭ 跳過」：",
+        _exercise_skip_keyboard("exercise:skip:note"),
+    )
+
+
+def handle_exercise_note_step(state_store: ConversationStateStore, telegram_user_id: int, text: str) -> tuple[str, dict]:
+    """處理 `pending_exercise_note` 狀態下使用者提供的補充內容（選填，取代原本只有重訓才有的
+    「強度與組數」欄位）。"""
+    state = state_store.get(telegram_user_id)
+    note = None
+    if text.strip().lower() not in ("skip", "沒有", "不用", "無"):
+        note, _detected = privacy.mask_text(text.strip())
+    state_store.set(telegram_user_id, {**state, "flow": "pending_exercise_calorie_choice", "note": note})
+    return _exercise_calorie_choice_prompt()
+
+
+def handle_exercise_skip_note(state_store: ConversationStateStore, telegram_user_id: int) -> tuple[str, dict]:
+    """按鈕「⏭ 跳過」補充內容（`exercise:skip:note`）。"""
+    state = state_store.get(telegram_user_id)
+    if not state or state.get("flow") != "pending_exercise_note":
+        return "目前沒有進行中的運動紀錄設定。", menu.back_to_main_menu_keyboard()
+    state_store.set(telegram_user_id, {**state, "flow": "pending_exercise_calorie_choice", "note": None})
+    return _exercise_calorie_choice_prompt()
+
+
+def handle_exercise_calorie_ai_choice(llm_client, state_store: ConversationStateStore, telegram_user_id: int) -> tuple[str, dict]:
+    """按鈕「🤖 AI 估算」（`exercise:calorie:ai`）：呼叫 LLM 估算後組摘要。估算失敗不擋下整筆
+    紀錄，見 `body.estimate_exercise_calories()`。"""
+    state = state_store.get(telegram_user_id)
+    if not state or state.get("flow") != "pending_exercise_calorie_choice":
+        return "目前沒有進行中的運動紀錄設定。", menu.back_to_main_menu_keyboard()
+    estimated_calories = body.estimate_exercise_calories(
+        llm_client, state["activity"], state["duration_minutes"], state["heart_rate"], state.get("note")
+    )
     state_store.set(
         telegram_user_id,
-        {**state, "flow": "pending_exercise_confirm", "heart_rate": heart_rate, "estimated_calories": estimated_calories},
+        {**state, "flow": "pending_exercise_confirm", "calorie_source": "ai", "estimated_calories": estimated_calories},
     )
+    return _exercise_confirm_summary(state, "ai", estimated_calories)
 
-    calorie_line = f"{estimated_calories:.0f} 大卡（估算值，不會到很準確）" if estimated_calories is not None else "沒能順利估算"
-    summary = (
-        "請確認以下內容：\n\n"
-        f"項目：{activity}\n"
-        f"時長：{duration_minutes} 分鐘\n"
-        f"心率：{heart_rate if heart_rate is not None else '（無）'}\n"
-        f"消耗熱量：{calorie_line}"
+
+def handle_exercise_calorie_manual_choice(state_store: ConversationStateStore, telegram_user_id: int) -> tuple[str, dict]:
+    """按鈕「✍️ 人工輸入」（`exercise:calorie:manual`）：改問人工消耗熱量數字。"""
+    state = state_store.get(telegram_user_id)
+    if not state or state.get("flow") != "pending_exercise_calorie_choice":
+        return "目前沒有進行中的運動紀錄設定。", menu.back_to_main_menu_keyboard()
+    state_store.set(telegram_user_id, {**state, "flow": "pending_exercise_calories_manual"})
+    return "好的，請輸入這次運動消耗的熱量（大卡，範圍 1～5,000）：", None
+
+
+def handle_exercise_calories_manual_step(state_store: ConversationStateStore, telegram_user_id: int, text: str) -> tuple[str, dict]:
+    """處理 `pending_exercise_calories_manual` 狀態下使用者輸入的人工消耗熱量。"""
+    state = state_store.get(telegram_user_id)
+    calories = _parse_positive_int(text)
+    if calories is None or calories > 5000:
+        return "不好意思，消耗熱量僅能輸入 1 到 5,000 的整數，麻煩再輸入一次：", None
+    state_store.set(
+        telegram_user_id,
+        {**state, "flow": "pending_exercise_confirm", "calorie_source": "manual", "estimated_calories": float(calories)},
     )
-    keyboard = {
-        "inline_keyboard": [
-            [{"text": "✅ 確認送出", "callback_data": "exercise:confirm_save"}],
-            [{"text": "❌ 取消", "callback_data": "menu:daily_log"}],
-        ]
-    }
-    return summary, keyboard
+    return _exercise_confirm_summary(state, "manual", float(calories))
 
 
 def handle_exercise_confirm_save(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int) -> str:
@@ -2720,19 +2857,28 @@ def handle_exercise_confirm_save(db: CloudSQLClient, state_store: ConversationSt
     target_user_id = state["target_user_id"]
     exercise_date = state["exercise_date"]
     exercise_id = state.get("exercise_id")
+    category_id = state["category_id"]
     activity = state["activity"]
     duration_minutes = state["duration_minutes"]
     heart_rate = state["heart_rate"]
+    note = state.get("note")
+    calorie_source = state["calorie_source"]
     estimated_calories = state["estimated_calories"]
     state_store.clear(telegram_user_id)
 
     if exercise_id is None:
-        body.create_exercise_log(db, target_user_id, activity, duration_minutes, heart_rate, estimated_calories, exercise_date)
+        body.create_exercise_log(
+            db, target_user_id, category_id, activity, duration_minutes, heart_rate, note,
+            calorie_source, estimated_calories, exercise_date,
+        )
     else:
-        body.update_exercise_log(db, exercise_id, activity, duration_minutes, heart_rate, estimated_calories)
+        body.update_exercise_log(
+            db, exercise_id, category_id, activity, duration_minutes, heart_rate, note, calorie_source, estimated_calories,
+        )
 
     if estimated_calories is not None:
-        return f"OK，已經幫你記錄好了！這次運動大約消耗了 {estimated_calories:.0f} 大卡，這個數字只是估算值，不會到很準確喔！"
+        source_note = "，這個數字只是估算值，不會到很準確喔！" if calorie_source == "ai" else "！"
+        return f"OK，已經幫你記錄好了！這次運動消耗了 {estimated_calories:.0f} 大卡{source_note}"
     return "OK，已經幫你記錄好了！這次沒能順利估算消耗的卡路里，不過紀錄已經存好了。"
 
 
@@ -2756,18 +2902,19 @@ def handle_exercise_list(db: CloudSQLClient, user_id: int) -> tuple[str, dict]:
     return listing, {"inline_keyboard": buttons}
 
 
-def start_exercise_edit(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int, exercise_log_id: int) -> str:
-    """「✏️ 編輯」：沿用原本記錄的 `entry_date`，重新走一次項目/時長/心率三輪反問，
-    `exercise_id` 帶著代表這是編輯而非新增。"""
+def start_exercise_edit(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int, exercise_log_id: int) -> tuple[str, dict]:
+    """「✏️ 編輯」：沿用原本記錄的 `entry_date`，重新走一次類別/時長/心率/補充內容/熱量來源
+    反問，`exercise_id` 帶著代表這是編輯而非新增（2026-08-17 起改回選類別開始，理由同批次1
+    「三種類型介面完全對稱、都重新走一次輸入」的簡化決策）。"""
     row = db.select("exercise_logs", where="id = %s", params=(exercise_log_id,), fetch_one=True)
     if row is None or row.get("user_id") != user_id:
-        return "找不到這筆運動紀錄，可能已經被刪除了。"
+        return "找不到這筆運動紀錄，可能已經被刪除了。", None
 
     state_store.set(
         telegram_user_id,
-        {"flow": "pending_exercise_activity", "target_user_id": user_id, "exercise_date": row["entry_date"], "exercise_id": exercise_log_id},
+        {"flow": "pending_exercise_category", "target_user_id": user_id, "exercise_date": row["entry_date"], "exercise_id": exercise_log_id},
     )
-    return "好的，那我們重新輸入一次，你做了什麼運動呢？"
+    return "好的，那我們重新輸入一次，這次做了什麼運動呢？請選擇類別：", _exercise_category_keyboard(db)
 
 
 def start_exercise_delete_confirm(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int, exercise_log_id: int) -> tuple[str, dict]:

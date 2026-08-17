@@ -192,7 +192,7 @@ def test_estimate_exercise_calories_parses_number():
     assert calories == 318.0
 
 
-def test_estimate_exercise_calories_includes_strength_details():
+def test_estimate_exercise_calories_includes_note():
     llm_client = Mock()
     llm_client.generate_text.return_value = "320"
 
@@ -201,7 +201,7 @@ def test_estimate_exercise_calories_includes_strength_details():
         "重訓",
         45,
         130,
-        training_details="深蹲 60 公斤 5 組，每組 8 下",
+        note="深蹲 60 公斤 5 組，每組 8 下",
     )
 
     prompt = llm_client.generate_text.call_args.args[0]
@@ -221,26 +221,31 @@ def test_estimate_exercise_calories_returns_none_on_llm_error():
 
 
 def test_create_update_delete_exercise_log(fake_db):
-    log_id = body.create_exercise_log(fake_db, 1, "跑步", 30, 140, 300.0, date(2026, 8, 4))
+    log_id = body.create_exercise_log(fake_db, 1, 10, "跑步", 30, 140, None, "ai", 300.0, date(2026, 8, 4))
     row = fake_db.select("exercise_logs", where="id = %s", params=(log_id,), fetch_one=True)
     assert row["activity"] == "跑步"
+    assert row["category_id"] == 10
     assert row["duration_minutes"] == 30
     assert row["heart_rate"] == 140
     assert row["estimated_calories"] == 300.0
+    assert row["calorie_source"] == "ai"
 
-    body.update_exercise_log(fake_db, log_id, "游泳", 45, None, 400.0)
+    body.update_exercise_log(fake_db, log_id, 11, "游泳", 45, None, "自由式", "manual", 400.0)
     row = fake_db.select("exercise_logs", where="id = %s", params=(log_id,), fetch_one=True)
     assert row["activity"] == "游泳"
+    assert row["category_id"] == 11
     assert row["duration_minutes"] == 45
     assert row["heart_rate"] is None
+    assert row["note"] == "自由式"
+    assert row["calorie_source"] == "manual"
 
     body.delete_exercise_log(fake_db, log_id)
     assert fake_db.select("exercise_logs", where="id = %s", params=(log_id,), fetch_one=True) is None
 
 
 def test_list_and_format_exercise_logs(fake_db):
-    body.create_exercise_log(fake_db, 1, "跑步", 30, None, 300.0, date(2026, 8, 4))
-    body.create_exercise_log(fake_db, 1, "重訓", 60, None, None, date(2026, 8, 2))
+    body.create_exercise_log(fake_db, 1, 10, "跑步", 30, None, None, "ai", 300.0, date(2026, 8, 4))
+    body.create_exercise_log(fake_db, 1, 11, "重訓", 60, None, "深蹲 5 組", "manual", None, date(2026, 8, 2))
 
     logs = body.list_exercise_logs(fake_db, 1)
     text = body.format_exercise_log_list(logs)
@@ -251,6 +256,43 @@ def test_list_and_format_exercise_logs(fake_db):
 
 def test_format_exercise_log_list_empty():
     assert "還沒有運動紀錄" in body.format_exercise_log_list([])
+
+
+def test_list_exercise_categories_and_find_or_create(fake_db):
+    fake_db.insert("exercise_categories", {"name": "跑步", "normalized_name": "跑步"})
+    fake_db.insert("exercise_categories", {"name": "重訓", "normalized_name": "重訓"})
+
+    categories = body.list_exercise_categories(fake_db)
+    assert [item["name"] for item in categories] == ["跑步", "重訓"]
+
+    # 正規化比對命中既有類別（trim／全形轉半形／大小寫統一）。
+    matched = body.find_or_create_exercise_category(fake_db, None, "  重訓  ")
+    assert matched["name"] == "重訓"
+    assert len(body.list_exercise_categories(fake_db)) == 2
+
+    # 正規化沒命中、沒有 llm_client 時直接新增。
+    created = body.find_or_create_exercise_category(fake_db, None, "拳擊")
+    assert created["name"] == "拳擊"
+    assert len(body.list_exercise_categories(fake_db)) == 3
+
+    # 正規化沒命中，LLM 判斷為既有類別同義詞時沿用既有類別，不新增。
+    llm_client = Mock()
+    llm_client.generate_text.return_value = "重訓"
+    synonym_matched = body.find_or_create_exercise_category(fake_db, llm_client, "重量訓練")
+    assert synonym_matched["name"] == "重訓"
+    assert len(body.list_exercise_categories(fake_db)) == 3
+
+    # LLM 回 NONE 時新增一筆。
+    llm_client.generate_text.return_value = "NONE"
+    new_category = body.find_or_create_exercise_category(fake_db, llm_client, "飛盤")
+    assert new_category["name"] == "飛盤"
+    assert len(body.list_exercise_categories(fake_db)) == 4
+
+    # LLM 呼叫失敗時降級為新增，不擋下流程。
+    llm_client.generate_text.side_effect = RuntimeError("LLM 暫時錯誤")
+    fallback_category = body.find_or_create_exercise_category(fake_db, llm_client, "壁球")
+    assert fallback_category["name"] == "壁球"
+    assert len(body.list_exercise_categories(fake_db)) == 5
 
 
 # --- 飲食/飲水 ---
@@ -507,12 +549,12 @@ def test_check_and_push_exercise_goal_achievements(fake_db):
     goal_id = body.create_goal(fake_db, user_id, "exercise", "這個月運動滿 60 分鐘", target_value=60)
     fake_db.update("body_goals", {"created_at": now}, where="id = %s", params=(goal_id,))
 
-    body.create_exercise_log(fake_db, user_id, "跑步", 30, None, None, date(2026, 8, 4))
+    body.create_exercise_log(fake_db, user_id, 1, "跑步", 30, None, None, "ai", None, date(2026, 8, 4))
     telegram_client = Mock()
     body.check_and_push_exercise_goal_achievements(fake_db, telegram_client, now=now)
     telegram_client.send_text.assert_not_called()
 
-    body.create_exercise_log(fake_db, user_id, "游泳", 40, None, None, date(2026, 8, 4))
+    body.create_exercise_log(fake_db, user_id, 2, "游泳", 40, None, None, "ai", None, date(2026, 8, 4))
     body.check_and_push_exercise_goal_achievements(fake_db, telegram_client, now=now)
     telegram_client.send_text.assert_called_once()
 
@@ -527,7 +569,7 @@ def test_check_and_push_exercise_goal_achievements_deletes_calendar_event_when_s
     fake_db.update("body_goals", {"created_at": now}, where="id = %s", params=(goal_id,))
     body.set_calendar_event_id(fake_db, goal_id, "event-xyz")
 
-    body.create_exercise_log(fake_db, user_id, "跑步", 60, None, None, date(2026, 8, 4))
+    body.create_exercise_log(fake_db, user_id, 1, "跑步", 60, None, None, "ai", None, date(2026, 8, 4))
     telegram_client = Mock()
     calendar_client = Mock()
     body.check_and_push_exercise_goal_achievements(fake_db, telegram_client, now=now, calendar_client=calendar_client)

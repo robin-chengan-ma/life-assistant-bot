@@ -31,9 +31,18 @@
    刻意簡化，記錄在此。
 ⑤ 運動目標的 `target_value` 語意是「累積運動分鐘數」（Robin 指出不是只有跑步，用公里數當單位
    對其他運動類型不通用，分鐘數才是各種運動都適用的共同單位）。
+
+2026-08-17 運動紀錄改版（FR-47a，批次2，見 docs/ADR/discuss/robinson.md）：取代原本「時間／
+熱量」雙頁籤設計，改成單一表單（持續時間必填／心率選填／補充內容選填）＋「是否交由 AI 計算
+消耗熱量」開關；刪除「重訓強度與組數」特殊分支，改由「補充內容」自由文字承接，AI 估算時一併
+參考。新增全域共用的 `exercise_categories` 類別表，取代原本寫死的固定類別字串；新增類別時採
+兩段式同義詞合併——先做正規化字串比對，沒命中才呼叫 LLM 語意判斷是否為既有類別的同義詞，仍然
+沒命中才新增一筆，LLM 失敗一律降級為新增（不擋下使用者的紀錄流程）。舊運動紀錄資料已於同批
+migration 直接清空，不做欄位相容回填。
 """
 import logging
 import re
+import unicodedata
 from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -249,6 +258,59 @@ def format_body_summary(summary: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
+# 運動類別（FR-47a，2026-08-17 批次2，全域共用，見模組 docstring）
+# ---------------------------------------------------------------------------
+
+
+def _normalize_category_name(name: str) -> str:
+    """正規化類別名稱供去重比對：trim、全形轉半形（NFKC）、大小寫統一。"""
+    return unicodedata.normalize("NFKC", name.strip()).casefold()
+
+
+def list_exercise_categories(db: CloudSQLClient) -> list[dict]:
+    """查詢全部運動類別（全域共用，不分使用者），依名稱排序，供 Telegram 按鈕與 Mobile 下拉選單
+    共用同一份清單。"""
+    rows = db.select("exercise_categories")
+    rows.sort(key=lambda row: row["name"])
+    return rows
+
+
+def find_or_create_exercise_category(db: CloudSQLClient, llm_client, raw_name: str) -> dict:
+    """FR-47a 同義詞合併（2026-08-17 定案，兩段式）：使用者新增全域類別時，先做正規化字串比對，
+    命中就直接沿用既有類別；沒命中才呼叫 LLM 判斷是否為既有類別的同義詞（例如「重量訓練」跟
+    「重訓」），仍然沒命中才新增一筆。LLM 呼叫失敗（或沒有 `llm_client`）一律降級為直接新增，
+    不能因為判斷失敗就擋下使用者的紀錄流程。回傳既有或新建立的類別列
+    （`{"id", "name", "normalized_name"}`）。"""
+    name = raw_name.strip()
+    normalized = _normalize_category_name(name)
+    existing = db.select(
+        "exercise_categories", where="normalized_name = %s", params=(normalized,), fetch_one=True
+    )
+    if existing is not None:
+        return existing
+
+    categories = list_exercise_categories(db)
+    if categories and llm_client is not None:
+        options = "、".join(f"「{item['name']}」" for item in categories)
+        prompt = (
+            f"以下是既有的運動類別清單：{options}。使用者新輸入了一個運動類別「{name}」，請判斷這個"
+            "類別是否為清單中某一個既有類別的同義詞（例如「重量訓練」跟「重訓」是同一件事）。如果"
+            "是，只回覆該既有類別的名稱（跟清單中完全一樣的文字）；如果不是清單中任何一個類別的"
+            "同義詞，只回覆 NONE，不要附加其他文字。"
+        )
+        try:
+            response = (llm_client.generate_text(prompt) or "").strip()
+        except Exception:  # noqa: BLE001 - LLM 失敗時降級為直接新增類別
+            response = "NONE"
+        matched = next((item for item in categories if item["name"] == response), None)
+        if matched is not None:
+            return matched
+
+    new_id = db.insert("exercise_categories", {"name": name, "normalized_name": normalized})
+    return {"id": new_id, "name": name, "normalized_name": normalized}
+
+
+# ---------------------------------------------------------------------------
 # 運動紀錄
 # ---------------------------------------------------------------------------
 
@@ -258,15 +320,16 @@ def estimate_exercise_calories(
     activity: str,
     duration_minutes: int,
     heart_rate: int | None,
-    training_details: str | None = None,
+    note: str | None = None,
 ) -> float | None:
-    """呼叫 LLM 估算這次運動大約消耗的卡路里（決策①）。回傳解析出的第一個數字；LLM 回覆無法解析
-    出數字時回傳 None，呼叫端仍應正常存檔（`estimated_calories` 存 NULL），不能因為估算失敗就擋下
-    整筆紀錄。"""
+    """呼叫 LLM 估算這次運動大約消耗的卡路里（決策①）。2026-08-17（FR-47a，批次2）：`note`
+    取代原本只有重訓才傳的 `training_details`，任何類別的補充內容都會一併參考。回傳解析出的
+    第一個數字；LLM 回覆無法解析出數字時回傳 None，呼叫端仍應正常存檔（`estimated_calories`
+    存 NULL），不能因為估算失敗就擋下整筆紀錄。"""
     heart_rate_part = f"，心率約 {heart_rate} 下/分鐘" if heart_rate else "（沒有心率資料）"
-    training_part = f"，訓練內容為「{training_details}」" if training_details else ""
+    note_part = f"，補充內容為「{note}」" if note else ""
     prompt = (
-        f"請估算一般成人做「{activity}」運動 {duration_minutes} 分鐘{heart_rate_part}{training_part}大約消耗多少大卡"
+        f"請估算一般成人做「{activity}」運動 {duration_minutes} 分鐘{heart_rate_part}{note_part}大約消耗多少大卡"
         "熱量，只要回覆一個數字（大卡），不要附加其他文字或單位。"
     )
     try:
@@ -280,43 +343,56 @@ def estimate_exercise_calories(
 def create_exercise_log(
     db: CloudSQLClient,
     user_id: int,
+    category_id: int,
     activity: str,
     duration_minutes: int,
     heart_rate: int | None,
+    note: str | None,
+    calorie_source: str,
     estimated_calories: float | None,
     entry_date: date,
 ) -> int:
-    """新增一筆運動紀錄（FR-47），回傳新建列的 id。"""
+    """新增一筆運動紀錄（FR-47／FR-47a，2026-08-17 批次2改版）。`activity` 是類別名稱的
+    denormalized 快照（寫入當下複製自 `exercise_categories.name`，方便清單顯示與既有分析
+    查詢不用額外 JOIN）；`category_id` 才是類別管理與同義詞合併的權威來源。回傳新建列的 id。"""
     return db.insert(
         "exercise_logs",
         {
             "user_id": user_id,
+            "category_id": category_id,
             "activity": activity,
             "duration_minutes": duration_minutes,
             "heart_rate": heart_rate,
+            "note": note,
             "estimated_calories": estimated_calories,
-            "input_mode": "time",
-            "calorie_source": "ai",
-            "training_details": None,
+            "calorie_source": calorie_source,
             "entry_date": entry_date,
         },
     )
 
 
 def update_exercise_log(
-    db: CloudSQLClient, log_id: int, activity: str, duration_minutes: int, heart_rate: int | None, estimated_calories: float | None
+    db: CloudSQLClient,
+    log_id: int,
+    category_id: int,
+    activity: str,
+    duration_minutes: int,
+    heart_rate: int | None,
+    note: str | None,
+    calorie_source: str,
+    estimated_calories: float | None,
 ) -> None:
     """更新一筆運動紀錄；`entry_date` 沿用原本記錄的那一天。"""
     db.update(
         "exercise_logs",
         {
+            "category_id": category_id,
             "activity": activity,
             "duration_minutes": duration_minutes,
             "heart_rate": heart_rate,
+            "note": note,
             "estimated_calories": estimated_calories,
-            "input_mode": "time",
-            "calorie_source": "ai",
-            "training_details": None,
+            "calorie_source": calorie_source,
         },
         where="id = %s",
         params=(log_id,),
@@ -336,19 +412,19 @@ def list_exercise_logs(db: CloudSQLClient, user_id: int, limit: int = 10) -> lis
 
 
 def format_exercise_log_list(logs: list[dict]) -> str:
-    """把運動紀錄清單格式化成使用者看的編號清單文字。"""
+    """把運動紀錄清單格式化成使用者看的編號清單文字（2026-08-17 改版：不再區分時間／熱量兩種
+    格式，統一顯示時長，熱量來源為人工輸入時附註說明）。"""
     if not logs:
         return "目前還沒有運動紀錄喔！"
     lines = ["這是你最近的運動紀錄：", ""]
     for index, item in enumerate(logs, start=1):
         calories = item.get("estimated_calories")
-        calories_part = f"　約 {float(calories):.0f} 大卡" if calories is not None else ""
-        if item.get("input_mode") == "calories":
-            lines.append(f"{index}. {item['entry_date']:%Y/%m/%d} {item['activity']}　{float(calories):.0f} 大卡（人工輸入）")
-        else:
-            lines.append(
-                f"{index}. {item['entry_date']:%Y/%m/%d} {item['activity']} {item['duration_minutes']} 分鐘{calories_part}"
-            )
+        source_part = "（人工輸入）" if item.get("calorie_source") == "manual" else ""
+        calories_part = f"　約 {float(calories):.0f} 大卡{source_part}" if calories is not None else ""
+        heart_rate_part = f"　心率 {item['heart_rate']}" if item.get("heart_rate") else ""
+        lines.append(
+            f"{index}. {item['entry_date']:%Y/%m/%d} {item['activity']} {item['duration_minutes']} 分鐘{heart_rate_part}{calories_part}"
+        )
     return "\n".join(lines)
 
 

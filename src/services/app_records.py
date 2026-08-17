@@ -13,7 +13,6 @@ from src.bot import body, finance, mood, privacy, todo
 _TAIWAN_TZ = ZoneInfo("Asia/Taipei")
 _DUPLICATE_WINDOW = timedelta(minutes=10)
 _MOOD_CODES = {code for code, _label in mood.MOOD_CATEGORIES}
-_EXERCISE_CATEGORIES = {"跑步", "健走", "騎自行車", "游泳", "重訓", "打球", "瑜伽"}
 _TODO_STATUSES = {"pending", "completed", "cancelled"}
 _SINGLE_DAILY_KINDS = {"diet", "weight", "mood"}
 
@@ -268,45 +267,52 @@ class AppRecordService:
                     "nutrition_source": nutrition_source, "entry_date": self._today, **macros}
             return data, "diet_logs", (description,)
         if kind == "exercise":
-            activity = payload.get("activity")
-            custom = payload.get("custom_activity")
-            if activity == "其他":
-                activity = _required_text(custom, "其他運動名稱", max_length=100)
-            elif activity not in _EXERCISE_CATEGORIES:
+            # 2026-08-17（FR-47a，批次2）：取代原本「時間／熱量」雙頁籤設計，改成單一表單＋
+            # 「是否交由 AI 計算消耗熱量」開關；類別改吃全域共用的 `exercise_categories`
+            # （既有類別傳 `category_id`，新增自訂類別傳 `custom_category`，同義詞合併見
+            # `body.find_or_create_exercise_category()`，跟 Telegram 端共用同一支函式）。
+            category_id = payload.get("category_id")
+            custom_category = payload.get("custom_category")
+            if custom_category not in (None, ""):
+                category = body.find_or_create_exercise_category(
+                    self._db, self._llm, _required_text(custom_category, "運動類別名稱", max_length=100)
+                )
+            elif category_id not in (None, ""):
+                if isinstance(category_id, bool) or not isinstance(category_id, int) or category_id <= 0:
+                    raise RecordValidationError("運動類別格式不正確")
+                category = self._db.select("exercise_categories", where="id = %s", params=(category_id,), fetch_one=True)
+                if category is None:
+                    raise RecordValidationError("找不到指定的運動類別")
+            else:
                 raise RecordValidationError("請選擇運動類別")
-            input_mode = payload.get("input_mode", "time")
-            if input_mode not in {"time", "calories"}:
-                raise RecordValidationError("請選擇正確的運動輸入模式")
-            if input_mode == "calories":
-                calories = _rounded_int(payload.get("calories"), "消耗熱量", maximum=5000)
-                data = {"activity": activity, "duration_minutes": None, "heart_rate": None,
-                        "estimated_calories": calories, "input_mode": "calories", "calorie_source": "manual",
-                        "training_details": None, "entry_date": self._today}
-                return data, "exercise_logs", (activity, input_mode, calories)
+
             duration = _positive_int(payload.get("duration_minutes"), "持續時間")
             heart_rate = _positive_int(payload.get("heart_rate"), "心率", optional=True)
-            training_details = payload.get("training_details")
-            if activity == "重訓":
-                training_details = _required_text(training_details, "強度與組數", max_length=1000)
-                training_details, _detected = privacy.mask_text(training_details)
+            note = payload.get("note")
+            if note not in (None, ""):
+                note, _detected = privacy.mask_text(_required_text(note, "補充內容", max_length=1000))
             else:
-                training_details = None
-            calories = body.estimate_exercise_calories(
-                self._llm,
-                activity,
-                duration,
-                heart_rate,
-                training_details=training_details,
-            ) if self._llm else None
-            if calories is not None:
-                try:
-                    calories = _rounded_int(calories, "AI 估算消耗熱量", maximum=5000)
-                except RecordValidationError:
-                    calories = None
-            data = {"activity": activity, "duration_minutes": duration, "heart_rate": heart_rate,
-                    "estimated_calories": calories, "input_mode": "time", "calorie_source": "ai",
-                    "training_details": training_details, "entry_date": self._today}
-            return data, "exercise_logs", (activity, input_mode, duration, heart_rate, training_details)
+                note = None
+
+            use_ai_calorie = payload.get("use_ai_calorie", True)
+            if use_ai_calorie:
+                calorie_source = "ai"
+                calories = body.estimate_exercise_calories(
+                    self._llm, category["name"], duration, heart_rate, note
+                ) if self._llm else None
+                if calories is not None:
+                    try:
+                        calories = _rounded_int(calories, "AI 估算消耗熱量", maximum=5000)
+                    except RecordValidationError:
+                        calories = None
+            else:
+                calorie_source = "manual"
+                calories = _rounded_int(payload.get("calories"), "消耗熱量", maximum=5000)
+
+            data = {"category_id": category["id"], "activity": category["name"], "duration_minutes": duration,
+                    "heart_rate": heart_rate, "note": note, "estimated_calories": calories,
+                    "calorie_source": calorie_source, "entry_date": self._today}
+            return data, "exercise_logs", (category["id"], duration, heart_rate, note, calorie_source, calories)
         if kind == "weight":
             value = payload.get("weight_kg")
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
@@ -447,12 +453,12 @@ class AppRecordService:
         if table == "diet_logs": return (row.get("description", "").strip(),)
         if table == "exercise_logs":
             return (
-                row.get("activity"),
-                row.get("input_mode", "time"),
+                row.get("category_id"),
                 row.get("duration_minutes"),
                 row.get("heart_rate"),
-                row.get("training_details"),
-                row.get("estimated_calories") if row.get("input_mode") == "calories" else None,
+                row.get("note"),
+                row.get("calorie_source"),
+                row.get("estimated_calories") if row.get("calorie_source") == "manual" else None,
             )
         if table == "body_weight_logs":
             waist = row.get("waist_cm")

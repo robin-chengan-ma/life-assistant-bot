@@ -1077,25 +1077,33 @@ def test_mood_delete_only_owner_can_target_own_journal(fake_db, monkeypatch):
 def test_exercise_new_flow_records_entry_with_confirm_gate(fake_db, monkeypatch):
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    category_id = fake_db.insert("exercise_categories", {"name": "跑步", "normalized_name": "跑步"})
     store = ConversationStateStore()
 
     reply0, keyboard0 = router.handle_callback_query(fake_db, store, FAMILY_ID, "daily_log:exercise")
     assert reply0 == "運動，請選擇要進行的操作："
     assert keyboard0["inline_keyboard"][0][0]["callback_data"] == "exercise:new"
 
-    _reply1, keyboard1 = router.handle_callback_query(fake_db, store, FAMILY_ID, "exercise:new")
-    assert keyboard1 is None
-    assert store.get(FAMILY_ID)["flow"] == "pending_exercise_activity"
+    reply1, _keyboard1 = router.handle_callback_query(fake_db, store, FAMILY_ID, "exercise:new")
+    assert "選擇類別" in reply1
+    assert store.get(FAMILY_ID)["flow"] == "pending_exercise_category"
 
-    reply2 = router.handle_message(fake_db, store, FAMILY_ID, "跑步")
-    assert "多久" in reply2
+    _reply1b, _keyboard1b = router.handle_callback_query(fake_db, store, FAMILY_ID, f"exercise:cat:{category_id}")
     assert store.get(FAMILY_ID)["flow"] == "pending_exercise_duration"
 
-    reply3 = router.handle_message(fake_db, store, FAMILY_ID, "30")
-    assert "心率" in reply3
+    reply2, _keyboard2 = router.handle_message(fake_db, store, FAMILY_ID, "30")
+    assert "心率" in reply2
     assert store.get(FAMILY_ID)["flow"] == "pending_exercise_heart_rate"
 
-    _reply4, keyboard4 = router.handle_message(fake_db, store, FAMILY_ID, "沒有")
+    reply3, _keyboard3 = router.handle_message(fake_db, store, FAMILY_ID, "skip")
+    assert "補充" in reply3
+    assert store.get(FAMILY_ID)["flow"] == "pending_exercise_note"
+
+    _reply3b, keyboard3b = router.handle_message(fake_db, store, FAMILY_ID, "skip")
+    assert "AI 估算" in keyboard3b["inline_keyboard"][0][0]["text"]
+    assert store.get(FAMILY_ID)["flow"] == "pending_exercise_calorie_choice"
+
+    _reply4, keyboard4 = router.handle_callback_query(fake_db, store, FAMILY_ID, "exercise:calorie:ai")
     assert keyboard4["inline_keyboard"][0][0]["callback_data"] == "exercise:confirm_save"
     assert store.get(FAMILY_ID)["flow"] == "pending_exercise_confirm"
 
@@ -1106,18 +1114,22 @@ def test_exercise_new_flow_records_entry_with_confirm_gate(fake_db, monkeypatch)
     rows = fake_db.select("exercise_logs", where="user_id = %s", params=(user_id,))
     assert len(rows) == 1
     assert rows[0]["activity"] == "跑步"
+    assert rows[0]["category_id"] == category_id
     assert rows[0]["duration_minutes"] == 30
 
 
 def test_exercise_confirm_step_rejects_stray_text(fake_db, monkeypatch):
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    category_id = fake_db.insert("exercise_categories", {"name": "跑步", "normalized_name": "跑步"})
     store = ConversationStateStore()
 
     router.handle_callback_query(fake_db, store, FAMILY_ID, "exercise:new")
-    router.handle_message(fake_db, store, FAMILY_ID, "跑步")
+    router.handle_callback_query(fake_db, store, FAMILY_ID, f"exercise:cat:{category_id}")
     router.handle_message(fake_db, store, FAMILY_ID, "30")
-    router.handle_message(fake_db, store, FAMILY_ID, "沒有")
+    router.handle_message(fake_db, store, FAMILY_ID, "skip")
+    router.handle_message(fake_db, store, FAMILY_ID, "skip")
+    router.handle_callback_query(fake_db, store, FAMILY_ID, "exercise:calorie:ai")
     assert store.get(FAMILY_ID)["flow"] == "pending_exercise_confirm"
 
     reply, keyboard = router.handle_message(fake_db, store, FAMILY_ID, "亂打字")
@@ -1131,13 +1143,18 @@ def test_exercise_confirm_step_rejects_stray_text(fake_db, monkeypatch):
 def test_exercise_list_edit_and_delete_full_flow(fake_db, monkeypatch):
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    category_id = fake_db.insert("exercise_categories", {"name": "游泳", "normalized_name": "游泳"})
+    other_category_id = fake_db.insert("exercise_categories", {"name": "跑步", "normalized_name": "跑步"})
     exercise_log_id = fake_db.insert(
         "exercise_logs",
         {
             "user_id": user_id,
+            "category_id": category_id,
             "activity": "游泳",
             "duration_minutes": 20,
             "heart_rate": None,
+            "note": None,
+            "calorie_source": "ai",
             "estimated_calories": None,
             "entry_date": date(2026, 8, 1),
         },
@@ -1150,15 +1167,18 @@ def test_exercise_list_edit_and_delete_full_flow(fake_db, monkeypatch):
     assert f"exercise:delete:{exercise_log_id}" in callback_datas
 
     router.handle_callback_query(fake_db, store, FAMILY_ID, f"exercise:edit:{exercise_log_id}")
-    assert store.get(FAMILY_ID)["flow"] == "pending_exercise_activity"
-    router.handle_message(fake_db, store, FAMILY_ID, "跑步")
+    assert store.get(FAMILY_ID)["flow"] == "pending_exercise_category"
+    router.handle_callback_query(fake_db, store, FAMILY_ID, f"exercise:cat:{other_category_id}")
     router.handle_message(fake_db, store, FAMILY_ID, "45")
-    router.handle_message(fake_db, store, FAMILY_ID, "沒有")
+    router.handle_message(fake_db, store, FAMILY_ID, "skip")
+    router.handle_message(fake_db, store, FAMILY_ID, "skip")
+    router.handle_callback_query(fake_db, store, FAMILY_ID, "exercise:calorie:ai")
     router.handle_callback_query(fake_db, store, FAMILY_ID, "exercise:confirm_save")
 
     rows = fake_db.select("exercise_logs")
     assert len(rows) == 1
     assert rows[0]["activity"] == "跑步"
+    assert rows[0]["category_id"] == other_category_id
     assert rows[0]["duration_minutes"] == 45
 
     router.handle_callback_query(fake_db, store, FAMILY_ID, "exercise:list")
