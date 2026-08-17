@@ -1,6 +1,6 @@
 ---
 title: DB Schema
-updated: 2026-08-15
+updated: 2026-08-17
 ---
 
 # DB Schema
@@ -359,7 +359,9 @@ CREATE TABLE budget_overrides (
 | `exercise_categories` | 已建立 | FR-47a | 全域共用運動類別表，新增自訂類別採正規化比對＋LLM 語意判斷兩段式同義詞合併 |
 | `exercise_logs` | 已建立 | FR-47／FR-47a、FR-64 | 運動紀錄單一表單（時長必填／心率選填／補充內容選填），消耗熱量可選 AI 估算或人工輸入 |
 | `diet_logs` | 已建立 | FR-48、FR-64 | 飲食與飲水共用一表，營養數值可由 AI 估算或人工輸入並保留來源 |
-| `body_goals` | 已建立 | FR-45～FR-48／FR-72a | 體重/運動/飲食三子功能共用一表（`goal_type` 區分）；`important_day_id` 連結期限事件 |
+| `body_goals` | 已建立 | FR-45～FR-48／FR-72a | 體重/運動/飲食三子功能共用一表（`goal_type` 區分）；`important_day_id` 連結期限事件；`target_unit`／`target_direction` 為批次3新增，供飲食目標存結構化單位與自動達成判斷方向 |
+| `module_goals` | 已建立 | FR-41b／FR-73a／FR-45a（批次3） | 記帳／收藏清單通用目標表（`module_key` 區分），設計精神比照 `body_goals`；`important_day_id` 連結期限事件；`sync_to_calendar`／`google_calendar_event_id` 為批次3補做新增，供 Google Calendar 同步 |
+| `goal_summaries` | 已建立 | FR-45a（批次3） | 🎯 目標追蹤每日排程（01:00）快取摘要，`goal_source` 區分來源表（`body_goals`／`module_goals`／`certificate_goals`），只保留最新一份快取 |
 
 <details>
 <summary>SQL 與設計理由</summary>
@@ -453,6 +455,8 @@ CREATE TABLE body_goals (
     goal_type TEXT NOT NULL CHECK (goal_type IN ('weight', 'exercise', 'diet')),
     target_description TEXT NOT NULL,
     target_value NUMERIC(6,2),
+    target_unit TEXT,
+    target_direction TEXT CHECK (target_direction IN ('min', 'max')),
     baseline_value NUMERIC(6,2),
     target_date DATE,
     important_day_id BIGINT REFERENCES important_days(id) ON DELETE SET NULL,
@@ -464,9 +468,55 @@ CREATE TABLE body_goals (
 );
 CREATE INDEX idx_body_goals_user_id ON body_goals (user_id);
 ```
-`src/migrations/0027_create_body_goals_table.sql`、`0082_link_goals_to_important_days.sql`
+`src/migrations/0027_create_body_goals_table.sql`、`0082_link_goals_to_important_days.sql`、
+`0087_add_target_unit_to_body_goals.sql`（2026-08-17，批次3，FR-48 方案A）、
+`0089_add_target_direction_to_body_goals.sql`（2026-08-17，批次3補做，FR-48 自動達成判斷）
 
-- 三子功能共用一表、`goal_type` 區分，語意隨類型不同由 App 層解讀；`weight` 用 `baseline_value` 判斷增/減方向；`exercise` 用累積分鐘數（各運動類型通用單位）；`diet` 不支援自動達成判斷（太主觀），只能手動標記
+- 三子功能共用一表、`goal_type` 區分，語意隨類型不同由 App 層解讀；`weight` 用 `baseline_value` 判斷增/減方向；`exercise` 用累積分鐘數（各運動類型通用單位）；`diet` 支援方案A LLM 輔助解析出結構化 `target_value`／`target_unit`／`target_direction`（見 `src/services/goal_parser.py`），`target_direction`＝`min` 時累計值隨時可判斷達成（至少要達到），＝`max` 時只在有 `target_date` 且已到期時才判斷（不能超過，見 `body.check_and_push_diet_goal_achievements()`），抽不出結構化數值時仍為純文字目標，只能手動標記
+
+```sql
+CREATE TABLE module_goals (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id),
+    module_key TEXT NOT NULL CHECK (module_key IN ('finance', 'collections')),
+    target_description TEXT NOT NULL,
+    target_value NUMERIC(12,2),
+    target_unit TEXT,
+    baseline_value NUMERIC(12,2),
+    target_date DATE,
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'achieved', 'cancelled')),
+    achieved_notified BOOLEAN NOT NULL DEFAULT FALSE,
+    deadline_reminder_sent BOOLEAN NOT NULL DEFAULT FALSE,
+    sync_to_calendar BOOLEAN NOT NULL DEFAULT FALSE,
+    google_calendar_event_id TEXT,
+    important_day_id BIGINT REFERENCES important_days(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_module_goals_user_id ON module_goals (user_id);
+CREATE INDEX idx_module_goals_important_day ON module_goals (important_day_id) WHERE important_day_id IS NOT NULL;
+```
+`src/migrations/0085_create_module_goals_table.sql`（2026-08-17，批次3）、
+`0088_add_calendar_sync_to_module_goals.sql`（2026-08-17，批次3補做，FR-41b／FR-73a Calendar 同步）
+
+- 批次3新增模組（記帳／收藏清單）的目標表，設計精神比照 `body_goals`；`finance`：`target_value` 為淨結餘變化金額（TWD），`baseline_value` 固定 0，達成判斷查「目標建立日期之後」的收入減支出；`collections`：`target_value` 為新完成收藏項目數，`baseline_value` 為建立當下已 `visited` 的項目數，見 `src/bot/goals.py`；`sync_to_calendar`／`google_calendar_event_id` 用法比照 `body_goals`（`0032_add_calendar_sync_to_body_goals.sql` 既有欄位，本表另外補上同名欄位），只在新建流程且有期限時詢問「要不要同步到 Google 家庭行事曆」，編輯不重問
+
+```sql
+CREATE TABLE goal_summaries (
+    id BIGSERIAL PRIMARY KEY,
+    goal_source TEXT NOT NULL CHECK (goal_source IN ('body_goals', 'module_goals', 'certificate_goals')),
+    goal_id BIGINT NOT NULL,
+    user_id BIGINT NOT NULL REFERENCES users(id),
+    summary_text TEXT NOT NULL,
+    generated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    generated_on DATE NOT NULL,
+    UNIQUE (goal_source, goal_id, generated_on)
+);
+CREATE INDEX idx_goal_summaries_lookup ON goal_summaries (goal_source, goal_id, generated_on DESC);
+```
+`src/migrations/0086_create_goal_summaries_table.sql`（2026-08-17，批次3）
+
+- 每日排程（統一台灣時間 01:00，`src/services/goal_summary_job.py`）產生的目標摘要快取；`goal_id` 不設 FK（三張來源表結構不同無法共用），正確性由唯一寫入者 `goal_summary_job.py` 保證；只保留寫入紀錄不主動清舊資料，查詢一律取 `generated_on` 最新一筆
 </details>
 
 ## 重要通知

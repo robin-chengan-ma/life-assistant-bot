@@ -159,9 +159,11 @@ def _check_finance_monthly_report() -> None:
 
 
 def _check_body_goal_alerts() -> None:
-    """在 /healthz 被呼叫時順便檢查體態目標的兩種排程型預警（Step 2.2，見 robinson SPEC.md
-    FR-45）：①運動目標累積分鐘數達成通知（體重目標則是記錄體重當下即時檢查，不需要排程）
-    ②目標期限前 7 天提醒，詳見 src/bot/body.py 模組 docstring 決策③。
+    """在 /healthz 被呼叫時順便檢查體態目標的排程型預警（Step 2.2，見 robinson SPEC.md
+    FR-45；批次3補上飲食目標自動判斷，見 FR-48 方案A）：①運動目標累積分鐘數達成通知（體重
+    目標則是記錄體重當下即時檢查，不需要排程）②飲食目標達成判斷（依 `target_direction` 分
+    min/max 兩種方向，詳見 `body.check_and_push_diet_goal_achievements()`）③目標期限前 7 天
+    提醒，詳見 src/bot/body.py 模組 docstring 決策③。
 
     跟 `_check_finance_alerts()` 一樣包一層 try/except 且不需要 `ROBIN_TELEGRAM_TOKEN`
     （推播對象是每一位有設定體態目標的使用者自己，不是固定通知 Robin）。
@@ -179,9 +181,57 @@ def _check_body_goal_alerts() -> None:
         body.check_and_push_exercise_goal_achievements(
             db, telegram_client, calendar_client=_build_calendar_client()
         )
+        body.check_and_push_diet_goal_achievements(db, telegram_client)
         body.check_and_push_goal_deadline_reminders(db, telegram_client)
     except Exception:
         logger.exception("體態目標預警檢查失敗，不影響健康檢查端點本身")
+    finally:
+        db.close()
+
+
+def _check_module_goal_deadline_reminders() -> None:
+    """在 /healthz 被呼叫時順便檢查記帳／收藏清單目標的期限將近提醒（批次3，見 robinson
+    SPEC.md FR-45a）：邏輯完全比照 `_check_body_goal_alerts()` 的期限提醒那段，只是改查
+    `module_goals` 表，見 `src/bot/goals.py`。"""
+    if not (os.environ.get("DATABASE_URL") and os.environ.get("TELEGRAM_BOT_TOKEN")):
+        return
+
+    from src.bot import goals
+    from submodules.cloudsql.client import CloudSQLClient
+    from submodules.telegram.client import TelegramClient
+
+    db = CloudSQLClient()
+    try:
+        telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
+        goals.check_and_push_goal_deadline_reminders(db, telegram_client)
+    except Exception:
+        logger.exception("記帳／收藏清單目標期限提醒檢查失敗，不影響健康檢查端點本身")
+    finally:
+        db.close()
+
+
+def _check_goal_summaries() -> None:
+    """在 /healthz 被呼叫時順便產生🎯目標追蹤每日摘要快取（批次3，見 robinson SPEC.md
+    FR-45a）：固定台灣時間凌晨 01:00，掃描 `body_goals`／`module_goals`／`certificate_goals`
+    三張來源表的所有 active 目標，各生成一份「過去一週／一個月」摘要寫進 `goal_summaries`，
+    詳見 `src/services/goal_summary_job.py` 模組 docstring。
+
+    不需要 `TELEGRAM_BOT_TOKEN`（只寫快取，不推播）；需要 `GEMINI_API_TEXT_KEY`（沿用既有
+    通用文字生成 Key，摘要生成屬於一般文字任務，不需要獨立申請新 Key）。
+    """
+    if not (os.environ.get("DATABASE_URL") and os.environ.get("GEMINI_API_TEXT_KEY")):
+        return
+
+    from src.services import goal_summary_job
+    from submodules.cloudsql.client import CloudSQLClient
+    from submodules.llm.client import LLMClient
+
+    db = CloudSQLClient()
+    try:
+        llm_client = LLMClient(api_key=os.environ["GEMINI_API_TEXT_KEY"])
+        goal_summary_job.generate_daily_goal_summaries(db, llm_client)
+    except Exception:
+        logger.exception("🎯目標追蹤每日摘要生成失敗，不影響健康檢查端點本身")
     finally:
         db.close()
 
@@ -528,7 +578,8 @@ def root():
 
 
 def _run_background_checks() -> None:
-    """實際執行 `/healthz` 附掛的 14 個排程檢查，在背景執行緒跑，見 `health_check()`。
+    """實際執行 `/healthz` 附掛的 16 個排程檢查（批次3新增🎯目標追蹤兩項），在背景執行緒跑，
+    見 `health_check()`。
 
     **2026-08-08 追加（production 事故修復）**：這些檢查原本是在 `/healthz` 的 HTTP
     request 裡依序同步執行，平常大部分檢查會因為「還沒到時間」提早 return、很快；但每天台灣
@@ -548,6 +599,8 @@ def _run_background_checks() -> None:
     _check_finance_reminders()
     _check_finance_monthly_report()
     _check_body_goal_alerts()
+    _check_module_goal_deadline_reminders()
+    _check_goal_summaries()
     _check_important_notifications()
     _check_skill_growth_collection()
     _check_toeic_pipeline()

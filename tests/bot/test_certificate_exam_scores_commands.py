@@ -137,6 +137,38 @@ def test_handle_exam_score_value_step_records_and_confirms(fake_db):
     assert rows[0]["user_id"] == 1
 
 
+def test_handle_exam_score_value_step_appends_achievement_message(fake_db):
+    """2026-08-17 補做（Robin 要求不得漏做）：輸入實際分數若達成目標分數，回覆要多附一句恭喜。"""
+    from src.bot import certificate_goals
+
+    certificate_goals.set_goal(fake_db, 1, "toeic", date(2026, 12, 1), "800")
+    state_store = ConversationStateStore()
+    commands.start_log_exam_score(fake_db, state_store, 999, 1)
+    commands.handle_exam_score_exam_type_step(state_store, 999, "toeic")
+    llm_client = _FakeLLMClient("STATUS: CLEAR\nDATE: 2026-08-01")
+    commands.handle_exam_score_date_step(fake_db, llm_client, state_store, 999, "8/1")
+
+    reply = commands.handle_exam_score_value_step(fake_db, state_store, 999, "850")
+
+    assert "恭喜" in reply
+    assert "800" in reply
+
+
+def test_handle_exam_score_value_step_below_target_no_achievement_message(fake_db):
+    from src.bot import certificate_goals
+
+    certificate_goals.set_goal(fake_db, 1, "toeic", date(2026, 12, 1), "800")
+    state_store = ConversationStateStore()
+    commands.start_log_exam_score(fake_db, state_store, 999, 1)
+    commands.handle_exam_score_exam_type_step(state_store, 999, "toeic")
+    llm_client = _FakeLLMClient("STATUS: CLEAR\nDATE: 2026-08-01")
+    commands.handle_exam_score_date_step(fake_db, llm_client, state_store, 999, "8/1")
+
+    reply = commands.handle_exam_score_value_step(fake_db, state_store, 999, "700")
+
+    assert "恭喜" not in reply
+
+
 def test_handle_exam_score_value_step_empty_reprompts(fake_db):
     state_store = ConversationStateStore()
     commands.start_log_exam_score(fake_db, state_store, 999, 1)

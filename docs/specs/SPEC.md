@@ -1,6 +1,6 @@
 ---
 title: Robinson — Robin 與家人們的生活小助手
-updated: 2026-08-15
+updated: 2026-08-17
 owner: Robin
 ---
 
@@ -297,6 +297,7 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 負責�
 - FR-75 探索地圖：不提供獨立新增入口，探索紀錄只能由收藏標記已造訪或完成行程時產生。依國家及區域／城市的可搜尋下拉選單篩選；同一地點只顯示一個 Leaflet／OpenStreetMap 標記，點開列出各次獨立造訪。頁面明示定位以行政區／鄉鎮市區為主，可能無法精確辨識門牌或街道。每次造訪保存名稱、類型、國家、區域／城市、地址、經緯度、備註、造訪日期及行程快照，可個別編輯或刪除。收藏表單由使用者明確按下「定位地址／定位區域」後才呼叫 Nominatim；有地址時依精確門牌、道路、城市逐級放寬，無地址時直接以國家及區域／城市定位。定位結果必須顯示精確地址、道路近似位置或城市近似位置；所有層級失敗仍可保存並列入「無法定位」。探索紀錄修改地址時立即清除舊座標，使用者可選擇重新定位，不得沿用失效座標。
 - FR-76 成果展示：首頁提供手動新增成果與待確認成果提示；系統只能根據體態達標、考試達標、運動累積、探索地點／國家數、行程完成及待辦里程碑提出候選，不經 LLM 且不得自行建立。候選採被動掃描：使用者開啟成果展示清單（Mobile 首頁或 Telegram「查看成果」）時，系統才重新掃描並以「加入成果展示／略過」按鈕列出，不於候選產生的當下主動推播（2026-08-16 決策，見 `docs/ADR/discuss/robinson.md` 2026-08-16「Phase 6 第二批 2e」）。任一端接受或拒絕後須同步更新；同一候選只詢問一次，拒絕後不重複提示，不以飲食或心情自動判斷。成果必填名稱、完成日期及類別，選填說明、照片及關聯紀錄，保存 `manual`／`suggested` 來源。成果支援刪除與防連點；Mobile App 刪除另有二次確認與 5 秒復原，Telegram 端刪除為直接執行，不提供二次確認與復原（2026-08-16 決策，同上 ADR）。刪除成果不影響原始紀錄。
 - FR-76a 導覽入口：首頁收藏清單提供「新增收藏」；旅遊行程從收藏清單進入建立／管理；探索地圖只提供查看；成果展示提供「新增成果」與待確認提示。左側選單保留收藏清單、探索地圖與成果展示，作為查看、篩選與分析入口。
+- FR-73a（2026-08-17 新增，批次3；2026-08-17 補充 Calendar 同步，見下方「2026-08-17 補做」條目）：收藏清單目標——「清單完成度目標」，Telegram 入口為「🧭 收藏與旅遊」子選單新增的「🎯 目標」按鈕（`collections:goal:*`，分「➕ 新增／📋 查看清單」兩層，比照 FR-45 支援多筆並存與按鈕式編輯/刪除）；目標值透過方案A解析「新完成收藏項目數」，`baseline_value` 為設定當下已 `visited` 的項目數；達成判斷：收藏項目被標記已造訪（`collections:visit:*`）後，檢查「目前 `visited` 數 － `baseline_value`」是否 ≥ `target_value`，達成時回覆恭喜文字；抽不出結構化數值時退化為純文字目標。新增流程且有期限時，比照 FR-45（體態目標）多問一輪「要不要同步到 Google 家庭行事曆」（`pending_module_goal_calendar_sync`），確認後在 `<module_key>:goal:confirm_save` 建立 Calendar 事件並存回 `google_calendar_event_id`；編輯不重問，維持原同步設定。資料表為 FR-41b 同一張新表 `module_goals`（`module_key='collections'`，`sync_to_calendar`／`google_calendar_event_id` 欄位見 migration 0088）
 
 **非功能性需求**
 - NFR-14：資料隔離 — 收藏、行程、探索與成果皆依 `user_id` 隔離，使用者只能管理自己的資料，Robin 不代改家人資料。
@@ -375,9 +376,12 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 負責�
 - FR-44：`/my_finance_summary` 文字摘要（本月支出/收入、預算使用率、分類佔比、跟上月比較）
 - FR-44a：月底 21:00 自動推播月報（僅推給有生效預算或當月有交易的使用者）
 - FR-42a：每日 23:00 記帳提醒（有預算且今天未記錄支出才推播）
+- FR-41b（2026-08-17 新增，批次3；2026-08-17 補充 Calendar 同步）：記帳目標——「儲蓄／淨結餘目標」，入口為指令觸發詞 `/finance_goal`（設定記帳目標）／`/my_finance_goals`（我的記帳目標），因記帳模組目前仍是純指令入口、沒有按鈕子選單，目標流程沿用既有指令觸發慣例（不比照體態/運動/飲食走按鈕子選單）；目標值透過方案A（`goal_parser.parse_goal_input()`）解析淨結餘金額（新台幣），解析成功時 `target_value` 為目標淨結餘變化金額、`baseline_value` 固定為 0；達成判斷：每次記帳寫入後，檢查「目標建立日期之後的收入總額－支出總額」是否 ≥ `target_value`，達成時比照 FR-45 回覆恭喜文字；抽不出結構化數值時退化為純文字目標，只能刪除結束。新增流程且有期限時，比照 FR-45（體態目標）多問一輪「要不要同步到 Google 家庭行事曆」，確認後建立 Calendar 事件並存回 `google_calendar_event_id`；編輯不重問。資料表為新表 `module_goals`（`module_key='finance'`，migration 0085；`sync_to_calendar`／`google_calendar_event_id` 欄位見 migration 0088），支援多筆並存、按鈕式編輯/刪除（`finance:goal:*`）
 
 **實作階段**
 - Phase 2 Step 2.1：全數完成，539 個測試全過、覆蓋率 100%
+- 批次3（記帳目標，FR-41b，2026-08-17）：新增 `src/bot/goals.py`（`module_goals` 通用 CRUD＋達成判斷）；`commands.py` 新增 `start_module_goal_*`／`handle_module_goal_*` 系列函式；`router.py` 新增 `finance:goal:*` 分派與 `_dispatch_module_goal_callback()` 共用邏輯；`finance.handle_transaction_note_step()` 寫入交易後呼叫 `goals.check_finance_goal_achievement()`，詳見 `docs/ADR/discuss/robinson.md` 2026-08-17「批次3：六模組目標泛化＋🎯 目標追蹤新選單 實作完成」
+- 批次3 補做（記帳／收藏清單目標 Calendar 同步、飲食目標自動達成、考試成績自動達成，2026-08-17）：`module_goals` 新增 `sync_to_calendar`／`google_calendar_event_id` 欄位（migration 0088），`goals.py`／`commands.py`／`router.py` 補上 `pending_module_goal_calendar_sync` 問句與 Calendar 事件建立（比照 `body.py` 既有做法）；`body_goals` 新增 `target_direction` 欄位（migration 0089），飲食目標新增 `check_and_push_diet_goal_achievements()`（依 LLM 解析出的 MIN／MAX 方向自動判斷達成）；`certificate_goals.py` 新增 `check_score_achievement()`，記錄正式應考成績後自動跟目標分數比對。1897 個測試全過（新增 19 個），`ruff check .` 通過，詳見 `docs/ADR/discuss/robinson.md` 2026-08-17「批次3補做：不得漏做的三項功能」
 
 ### 體態管理
 
@@ -387,15 +391,15 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 負責�
 
 **概要**：身高/體重/腰圍（基準值）、運動、飲食三個子功能共用 `body_goals` 表，各自完整 CRUD 與預警。
 
-> **2026-08-17 已定案、尚未實作**：FR-45a（🎯 目標追蹤新選單）與 FR-48 目標欄位方案A（飲食目標 LLM 輔助解析，批次3）仍待批次3 開工後才會真正上線；FR-45、FR-46 已於 Phase 6 第二批 2h（2026-08-17）正式生效，FR-47／FR-47a（運動紀錄改版，批次2）已於 2026-08-17 正式生效，決策記錄見 `docs/ADR/discuss/robinson.md` 2026-08-17「日常紀錄－體態（Phase 6 第二批 2h）前置討論：範圍拆分與三批決策」「補充：目標編輯/多目標並存與🎯目標追蹤新選單」及「運動紀錄改版（批次2）實作完成」。實際上線狀態請對照下方「實作階段」。
+> **2026-08-17 全部正式生效**：FR-45、FR-46 已於 Phase 6 第二批 2h（2026-08-17）正式生效，FR-47／FR-47a（運動紀錄改版，批次2）已於 2026-08-17 正式生效，FR-45a（🎯 目標追蹤新選單）與 FR-48 目標欄位方案A（飲食目標 LLM 輔助解析）已於批次3（2026-08-17）正式生效，決策記錄見 `docs/ADR/discuss/robinson.md` 2026-08-17「日常紀錄－體態（Phase 6 第二批 2h）前置討論：範圍拆分與三批決策」「補充：目標編輯/多目標並存與🎯目標追蹤新選單」「運動紀錄改版（批次2）實作完成」及「批次3：六模組目標泛化＋🎯 目標追蹤新選單 實作完成」。實際上線狀態請對照下方「實作階段」。
 
 **功能性需求**
 - FR-45：三種預警——目標達成通知、依 FR-72a 重要日子設定的期限提醒、BMI 異常提醒；體態目標達成時回覆恭喜文字，是否加入成果展示由使用者自行開啟「🏆 成果展示」清單查看候選並確認（見 FR-76 被動掃描機制），系統不於達成當下主動推播候選按鈕，也不自行建立成果。目標支援同一使用者、同一模組（體重／運動／飲食）多筆並存，清單可「編輯」（重新走一次目標值/期限輸入）或「刪除」（二次確認），不再限制「要調整就取消重設」
-- FR-45a（2026-08-17 新增，批次3）：主選單新增「🎯 目標追蹤」，點擊後列出已支援目標功能的模組按鈕（飲食、體態等，隨各模組陸續支援而增加）→ 選模組列出該模組未過期（active 且未超過期限，或無期限）的目標清單，無目標顯示「查無資料」→ 選一個目標顯示最新快取摘要（依「過去一個月」「過去一週」紀錄生成建議與方向、提及距離截止日還有多久，無期限的目標不顯示這段，並附加油打氣文字）；摘要由每日排程（統一凌晨 01:00）產生快取，Telegram 端只顯示最新一份、不即時生成、不可操作，下方固定只有「🔙 返回主頁面」按鈕
+- FR-45a（2026-08-17 正式生效，批次3）：主選單新增「🎯 目標追蹤」（`menu.py` `GOAL_TRACKING_MODULES`），點擊後列出已支援目標功能的模組按鈕（飲食、體態、運動、記帳、收藏清單、考試共六個）→ 選模組列出該模組未過期（active 且未超過期限，或無期限）的目標清單，無目標顯示「查無資料」→ 選一個目標顯示最新快取摘要（依「過去一個月」「過去一週」紀錄生成建議與方向、提及距離截止日還有多久，無期限的目標不顯示這段，並附加油打氣文字）；摘要由每日排程（統一凌晨 01:00，`src/services/goal_summary_job.py`，寫入新表 `goal_summaries`）產生快取，Telegram 端只顯示最新一份、不即時生成、不可操作，下方固定只有「🔙 返回主頁面」按鈕。體態/運動/飲食讀 `body_goals`，記帳/收藏清單讀新表 `module_goals`（migration 0085），考試沿用既有 `certificate_goals`，三張來源表結構不同，統一由 `goal_summaries.goal_source` 欄位區分
 - FR-46：Telegram 入口為「日常紀錄」子選單的「⚖️ 體態」（取代原 `/set_height`／`/set_waist`／`/log_weight`／`/backfill_weight`／`/my_weight_logs`／`/set_body_goal`，不提供舊指令相容期）；子選單：設定身高／設定腰圍／記錄體重／補記體重／我的體態紀錄／🎯 目標／🔙 返回。身高 140～200 公分、腰圍 50～150 公分、體重 40～150 公斤，超出範圍原地反問並明講區間與單位；新增／補記流程末段先組摘要文字＋「確認送出／取消」按鈕，確認才寫入；「我的體態紀錄」（原「我的體重紀錄」正名擴充）點擊後直接顯示身高／體重／腰圍／BMI 四項，從未紀錄的欄位顯示「尚無紀錄」，體重抓最新一筆（不限今天），BMI 缺身高或體重時顯示「無法計算」；體重歷史清單改按鈕式「編輯／刪除」，刪除需二次確認；「🎯 目標」分「➕ 新增／📋 查看清單」兩層，比照 FR-45 支援多筆並存與編輯/刪除
 - FR-47：Telegram 入口為「日常紀錄」子選單的「🏃 運動」（Phase 6 第二批 2c 起改為選單按鈕觸發，取代原 `/log_exercise`／`/backfill_exercise`／`/my_exercise_logs`，不提供舊指令相容期，決策見 `docs/ADR/discuss/robinson.md` 2026-08-16「Phase 6 第二批 2c」）；新增／補記流程末段先組摘要文字＋「確認送出／取消」按鈕，確認才寫入（卡路里 LLM 估算，非 MET 公式）；清單改按鈕式「編輯／刪除」，刪除需二次確認。子選單另補一顆「🎯 目標」按鈕（分「➕ 新增／📋 查看清單」兩層），比照 FR-45 支援多筆並存與編輯/刪除
 - FR-47a（2026-08-17 正式生效，批次2）：運動紀錄表單全面改版，取代原「時間／熱量」雙頁籤設計——新增全域共用的運動類別表 `exercise_categories`，類別選「➕ 其他」時可直接新增全域類別（不需 Owner 審核，重複名稱以「正規化字串比對＋LLM 語意判斷」兩段式同義詞合併），現有固定類別（跑步/健走/騎自行車/游泳/重訓/打球/瑜伽）一併搬進新的類別表；欄位改成單一表單：持續時間（分鐘，必填）／心率（bpm，選填，可跳過）／補充內容（選填，可跳過，placeholder「請描述詳細內容...」），刪除「重訓強度與組數」特殊分支，強度組數改由使用者寫進「補充內容」自由文字，AI 估算消耗熱量時一併參考；下方提供「是否交由 AI 計算消耗熱量？」是／否，選「否」時顯示「消耗熱量（大卡）」輸入框（placeholder「請輸入數字」），沿用既有 1～5,000 大卡範圍限制；Mobile App（`RecordModal.tsx`）與 Telegram（`body.py`／`commands.py`／`router.py`）同步改版，新增 `GET /api/app/exercise-categories` 供 Mobile 下拉選單；舊運動紀錄資料已於 migration 0084 直接清空，不做欄位相容回填
-- FR-48：Telegram 入口為「日常紀錄」子選單的「🍚 飲食」（Phase 6 第二批 2g 起改為選單按鈕觸發，取代原 `/log_diet`／`/backfill_diet`／`/my_diet_logs`，不提供舊指令相容期，決策見 `docs/ADR/discuss/robinson.md` 2026-08-16「Phase 6 第二批 2g」）；飲食（`food`）、飲水（`water`）比照 Mobile App 的 single-daily 設計，同一天各自只能有一筆，已有紀錄時新增流程會導向查看清單的編輯功能；新增流程先問要不要記飲水、再問要不要記食物（已有的項目直接跳過提問，兩項都跳過就不寫入），食物內容支援文字／照片兩種輸入方式（照片複用 Mobile App 既有的 `src/services/app_diet_photo.py` 辨識邏輯），算完營養素後可選擇沿用 AI 估算（附誤差聲明）或自己填寫（`nutrition_source`，範圍比照 migration 0078 CHECK 限制）；新增／補記流程末段組摘要＋「確認送出／取消」按鈕，確認才寫入；清單改按鈕式「編輯／刪除」，刪除需二次確認。子選單另補一顆「🎯 目標」按鈕（分「➕ 新增／📋 查看清單」兩層）；2026-08-17 已定案（批次3）：飲食目標改採方案A「結構化為主、LLM 輔助解析」，能抽出結構化欄位時支援自動達成判斷，抽不出來時退化為純文字目標、只能手動標記完成
+- FR-48：Telegram 入口為「日常紀錄」子選單的「🍚 飲食」（Phase 6 第二批 2g 起改為選單按鈕觸發，取代原 `/log_diet`／`/backfill_diet`／`/my_diet_logs`，不提供舊指令相容期，決策見 `docs/ADR/discuss/robinson.md` 2026-08-16「Phase 6 第二批 2g」）；飲食（`food`）、飲水（`water`）比照 Mobile App 的 single-daily 設計，同一天各自只能有一筆，已有紀錄時新增流程會導向查看清單的編輯功能；新增流程先問要不要記飲水、再問要不要記食物（已有的項目直接跳過提問，兩項都跳過就不寫入），食物內容支援文字／照片兩種輸入方式（照片複用 Mobile App 既有的 `src/services/app_diet_photo.py` 辨識邏輯），算完營養素後可選擇沿用 AI 估算（附誤差聲明）或自己填寫（`nutrition_source`，範圍比照 migration 0078 CHECK 限制）；新增／補記流程末段組摘要＋「確認送出／取消」按鈕，確認才寫入；清單改按鈕式「編輯／刪除」，刪除需二次確認。子選單另補一顆「🎯 目標」按鈕（分「➕ 新增／📋 查看清單」兩層）；2026-08-17 正式生效（批次3；2026-08-17 補做自動達成判斷）：飲食目標改採方案A「結構化為主、LLM 輔助解析」（`goal_parser.parse_goal_input()`），能抽出結構化欄位時寫入 `body_goals.target_value`／新增的 `target_unit` 欄位（migration 0087），抽不出來時退化為純文字目標；「以上／以下」語意不明確的問題（例如「熱量控制在X以內」是上限、「每週吃蔬菜X次」是下限）已解決：新增 `target_direction` 欄位（migration 0089，`min`＝至少要達到、`max`＝不能超過），由 LLM 解析時一併判斷方向；`check_and_push_diet_goal_achievements()` 依方向自動判斷達成——`min` 方向隨時可判斷（累計值 ≥ 目標即達成），`max` 方向因數學上需要明確的結束邊界才能判斷「有沒有超標」，只在目標「有期限」且已到期時才判斷（累計值 ≤ 目標才算達成），沒有期限的 `max` 方向目標暫時無法自動判斷，只能手動刪除結束
 
 **實作階段**
 - Phase 2 Step 2.2：全數完成，661 個測試全過；`src/bot/body.py` 覆蓋率 100%；2026-08-08 腰圍擴充新增 1009 個測試
@@ -403,7 +407,7 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 負責�
 - Phase 6 第二批 2g（飲食子項，2026-08-16）：入口改選單按鈕，single-daily 規則、文字/照片雙輸入、AI/人工營養素選擇、摘要→二次確認、按鈕式編輯/刪除；同批一併完成全站語音確認機制（FR-16b），見 `docs/ADR/discuss/robinson.md` 2026-08-16「Phase 6 第二批 2g」
 - Phase 6 第二批 2h（體態子項，FR-45／FR-46，2026-08-17）：入口全面改選單按鈕＋摘要→二次確認，身高 140～200 公分／腰圍 50～150 公分／體重 40～150 公斤三處合理範圍同步收斂並附動態文案；新增 `get_body_summary()`／`format_body_summary()` 供「我的體態紀錄」四項摘要；目標改為運動/飲食/體態三入口共用同一套 `body:goal:*` 子流程，支援多筆並存＋按鈕式編輯/刪除；六個舊指令（`/set_height`／`/set_waist`／`/log_weight`／`/backfill_weight`／`/my_weight_logs`／`/set_body_goal`）已移除，不提供相容期；1842 個測試全過，`ruff check .` 通過；FR-45a（🎯 目標追蹤新選單）留給批次3
 - 批次2（運動紀錄改版，FR-47a，2026-08-17）：新增 `exercise_categories` 全域類別表（migration 0084，同批清空舊 `exercise_logs` 資料並改結構）；`body.py` 新增 `list_exercise_categories()`／`find_or_create_exercise_category()`（兩段式同義詞合併）並改寫 `create_exercise_log()`／`update_exercise_log()`／`format_exercise_log_list()`；Telegram 流程改為選類別→時長→心率（可跳過）→補充內容（可跳過）→AI／人工熱量二選一→摘要確認；`app_records.py` 同步改寫 exercise 驗證邏輯並新增 `GET /api/app/exercise-categories`；Mobile `RecordModal.tsx` 改用 `SearchableSelect` 動態載入類別、移除雙頁籤與重訓特殊分支；1844 個測試全過（新增 2 個），`ruff check .`／`tsc --noEmit` 皆通過，詳見 `docs/ADR/discuss/robinson.md` 2026-08-17「運動紀錄改版（批次2）實作完成」
-- 六模組目標泛化（FR-45a 及各模組目標欄位）：已定案方向（方案A）／待開發
+- 批次3（六模組目標泛化＋🎯 目標追蹤新選單，FR-45a／FR-48 方案A，2026-08-17）：新增 `body_goals.target_unit` 欄位（migration 0087）供飲食目標存結構化單位；新增 `src/services/goal_parser.py`（LLM 輔助解析目標值/單位，方案A）；`body.py` 的 `create_goal()`／`update_goal()` 支援 `target_unit`；飲食目標新增流程（`handle_goal_diet_description_step()`）改呼叫 `goal_parser.parse_goal_input()`。1878 個測試全過（新增 34 個），`ruff check .` 通過，詳見 `docs/ADR/discuss/robinson.md` 2026-08-17「批次3：六模組目標泛化＋🎯 目標追蹤新選單 實作完成」與 `docs/reference/db_schema.md`
 
 ### 心情小記
 
@@ -479,6 +483,7 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 負責�
 **功能性需求**
 - FR-22／FR-23：`tech_intel` 開關；`skill_growth_digests` 一天最多三筆（一筆一來源），任一來源失敗只記 log；三個來源皆無內容才推播固定訊息
 - FR-24：`certificate` 開關；`/set_certificate_goal`／`/my_certificate_goals`／`/certificate_advice`（依近 30 天成效與目標生成客製化建議）
+- FR-24a（2026-08-17 新增，批次3；2026-08-17 補做自動達成判斷）：考試準備目標整合進🎯 目標追蹤主選單（FR-45a），沿用既有 `certificate_goals` 表不新建資料表；每日 01:00 排程（`goal_summary_job.py`）依 `certificate_stats.compute_daily_period_stats()` 統計近一週／一個月作答成效生成快取摘要，寫入 `goal_summaries`（`goal_source='certificate_goals'`）；自動達成判斷：使用者透過 `/record_official_score` 記錄「實際應考成績」（`handle_exam_score_value_step()`）後，立即呼叫 `certificate_goals.check_score_achievement()` 跟該 `exam_type` 設定的 `target_score` 做數字比對（兩者皆為 TEXT，只在都能抽出數字時比較，`分數 ≥ 目標分數` 視為達成），達標就在記錄成功的回覆後面附加一句恭喜；`target_score` 或成績本身不是數字（例如「通過／未通過」這類非量化證照）時優雅跳過，不誤判；跟 `/certificate_advice` 既有的即時方向建議並存，互不取代
 - FR-25：TOEIC 每次出題 1 聽力+2 填空+3 單字；軌道一檔名格式泛用化為 `{exam_type}_{test_id}_write/listen_{題號}.{ext}`；軌道二單字題即時生成入庫
 - FR-26：每日出題數量/比例（TOEIC 額外三軌比例）、新題:複習題 7:3，彈性排程支援挪動/取消/區間覆蓋/平攤四種語意（平攤需提案確認才寫入）
 - FR-27：作答只接受 A/B/C/D；正解來自 Robin 拍照上傳的 `_ans` 答案照

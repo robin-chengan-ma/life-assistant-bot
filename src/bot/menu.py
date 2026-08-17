@@ -52,6 +52,12 @@ Inline Keyboard，比照 `collections` 的單層選單做法。候選機制維�
 紀錄／🎯 目標／🔙 返回）由 `commands.start_body_menu()` 直接組出 Inline Keyboard，比照 `diet`
 的單層子選單做法；運動／飲食子選單也各自補上一顆「🎯 目標」按鈕，統一導到體態模組共用的
 `body:goal:*` 目標子流程。
+
+2026-08-17（批次3，見 docs/ADR/discuss/robinson.md「批次3 開工前 SDD 計畫確認」）：
+`goal_tracking`（🎯 目標追蹤）新增為主選單項目，直接接上真正邏輯（不進 `_NOT_YET_IMPLEMENTED_
+KEYS`）；點擊後列出已支援目標功能的模組（見 `GOAL_TRACKING_MODULES`），選模組→選目標→顯示
+`goal_summaries` 最新一份快取摘要，全程唯讀，由 `src/bot/commands.py` 的 `start_goal_tracking_*`
+系列函式與 `src/bot/router.py` 的 `goal_tracking:*` 分派處理。
 """
 
 # key、label 依 FR-6e 定案順序；owner_only 決定這個項目是否只有 Owner 看得到。
@@ -62,6 +68,7 @@ MAIN_MENU_ITEMS = [
     {"key": "important_days", "label": "📅 重要日子", "owner_only": False},
     {"key": "collections", "label": "🧭 收藏與旅遊", "owner_only": False},
     {"key": "achievements", "label": "🏆 成果展示", "owner_only": False},
+    {"key": "goal_tracking", "label": "🎯 目標追蹤", "owner_only": False},
     {"key": "schedule", "label": "⏰ 排程設定", "owner_only": False},
     {"key": "rule", "label": "📋 使用規則", "owner_only": False},
     {"key": "permission", "label": "🔑 權限管理", "owner_only": True},
@@ -110,6 +117,35 @@ def is_valid_daily_log_key(key: str) -> bool:
 
 def is_daily_log_not_yet_implemented(key: str) -> bool:
     return key in _DAILY_LOG_NOT_YET_IMPLEMENTED_KEYS
+
+# 2026-08-17（批次3，FR-45a）：🎯 目標追蹤主選單，列出已支援目標功能的模組。`goal_source`／
+# `goal_type` 決定 `commands.start_goal_tracking_module()` 要去哪張表查目標清單；體態/運動/飲食
+# 共用 `body_goals`（用 `goal_type` 篩選），記帳/收藏清單用批次3新增的 `module_goals`，考試沿用
+# 既有 `certificate_goals`（不用 `goal_type` 篩選，`exam_type` 本身就是目標的分類）。
+GOAL_TRACKING_MODULES = [
+    {"key": "diet", "label": "🍚 飲食", "goal_source": "body_goals", "goal_type": "diet"},
+    {"key": "body", "label": "⚖️ 體態", "goal_source": "body_goals", "goal_type": "weight"},
+    {"key": "exercise", "label": "🏃 運動", "goal_source": "body_goals", "goal_type": "exercise"},
+    {"key": "finance", "label": "💰 記帳", "goal_source": "module_goals", "goal_type": "finance"},
+    {"key": "collections", "label": "🧭 收藏清單", "goal_source": "module_goals", "goal_type": "collections"},
+    {"key": "certificate", "label": "📖 考試", "goal_source": "certificate_goals", "goal_type": None},
+]
+
+GOAL_TRACKING_MENU_TEXT = "🎯 目標追蹤，請選擇要查看的模組："
+
+
+def build_goal_tracking_menu_keyboard() -> dict:
+    buttons = [
+        [{"text": item["label"], "callback_data": f"goal_tracking:module:{item['key']}"}]
+        for item in GOAL_TRACKING_MODULES
+    ]
+    buttons.append([{"text": "🔙 返回主頁面", "callback_data": "menu:main"}])
+    return {"inline_keyboard": buttons}
+
+
+def goal_tracking_module_by_key(key: str) -> dict | None:
+    return next((item for item in GOAL_TRACKING_MODULES if item["key"] == key), None)
+
 
 MAIN_MENU_TEXT = "請選擇功能："
 _NOT_YET_IMPLEMENTED_REPLY = "這個功能還在開發中，敬請期待！可以先按下面按鈕回主選單。"

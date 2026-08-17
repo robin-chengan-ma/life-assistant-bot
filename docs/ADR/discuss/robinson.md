@@ -548,7 +548,9 @@ Robin 追加要求「語音辨識結果可能跟使用者實際講的內容有�
 
 ## 2026-08-17 補充：目標編輯/多目標並存（批次1）與🎯目標追蹤新選單（批次3）
 
-**狀態**：pending
+**狀態**：superseded——批次1部分已被下方「日常紀錄－體態（Phase 6 第二批 2h）實作完成」
+取代為 accepted；批次3部分已被下方「批次3 開工前 SDD 計畫確認」與「批次3：六模組目標泛化＋
+🎯 目標追蹤新選單 實作完成」取代為 accepted
 
 **批次1（體態）範圍追加**：
 - 目標清單改支援「編輯」（重新走一次目標值/期限輸入，帶出舊值）＋「刪除」（沿用既有二次確認），取代原本「這版不支援修改目標內容，要調整就取消重設」的舊限制
@@ -699,3 +701,212 @@ SDD 計畫給 Robin 確認（同義詞合併機制、類別是否全域共用、
 - 類別清單目前不做分頁／常用排序，全部列出按鈕；使用者變多、自訂類別暴增時另外討論
 - `exercise_categories` 沒有「刪除／合併既有類別」的管理介面，這批不做
 - 運動編輯改回從選類別開始重新走一次完整輸入，不支援只改單一欄位（理由同批次1同類決策）
+
+## 2026-08-17 批次3 開工前 SDD 計畫確認
+
+**狀態**：accepted（取代「補充：目標編輯/多目標並存與🎯目標追蹤新選單」段落中批次3部分的
+pending 狀態）
+
+**背景**：批次3「六模組目標泛化＋🎯 目標追蹤新選單」開工前，先提出一份完整 SDD 計畫給 Robin
+確認，其中四個會改變產品行為的設計分岔點無法自行選擇：①目標資料表要不要完全泛化成一張表
+②記帳模組的「目標」具體指什麼（目前只有月支出預算上限，不是目標）③收藏清單模組的「目標」
+具體指什麼（目前只是清單項目，沒有目標概念）④考試模組（`certificate_goals`）要不要整合進
+🎯目標追蹤新選單。
+
+**決策**：
+① 資料表策略：**新增通用 `module_goals` 表**（`module_key`: finance／collections），
+`body_goals` 保留不動——避免動到已上線的體態/運動/飲食功能，之後若要六模組完全統一再另外討論
+搬遷。
+② 記帳目標定義：**儲蓄／淨結餘目標**（本月「收入－支出」達到某數值），跟既有「每月支出預算
+上限」是兩個獨立概念，不互相取代。
+③ 收藏清單目標定義：**清單完成度目標**（期限內完成 N 個收藏項目，用「標記已造訪」數量計算）。
+④ 考試目標整合：**整合進🎯目標追蹤新選單，沿用既有 `certificate_goals` 資料**，不新建資料表。
+
+**理由**：`module_goals` 新表比完全泛化風險低，體態/運動/飲食三個子功能已在批次1／批次2上線，
+搬遷資料表牽動既有程式碼與資料，不符合批次3「聚焦六模組泛化本身」的範圍；記帳/收藏清單目標
+定義由 Robin 直接選擇推薦方案，避免 Claude 自行猜測會改變產品行為的語意；考試模組沿用既有表
+是因為 `certificate_goals` 結構（`target_date`／`target_score`）已經夠用，不需要重工。
+
+**後果**：`module_goals` 與 `body_goals`／`certificate_goals` 三張來源表結構不同，
+`goal_summaries.goal_source` 欄位負責標示來源，跨表查詢邏輯（`goal_summary_job.py`、
+`commands.start_goal_tracking_module()`）需要依 `goal_source` 分流，比單一泛化表複雜，但換來
+批次1／批次2功能不受影響的穩定性。
+
+## 2026-08-17 批次3：六模組目標泛化＋🎯 目標追蹤新選單 實作完成
+
+**狀態**：accepted（取代「補充：目標編輯/多目標並存與🎯目標追蹤新選單」段落中批次3部分的
+pending 狀態，資料表策略等四項決策見上方「批次3 開工前 SDD 計畫確認」）；下方「已知的刻意簡化」
+三點已於 2026-08-17「批次3補做：不得漏做的三項功能」全部補做完成，該三點標記 **superseded**，
+不再是目前有效的限制，詳見該段落
+
+**背景**：批次3依上方定案的 SDD 計畫開工，目標是讓記帳／收藏清單／考試三個模組補上「🎯 目標」
+功能（體態/運動/飲食已在批次1完成），並新增「🎯 目標追蹤」主選單統一顯示六模組的每日快取摘要。
+
+**設計內容**：
+①**資料庫**：新增 3 支 migration——`0085_create_module_goals_table.sql`（記帳/收藏清單通用
+目標表，`module_key` 區分，含 `important_day_id` 供重要日子同步）、
+`0086_create_goal_summaries_table.sql`（🎯目標追蹤每日快取摘要表，`UNIQUE (goal_source,
+goal_id, generated_on)` 供 UPSERT 去重）、`0087_add_target_unit_to_body_goals.sql`
+（`body_goals` 補 `target_unit` 欄位給飲食目標用）。
+②**`src/services/goal_parser.py`**（新檔）：方案A「LLM 輔助解析」，`parse_goal_input()`
+依 `module_key`（finance／collections／diet）用不同 Prompt 請 LLM 抽出「數字|單位」，解析
+失敗或格式不符一律降級為 `target_value=None`（純文字目標），比照 `body.py` 既有 LLM 容錯
+風格。
+③**`src/bot/goals.py`**（新檔）：`module_goals` 通用 CRUD（`create_goal()`／`update_goal()`／
+`get_goal()`／`list_active_goals()`／`cancel_goal()`）；`check_finance_goal_achievement()`
+用「目標建立日期之後的收入總額－支出總額 ≥ target_value」判斷（`baseline_value` 固定 0，
+用「這段期間賺了多少」而非「目前淨結餘－基準淨結餘」，避免要處理使用者過去負債/存款的絕對值）；
+`check_collections_goal_achievement()` 用「目前 visited 數－baseline_value ≥ target_value」
+判斷；`check_and_push_goal_deadline_reminders()` 期限提醒邏輯完全比照
+`body.check_and_push_goal_deadline_reminders()`。
+④**`src/services/goal_summary_job.py`**（新檔）：`generate_daily_goal_summaries()` 只在
+台灣時間 01:00 這個小時執行，掃描三張來源表所有 active 目標，各自組「過去一週／過去一個月」
+活動事實文字（body_goals 查對應 log 表、module_goals 查 transactions／collection_items、
+certificate_goals 複用既有 `certificate_stats.compute_daily_period_stats()`），餵給同一個
+LLM Prompt 生成摘要（「先組事實文字、LLM 只負責潤飾與建議」，不是讓 LLM 自己查資料），寫入
+`goal_summaries`（UPSERT，同一小時內被 `/healthz` cron 打好幾次不會重複寫入）；單一目標的
+LLM 失敗只記 log 跳過，不影響其他目標。
+⑤**`src/services/goal_important_day_sync.py`**：新增 `sync_module_goal()`，邏輯比照既有
+`sync_body_goal()`。
+⑥**`src/bot/menu.py`**：`MAIN_MENU_ITEMS` 新增「🎯 目標追蹤」（`goal_tracking`，不進
+`_NOT_YET_IMPLEMENTED_KEYS`，直接接上真正邏輯）；新增 `GOAL_TRACKING_MODULES`（飲食/體態/
+運動/記帳/收藏清單/考試六個模組，各自標示 `goal_source`／`goal_type`）與對應 Keyboard 組裝
+函式。
+⑦**`src/bot/commands.py`**：新增 `start_module_goal_menu()`／`start_module_goal_new()`／
+`handle_module_goal_description_step()`（呼叫 `goal_parser.parse_goal_input()`）／
+`handle_module_goal_deadline_step()`（**刻意簡化**：省略 body.py 才有的 Google Calendar
+同步問句，直接組摘要確認）／`handle_module_goal_confirm_save()`／`start_module_goal_list()`／
+`start_module_goal_edit()`／`start_module_goal_delete_confirm()`／`handle_module_goal_delete()`
+共用於記帳／收藏清單；新增 `start_goal_tracking_menu()`／`start_goal_tracking_module()`／
+`start_goal_tracking_detail()` 供🎯目標追蹤主選單（全程唯讀，只有「🔙 返回主頁面」按鈕）；
+飲食目標新增流程（`handle_goal_diet_description_step()`）改接 `goal_parser`；記帳交易寫入後
+（`handle_transaction_note_step()`）呼叫 `goals.check_finance_goal_achievement()` 並把恭喜
+文字附加在回覆後面。
+⑧**`src/bot/router.py`**：新增 `finance:`／`goal_tracking:` 兩個全新的 callback 分派區塊
+（記帳過去完全沒有按鈕子選單，只有指令觸發詞）；`collections:` 分派新增 `goal` 動作交給共用的
+`_dispatch_module_goal_callback()`；`_FINAL_CONFIRM_FLOWS` 新增 `pending_module_goal_confirm`／
+`module_goal_delete_confirm` 兩個摘要→二次確認 flow；文字 flow 分派新增
+`pending_module_goal_description`／`pending_module_goal_deadline` 分支；`_FINANCE_GOAL_
+TRIGGERS`／`_MY_FINANCE_GOALS_TRIGGERS` 新增指令觸發詞 `/finance_goal`（設定記帳目標）／
+`/my_finance_goals`（我的記帳目標），因記帳模組目前仍是純指令入口，目標流程沿用既有慣例
+而非比照其他模組走按鈕子選單。
+⑨**`src/bot/collections.py`**：子選單新增「🎯 目標」按鈕（`collections:goal:menu`）；
+`handle_visit_step()` 標記造訪成功後呼叫 `goals.check_collections_goal_achievement()`。
+⑩**`src/bot/body.py`**：`create_goal()`／`update_goal()` 新增 `target_unit` 參數。
+⑪**`main.py`**：`/healthz` 新增 `_check_module_goal_deadline_reminders()`（借用既有 10 分鐘
+cron 頻率檢查記帳/收藏清單目標期限）與 `_check_goal_summaries()`（固定台灣時間 01:00 呼叫
+`goal_summary_job.generate_daily_goal_summaries()`，用 `GEMINI_API_TEXT_KEY` 沿用既有通用
+文字 Key，不申請新 Key），排程檢查總數從 14 個增為 16 個。
+
+**理由**：記帳目標用「淨結餘變化金額」而非「目前淨結餘與基準值比較」，是因為後者需要另外記錄
+設定當下的絕對淨結餘（可能是負數，語意複雜），前者只算「這段期間賺了多少」更直覺、也不用擔心
+使用者過去財務狀況；`goal_summary_job.py` 採「先組事實文字、LLM 只負責潤飾」而非讓 LLM 自己
+查資料庫，理由同 `certificate_goals.build_advice_prompt()` 既有做法：LLM 只做語言生成，不做
+資料正確性判斷，避免生成內容跟實際資料兜不起來。
+
+**已知的刻意簡化（未來若要調整需另外討論）**：
+- 記帳/收藏清單目標新增流程省略 Google Calendar 同步問句（body.py 才有），理由是這兩個新模組
+  範圍聚焦在方案A解析與六模組泛化本身，行事曆同步屬於錦上添花
+- **飲食目標（FR-48 方案A）本批只做「結構化欄位解析與儲存、顯示於摘要」，暫不新增自動達成
+  判斷**：飲食目標語意可能是「以上」（例如每週吃蔬菜5次，越多越好）也可能是「以下」（例如
+  熱量控制在14000大卡以內，越少越好），不像記帳/收藏清單/運動都是明確的「達到某個下限」，
+  貿然假設方向可能產生錯誤的「恭喜達成」通知；待未來有更明確的語意規則（例如額外請 LLM 判斷
+  目標方向）再開發
+- 考試目標（FR-24a）整合進🎯目標追蹤主選單，但不新增自動達成判斷——考試是否「達標」需要實際
+  應考結果，系統目前沒有這項資料，維持既有的手動性質
+- `module_goals` 表不做完全泛化（不搬遷 `body_goals`），見上方「批次3 開工前 SDD 計畫確認」
+  決策①的理由
+
+**執行結果（2026-08-17，程式碼完成＋測試綠燈，尚未 commit）**：沿用批次1／批次2同樣的「整包
+repo 打包 tar 進雲端沙箱、裝好完整依賴鏈跑滿整套測試」流程（本機 `device_bash` 仍連不到網路，
+見 `docs/ADR/debug/robinson.md`「Sandbox network limits」）。完整 `python3 -m pytest -q`：
+**1878 個測試全過**（原本 1844 個 baseline 全過，新增 34 個測試）；`ruff check .` 全過。
+異動檔案：`src/migrations/0085_create_module_goals_table.sql`、
+`src/migrations/0086_create_goal_summaries_table.sql`、
+`src/migrations/0087_add_target_unit_to_body_goals.sql`、`src/services/goal_parser.py`（新）、
+`src/services/goal_summary_job.py`（新）、`src/services/goal_important_day_sync.py`、
+`src/bot/goals.py`（新）、`src/bot/menu.py`、`src/bot/commands.py`、`src/bot/router.py`、
+`src/bot/collections.py`、`src/bot/body.py`、`main.py`、
+`tests/services/test_goal_parser.py`（新）、`tests/services/test_goal_summary_job.py`（新）、
+`tests/bot/test_goals.py`（新）、`tests/bot/test_goal_tracking_router.py`（新）、
+`tests/bot/conftest.py`、`tests/bot/test_collections.py`、`docs/specs/SPEC.md`、
+`docs/specs/PROGRESS.md`、`docs/reference/db_schema.md`。
+
+## 2026-08-17 批次3補做：不得漏做的三項功能
+
+**狀態**：accepted（取代上方「批次3：六模組目標泛化＋🎯 目標追蹤新選單 實作完成」段落
+「已知的刻意簡化」三點中的前兩點與第三點，該三點標記 superseded）
+
+**背景**：批次3原始交付把「記帳/收藏清單省略 Calendar 同步」「飲食目標不做自動達成判斷」
+「考試目標不做自動達成判斷」寫成「已知的刻意簡化」。Robin 明確表示不接受，逐項回覆：
+1.「不准漏做，給我補回去」（Calendar 同步）
+2.「給我想辦法處理」（飲食方向不明確的問題要解決，不是繞過）
+3.「這個我可以理解，只要我輸入實際分數，就可以自動判斷了吧，所以給我補進去」（考試成績自動判斷）
+三項要求全部是「把原本規劃內、被我以簡化為由砍掉的功能做回來」，不是新需求，因此不需要另外
+走 SDD 確認流程，直接依原本設計精神補做並記錄。
+
+**討論內容與決策**：
+
+①**記帳／收藏清單目標 Calendar 同步**：直接比照 `body.py` 既有的 `handle_goal_deadline_step()`
+／`handle_goal_calendar_sync_step()`／`handle_goal_confirm_save()` 三段式設計搬過來給
+`module_goals` 用——新增流程且講清楚有期限時，多問一輪「要不要同步到 Google 家庭行事曆呢？」，
+答「要」的話在 `<module_key>:goal:confirm_save` 實際建立 Calendar 事件並把 `event_id` 存回去；
+編輯不重問（跟 body.py 一致：Calendar 同步只在新建時問一次）。新增 migration
+`0088_add_calendar_sync_to_module_goals.sql`（`module_goals.sync_to_calendar` BOOLEAN NOT
+NULL DEFAULT FALSE、`google_calendar_event_id` TEXT）；`goals.py` 新增
+`set_calendar_event_id()`；`commands.py` 新增 `handle_module_goal_calendar_sync_step()`，
+`handle_module_goal_deadline_step()`／`_build_module_goal_confirm_summary()`／
+`handle_module_goal_confirm_save()` 三個既有函式改造成跟 body.py 對應函式同構；`router.py`
+新增 `pending_module_goal_calendar_sync` 文字 flow 分派，`_dispatch_module_goal_callback()`
+與 `finance:`／`collections:` 兩個 callback 分支都補上 `calendar_client` 參數往下傳。
+
+②**飲食目標自動達成判斷（解決方向不明確的問題）**：原本卡住的點是「飲食目標語意可能是『至少
+要達到』（例如每週吃蔬菜5次）也可能是『不能超過』（例如熱量控制在14000大卡以內），兩者判斷
+邏輯完全相反，貿然假設方向可能誤發恭喜」。解法不是繞過，而是**讓 LLM 在解析目標值的同時，一併
+判斷這是哪一種方向**：`goal_parser.py` 新增 `_DIET_PROMPT`／`_parse_diet()`，請 LLM 額外回傳
+「MIN」（至少要達到，數值越大越好）或「MAX」（不能超過，數值越小越好），寫入新欄位
+`body_goals.target_direction`（migration `0089_add_target_direction_to_body_goals.sql`，
+CHECK IN ('min', 'max')，只有 `goal_type='diet'` 且成功解析出結構化數值時才會有值）。
+`body.py` 新增 `_diet_cumulative_value()`（依 `target_unit` 判斷是查熱量加總還是查次數）與
+`check_and_push_diet_goal_achievements()`：MIN 方向隨時可以判斷（累計值 ≥ 目標值即達成，因為
+「至少要達到」沒有結束邊界的問題，達到那一刻就算達成）；MAX 方向則必須要有 `target_date` 且
+已經到期才能判斷（累計值 ≤ 目標值才算達成）——這是數學上的真實限制、不是偷懶：「不能超過某個
+上限」這種目標，沒有明確的結束時間點就無法判斷「有沒有超標」（使用者理論上隨時可能之後才超標），
+沒設期限的 MAX 方向飲食目標目前仍然無法自動判斷，需要在文件裡誠實寫清楚這個限制，而不是不寫。
+`main.py` `_check_body_goal_alerts()` 串接 `check_and_push_diet_goal_achievements()`。
+
+③**考試成績自動達成判斷**：Robin 指出「只要我輸入實際分數，就可以自動判斷了吧」，這點確實
+可行——系統本來就有 `/record_official_score`（`certificate_exam_scores.record_score()`）
+可以記錄使用者輸入的實際應考成績，先前寫「系統無應考結果資料」是錯誤的判斷，遺漏了這個既有
+功能。新增 `certificate_goals.check_score_achievement()`：`target_score`／`score` 都是 TEXT
+（因為 `exam_type` 開放任意證照類型，有些沒有量化分數，例如「通過／未通過」），用正規表達式
+從兩邊各自抽數字，只在都抽得出數字時比較（`score >= target_score` 視為達成，語意是分數越高
+越好，符合 TOEIC／統測這類常見情境）；抽不出數字（其中一邊是「通過」這類文字）時直接跳過，
+不誤判。`commands.handle_exam_score_value_step()` 記錄成績成功後立即呼叫這個函式，達標就在
+回覆訊息後面附加一句恭喜文字。這個判斷是「記錄當下立即比對」，不是背景排程，因此不需要額外的
+`achieved_notified` 去重欄位——`certificate_goals` 表本身也沒有這類狀態欄位，維持現有表結構
+不變。
+
+**理由**：三項都是把原本設計文件裡就已經想清楚、只是因為時間/範圍考量而口頭簡化掉的功能做
+回來，不是重新設計；MAX 方向飲食目標沒有期限時無法判斷這一點，屬於解決問題過程中發現的真實
+數學限制（而非簡化），必須誠實寫進 SPEC.md，不能又用「已知簡化」的說法輕輕帶過。
+
+**後果**：`docs/specs/SPEC.md` FR-41b／FR-73a／FR-48／FR-24a 四處已更新，移除「已知簡化」字眼、
+改寫為實際已生效的行為；上方「批次3：六模組目標泛化＋🎯 目標追蹤新選單 實作完成」段落的
+「已知的刻意簡化」三點標記 superseded（不再是目前有效的限制，但保留原文不刪除，作為決策
+歷史）。
+
+**執行結果（2026-08-17，程式碼完成＋測試綠燈，尚未 commit）**：沿用同一套雲端沙箱跑滿整套
+測試流程。完整 `python3 -m pytest -q`：**1897 個測試全過**（原本 1878 個 baseline 全過，新增
+19 個：`tests/bot/test_goals.py` 新增 2 項 Calendar 同步測試、`tests/bot/test_body.py` 新增
+4 項飲食目標達成判斷測試、`tests/bot/test_certificate_goals.py` 新增 7 項成績比對測試、
+`tests/bot/test_certificate_exam_scores_commands.py` 新增 2 項整合測試、
+`tests/bot/test_goal_tracking_router.py` 新增 1 項記帳目標 Calendar 同步全流程整合測試，另
+既有 `test_create_and_get_goal` 補一項 `sync_to_calendar` 預設值斷言）；`ruff check .` 全過。
+異動檔案：`src/migrations/0088_add_calendar_sync_to_module_goals.sql`（新）、
+`src/migrations/0089_add_target_direction_to_body_goals.sql`（新）、`src/bot/goals.py`、
+`src/bot/commands.py`、`src/bot/router.py`、`src/bot/body.py`、`src/bot/certificate_goals.py`、
+`src/services/goal_parser.py`、`main.py`、`tests/bot/test_goals.py`、`tests/bot/test_body.py`、
+`tests/bot/test_certificate_goals.py`、`tests/bot/test_certificate_exam_scores_commands.py`、
+`tests/bot/test_goal_tracking_router.py`、`tests/services/test_goal_parser.py`、
+`docs/specs/SPEC.md`、`docs/specs/PROGRESS.md`、`docs/reference/db_schema.md`。

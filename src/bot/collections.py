@@ -20,7 +20,7 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from src.bot import menu
+from src.bot import goals, menu
 from src.bot.state import ConversationStateStore
 from src.services.app_collections import (
     AppCollectionService,
@@ -74,6 +74,7 @@ def start_collections_menu() -> tuple[str, dict]:
         "inline_keyboard": [
             [{"text": "📋 收藏清單", "callback_data": "collections:list"}],
             [{"text": "➕ 新增收藏", "callback_data": "collections:add"}],
+            [{"text": "🎯 目標", "callback_data": "collections:goal:menu"}],
             [{"text": "🧳 旅遊行程", "callback_data": "trips:list"}],
             [{"text": "🔙 返回主選單", "callback_data": "menu:main"}],
         ]
@@ -458,6 +459,11 @@ def handle_visit_step(
             return f"標記失敗：{exc}", menu.back_to_main_menu_keyboard()
         except LifeNotFoundError as exc:
             return str(exc), menu.back_to_main_menu_keyboard()
-        return "已標記造訪，探索地圖會顯示這個地點的座標標記（若收藏本身尚未定位成功，仍會列在「無法定位」清單）！", menu.back_to_main_menu_keyboard()
+        reply = "已標記造訪，探索地圖會顯示這個地點的座標標記（若收藏本身尚未定位成功，仍會列在「無法定位」清單）！"
+        # 2026-08-17（批次3，FR-45a）：標記造訪後順便檢查收藏清單目標是否達成，見 src/bot/goals.py。
+        goal_message = goals.check_collections_goal_achievement(db, user_id)
+        if goal_message:
+            reply += "\n\n" + goal_message
+        return reply, menu.back_to_main_menu_keyboard()
 
     raise ValueError(f"未知的對話狀態：{state}")

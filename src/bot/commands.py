@@ -17,6 +17,7 @@ from src.bot import (
     certificate_stats,
     finance,
     friend_chat,
+    goals,
     job_search,
     knowledge,
     menu,
@@ -30,6 +31,7 @@ from src.bot import (
 from src.bot import complaint as complaint_module
 from src.bot import todo as todo_module
 from src.bot.state import ConversationStateStore
+from src.services import goal_parser
 from submodules.cloudsql.client import CloudSQLClient
 
 _TAIWAN_TZ = ZoneInfo("Asia/Taipei")
@@ -2031,6 +2033,10 @@ def handle_transaction_note_step(
     reply = "已經幫你記錄好了！"
     if pii_detected:
         reply += _PII_DETECTED_REMINDER
+    # 2026-08-17（批次3，FR-45a）：記帳寫入後順便檢查記帳目標是否達成，見 src/bot/goals.py。
+    goal_message = goals.check_finance_goal_achievement(db, target_user_id)
+    if goal_message:
+        reply += "\n\n" + goal_message
     return reply
 
 
@@ -3453,21 +3459,31 @@ def handle_goal_exercise_minutes_step(state_store: ConversationStateStore, teleg
     return "有預計完成時間嗎？（例如：三個月內完成，沒有的話輸入「沒有」）"
 
 
-def handle_goal_diet_description_step(state_store: ConversationStateStore, telegram_user_id: int, text: str, privacy_llm_client=None) -> str:
-    """處理 `pending_goal_diet_description` 狀態下使用者提供的飲食目標敘述（自由文字，決策④：
-    飲食目標太主觀，不做自動達成判斷，`target_value` 固定為 None）。"""
+def handle_goal_diet_description_step(
+    state_store: ConversationStateStore, telegram_user_id: int, text: str, llm_client=None, privacy_llm_client=None
+) -> str:
+    """處理 `pending_goal_diet_description` 狀態下使用者提供的飲食目標敘述（自由文字）。
+
+    2026-08-17（批次3，FR-48 方案A）：改交給 `goal_parser.parse_goal_input()` 嘗試解析出結構化
+    數值＋方向（例如「熱量控制在14000大卡以內」解析出 MAX 方向），抽得出來就存
+    `target_value`／`target_unit`／`target_direction` 支援之後的自動達成判斷（見
+    `body.check_and_push_diet_goal_achievements()`）；抽不出來時維持原本純文字目標
+    （`target_value` 為 None）。"""
     state = state_store.get(telegram_user_id)
     description = text.strip()
     if not description:
         return "不好意思，我沒看懂，麻煩用你自己的話告訴我飲食目標是什麼呢？"
     masked_description, _pii_detected = privacy.mask_text(description, privacy_llm_client)
+    parsed = goal_parser.parse_goal_input(llm_client, masked_description, "diet")
 
     state_store.set(
         telegram_user_id,
         {
             **state,
             "flow": "pending_goal_deadline",
-            "target_value": None,
+            "target_value": parsed["target_value"],
+            "target_unit": parsed["target_unit"],
+            "target_direction": parsed["target_direction"],
             "baseline_value": None,
             "target_description": masked_description,
         },
@@ -3546,19 +3562,24 @@ def handle_goal_confirm_save(
     goal_type = state["goal_type"]
     target_description = state["target_description"]
     target_value = state["target_value"]
+    target_unit = state.get("target_unit")
+    target_direction = state.get("target_direction")
     baseline_value = state["baseline_value"]
     target_date = state.get("target_date")
     goal_id = state.get("goal_id")
     state_store.clear(telegram_user_id)
 
     if goal_id is not None:
-        body.update_goal(db, goal_id, target_description, target_value, baseline_value, target_date)
+        body.update_goal(
+            db, goal_id, target_description, target_value, baseline_value, target_date,
+            target_unit=target_unit, target_direction=target_direction,
+        )
         return f"好的，已經幫你更新目標「{target_description}」了，加油！"
 
     sync_to_calendar = state.get("sync_to_calendar", False)
     goal_id = body.create_goal(
         db, target_user_id, goal_type, target_description, target_value, baseline_value, target_date,
-        sync_to_calendar=sync_to_calendar,
+        sync_to_calendar=sync_to_calendar, target_unit=target_unit, target_direction=target_direction,
     )
     if sync_to_calendar and target_date is not None and calendar_client is not None:
         try:
@@ -4142,11 +4163,20 @@ def handle_exam_score_value_step(
         return "不好意思，我沒看懂成績，麻煩再告訴我一次："
 
     state = state_store.get(telegram_user_id)
-    certificate_exam_scores.record_score(db, state["target_user_id"], state["exam_type"], state["exam_date"], score)
+    target_user_id = state["target_user_id"]
+    exam_type = state["exam_type"]
+    certificate_exam_scores.record_score(db, target_user_id, exam_type, state["exam_date"], score)
     state_store.clear(telegram_user_id)
 
     exam_date = state["exam_date"]
-    return f"已經幫你記錄「{state['exam_type']}」{exam_date.year}/{exam_date.month}/{exam_date.day} 的正式成績：{score} 囉！"
+    reply = f"已經幫你記錄「{exam_type}」{exam_date.year}/{exam_date.month}/{exam_date.day} 的正式成績：{score} 囉！"
+
+    # 2026-08-17 補做（Robin 要求不得漏做）：記錄實際成績後，跟這個 exam_type 設定的目標分數
+    # 比對，達標就在回覆後面補一句恭喜；比對失敗（沒設目標、或分數不是數字）優雅跳過。
+    achievement_text = certificate_goals.check_score_achievement(db, target_user_id, exam_type, score)
+    if achievement_text:
+        reply = f"{reply}\n\n{achievement_text}"
+    return reply
 
 
 def handle_my_exam_scores(db: CloudSQLClient, user_id: int) -> str:
@@ -4896,3 +4926,295 @@ def handle_my_applications(db: CloudSQLClient) -> str:
     """「我的應徵紀錄」／`/my_applications`：列出各職缺目前最新的應徵狀態（依最新更新時間排序）。"""
     statuses = job_search.list_latest_application_statuses(db)
     return job_search.format_application_statuses(statuses)
+
+
+# ---------------------------------------------------------------------------
+# 批次3：記帳／收藏清單「🎯 目標」共用流程（module_goals，見 src/bot/goals.py）
+# ---------------------------------------------------------------------------
+# 2026-08-17（批次3，見 docs/ADR/discuss/robinson.md「批次3 開工前 SDD 計畫確認」）：記帳／
+# 收藏清單目前都沒有既有的按鈕子選單流程（記帳仍是純指令觸發，見 _FINANCE_* 系列指令；收藏清單
+# 有按鈕子選單但沒有目標概念），這裡新增一套跟 body.py 的 `body:goal:*` 精神一致、但改吃
+# `module_goals` 的通用目標子流程，`module_key`（finance／collections）決定要查哪個模組的目標；
+# 跟體態批次1的決策一致：新增/編輯都重新走一次完整輸入，不做「只改期限」的特例；刻意簡化——
+# 不提供 Google Calendar 同步問句（body.py 才有），理由是這兩個新模組目標範圍聚焦在方案A解析與
+# 六模組泛化本身，行事曆同步屬於錦上添花，之後有需要再談。
+
+
+def start_module_goal_menu(module_key: str, source: str) -> tuple[str, dict]:
+    label = goals.module_label(module_key)
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "➕ 新增", "callback_data": f"{module_key}:goal:new"}],
+            [{"text": "📋 查看清單", "callback_data": f"{module_key}:goal:list"}],
+            [{"text": "🔙 返回", "callback_data": f"menu:{source}"}],
+        ]
+    }
+    return f"{label}目標，請選擇要進行的操作：", keyboard
+
+
+def start_module_goal_new(state_store: ConversationStateStore, telegram_user_id: int, user_id: int, module_key: str) -> str:
+    """「➕ 新增」：先問目標的自由文字敘述（方案A：之後才嘗試用 LLM 解析出結構化數值）。"""
+    state_store.set(
+        telegram_user_id,
+        {"flow": "pending_module_goal_description", "target_user_id": user_id, "module_key": module_key, "goal_id": None},
+    )
+    label = goals.module_label(module_key)
+    if module_key == "finance":
+        return f"好的！那你的{label}目標是什麼呢？（例如：這個月想存 5000 元）"
+    return f"好的！那你的{label}目標是什麼呢？（例如：這個月完成 5 個收藏項目）"
+
+
+def handle_module_goal_description_step(
+    db: CloudSQLClient, llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str, privacy_llm_client=None
+) -> str:
+    """處理 `pending_module_goal_description` 狀態：把敘述交給 `goal_parser.parse_goal_input()`
+    嘗試解析出結構化數值，抽不出來就退化為純文字目標（方案A）；接著問期限。"""
+    state = state_store.get(telegram_user_id)
+    masked_text, _ = privacy.mask_text(text, privacy_llm_client)
+    parsed = goal_parser.parse_goal_input(llm_client, masked_text, state["module_key"])
+
+    baseline_value = None
+    if state["module_key"] == "collections":
+        baseline_value = goals.compute_collections_baseline(db, state["target_user_id"])
+    elif state["module_key"] == "finance":
+        baseline_value = 0
+
+    state_store.set(
+        telegram_user_id,
+        {
+            **state,
+            "flow": "pending_module_goal_deadline",
+            "target_description": masked_text,
+            "target_value": parsed["target_value"],
+            "target_unit": parsed["target_unit"],
+            "baseline_value": baseline_value,
+        },
+    )
+    return "有預計完成時間嗎？（例如：這個月底、沒有）"
+
+
+def handle_module_goal_deadline_step(llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str | tuple[str, dict]:
+    """處理 `pending_module_goal_deadline` 狀態，邏輯比照 `handle_goal_deadline_step()`。
+
+    2026-08-17 補做（Robin 要求不得漏做）：新增流程且有期限時（`goal_id is None`），比照體態
+    目標多問一輪「要不要同步到 Google 家庭行事曆」（`pending_module_goal_calendar_sync`）；其餘
+    情況（沒有期限，或這是編輯既有目標）直接組摘要＋確認，跟原本行為一致。"""
+    state = state_store.get(telegram_user_id)
+    parsed = _parse_key_value_block(
+        llm_client.generate_text(_GOAL_DEADLINE_PARSE_PROMPT.format(deadline_reply=text, current_date_text=_current_date_text()))
+    )
+    status = parsed.get("STATUS")
+    if status == "UNCLEAR":
+        return _GOAL_DEADLINE_UNCLEAR_REPLY
+
+    target_date = None
+    if status == "HAS_DEADLINE":
+        target_date = _parse_date_only(parsed.get("DATE", ""))
+        if target_date is None:
+            return _GOAL_DEADLINE_UNCLEAR_REPLY
+
+    is_edit = state.get("goal_id") is not None
+    if target_date is not None and not is_edit:
+        state_store.set(telegram_user_id, {**state, "flow": "pending_module_goal_calendar_sync", "target_date": target_date})
+        return "好的！最後想問一下，這個目標要不要同步到 Google 家庭行事曆呢？（家人會在自己手機上看到）"
+
+    return _build_module_goal_confirm_summary(state_store, telegram_user_id, {**state, "target_date": target_date})
+
+
+def handle_module_goal_calendar_sync_step(
+    llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str
+) -> tuple[str, dict]:
+    """處理 `pending_module_goal_calendar_sync` 狀態下使用者對「要不要同步到 Google 家庭行事曆」
+    的回覆，比照 `handle_goal_calendar_sync_step()`，組出摘要＋確認送出按鈕，還不會真正寫入。"""
+    state = state_store.get(telegram_user_id)
+    decision = llm_client.generate_text(_TODO_CALENDAR_SYNC_PROMPT.format(text=text)).strip()
+    sync_to_calendar = decision == "CONFIRM"
+    return _build_module_goal_confirm_summary(state_store, telegram_user_id, {**state, "sync_to_calendar": sync_to_calendar})
+
+
+def _build_module_goal_confirm_summary(state_store: ConversationStateStore, telegram_user_id: int, state: dict) -> tuple[str, dict]:
+    state_store.set(telegram_user_id, {**state, "flow": "pending_module_goal_confirm"})
+    target_date = state.get("target_date")
+    deadline_part = f"\n期限：{target_date:%Y/%m/%d}" if target_date else ""
+    value_part = ""
+    if state.get("target_value") is not None:
+        value_part = f"\n解析出的結構化目標：{state['target_value']}{state.get('target_unit') or ''}（支援自動達成判斷）"
+    sync_part = "\n將同步到 Google 家庭行事曆" if state.get("sync_to_calendar") else ""
+    summary = f"請確認以下內容：\n\n目標：{state['target_description']}{deadline_part}{value_part}{sync_part}"
+    module_key = state["module_key"]
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "✅ 確認送出", "callback_data": f"{module_key}:goal:confirm_save"}],
+            [{"text": "❌ 取消", "callback_data": f"{module_key}:goal:menu"}],
+        ]
+    }
+    return summary, keyboard
+
+
+def handle_module_goal_confirm_save(
+    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, calendar_client=None
+) -> str:
+    """`<module_key>:goal:confirm_save`：實際寫入目標（新增或編輯）。
+
+    2026-08-17 補做（Robin 要求不得漏做）：新增且勾選同步時，比照 `handle_goal_confirm_save()`
+    呼叫 `calendar_client.create_event()` 建立 Google Calendar 事件並存回
+    `google_calendar_event_id`；建立失敗只記 log，不影響目標本身已成功寫入。"""
+    state = state_store.get(telegram_user_id)
+    if not state or state.get("flow") != "pending_module_goal_confirm":
+        return "這個確認已經過期了，麻煩重新操作一次喔！"
+
+    target_user_id = state["target_user_id"]
+    module_key = state["module_key"]
+    target_description = state["target_description"]
+    target_value = state.get("target_value")
+    target_unit = state.get("target_unit")
+    target_date = state.get("target_date")
+    goal_id = state.get("goal_id")
+    state_store.clear(telegram_user_id)
+
+    if goal_id is not None:
+        goals.update_goal(db, goal_id, target_description, target_value, target_unit, target_date)
+        return f"已經幫你更新「{goals.module_label(module_key)}」的目標囉！"
+
+    sync_to_calendar = state.get("sync_to_calendar", False)
+    goal_id = goals.create_goal(
+        db, target_user_id, module_key, target_description, target_value, target_unit, state.get("baseline_value"), target_date,
+        sync_to_calendar=sync_to_calendar,
+    )
+    if sync_to_calendar and target_date is not None and calendar_client is not None:
+        try:
+            event_id = calendar_client.create_event(
+                summary=target_description,
+                start=target_date.isoformat(),
+                end=(target_date + timedelta(days=1)).isoformat(),
+                description=f"來自 Robinson {goals.module_label(module_key)}目標",
+                all_day=True,
+            )
+            goals.set_calendar_event_id(db, goal_id, event_id)
+        except Exception:
+            _logger.exception(
+                "模組目標（id=%s）同步到 Google Calendar 失敗，目標本身已成功記錄不受影響", goal_id
+            )
+    return f"已經幫你記下「{goals.module_label(module_key)}」的目標囉！"
+
+
+def handle_module_goal_confirm_text(state_store: ConversationStateStore, telegram_user_id: int) -> tuple[str, dict]:
+    """`pending_module_goal_confirm`／`module_goal_delete_confirm` 只接受按鈕操作，理由同
+    `handle_goal_confirm_text()`：這是最終寫入前的把關，避免語音誤觸發。"""
+    state = state_store.get(telegram_user_id)
+    module_key = state.get("module_key", "finance") if state else "finance"
+    return "這一步麻煩用按鈕操作喔！", {"inline_keyboard": [[{"text": "🔙 返回", "callback_data": f"{module_key}:goal:menu"}]]}
+
+
+def start_module_goal_list(db: CloudSQLClient, user_id: int, module_key: str) -> tuple[str, dict]:
+    active_goals = goals.list_active_goals(db, user_id, module_key)
+    back_keyboard = {"inline_keyboard": [[{"text": "🔙 返回", "callback_data": f"{module_key}:goal:menu"}]]}
+    if not active_goals:
+        return goals.format_goal_list(active_goals), back_keyboard
+
+    listing = goals.format_goal_list(active_goals)
+    buttons = [
+        [
+            {"text": f"✏️ 編輯 {index}", "callback_data": f"{module_key}:goal:edit:{item['id']}"},
+            {"text": f"🗑 刪除 {index}", "callback_data": f"{module_key}:goal:delete:{item['id']}"},
+        ]
+        for index, item in enumerate(active_goals, start=1)
+    ]
+    buttons.append([{"text": "🔙 返回", "callback_data": f"{module_key}:goal:menu"}])
+    return listing, {"inline_keyboard": buttons}
+
+
+def start_module_goal_edit(
+    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int, module_key: str, goal_id: int
+) -> str:
+    row = goals.get_goal(db, goal_id)
+    if row is None or row["user_id"] != user_id:
+        return "找不到這筆目標，可能已經被刪除了。"
+    state_store.set(
+        telegram_user_id,
+        {
+            "flow": "pending_module_goal_description",
+            "target_user_id": user_id,
+            "module_key": module_key,
+            "goal_id": goal_id,
+        },
+    )
+    label = goals.module_label(module_key)
+    return f"好的，重新設定「{label}」的目標吧！那你的目標是什麼呢？"
+
+
+def start_module_goal_delete_confirm(
+    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int, module_key: str, goal_id: int
+) -> tuple[str, dict]:
+    row = goals.get_goal(db, goal_id)
+    if row is None or row["user_id"] != user_id:
+        return "找不到這筆目標，可能已經被刪除了。", {"inline_keyboard": [[{"text": "🔙 返回", "callback_data": f"{module_key}:goal:menu"}]]}
+    state_store.set(telegram_user_id, {"flow": "module_goal_delete_confirm", "goal_id": goal_id, "module_key": module_key})
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "✅ 確認刪除", "callback_data": f"{module_key}:goal:confirm_delete:{goal_id}"}],
+            [{"text": "❌ 取消", "callback_data": f"{module_key}:goal:list"}],
+        ]
+    }
+    return f"確定要刪除目標「{row['target_description']}」嗎？", keyboard
+
+
+def handle_module_goal_delete(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int, goal_id: int) -> str:
+    row = goals.get_goal(db, goal_id)
+    if row is None or row["user_id"] != user_id:
+        return "找不到這筆目標，可能已經被刪除了。"
+    goals.cancel_goal(db, goal_id)
+    return "已經幫你刪除這筆目標囉！"
+
+
+# ---------------------------------------------------------------------------
+# 批次3：🎯 目標追蹤主選單（FR-45a，唯讀，見 src/bot/menu.py GOAL_TRACKING_MODULES）
+# ---------------------------------------------------------------------------
+
+
+def start_goal_tracking_menu() -> tuple[str, dict]:
+    return menu.GOAL_TRACKING_MENU_TEXT, menu.build_goal_tracking_menu_keyboard()
+
+
+def start_goal_tracking_module(db: CloudSQLClient, user_id: int, module_key: str) -> tuple[str, dict]:
+    """選模組後列出該模組未過期（active 且未超過期限，或無期限）的目標清單。"""
+    item = menu.goal_tracking_module_by_key(module_key)
+    back_keyboard = {"inline_keyboard": [[{"text": "🔙 返回", "callback_data": "menu:goal_tracking"}]]}
+    if item is None:
+        return "查無資料", back_keyboard
+
+    today = _now().date()
+    if item["goal_source"] == "body_goals":
+        active_goals = [g for g in body.list_active_goals(db, user_id) if g["goal_type"] == item["goal_type"]]
+    elif item["goal_source"] == "module_goals":
+        active_goals = goals.list_active_goals(db, user_id, item["goal_type"])
+    else:
+        active_goals = certificate_goals.list_goals(db, user_id)
+
+    active_goals = [g for g in active_goals if not g.get("target_date") or g["target_date"] >= today]
+    if not active_goals:
+        return "查無資料", back_keyboard
+
+    buttons = []
+    for goal_row in active_goals:
+        if item["goal_source"] == "certificate_goals":
+            label = goal_row["exam_type"]
+        else:
+            label = goal_row["target_description"]
+        buttons.append([{"text": label[:40], "callback_data": f"goal_tracking:goal:{item['goal_source']}:{goal_row['id']}"}])
+    buttons.append([{"text": "🔙 返回", "callback_data": "menu:goal_tracking"}])
+    return f"{item['label']}的目標，請選一個查看摘要：", {"inline_keyboard": buttons}
+
+
+def start_goal_tracking_detail(db: CloudSQLClient, goal_source: str, goal_id: int) -> tuple[str, dict]:
+    """選一個目標後顯示 `goal_summaries` 最新快取，全程唯讀，只有「🔙 返回主頁面」按鈕。"""
+    keyboard = {"inline_keyboard": [[{"text": "🔙 返回主頁面", "callback_data": "menu:main"}]]}
+    rows = db.select(
+        "goal_summaries",
+        where="goal_source = %s AND goal_id = %s",
+        params=(goal_source, goal_id),
+    )
+    if not rows:
+        return "摘要生成中，明天再回來看看！（每日凌晨會固定更新一次）", keyboard
+    latest = max(rows, key=lambda r: r["generated_on"])
+    return latest["summary_text"], keyboard

@@ -577,6 +577,79 @@ def test_check_and_push_exercise_goal_achievements_deletes_calendar_event_when_s
     calendar_client.delete_event.assert_called_once_with(event_id="event-xyz")
 
 
+def test_check_and_push_diet_goal_achievements_min_direction(fake_db):
+    """2026-08-17 補做（Robin 要求不得漏做）：MIN 方向（至少要達到）目標隨時可以判斷。"""
+    user_id = fake_db.insert("users", {"telegram_user_id": 111, "role": "測試家人", "is_owner": False})
+    now = datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc)
+    goal_id = body.create_goal(
+        fake_db, user_id, "diet", "每週吃蔬菜5次", target_value=5, target_unit="次", target_direction="min"
+    )
+    fake_db.update("body_goals", {"created_at": now}, where="id = %s", params=(goal_id,))
+
+    for _ in range(4):
+        body.create_diet_log(fake_db, user_id, "food", "蔬菜", date(2026, 8, 4))
+    telegram_client = Mock()
+    body.check_and_push_diet_goal_achievements(fake_db, telegram_client, now=now)
+    telegram_client.send_text.assert_not_called()
+
+    body.create_diet_log(fake_db, user_id, "food", "蔬菜", date(2026, 8, 4))
+    body.check_and_push_diet_goal_achievements(fake_db, telegram_client, now=now)
+    telegram_client.send_text.assert_called_once()
+    assert fake_db.select("body_goals", where="id = %s", params=(goal_id,), fetch_one=True)["status"] == "achieved"
+
+
+def test_check_and_push_diet_goal_achievements_max_direction_requires_deadline(fake_db):
+    """2026-08-17 補做：MAX 方向（不能超過）目標沒有期限時無法判斷（數學上沒有結束邊界），
+    有期限但還沒到期也先不判斷；到期後才依累計值決定是否達成。"""
+    user_id = fake_db.insert("users", {"telegram_user_id": 222, "role": "測試家人", "is_owner": False})
+    now = datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc)
+    goal_id = body.create_goal(
+        fake_db, user_id, "diet", "這週熱量控制在1000大卡以內", target_value=1000,
+        target_unit="大卡", target_direction="max",
+    )
+    fake_db.update("body_goals", {"created_at": now}, where="id = %s", params=(goal_id,))
+    body.create_diet_log(fake_db, user_id, "food", "沙拉", date(2026, 8, 4), macros={"estimated_calories": 500})
+
+    telegram_client = Mock()
+    body.check_and_push_diet_goal_achievements(fake_db, telegram_client, now=now)
+    telegram_client.send_text.assert_not_called()  # 沒有 target_date，無法判斷
+
+    fake_db.update("body_goals", {"target_date": date(2026, 8, 10)}, where="id = %s", params=(goal_id,))
+    body.check_and_push_diet_goal_achievements(fake_db, telegram_client, now=now)
+    telegram_client.send_text.assert_not_called()  # 還沒到期限
+
+    later_now = datetime(2026, 8, 10, 12, 0, tzinfo=timezone.utc)
+    body.check_and_push_diet_goal_achievements(fake_db, telegram_client, now=later_now)
+    telegram_client.send_text.assert_called_once()
+    assert fake_db.select("body_goals", where="id = %s", params=(goal_id,), fetch_one=True)["status"] == "achieved"
+
+
+def test_check_and_push_diet_goal_achievements_max_direction_exceeded(fake_db):
+    user_id = fake_db.insert("users", {"telegram_user_id": 333, "role": "測試家人", "is_owner": False})
+    now = datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc)
+    goal_id = body.create_goal(
+        fake_db, user_id, "diet", "這週熱量控制在1000大卡以內", target_value=1000,
+        target_unit="大卡", target_direction="max", target_date=date(2026, 8, 10),
+    )
+    fake_db.update("body_goals", {"created_at": now}, where="id = %s", params=(goal_id,))
+    body.create_diet_log(fake_db, user_id, "food", "大餐", date(2026, 8, 4), macros={"estimated_calories": 1500})
+
+    telegram_client = Mock()
+    later_now = datetime(2026, 8, 10, 12, 0, tzinfo=timezone.utc)
+    body.check_and_push_diet_goal_achievements(fake_db, telegram_client, now=later_now)
+    telegram_client.send_text.assert_not_called()  # 超標，沒有達成
+
+
+def test_check_and_push_diet_goal_achievements_skips_goal_without_direction(fake_db):
+    """未經 LLM 解析出結構化數值（`target_value`／`target_direction` 為 None）的飲食目標維持
+    純文字，不做自動判斷。"""
+    user_id = fake_db.insert("users", {"telegram_user_id": 444, "role": "測試家人", "is_owner": False})
+    body.create_goal(fake_db, user_id, "diet", "想吃得更健康")
+    telegram_client = Mock()
+    body.check_and_push_diet_goal_achievements(fake_db, telegram_client)
+    telegram_client.send_text.assert_not_called()
+
+
 def test_check_and_push_goal_deadline_reminders(fake_db):
     user_id = fake_db.insert("users", {"telegram_user_id": 222, "role": "測試家人", "is_owner": False})
     now = datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc)

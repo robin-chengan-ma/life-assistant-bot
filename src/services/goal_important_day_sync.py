@@ -29,6 +29,24 @@ def sync_body_goal(db: GoalSyncDatabase, goal_id: int) -> int | None:
     )
 
 
+def sync_module_goal(db: GoalSyncDatabase, goal_id: int) -> int | None:
+    """批次3新增：`module_goals`（記帳／收藏清單）目標同步至重要日子，邏輯比照 `sync_body_goal()`。"""
+    goal = db.select("module_goals", where="id = %s", params=(goal_id,), fetch_one=True)
+    if not goal:
+        return None
+    label = {"finance": "記帳", "collections": "收藏清單"}.get(goal["module_key"], goal["module_key"])
+    return _sync(
+        db,
+        table="module_goals",
+        row=goal,
+        owner_user_id=goal["user_id"],
+        title=f"{label}目標：{goal['target_description']}",
+        target_date=goal.get("target_date"),
+        active=goal.get("status") == "active",
+        notes="由模組目標自動同步",
+    )
+
+
 def sync_certificate_goal(db: GoalSyncDatabase, goal_id: int) -> int | None:
     goal = db.select("certificate_goals", where="id = %s", params=(goal_id,), fetch_one=True)
     if not goal:

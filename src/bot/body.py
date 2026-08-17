@@ -580,6 +580,8 @@ def create_goal(
     baseline_value: float | None = None,
     target_date: date | None = None,
     sync_to_calendar: bool = False,
+    target_unit: str | None = None,
+    target_direction: str | None = None,
 ) -> int:
     """新增一筆體態目標（FR-46～FR-48），回傳新建列的 id。`baseline_value` 只有 `goal_type ==
     "weight"` 時才需要傳（設定當下的體重，用來判斷要瘦還是要增，決策④）。
@@ -597,6 +599,8 @@ def create_goal(
             "goal_type": goal_type,
             "target_description": target_description,
             "target_value": target_value,
+            "target_unit": target_unit,
+            "target_direction": target_direction,
             "baseline_value": baseline_value,
             "target_date": target_date,
             "status": "active",
@@ -620,6 +624,8 @@ def update_goal(
     target_value: float | None = None,
     baseline_value: float | None = None,
     target_date: date | None = None,
+    target_unit: str | None = None,
+    target_direction: str | None = None,
 ) -> None:
     """FR-46（2026-08-17 新增）：目標「✏️ 編輯」重新走一次目標值/期限輸入後寫回，取代原本
     「要調整就取消重設」的限制。編輯後期限可能改變，`deadline_reminder_sent` 重置為 False
@@ -630,6 +636,8 @@ def update_goal(
         {
             "target_description": target_description,
             "target_value": target_value,
+            "target_unit": target_unit,
+            "target_direction": target_direction,
             "baseline_value": baseline_value,
             "target_date": target_date,
             "deadline_reminder_sent": False,
@@ -771,6 +779,68 @@ def check_and_push_exercise_goal_achievements(
                 chat_id=user["telegram_user_id"],
                 text=f"🎉 恭喜你達成運動目標「{goal['target_description']}」了，累積運動了 {total_minutes} 分鐘！",
             )
+
+
+def _diet_cumulative_value(db: CloudSQLClient, user_id: int, target_unit: str | None, since_date: date, until_date: date):
+    """依 `target_unit` 判斷要加總的飲食指標：單位含「大卡」「kcal」「卡」時加總
+    `estimated_calories`（熱量類目標），其餘一律當作次數目標，計算 `entry_type='food'` 的
+    紀錄筆數（見 `check_and_push_diet_goal_achievements()`）。"""
+    logs = [
+        row
+        for row in db.select("diet_logs", where="user_id = %s", params=(user_id,))
+        if row["entry_type"] == "food" and since_date <= row["entry_date"] <= until_date
+    ]
+    unit_text = target_unit or ""
+    if any(keyword in unit_text for keyword in ("大卡", "kcal", "卡")):
+        return sum(row.get("estimated_calories") or 0 for row in logs)
+    return len(logs)
+
+
+def check_and_push_diet_goal_achievements(db: CloudSQLClient, telegram_client, now: datetime | None = None) -> None:
+    """FR-48 方案A（2026-08-17 補做，見 docs/ADR/discuss/robinson.md）：飲食目標的自動達成判斷，
+    依 `target_direction` 分兩種方向處理：
+
+    - `min`（至少要達到，例如「每週吃蔬菜5次」）：累積值達到或超過 `target_value` 隨時可判定
+      達成，邏輯比照 `check_and_push_exercise_goal_achievements()`。
+    - `max`（不能超過，例如「熱量控制在14000大卡以內」）：這種「有沒有守住上限」只有在「一段
+      期間結束」時才有意義判斷，所以只在目標有 `target_date`（期限）且已經到期限當天或之後才
+      評估；沒有期限的 `max` 目標無法自動判斷「什麼時候算結束」，維持純手動（不是偷懶，是這種
+      目標的數學意義上就無法在沒有終點的情況下判定「守住了」）；累積值超過上限時本批不主動發送
+      「沒達成」通知，只是不會被標記 `achieved`，使用者可自行決定要不要刪除重設。
+
+    `target_value` 或 `target_direction` 為 `None`（LLM 解析不出結構化數值）的目標一律跳過，
+    維持純文字目標。"""
+    now = now or datetime.now(_TAIWAN_TZ)
+    today = now.astimezone(_TAIWAN_TZ).date()
+    goals = db.select("body_goals", where="goal_type = %s AND status = %s", params=("diet", "active"))
+    for goal in goals:
+        target_value = goal.get("target_value")
+        direction = goal.get("target_direction")
+        if target_value is None or direction is None:
+            continue
+        user = db.select("users", where="id = %s", params=(goal["user_id"],), fetch_one=True)
+        if user is None or user.get("telegram_user_id") is None:
+            continue
+
+        since_date = goal["created_at"].astimezone(_TAIWAN_TZ).date()
+
+        if direction == "min":
+            cumulative = _diet_cumulative_value(db, goal["user_id"], goal.get("target_unit"), since_date, today)
+            if cumulative < float(target_value):
+                continue
+        else:  # direction == "max"
+            target_date = goal.get("target_date")
+            if target_date is None or today < target_date:
+                continue
+            cumulative = _diet_cumulative_value(db, goal["user_id"], goal.get("target_unit"), since_date, target_date)
+            if cumulative > float(target_value):
+                continue
+
+        _mark_goal_achieved(db, goal["id"])
+        telegram_client.send_text(
+            chat_id=user["telegram_user_id"],
+            text=f"🎉 恭喜你達成飲食目標「{goal['target_description']}」了！",
+        )
 
 
 def check_and_push_goal_deadline_reminders(db: CloudSQLClient, telegram_client, now: datetime | None = None) -> None:

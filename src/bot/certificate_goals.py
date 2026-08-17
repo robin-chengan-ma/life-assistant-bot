@@ -8,6 +8,7 @@
 與對話狀態機是 `src/bot/commands.py` 的責任。
 """
 import logging
+import re
 from datetime import date
 
 from src.services.goal_important_day_sync import sync_certificate_goal
@@ -128,6 +129,29 @@ def _format_stats_text(stats: dict | None) -> str:
     if stats["most_wrong_type"]:
         lines.append(f"最常出錯的題型是「{stats['most_wrong_type']}」。")
     return "".join(lines)
+
+
+def check_score_achievement(db: CloudSQLClient, user_id: int, exam_type: str, score: str) -> str | None:
+    """2026-08-17 補做（Robin 要求不得漏做）：使用者透過 `/record_official_score` 記錄「實際應考
+    成績」後呼叫，跟這個 `exam_type` 目前設定的 `target_score` 做數字比對，達標就回傳恭喜文字。
+
+    `target_score`／`score` 都是 TEXT（`exam_type` 開放任意證照類型，有些沒有量化分數，例如
+    「通過／未通過」），只在兩邊都能抽出數字時才比較（`score >= target_score`，語意是「分數越高
+    越好」，符合 TOEIC／統測分數這類常見情境）；抽不出數字（例如目標或成績本身就是「通過」這種
+    文字）時直接跳過，不誤判、也不擋下記錄成績這個主流程。沒有設定目標、或目標沒填 `target_score`
+    時同樣回傳 `None`。"""
+    goal = get_goal(db, user_id, exam_type)
+    if goal is None or not goal.get("target_score"):
+        return None
+
+    target_match = re.search(r"-?\d+(\.\d+)?", str(goal["target_score"]))
+    score_match = re.search(r"-?\d+(\.\d+)?", str(score))
+    if not target_match or not score_match:
+        return None
+
+    if float(score_match.group()) >= float(target_match.group()):
+        return f"🎉 恭喜你達成「{exam_type}」的目標分數（{goal['target_score']}）了！"
+    return None
 
 
 def build_advice_prompt(exam_type: str, goal: dict | None, stats: dict | None, today: date) -> str:

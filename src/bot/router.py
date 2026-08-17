@@ -74,6 +74,9 @@ _FINANCE_ADD_TRIGGERS = {"/add_transaction", "我要記帳"}
 _FINANCE_BACKFILL_TRIGGERS = {"/backfill_transaction", "我要補記帳"}
 _MY_TRANSACTIONS_TRIGGERS = {"/my_transactions", "我的記帳紀錄"}
 _FINANCE_SUMMARY_TRIGGERS = {"/my_finance_summary", "我的記帳摘要"}
+# 2026-08-17（批次3，FR-45a）：記帳目前沒有按鈕子選單，目標入口沿用指令觸發詞的既有慣例。
+_FINANCE_GOAL_TRIGGERS = {"/finance_goal", "設定記帳目標"}
+_MY_FINANCE_GOALS_TRIGGERS = {"/my_finance_goals", "我的記帳目標"}
 # 2026-08-16（Phase 6 第二批 2c）：運動全面改選單觸發，舊文字觸發詞
 # （/log_exercise、/backfill_exercise、/my_exercise_logs 等）已移除，入口改為
 # 「📝 日常紀錄」→「🏃 運動」子選單。
@@ -146,6 +149,9 @@ _FINAL_CONFIRM_FLOWS = {
     "body_weight_delete_confirm",
     "pending_goal_confirm",
     "goal_delete_confirm",
+    # 2026-08-17（批次3，FR-45a）：記帳／收藏清單目標摘要→二次確認關卡，理由同上。
+    "pending_module_goal_confirm",
+    "module_goal_delete_confirm",
 }
 
 
@@ -359,6 +365,11 @@ def handle_message(
     if text in _FINANCE_SUMMARY_TRIGGERS:
         # 2026-08-04（FR-44）：單次查詢當月記帳文字摘要，不需要對話狀態機。
         return commands.handle_finance_summary(db, user_id)
+    if text in _FINANCE_GOAL_TRIGGERS:
+        # 2026-08-17（批次3，FR-45a）：開始設定記帳目標，走通用 module_goals 流程。
+        return commands.start_module_goal_new(state_store, telegram_user_id, user_id, "finance")
+    if text in _MY_FINANCE_GOALS_TRIGGERS:
+        return commands.start_module_goal_list(db, user_id, "finance")
     if text in _COMPLAINT_TRIGGERS:
         # 2026-08-02（Step 1.9，見 robinson SPEC.md FR-60）：固定提問，不經過 LLM。
         return commands.start_complaint(state_store, telegram_user_id, user_id)
@@ -467,6 +478,10 @@ def handle_callback_query(
         if key == "daily_log":
             state_store.clear(telegram_user_id)
             return menu.DAILY_LOG_MENU_TEXT, menu.build_daily_log_menu_keyboard()
+        if key == "goal_tracking":
+            # 2026-08-17（批次3，FR-45a）：🎯 目標追蹤主選單首頁。
+            state_store.clear(telegram_user_id)
+            return commands.start_goal_tracking_menu()
         return menu.not_yet_implemented_reply()
 
     if data.startswith("daily_log:"):
@@ -539,12 +554,44 @@ def handle_callback_query(
         # 未知的重要日子子動作，導回子選單而不是整個拋例外，比照其餘 callback 的保守做法。
         return important_days.start_important_days_menu()
 
+    if data.startswith("goal_tracking:"):
+        # 2026-08-17（批次3，FR-45a）：🎯 目標追蹤主選單，全程唯讀。
+        user = _get_identified_user(db, telegram_user_id)
+        if user is None:
+            return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
+        action = data[len("goal_tracking:") :]
+        if action.startswith("module:"):
+            module_key = action[len("module:") :]
+            return commands.start_goal_tracking_module(db, user["id"], module_key)
+        if action.startswith("goal:"):
+            _, goal_source, goal_id_text = action.split(":", 2)
+            return commands.start_goal_tracking_detail(db, goal_source, int(goal_id_text))
+        return commands.start_goal_tracking_menu()
+
+    if data.startswith("finance:"):
+        # 2026-08-17（批次3，FR-45a）：記帳目前沒有按鈕子選單，這裡只接目標子流程
+        # （`finance:goal:*`），沿用 body/collections 目標子流程共用的 `_dispatch_module_goal_callback()`。
+        user = _get_identified_user(db, telegram_user_id)
+        if user is None:
+            return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
+        action = data[len("finance:") :]
+        if action.startswith("goal"):
+            return _dispatch_module_goal_callback(
+                db, state_store, telegram_user_id, user["id"], "finance", action, calendar_client=calendar_client
+            )
+        return menu.not_yet_implemented_reply()
+
     if data.startswith("collections:"):
         # 2026-08-16（Phase 6 第二批 2d，FR-6e／FR-6h／FR-75）：收藏清單選單與 CRUD 操作。
         user = _get_identified_user(db, telegram_user_id)
         if user is None:
             return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
         action = data[len("collections:") :]
+        if action.startswith("goal"):
+            # 2026-08-17（批次3，FR-45a）：收藏清單目標子流程，共用 module_goals。
+            return _dispatch_module_goal_callback(
+                db, state_store, telegram_user_id, user["id"], "collections", action, calendar_client=calendar_client
+            )
         if action == "list":
             return collections.handle_list(db, user["id"])
         if action == "add":
@@ -835,6 +882,44 @@ def _dispatch_body_goal_callback(
             menu.back_to_main_menu_keyboard(),
         )
     return commands.start_body_goal_menu(None, "body")
+
+
+def _dispatch_module_goal_callback(
+    db: CloudSQLClient,
+    state_store: ConversationStateStore,
+    telegram_user_id: int,
+    user_id: int,
+    module_key: str,
+    action: str,
+    calendar_client=None,
+):
+    """`<module_key>:goal*` callback 分派（2026-08-17，批次3）：記帳／收藏清單共用的通用目標
+    子流程，結構比照 `_dispatch_body_goal_callback()`，但 `module_key` 固定寫死在 callback_data
+    前綴本身（不像 body 的 `goal_type`／`source` 需要額外編碼），所以不用像 body 版本額外拆
+    `source` 參數。
+
+    `calendar_client`（2026-08-17 補做，Robin 要求不得漏做）：只有 `goal:confirm_save` 這個
+    callback 會用到，`None` 時優雅降級成「目標照常記錄，但不會同步到 Google Calendar」。"""
+    if action == "goal":
+        return commands.start_module_goal_menu(module_key, "main" if module_key == "finance" else module_key)
+    if action == "goal:menu":
+        return commands.start_module_goal_menu(module_key, "main" if module_key == "finance" else module_key)
+    if action == "goal:new":
+        return commands.start_module_goal_new(state_store, telegram_user_id, user_id, module_key), None
+    if action == "goal:list":
+        return commands.start_module_goal_list(db, user_id, module_key)
+    if action == "goal:confirm_save":
+        return commands.handle_module_goal_confirm_save(db, state_store, telegram_user_id, calendar_client=calendar_client), None
+    if action.startswith("goal:edit:"):
+        goal_id = int(action[len("goal:edit:") :])
+        return commands.start_module_goal_edit(db, state_store, telegram_user_id, user_id, module_key, goal_id), None
+    if action.startswith("goal:delete:"):
+        goal_id = int(action[len("goal:delete:") :])
+        return commands.start_module_goal_delete_confirm(db, state_store, telegram_user_id, user_id, module_key, goal_id)
+    if action.startswith("goal:confirm_delete:"):
+        goal_id = int(action[len("goal:confirm_delete:") :])
+        return commands.handle_module_goal_delete(db, state_store, telegram_user_id, user_id, goal_id), menu.back_to_main_menu_keyboard()
+    return commands.start_module_goal_menu(module_key, "main" if module_key == "finance" else module_key)
 
 
 def handle_photo_message(
@@ -1241,7 +1326,7 @@ def _dispatch_active_flow(
         return commands.handle_goal_exercise_minutes_step(state_store, telegram_user_id, text)
     if flow == "pending_goal_diet_description":
         return commands.handle_goal_diet_description_step(
-            state_store, telegram_user_id, text, privacy_llm_client=privacy_llm_client
+            state_store, telegram_user_id, text, llm_client=llm_client, privacy_llm_client=privacy_llm_client
         )
     if flow == "pending_goal_deadline":
         return commands.handle_goal_deadline_step(llm_client, state_store, telegram_user_id, text)
@@ -1250,6 +1335,19 @@ def _dispatch_active_flow(
         return commands.handle_goal_calendar_sync_step(llm_client, state_store, telegram_user_id, text)
     if flow in ("pending_goal_confirm", "goal_delete_confirm"):
         return commands.handle_goal_confirm_text(state_store, telegram_user_id)
+    # 2026-08-17（批次3，FR-45a）：記帳／收藏清單通用目標流程，見 commands.py 對應區塊。
+    if flow == "pending_module_goal_description":
+        return commands.handle_module_goal_description_step(
+            db, llm_client, state_store, telegram_user_id, text, privacy_llm_client=privacy_llm_client
+        )
+    if flow == "pending_module_goal_deadline":
+        return commands.handle_module_goal_deadline_step(llm_client, state_store, telegram_user_id, text)
+    if flow == "pending_module_goal_calendar_sync":
+        # 2026-08-17 補做（Robin 要求不得漏做）：只有新增流程、講清楚期限的模組目標才會走到
+        # 這一題，見 handle_module_goal_deadline_step。
+        return commands.handle_module_goal_calendar_sync_step(llm_client, state_store, telegram_user_id, text)
+    if flow in ("pending_module_goal_confirm", "module_goal_delete_confirm"):
+        return commands.handle_module_goal_confirm_text(state_store, telegram_user_id)
     # 2026-08-04（Step 2.3，見 robinson SPEC.md FR-53）：設定家人生日，結構比照 /set_toggle。
     if flow == "pending_family_birthday_select":
         return commands.handle_family_birthday_select_step(db, state_store, telegram_user_id, text)

@@ -56,6 +56,11 @@ class FakeCloudSQLClient:
             "important_days": [],
             "important_day_occurrences": [],
             "important_day_recipients": [],
+            # 2026-08-17（批次3，見 SPEC.md FR-45a）：記帳／收藏清單通用目標表、🎯 目標追蹤
+            # 每日摘要快取表。
+            "module_goals": [],
+            "goal_summaries": [],
+            "collection_items": [],
         }
         self._id_counter = itertools.count(1)
 
@@ -88,6 +93,29 @@ class FakeCloudSQLClient:
         # 需要驗證清單內容的測試改用 tests/bot/test_important_days.py 自己的 FakeDatabase。
         if "app_important_days:list" in query:
             return []
+        # 2026-08-17（批次3，見 SPEC.md FR-45a）：記帳／收藏清單目標達成判斷用的統計查詢，
+        # 見 src/bot/goals.py check_finance_goal_achievement()／check_collections_goal_achievement()。
+        if "FROM transactions" in query and "GROUP BY type" in query:
+            user_id, since_date = params[0], params[1]
+            totals: dict[str, float] = {}
+            for row in self._tables["transactions"]:
+                if row["user_id"] == user_id and row["transaction_date"] >= since_date:
+                    totals[row["type"]] = totals.get(row["type"], 0.0) + row["amount"]
+            return [{"type": key, "total": value} for key, value in totals.items()]
+        if "FROM collection_items" in query and "COUNT(*)" in query:
+            user_id = params[0]
+            start_date = params[1] if len(params) > 1 else None
+            end_date = params[2] if len(params) > 2 else None
+            count = 0
+            for row in self._tables["collection_items"]:
+                if row["user_id"] != user_id or row["status"] != "visited":
+                    continue
+                if start_date is not None and (row.get("visited_at") is None or row["visited_at"] < start_date):
+                    continue
+                if end_date is not None and (row.get("visited_at") is None or row["visited_at"] > end_date):
+                    continue
+                count += 1
+            return [{"total": count}]
         raise NotImplementedError(f"FakeCloudSQLClient 尚未支援這段 execute_query：{query[:80]}")
 
     def delete(self, table, where, params):
@@ -311,6 +339,22 @@ class FakeCloudSQLClient:
         # （見 src/bot/body.py find_or_create_exercise_category()）。
         if where == "normalized_name = %s":
             return row.get("normalized_name") == params[0]
+        # 2026-08-17（批次3，見 SPEC.md FR-45a）：記帳／收藏清單通用目標表、🎯 目標追蹤每日
+        # 摘要快取表的查詢條件（見 src/bot/goals.py、src/services/goal_summary_job.py）。
+        if where == "user_id = %s AND module_key = %s AND status = %s":
+            return (
+                row.get("user_id") == params[0]
+                and row.get("module_key") == params[1]
+                and row.get("status") == params[2]
+            )
+        if where == "goal_source = %s AND goal_id = %s":
+            return row.get("goal_source") == params[0] and row.get("goal_id") == params[1]
+        if where == "goal_source = %s AND goal_id = %s AND generated_on = %s":
+            return (
+                row.get("goal_source") == params[0]
+                and row.get("goal_id") == params[1]
+                and row.get("generated_on") == params[2]
+            )
 
         raise NotImplementedError(f"FakeCloudSQLClient 尚未支援這個 where 條件：{where}")
 

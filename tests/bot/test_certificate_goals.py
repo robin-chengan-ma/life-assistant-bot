@@ -142,3 +142,44 @@ def test_build_advice_prompt_includes_stats():
     assert "20 題" in prompt
     assert "15 題" in prompt
     assert "write" in prompt
+
+
+# --- check_score_achievement（2026-08-17 補做，Robin 要求「輸入實際分數就要能自動判斷」）---
+
+
+def test_check_score_achievement_no_goal_returns_none(fake_db):
+    assert certificate_goals.check_score_achievement(fake_db, 1, "toeic", "900") is None
+
+
+def test_check_score_achievement_goal_without_target_score_returns_none(fake_db):
+    certificate_goals.set_goal(fake_db, 1, "toeic", date(2026, 12, 1), None)
+    assert certificate_goals.check_score_achievement(fake_db, 1, "toeic", "900") is None
+
+
+def test_check_score_achievement_reaches_target(fake_db):
+    certificate_goals.set_goal(fake_db, 1, "toeic", date(2026, 12, 1), "850")
+    result = certificate_goals.check_score_achievement(fake_db, 1, "toeic", "900")
+    assert result is not None
+    assert "toeic" in result
+    assert "850" in result
+
+
+def test_check_score_achievement_exactly_meets_target(fake_db):
+    certificate_goals.set_goal(fake_db, 1, "toeic", date(2026, 12, 1), "850")
+    assert certificate_goals.check_score_achievement(fake_db, 1, "toeic", "850") is not None
+
+
+def test_check_score_achievement_below_target_returns_none(fake_db):
+    certificate_goals.set_goal(fake_db, 1, "toeic", date(2026, 12, 1), "850")
+    assert certificate_goals.check_score_achievement(fake_db, 1, "toeic", "700") is None
+
+
+def test_check_score_achievement_non_numeric_target_returns_none(fake_db):
+    """有些證照沒有量化分數（例如「通過／未通過」），抽不出數字就不誤判。"""
+    certificate_goals.set_goal(fake_db, 1, "gcp", date(2026, 12, 1), "通過")
+    assert certificate_goals.check_score_achievement(fake_db, 1, "gcp", "通過") is None
+
+
+def test_check_score_achievement_non_numeric_score_returns_none(fake_db):
+    certificate_goals.set_goal(fake_db, 1, "toeic", date(2026, 12, 1), "850")
+    assert certificate_goals.check_score_achievement(fake_db, 1, "toeic", "未知") is None

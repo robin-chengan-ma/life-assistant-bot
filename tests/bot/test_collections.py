@@ -12,7 +12,12 @@ from src.bot.state import ConversationStateStore
 
 class FakeDatabase:
     def __init__(self):
-        self.tables = {"collection_items": [], "geocoding_cache": [], "exploration_events": []}
+        self.tables = {
+            "collection_items": [], "geocoding_cache": [], "exploration_events": [],
+            # 2026-08-17（批次3，FR-45a）：check_collections_goal_achievement() 需要查詢
+            # module_goals，這裡的測試沒有設定任何目標，維持空清單即可。
+            "module_goals": [],
+        }
         self.next_id = 1
         self.next_event_id = 1
 
