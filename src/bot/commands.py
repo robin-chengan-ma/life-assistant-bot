@@ -2174,10 +2174,13 @@ def handle_finance_summary(db: CloudSQLClient, user_id: int) -> str:
 # pending_transaction_delete_confirm 完全同一套設計。
 # ---------------------------------------------------------------------------
 
-_HEIGHT_UNREASONABLE_REPLY = "這個身高數字好像不太合理喔（成人身高大概在 140~220 公分之間），麻煩再確認一次告訴我："
-_WEIGHT_UNREASONABLE_REPLY = "這個體重數字好像不太合理喔（成人體重大概要有 40 公斤以上），麻煩再確認一次告訴我："
-# 2026-08-08 追加（FR-46 擴充）：腰圍為參考指標、非必要欄位，措辭刻意比身高/體重柔和，強調可跳過。
-_WAIST_UNREASONABLE_REPLY = "這個腰圍數字好像不太合理喔（大概在 40~200 公分之間），麻煩再確認一次告訴我（不想記錄的話也可以直接跟我說「跳過」）："
+# 2026-08-17（Phase 6 第二批 2h）：三則「數值不合理」文案改成動態帶出 body.py 的合理範圍常數
+# （`height_range_text()`／`weight_range_text()`／`waist_range_text()`），避免文案跟常數各自
+#維護、日後改範圍又漏改文案。
+_HEIGHT_UNREASONABLE_REPLY = f"這個身高數字好像不太合理喔（請輸入 {body.height_range_text()} 之間的數字），麻煩再確認一次告訴我："
+_WEIGHT_UNREASONABLE_REPLY = f"這個體重數字好像不太合理喔（請輸入 {body.weight_range_text()} 之間的數字），麻煩再確認一次告訴我："
+# 腰圍為參考指標、非必要欄位，措辭刻意比身高/體重柔和，強調可跳過。
+_WAIST_UNREASONABLE_REPLY = f"這個腰圍數字好像不太合理喔（請輸入 {body.waist_range_text()} 之間的數字），麻煩再確認一次告訴我（不想記錄的話也可以直接跟我說「跳過」）："
 _WAIST_OFFER_PROMPT = "順便問一下，要不要也記錄一下腰圍呢？（可直接輸入公分數字，不想記錄的話回覆「跳過」或任何話都可以，之後想記錄再跟我說「設定腰圍」就好）"
 _WAIST_OFFER_SKIPPED_REPLY = "好的，那就先不記錄腰圍，之後想記錄的話直接跟我說「設定腰圍」即可！"
 
@@ -2197,12 +2200,6 @@ _WEIGHT_DELETE_CONFIRM_PROMPT = (
 # 選單按鈕本身就是明確意圖，不需要再靠 LLM 猜。
 _DIET_ACTION_CLASSIFY_PROMPT = _WEIGHT_ACTION_CLASSIFY_PROMPT.replace("體重紀錄", "飲食紀錄")
 _DIET_DELETE_CONFIRM_PROMPT = _WEIGHT_DELETE_CONFIRM_PROMPT.replace("體重紀錄", "飲食紀錄")
-_GOAL_CANCEL_CONFIRM_PROMPT = (
-    "使用者剛被 Robinson 反問「確定要取消這個體態目標嗎？」，這是使用者這一則的回覆：「{text}」。\n"
-    "請判斷使用者的意思，整則回覆只能輸出以下其中一個固定字，不要輸出其他任何文字：\n"
-    "(1) 確定要取消 → CONFIRM\n(2) 不要取消、想保留、或其實在問別的事 → CANCEL"
-)
-
 _BACKFILL_DATE_PARSE_PROMPT = (
     "使用者想要補記{feature_label}，Robinson 剛反問要補記哪一天，這是使用者這一則的回覆：「{date_reply}」。\n"
     "【現在的日期（台灣時區，計算相對日期時一律以此為準）】\n{current_date_text}\n\n"
@@ -2254,67 +2251,124 @@ def _parse_positive_float(text: str) -> float | None:
     return value if value > 0 else None
 
 
+# --- 體態子選單首頁（2026-08-17，Phase 6 第二批 2h，FR-46）---
+
+
+def start_body_menu() -> tuple[str, dict]:
+    """主選單「📝 日常紀錄」→「⚖️ 體態」子選單首頁，取代原本六個舊指令。"""
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "📏 設定身高", "callback_data": "body:height"}],
+            [{"text": "📐 設定腰圍", "callback_data": "body:waist"}],
+            [{"text": "⚖️ 記錄體重", "callback_data": "body:weight_new"}],
+            [{"text": "🕐 補記體重", "callback_data": "body:weight_backfill"}],
+            [{"text": "📋 我的體態紀錄", "callback_data": "body:summary"}],
+            [{"text": "🎯 目標", "callback_data": "body:goal"}],
+            [{"text": "🔙 返回日常紀錄", "callback_data": "menu:daily_log"}],
+        ]
+    }
+    return "體態，請選擇要進行的操作：", keyboard
+
+
 # --- 身高 ---
 
 
-def start_set_height(state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
-    """「設定身高」／`/set_height`：開始設定身高（FR-46）。"""
-    state_store.set(telegram_user_id, {"flow": "pending_height_value", "target_user_id": user_id})
-    return "好的，請告訴我你的身高（公分）："
+def start_body_height(state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
+    """「📏 設定身高」：開始設定身高（FR-46）。"""
+    state_store.set(telegram_user_id, {"flow": "pending_body_height_value", "target_user_id": user_id})
+    return f"好的，請告訴我你的身高（公分，{body.height_range_text()}）："
 
 
-def handle_height_value_step(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
-    """處理 `pending_height_value` 狀態下使用者提供的身高數值；不合理範圍原地反問，不清除狀態。"""
+def handle_body_height_value_step(state_store: ConversationStateStore, telegram_user_id: int, text: str) -> tuple[str, dict]:
+    """處理 `pending_body_height_value` 狀態下使用者提供的身高數值；不合理範圍原地反問，不清除
+    狀態。合理範圍內先組摘要文字＋確認送出按鈕，確認了才真正寫入（2h 新增的摘要→二次確認關卡）。"""
     state = state_store.get(telegram_user_id)
     height = _parse_positive_float(text)
     if height is None:
-        return "不好意思，我沒看懂，麻煩輸入一個數字喔（例如：173）"
+        return "不好意思，我沒看懂，麻煩輸入一個數字喔（例如：173）", None
     if not body.is_height_reasonable(height):
-        return _HEIGHT_UNREASONABLE_REPLY
+        return _HEIGHT_UNREASONABLE_REPLY, None
+
+    state_store.set(telegram_user_id, {**state, "flow": "pending_body_height_confirm", "height": height})
+    summary = f"請確認以下內容：\n\n身高：{height:.1f} 公分"
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "✅ 確認送出", "callback_data": "body:height_confirm_save"}],
+            [{"text": "❌ 取消", "callback_data": "body:menu"}],
+        ]
+    }
+    return summary, keyboard
+
+
+def handle_body_height_confirm_save(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int) -> str:
+    """`body:height_confirm_save`：實際寫入身高設定。"""
+    state = state_store.get(telegram_user_id)
+    if not state or state.get("flow") != "pending_body_height_confirm":
+        return "目前沒有進行中的身高設定。"
 
     target_user_id = state["target_user_id"]
+    height = state["height"]
     state_store.clear(telegram_user_id)
     body.set_height(db, target_user_id, height)
     return f"好的，已經幫你記錄身高為 {height:.1f} 公分囉！"
 
 
-# --- 腰圍（2026-08-08 追加，FR-46 擴充）---
+# --- 腰圍（2026-08-08 追加，FR-46 擴充；2026-08-17 改按鈕觸發＋摘要確認）---
 #
-# 設計比照身高：獨立指令「設定腰圍」／`/set_waist` 可隨時主動設定/更新；另外在
-# handle_weight_value_step() 記錄體重後，若使用者「從未設定過腰圍」，會順便問一次要不要記錄
-# （見 _WAIST_OFFER_PROMPT／handle_waist_offer_step()），問過一次之後除非使用者自己再更新，
-# 不會每次記體重都重複問，避免每天打擾。腰圍只是參考指標，跳過完全不影響其他功能。
+# 設計比照身高：子選單「📐 設定腰圍」可隨時主動設定/更新；另外在
+# handle_body_weight_confirm_save() 記錄體重後，若使用者「從未設定過腰圍」，會順便問一次要不要
+# 記錄（見 _WAIST_OFFER_PROMPT／handle_body_waist_offer_step()），問過一次之後除非使用者自己再
+# 更新，不會每次記體重都重複問，避免每天打擾。腰圍只是參考指標，跳過完全不影響其他功能。
 
 
-def start_set_waist(state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
-    """「設定腰圍」／`/set_waist`：開始設定腰圍（FR-46 擴充）。"""
-    state_store.set(telegram_user_id, {"flow": "pending_waist_value", "target_user_id": user_id})
-    return "好的，請告訴我你的腰圍（公分）："
+def start_body_waist(state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
+    """「📐 設定腰圍」：開始設定腰圍（FR-46 擴充）。"""
+    state_store.set(telegram_user_id, {"flow": "pending_body_waist_value", "target_user_id": user_id})
+    return f"好的，請告訴我你的腰圍（公分，{body.waist_range_text()}）："
 
 
-def handle_waist_value_step(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
-    """處理 `pending_waist_value` 狀態下使用者提供的腰圍數值；不合理範圍原地反問，不清除狀態。"""
+def handle_body_waist_value_step(state_store: ConversationStateStore, telegram_user_id: int, text: str) -> tuple[str, dict]:
+    """處理 `pending_body_waist_value` 狀態下使用者提供的腰圍數值；不合理範圍原地反問，不清除
+    狀態。合理範圍內先組摘要文字＋確認送出按鈕。"""
     state = state_store.get(telegram_user_id)
     waist = _parse_positive_float(text)
     if waist is None:
-        return "不好意思，我沒看懂，麻煩輸入一個數字喔（例如：80）"
+        return "不好意思，我沒看懂，麻煩輸入一個數字喔（例如：80）", None
     if not body.is_waist_reasonable(waist):
-        return _WAIST_UNREASONABLE_REPLY
+        return _WAIST_UNREASONABLE_REPLY, None
+
+    state_store.set(telegram_user_id, {**state, "flow": "pending_body_waist_confirm", "waist": waist})
+    summary = f"請確認以下內容：\n\n腰圍：{waist:.1f} 公分"
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "✅ 確認送出", "callback_data": "body:waist_confirm_save"}],
+            [{"text": "❌ 取消", "callback_data": "body:menu"}],
+        ]
+    }
+    return summary, keyboard
+
+
+def handle_body_waist_confirm_save(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int) -> str:
+    """`body:waist_confirm_save`：實際寫入腰圍設定。"""
+    state = state_store.get(telegram_user_id)
+    if not state or state.get("flow") != "pending_body_waist_confirm":
+        return "目前沒有進行中的腰圍設定。"
 
     target_user_id = state["target_user_id"]
+    waist = state["waist"]
     state_store.clear(telegram_user_id)
     body.set_waist(db, target_user_id, waist)
     return f"好的，已經幫你記錄腰圍為 {waist:.1f} 公分囉！"
 
 
-def handle_waist_offer_step(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
-    """處理 `pending_waist_offer` 狀態下使用者對「順便問要不要記錄腰圍」的回覆（見
-    handle_weight_value_step()）。
+def handle_body_waist_offer_step(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
+    """處理 `pending_body_waist_offer` 狀態下使用者對「順便問要不要記錄腰圍」的回覆（見
+    handle_body_weight_confirm_save()）。
 
-    這一步刻意不用 LLM 分類「要/不要」，直接嘗試把回覆解析成數字：能解析出合理範圍內的數字就
-    當作腰圍存起來；解析出數字但超出合理範圍則原地反問一次（不清除狀態，比照身高/體重的既有
-    寫法）；完全無法解析成數字（包含「跳過」「不用」等任何說法）一律視為跳過，直接結束這輪，
-    不強迫使用者一定要明確拒絕——腰圍本來就是可有可無的參考指標，低摩擦比嚴謹分類更重要。
+    這一步刻意不用摘要→二次確認（本來就是可有可無的順口一問，低摩擦比嚴謹流程更重要），直接
+    嘗試把回覆解析成數字：能解析出合理範圍內的數字就當作腰圍存起來；解析出數字但超出合理範圍
+    則原地反問一次（不清除狀態，比照身高/體重的既有寫法）；完全無法解析成數字（包含「跳過」
+    「不用」等任何說法）一律視為跳過，直接結束這輪。
     """
     state = state_store.get(telegram_user_id)
     target_user_id = state["target_user_id"]
@@ -2331,26 +2385,27 @@ def handle_waist_offer_step(db: CloudSQLClient, state_store: ConversationStateSt
     return f"好的，已經幫你記錄腰圍為 {waist:.1f} 公分囉！"
 
 
-# --- 體重 ---
+# --- 體重（2026-08-17 改按鈕觸發＋摘要確認＋按鈕式編輯/刪除，取代原本自由文字反問）---
 
 
-def start_weight_log(state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
-    """「我要記錄體重」／`/log_weight`：開始記錄體重（FR-46），一般新增固定是今天。"""
+def start_body_weight_new(state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
+    """「⚖️ 記錄體重」：開始記錄體重（FR-46），一般新增固定是今天。"""
     state_store.set(
         telegram_user_id,
-        {"flow": "pending_weight_value", "target_user_id": user_id, "weight_date": _now().date(), "weight_id": None},
+        {"flow": "pending_body_weight_value", "target_user_id": user_id, "weight_date": _now().date(), "weight_id": None},
     )
-    return "好的，請告訴我你的體重（公斤）："
+    return f"好的，請告訴我你的體重（公斤，{body.weight_range_text()}）："
 
 
-def start_weight_backfill(state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
-    """「我要補記體重」／`/backfill_weight`：開始補記流程，先問要補記哪一天（FR-46）。"""
-    state_store.set(telegram_user_id, {"flow": "pending_weight_backfill_date", "target_user_id": user_id})
+def start_body_weight_backfill(state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
+    """「🕐 補記體重」：開始補記流程，先問要補記哪一天（FR-46）。"""
+    state_store.set(telegram_user_id, {"flow": "pending_body_weight_backfill_date", "target_user_id": user_id})
     return "好的，要補記哪一天的體重呢？（例如：昨天、8/1）"
 
 
-def handle_weight_backfill_date_step(llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
-    """處理 `pending_weight_backfill_date` 狀態下使用者提供的日期描述，講清楚後接著問體重數值。"""
+def handle_body_weight_backfill_date_step(llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
+    """處理 `pending_body_weight_backfill_date` 狀態下使用者提供的日期描述，講清楚後接著問體重
+    數值。"""
     state = state_store.get(telegram_user_id)
     target_user_id = state["target_user_id"]
 
@@ -2370,38 +2425,61 @@ def handle_weight_backfill_date_step(llm_client, state_store: ConversationStateS
 
     state_store.set(
         telegram_user_id,
-        {"flow": "pending_weight_value", "target_user_id": target_user_id, "weight_date": weight_date, "weight_id": None},
+        {"flow": "pending_body_weight_value", "target_user_id": target_user_id, "weight_date": weight_date, "weight_id": None},
     )
-    return "好的，請告訴我那天的體重（公斤）："
+    return f"好的，請告訴我那天的體重（公斤，{body.weight_range_text()}）："
 
 
-def handle_weight_value_step(
-    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, text: str, calendar_client=None
-) -> str:
-    """處理 `pending_weight_value` 狀態下使用者提供的體重數值；不合理範圍原地反問，不清除狀態。
-
-    寫入成功後附上 BMI 說明（已設定身高才有）、體重目標達成判斷（FR-45），兩者都是「有才附加」，
-    缺少身高或沒有進行中的體重目標都不影響體重紀錄本身成功寫入。
-
-    `calendar_client`（2026-08-05，見 FR-66c、ADR-17）：透傳給 `body.check_weight_goal_achieved()`，
-    達成時順便刪除對應的 Calendar 事件。
-
-    2026-08-08 追加（FR-46 擴充）：只有「新增一筆體重紀錄」（`weight_id is None`，排除
-    `/my_weight_logs` 觸發的更新流程）且「使用者從未設定過腰圍」時，才會順便問一次要不要記錄
-    腰圍（見 handle_waist_offer_step()）；問過一次之後除非使用者自己再更新，不會每次記體重都
-    重複問。這種情況下刻意不清除對話狀態，改成切到 `pending_waist_offer`，讓使用者下一則回覆
-    被導去處理腰圍，而不是直接結束這輪對話。
-    """
+def handle_body_weight_value_step(
+    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, text: str
+) -> tuple[str, dict]:
+    """處理 `pending_body_weight_value` 狀態下使用者提供的體重數值；不合理範圍原地反問，不清除
+    狀態。合理範圍內先算出 BMI 預覽組摘要文字＋確認送出按鈕，確認了才真正寫入（2h 新增的摘要→
+    二次確認關卡）。"""
     state = state_store.get(telegram_user_id)
     weight = _parse_positive_float(text)
     if weight is None:
-        return "不好意思，我沒看懂，麻煩輸入一個數字喔（例如：75）"
+        return "不好意思，我沒看懂，麻煩輸入一個數字喔（例如：75）", None
     if not body.is_weight_reasonable(weight):
-        return _WEIGHT_UNREASONABLE_REPLY
+        return _WEIGHT_UNREASONABLE_REPLY, None
+
+    target_user_id = state["target_user_id"]
+    height = body.get_height(db, target_user_id)
+    bmi_line = body.format_bmi_note(weight, height) if height is not None else "（尚未設定身高，這次不會附上 BMI）"
+
+    state_store.set(telegram_user_id, {**state, "flow": "pending_body_weight_confirm", "weight": weight})
+    weight_date = state["weight_date"]
+    summary = f"請確認以下內容：\n\n日期：{weight_date:%Y/%m/%d}\n體重：{weight:.1f} 公斤\n{bmi_line}"
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "✅ 確認送出", "callback_data": "body:weight_confirm_save"}],
+            [{"text": "❌ 取消", "callback_data": "body:menu"}],
+        ]
+    }
+    return summary, keyboard
+
+
+def handle_body_weight_confirm_save(
+    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, calendar_client=None
+) -> tuple[str, dict | None]:
+    """`body:weight_confirm_save`：實際寫入體重紀錄（新增或編輯）。
+
+    寫入成功後附上 BMI 說明（已設定身高才有）、體重目標達成判斷（FR-45），兩者都是「有才附加」。
+    `calendar_client`（見 FR-66c、ADR-17）：透傳給 `body.check_weight_goal_achieved()`，達成時
+    順便刪除對應的 Calendar 事件。
+
+    只有「新增一筆體重紀錄」（`weight_id is None`，排除編輯既有紀錄的情境）且「使用者從未設定過
+    腰圍」時，才會順便問一次要不要記錄腰圍（見 handle_body_waist_offer_step()）。
+    """
+    state = state_store.get(telegram_user_id)
+    if not state or state.get("flow") != "pending_body_weight_confirm":
+        return "目前沒有進行中的體重紀錄設定。", None
 
     target_user_id = state["target_user_id"]
     weight_date = state["weight_date"]
     weight_id = state.get("weight_id")
+    weight = state["weight"]
+    state_store.clear(telegram_user_id)
 
     is_new_entry = weight_id is None
     if is_new_entry:
@@ -2419,79 +2497,99 @@ def handle_weight_value_step(
 
     should_offer_waist = is_new_entry and body.get_waist(db, target_user_id) is None
     if should_offer_waist:
-        state_store.set(telegram_user_id, {"flow": "pending_waist_offer", "target_user_id": target_user_id})
+        state_store.set(telegram_user_id, {"flow": "pending_body_waist_offer", "target_user_id": target_user_id})
         reply += "\n\n" + _WAIST_OFFER_PROMPT
-    else:
-        state_store.clear(telegram_user_id)
-    return reply
+        return reply, None
+
+    keyboard = {"inline_keyboard": [[{"text": "🔙 返回體態選單", "callback_data": "body:menu"}]]}
+    return reply, keyboard
 
 
-def start_weight_list(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
-    """「我的體重紀錄」／`/my_weight_logs`：列出最近的體重紀錄，並進入可更新/刪除的模式。"""
+def start_body_summary(db: CloudSQLClient, user_id: int) -> tuple[str, dict]:
+    """「📋 我的體態紀錄」：一次顯示身高／體重／腰圍／BMI 四項（FR-46 正名擴充），下方附
+    「📋 體重歷史紀錄」導向可編輯/刪除的體重清單。"""
+    summary = body.get_body_summary(db, user_id)
+    text = body.format_body_summary(summary)
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "📋 體重歷史紀錄", "callback_data": "body:weight_list"}],
+            [{"text": "🔙 返回體態選單", "callback_data": "body:menu"}],
+        ]
+    }
+    return text, keyboard
+
+
+def handle_body_weight_list(db: CloudSQLClient, user_id: int) -> tuple[str, dict]:
+    """「📋 體重歷史紀錄」：列出最近的體重紀錄，每一筆附「✏️ 編輯」「🗑 刪除」按鈕。"""
     logs = body.list_weight_logs(db, user_id)
-    listing = body.format_weight_log_list(logs)
     if not logs:
-        return listing
+        return "目前還沒有任何體重紀錄，可以按「⚖️ 記錄體重」建立第一筆！", {
+            "inline_keyboard": [[{"text": "🔙 返回體態選單", "callback_data": "body:menu"}]]
+        }
+
+    listing = body.format_weight_log_list(logs)
+    buttons = [
+        [
+            {"text": f"✏️ 編輯 {index}", "callback_data": f"body:weight_edit:{item['id']}"},
+            {"text": f"🗑 刪除 {index}", "callback_data": f"body:weight_delete:{item['id']}"},
+        ]
+        for index, item in enumerate(logs, start=1)
+    ]
+    buttons.append([{"text": "🔙 返回體態選單", "callback_data": "body:menu"}])
+    return listing, {"inline_keyboard": buttons}
+
+
+def start_body_weight_edit(
+    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int, weight_log_id: int
+) -> str:
+    """「✏️ 編輯」：沿用原本記錄的 `entry_date`，重新問一次體重數值，`weight_id` 帶著代表這是
+    編輯而非新增。"""
+    row = db.select("body_weight_logs", where="id = %s", params=(weight_log_id,), fetch_one=True)
+    if row is None or row.get("user_id") != user_id:
+        return "找不到這筆體重紀錄，可能已經被刪除了。"
 
     state_store.set(
         telegram_user_id,
-        {"flow": "pending_weight_list_action", "target_user_id": user_id, "weight_log_ids": [item["id"] for item in logs]},
+        {"flow": "pending_body_weight_value", "target_user_id": user_id, "weight_date": row["entry_date"], "weight_id": weight_log_id},
     )
-    return f"{listing}\n\n如果要更新或刪除某一筆，請輸入編號；不需要的話輸入「結束」。"
+    return f"好的，那我們重新輸入一次，這天的體重是多少呢？（公斤，{body.weight_range_text()}）"
 
 
-def handle_weight_list_action_step(state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
-    """處理 `pending_weight_list_action` 狀態下使用者輸入的編號，選定要更新/刪除的那一筆。"""
-    state = state_store.get(telegram_user_id)
-    if text in _EXIT_PHRASES:
-        state_store.clear(telegram_user_id)
-        return "好的，已結束體重紀錄查詢模式！"
+def start_body_weight_delete_confirm(
+    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int, weight_log_id: int
+) -> tuple[str, dict]:
+    row = db.select("body_weight_logs", where="id = %s", params=(weight_log_id,), fetch_one=True)
+    if row is None or row.get("user_id") != user_id:
+        return "找不到這筆體重紀錄，可能已經被刪除了。", {"inline_keyboard": [[{"text": "🔙 返回體態選單", "callback_data": "body:menu"}]]}
 
-    ids = state["weight_log_ids"]
-    if not text.isdigit() or not (1 <= int(text) <= len(ids)):
-        return f"請輸入 1～{len(ids)} 之間的編號，或輸入「結束」離開喔！"
+    state_store.set(telegram_user_id, {"flow": "body_weight_delete_confirm", "weight_log_id": weight_log_id})
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "✅ 確認刪除", "callback_data": f"body:weight_confirm_delete:{weight_log_id}"}],
+            [{"text": "❌ 取消", "callback_data": "body:weight_list"}],
+        ]
+    }
+    return "確定要刪除這筆體重紀錄嗎？這個動作沒辦法復原喔！", keyboard
 
-    state_store.set(
-        telegram_user_id,
-        {"flow": "pending_weight_action_choice", "target_user_id": state["target_user_id"], "weight_log_id": ids[int(text) - 1]},
-    )
-    return "要更新這筆還是刪除呢？"
 
-
-def handle_weight_action_choice_step(db: CloudSQLClient, llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
-    """處理 `pending_weight_action_choice` 狀態下使用者對「要更新這筆還是刪除呢？」的回覆。"""
-    state = state_store.get(telegram_user_id)
-    weight_log_id = state["weight_log_id"]
-    target_user_id = state["target_user_id"]
-
-    decision = llm_client.generate_text(_WEIGHT_ACTION_CLASSIFY_PROMPT.format(text=text)).strip()
-    if decision == "UPDATE":
-        row = db.select("body_weight_logs", where="id = %s", params=(weight_log_id,), fetch_one=True)
-        state_store.set(
-            telegram_user_id,
-            {"flow": "pending_weight_value", "target_user_id": target_user_id, "weight_date": row["entry_date"], "weight_id": weight_log_id},
-        )
-        return "好的，請告訴我新的體重（公斤）："
-    if decision == "DELETE":
-        state_store.set(telegram_user_id, {"flow": "pending_weight_delete_confirm", "target_user_id": target_user_id, "weight_log_id": weight_log_id})
-        return "確定要刪除這筆體重紀錄嗎？這個動作沒辦法復原喔！"
-
+def handle_body_weight_delete(
+    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int, weight_log_id: int
+) -> str:
+    """`body:weight_confirm_delete:<id>` 觸發時重新驗證擁有者（理由同 `handle_exercise_delete`）。"""
     state_store.clear(telegram_user_id)
-    return "不好意思，我不太確定你的意思，這筆體重紀錄維持原狀，你可以再查詢一次體重紀錄清單重新選擇喔！"
-
-
-def handle_weight_delete_confirm_step(db: CloudSQLClient, llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
-    """處理 `pending_weight_delete_confirm` 狀態下使用者對刪除確認的回覆（簡單一輪 CONFIRM/CANCEL）。"""
-    state = state_store.get(telegram_user_id)
-    weight_log_id = state["weight_log_id"]
-    state_store.clear(telegram_user_id)
-
-    decision = llm_client.generate_text(_WEIGHT_DELETE_CONFIRM_PROMPT.format(text=text)).strip()
-    if decision != "CONFIRM":
-        return "好的，這筆體重紀錄保留，沒有刪除！"
-
+    row = db.select("body_weight_logs", where="id = %s", params=(weight_log_id,), fetch_one=True)
+    if row is None or row.get("user_id") != user_id:
+        return "找不到這筆體重紀錄，可能已經被刪除了。"
     body.delete_weight_log(db, weight_log_id)
     return "好的，已經刪除這筆體重紀錄了！"
+
+
+def handle_body_confirm_text(state_store: ConversationStateStore, telegram_user_id: int) -> tuple[str, dict]:
+    """`pending_body_height_confirm`／`pending_body_waist_confirm`／`pending_body_weight_confirm`／
+    `body_weight_delete_confirm` 只接受按鈕操作，理由同 `handle_exercise_confirm_text`。"""
+    state_store.clear(telegram_user_id)
+    keyboard = {"inline_keyboard": [[{"text": "🔙 返回體態選單", "callback_data": "body:menu"}]]}
+    return "這個步驟請用上面的按鈕操作喔，這次先幫你取消了。", keyboard
 
 
 # --- 運動 ---
@@ -2504,6 +2602,9 @@ def start_exercise_menu() -> tuple[str, dict]:
             [{"text": "➕ 新增", "callback_data": "exercise:new"}],
             [{"text": "🕐 補記", "callback_data": "exercise:backfill"}],
             [{"text": "📋 查看清單", "callback_data": "exercise:list"}],
+            # 2026-08-17（Phase 6 第二批 2h）：導到體態模組共用的目標子流程，見 router.py
+            # `_dispatch_body_goal_callback()`。
+            [{"text": "🎯 目標", "callback_data": "exercise:goal"}],
             [{"text": "🔙 返回日常紀錄", "callback_data": "menu:daily_log"}],
         ]
     }
@@ -2718,6 +2819,9 @@ def _diet_menu_keyboard() -> dict:
             [{"text": "➕ 新增", "callback_data": "diet:new"}],
             [{"text": "🕐 補記", "callback_data": "diet:backfill"}],
             [{"text": "📋 查看清單", "callback_data": "diet:list"}],
+            # 2026-08-17（Phase 6 第二批 2h）：導到體態模組共用的目標子流程，見 router.py
+            # `_dispatch_body_goal_callback()`。
+            [{"text": "🎯 目標", "callback_data": "diet:goal"}],
             [{"text": "🔙 返回日常紀錄", "callback_data": "menu:daily_log"}],
         ]
     }
@@ -3097,13 +3201,54 @@ def handle_diet_confirm_text(state_store: ConversationStateStore, telegram_user_
     return "這個步驟請用上面的按鈕操作喔，這次先幫你取消了。", keyboard
 
 
-# --- 體態目標（三個子功能共用） ---
+# --- 體態目標（三個子功能共用，2026-08-17 改按鈕觸發＋多筆並存＋編輯/刪除）---
+#
+# 運動／飲食子選單各有一顆「🎯 目標」按鈕，統一導到這裡（不寫三份重複邏輯），差別只在
+# `goal_type_filter`（從哪個子選單點進來，就預設/篩選那個類型，跳過「請選類型」那題）跟
+# `source`（決定各層「返回」按鈕要導回哪個子選單，見 router.py 的 body:goal:* 分派）。
+# 「✏️ 編輯」統一都是「重新走一次目標值/期限輸入」，三種類型介面完全對稱，不做「只改一部分」
+# 的特例（該優化留給批次3泛化時統一處理，見 2026-08-17 討論紀錄）。編輯時刻意跳過 Calendar
+# 同步問句、沿用原本的 sync_to_calendar／google_calendar_event_id，避免這批另外重寫「編輯時改
+# 同步設定」的邏輯（已知的刻意簡化）。
 
 
-def start_body_goal(state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
-    """「我要設定體態管理目標」／`/set_body_goal`：開始設定目標（FR-46～FR-48），先問類型。"""
-    state_store.set(telegram_user_id, {"flow": "pending_goal_type", "target_user_id": user_id})
-    return body.format_goal_type_prompt()
+def start_body_goal_menu(goal_type: str | None, source: str) -> tuple[str, dict]:
+    """「🎯 目標」：➕ 新增／📋 查看清單兩層首頁。"""
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "➕ 新增", "callback_data": f"body:goal:new:{goal_type or '-'}:{source}"}],
+            [{"text": "📋 查看清單", "callback_data": f"body:goal:list:{goal_type or '-'}:{source}"}],
+            [{"text": "🔙 返回", "callback_data": f"{source}:menu"}],
+        ]
+    }
+    return "體態目標，請選擇要進行的操作：", keyboard
+
+
+def start_body_goal_new(
+    state_store: ConversationStateStore, telegram_user_id: int, user_id: int, goal_type: str | None, source: str
+) -> str:
+    """「➕ 新增」：開始設定目標（FR-45～FR-46）。從運動/飲食子選單點進來時 `goal_type` 已預設，
+    跳過「請選類型」那題；從體態子選單點進來（`goal_type is None`）才問類型。"""
+    if goal_type is None:
+        state_store.set(telegram_user_id, {"flow": "pending_goal_type", "target_user_id": user_id, "goal_source": source})
+        return body.format_goal_type_prompt()
+    return _start_goal_value_question(state_store, telegram_user_id, user_id, goal_type, source, goal_id=None)
+
+
+def _start_goal_value_question(
+    state_store: ConversationStateStore, telegram_user_id: int, user_id: int, goal_type: str, source: str, goal_id: int | None
+) -> str:
+    """依 `goal_type` 分流到不同的目標值問法，`goal_id` 非 None 代表這是編輯既有目標。"""
+    base_state = {"target_user_id": user_id, "goal_source": source, "goal_type": goal_type, "goal_id": goal_id}
+    if goal_type == "weight":
+        state_store.set(telegram_user_id, {**base_state, "flow": "pending_goal_weight_value"})
+        return "好的，請告訴我目標體重是多少公斤？"
+    if goal_type == "exercise":
+        state_store.set(telegram_user_id, {**base_state, "flow": "pending_goal_exercise_minutes"})
+        return "好的，請告訴我這個目標要達成的累積運動分鐘數（例如：這個月運動滿 300 分鐘，就輸入 300）："
+
+    state_store.set(telegram_user_id, {**base_state, "flow": "pending_goal_diet_description"})
+    return "好的，請用你自己的話告訴我飲食目標是什麼（例如：控制在每天 1800 大卡以內）："
 
 
 def handle_goal_type_step(state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
@@ -3113,16 +3258,9 @@ def handle_goal_type_step(state_store: ConversationStateStore, telegram_user_id:
     if goal_type is None:
         return "不好意思，我沒看懂，麻煩從下面選一個喔：\n\n" + body.format_goal_type_prompt()
 
-    target_user_id = state["target_user_id"]
-    if goal_type == "weight":
-        state_store.set(telegram_user_id, {"flow": "pending_goal_weight_value", "target_user_id": target_user_id})
-        return "好的，請告訴我目標體重是多少公斤？"
-    if goal_type == "exercise":
-        state_store.set(telegram_user_id, {"flow": "pending_goal_exercise_minutes", "target_user_id": target_user_id})
-        return "好的，請告訴我這個目標要達成的累積運動分鐘數（例如：這個月運動滿 300 分鐘，就輸入 300）："
-
-    state_store.set(telegram_user_id, {"flow": "pending_goal_diet_description", "target_user_id": target_user_id})
-    return "好的，請用你自己的話告訴我飲食目標是什麼（例如：控制在每天 1800 大卡以內）："
+    return _start_goal_value_question(
+        state_store, telegram_user_id, state["target_user_id"], goal_type, state["goal_source"], goal_id=None
+    )
 
 
 def handle_goal_weight_value_step(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
@@ -3138,9 +3276,8 @@ def handle_goal_weight_value_step(db: CloudSQLClient, state_store: ConversationS
     state_store.set(
         telegram_user_id,
         {
+            **state,
             "flow": "pending_goal_deadline",
-            "target_user_id": target_user_id,
-            "goal_type": "weight",
             "target_value": target_value,
             "baseline_value": baseline_value,
             "target_description": f"目標體重 {target_value:.1f} 公斤",
@@ -3159,9 +3296,8 @@ def handle_goal_exercise_minutes_step(state_store: ConversationStateStore, teleg
     state_store.set(
         telegram_user_id,
         {
+            **state,
             "flow": "pending_goal_deadline",
-            "target_user_id": state["target_user_id"],
-            "goal_type": "exercise",
             "target_value": target_value,
             "baseline_value": None,
             "target_description": f"累積運動 {target_value} 分鐘",
@@ -3182,9 +3318,8 @@ def handle_goal_diet_description_step(state_store: ConversationStateStore, teleg
     state_store.set(
         telegram_user_id,
         {
+            **state,
             "flow": "pending_goal_deadline",
-            "target_user_id": state["target_user_id"],
-            "goal_type": "diet",
             "target_value": None,
             "baseline_value": None,
             "target_description": masked_description,
@@ -3193,13 +3328,14 @@ def handle_goal_diet_description_step(state_store: ConversationStateStore, teleg
     return "有預計完成時間嗎？（例如：三個月內完成，沒有的話輸入「沒有」）"
 
 
-def handle_goal_deadline_step(db: CloudSQLClient, llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
+def handle_goal_deadline_step(llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str | tuple[str, dict]:
     """處理 `pending_goal_deadline` 狀態下使用者對「有預計完成時間嗎？」的回覆，講清楚（或明確表示
-    不需要）後正式寫入目標。
+    不需要）後進入下一步。
 
-    2026-08-05 起（見 FR-66c、ADR-17）：只有講清楚期限的目標才有意義同步到 Calendar（沒有日期就
-    沒有事件可以建），所以只有 `target_date` 不是 `None` 時才多問一輪「要不要同步」
-    （`pending_goal_calendar_sync`）；沒有期限的目標維持原本行為，這一步就直接寫入。
+    新增流程且有期限時（`goal_id is None`）：多問一輪「要不要同步到 Calendar」（`pending_goal_
+    calendar_sync`，見 FR-66c、ADR-17）。其餘情況（沒有期限，或這是編輯既有目標——編輯時刻意
+    跳過同步問句，沿用原本設定）直接組摘要文字＋「確認送出／取消」按鈕（2h 新增的摘要→二次確認
+    關卡）。
     """
     state = state_store.get(telegram_user_id)
 
@@ -3216,65 +3352,68 @@ def handle_goal_deadline_step(db: CloudSQLClient, llm_client, state_store: Conve
         if target_date is None:
             return _GOAL_DEADLINE_UNCLEAR_REPLY
 
-    target_user_id = state["target_user_id"]
-    goal_type = state["goal_type"]
-    target_description = state["target_description"]
-    target_value = state["target_value"]
-    baseline_value = state["baseline_value"]
-
-    if target_date is not None:
-        state_store.set(
-            telegram_user_id,
-            {
-                "flow": "pending_goal_calendar_sync",
-                "target_user_id": target_user_id,
-                "goal_type": goal_type,
-                "target_description": target_description,
-                "target_value": target_value,
-                "baseline_value": baseline_value,
-                "target_date": target_date,
-            },
-        )
+    is_edit = state.get("goal_id") is not None
+    if target_date is not None and not is_edit:
+        state_store.set(telegram_user_id, {**state, "flow": "pending_goal_calendar_sync", "target_date": target_date})
         return "好的！最後想問一下，這個目標要不要同步到 Google 家庭行事曆呢？（家人會在自己手機上看到）"
 
-    state_store.clear(telegram_user_id)
-    body.create_goal(db, target_user_id, goal_type, target_description, target_value, baseline_value, target_date)
-    return f"好的，已經幫你記錄目標「{target_description}」了，加油！"
+    return _build_goal_confirm_summary(state_store, telegram_user_id, {**state, "target_date": target_date})
 
 
 def handle_goal_calendar_sync_step(
-    db: CloudSQLClient,
-    llm_client,
-    state_store: ConversationStateStore,
-    telegram_user_id: int,
-    text: str,
-    calendar_client=None,
-) -> str:
+    llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str
+) -> tuple[str, dict]:
     """處理 `pending_goal_calendar_sync` 狀態下使用者對「要不要同步到 Google 家庭行事曆」的回覆，
-    這一步才真正寫入 `body_goals`（FR-66c、ADR-17），只有有期限的目標才會走到這一步。
-
-    同步失敗（`calendar_client` 為 `None` 或 API 例外）優雅降級，理由與
-    `commands.handle_todo_calendar_sync_step()` 一致：目標本身已成功記錄，只是不會出現在
-    Calendar 上，不把技術細節暴露給使用者，只記警告 log。
-    """
+    只有新增流程、有期限的目標才會走到這一步；組出摘要文字＋確認送出按鈕，還不會真正寫入。"""
     state = state_store.get(telegram_user_id)
+    decision = llm_client.generate_text(_TODO_CALENDAR_SYNC_PROMPT.format(text=text)).strip()
+    sync_to_calendar = decision == "CONFIRM"
+    return _build_goal_confirm_summary(state_store, telegram_user_id, {**state, "sync_to_calendar": sync_to_calendar})
+
+
+def _build_goal_confirm_summary(state_store: ConversationStateStore, telegram_user_id: int, state: dict) -> tuple[str, dict]:
+    """組出目標新增/編輯的摘要文字＋「確認送出／取消」按鈕，設定 `pending_goal_confirm`（FINAL）。"""
+    state_store.set(telegram_user_id, {**state, "flow": "pending_goal_confirm"})
+    target_date = state.get("target_date")
+    deadline_part = f"\n期限：{target_date:%Y/%m/%d}" if target_date else ""
+    summary = f"請確認以下內容：\n\n類型：{body.goal_type_label(state['goal_type'])}\n目標：{state['target_description']}{deadline_part}"
+    source = state["goal_source"]
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "✅ 確認送出", "callback_data": "body:goal:confirm_save"}],
+            [{"text": "❌ 取消", "callback_data": f"{source}:menu"}],
+        ]
+    }
+    return summary, keyboard
+
+
+def handle_goal_confirm_save(
+    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, calendar_client=None
+) -> str:
+    """`body:goal:confirm_save`：實際寫入目標（新增或編輯）。"""
+    state = state_store.get(telegram_user_id)
+    if not state or state.get("flow") != "pending_goal_confirm":
+        return "目前沒有進行中的體態目標設定。"
+
     target_user_id = state["target_user_id"]
     goal_type = state["goal_type"]
     target_description = state["target_description"]
     target_value = state["target_value"]
     baseline_value = state["baseline_value"]
-    target_date = state["target_date"]
+    target_date = state.get("target_date")
+    goal_id = state.get("goal_id")
     state_store.clear(telegram_user_id)
 
-    decision = llm_client.generate_text(_TODO_CALENDAR_SYNC_PROMPT.format(text=text)).strip()
-    sync_to_calendar = decision == "CONFIRM"
+    if goal_id is not None:
+        body.update_goal(db, goal_id, target_description, target_value, baseline_value, target_date)
+        return f"好的，已經幫你更新目標「{target_description}」了，加油！"
 
+    sync_to_calendar = state.get("sync_to_calendar", False)
     goal_id = body.create_goal(
         db, target_user_id, goal_type, target_description, target_value, baseline_value, target_date,
         sync_to_calendar=sync_to_calendar,
     )
-
-    if sync_to_calendar and calendar_client is not None:
+    if sync_to_calendar and target_date is not None and calendar_client is not None:
         try:
             event_id = calendar_client.create_event(
                 summary=target_description,
@@ -3288,81 +3427,90 @@ def handle_goal_calendar_sync_step(
             _logger.exception(
                 "體態目標（id=%s）同步到 Google Calendar 失敗，目標本身已成功記錄不受影響", goal_id
             )
+    return f"好的，已經幫你記錄目標「{target_description}」了，加油！"
 
-    return f"好的，已經幫你記錄目標「{target_description}」了，期限是 {target_date:%Y/%m/%d}，加油！"
+
+def handle_goal_confirm_text(state_store: ConversationStateStore, telegram_user_id: int) -> tuple[str, dict]:
+    """`pending_goal_confirm`／`goal_delete_confirm` 只接受按鈕操作，理由同
+    `handle_exercise_confirm_text`。"""
+    state = state_store.get(telegram_user_id) or {}
+    source = state.get("goal_source", "body")
+    state_store.clear(telegram_user_id)
+    keyboard = {"inline_keyboard": [[{"text": "🔙 返回", "callback_data": f"{source}:menu"}]]}
+    return "這個步驟請用上面的按鈕操作喔，這次先幫你取消了。", keyboard
 
 
-def start_body_goal_list(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
-    """「我的體態目標」／`/my_body_goals`：列出進行中的目標，並進入可取消的模式（這版不支援修改
-    目標內容，要調整就取消重設）。"""
+def start_body_goal_list(db: CloudSQLClient, user_id: int, goal_type: str | None, source: str) -> tuple[str, dict]:
+    """「📋 查看清單」：列出進行中的體態目標（依 `goal_type` 篩選，`None` 代表全部），每一筆附
+    「✏️ 編輯」「🗑 刪除」按鈕。"""
     goals = body.list_active_goals(db, user_id)
-    listing = body.format_goal_list(goals)
+    if goal_type is not None:
+        goals = [item for item in goals if item["goal_type"] == goal_type]
+
+    back_keyboard = {"inline_keyboard": [[{"text": "🔙 返回", "callback_data": f"body:goal:menu:{goal_type or '-'}:{source}"}]]}
     if not goals:
-        return listing
+        return "目前還沒有設定中的體態目標喔！", back_keyboard
 
-    state_store.set(
-        telegram_user_id,
-        {"flow": "pending_goal_list_action", "target_user_id": user_id, "goal_ids": [item["id"] for item in goals]},
-    )
-    return f"{listing}\n\n如果要取消某個目標，請輸入編號；不需要的話輸入「結束」。"
+    listing = body.format_goal_list(goals)
+    buttons = [
+        [
+            {"text": f"✏️ 編輯 {index}", "callback_data": f"body:goal:edit:{item['id']}:{source}"},
+            {"text": f"🗑 刪除 {index}", "callback_data": f"body:goal:delete:{item['id']}:{source}"},
+        ]
+        for index, item in enumerate(goals, start=1)
+    ]
+    buttons.append(back_keyboard["inline_keyboard"][0])
+    return listing, {"inline_keyboard": buttons}
 
 
-def handle_goal_list_action_step(
-    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, text: str
+def start_body_goal_edit(
+    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int, goal_id: int, source: str
 ) -> str:
-    """處理 `pending_goal_list_action` 狀態下使用者輸入的編號，選定要取消的那個目標。
+    """「✏️ 編輯」：重新走一次目標值/期限輸入（三種類型介面完全對稱），`goal_id` 帶著代表這是
+    編輯而非新增。"""
+    row = body.get_goal(db, goal_id)
+    if row is None or row.get("user_id") != user_id:
+        return "找不到這個體態目標，可能已經被刪除了。"
 
-    2026-08-05 起（見 FR-66c、ADR-17）：`db` 改為必要參數，多查一次該筆目標的
-    `google_calendar_event_id`，供下一步取消時判斷要不要刪除對應 Calendar 事件。
-    """
-    state = state_store.get(telegram_user_id)
-    if text in _EXIT_PHRASES:
-        state_store.clear(telegram_user_id)
-        return "好的，已結束體態目標查詢模式！"
+    return _start_goal_value_question(state_store, telegram_user_id, user_id, row["goal_type"], source, goal_id=goal_id)
 
-    ids = state["goal_ids"]
-    if not text.isdigit() or not (1 <= int(text) <= len(ids)):
-        return f"請輸入 1～{len(ids)} 之間的編號，或輸入「結束」離開喔！"
 
-    goal_id = ids[int(text) - 1]
-    row = db.select("body_goals", where="id = %s", params=(goal_id,), fetch_one=True)
+def start_body_goal_delete_confirm(
+    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int, goal_id: int, source: str
+) -> tuple[str, dict]:
+    row = body.get_goal(db, goal_id)
+    if row is None or row.get("user_id") != user_id:
+        return "找不到這個體態目標，可能已經被刪除了。", {"inline_keyboard": [[{"text": "🔙 返回", "callback_data": f"{source}:menu"}]]}
+
     state_store.set(
         telegram_user_id,
         {
-            "flow": "pending_goal_cancel_confirm",
+            "flow": "goal_delete_confirm",
             "goal_id": goal_id,
-            "google_calendar_event_id": row.get("google_calendar_event_id") if row else None,
+            "goal_source": source,
+            "google_calendar_event_id": row.get("google_calendar_event_id"),
         },
     )
-    return "確定要取消這個體態目標嗎？"
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "✅ 確認刪除", "callback_data": f"body:goal:confirm_delete:{goal_id}:{source}"}],
+            [{"text": "❌ 取消", "callback_data": f"body:goal:list:-:{source}"}],
+        ]
+    }
+    return "確定要刪除這個體態目標嗎？這個動作沒辦法復原喔！", keyboard
 
 
-def handle_goal_cancel_confirm_step(
-    db: CloudSQLClient,
-    llm_client,
-    state_store: ConversationStateStore,
-    telegram_user_id: int,
-    text: str,
-    calendar_client=None,
+def handle_goal_delete(
+    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int, goal_id: int, calendar_client=None
 ) -> str:
-    """處理 `pending_goal_cancel_confirm` 狀態下使用者對取消確認的回覆（簡單一輪 CONFIRM/CANCEL）。
-
-    2026-08-05 起（見 FR-66c、ADR-17）：如果這個目標當初有同步到 Calendar，取消時一併刪除對應
-    事件，見 `body.cancel_goal()`。
-    """
-    state = state_store.get(telegram_user_id)
-    goal_id = state["goal_id"]
-    google_calendar_event_id = state.get("google_calendar_event_id")
+    """`body:goal:confirm_delete:<id>:<source>` 觸發時重新驗證擁有者（理由同
+    `handle_exercise_delete`），實際上是 `body.cancel_goal()`（狀態改成 cancelled）。"""
     state_store.clear(telegram_user_id)
-
-    decision = llm_client.generate_text(_GOAL_CANCEL_CONFIRM_PROMPT.format(text=text)).strip()
-    if decision != "CONFIRM":
-        return "好的，這個體態目標保留，沒有取消！"
-
-    body.cancel_goal(
-        db, goal_id, calendar_client=calendar_client, google_calendar_event_id=google_calendar_event_id
-    )
-    return "好的，已經取消這個體態目標了！"
+    row = body.get_goal(db, goal_id)
+    if row is None or row.get("user_id") != user_id:
+        return "找不到這個體態目標，可能已經被刪除了。"
+    body.cancel_goal(db, goal_id, calendar_client=calendar_client, google_calendar_event_id=row.get("google_calendar_event_id"))
+    return "好的，已經刪除這個體態目標了！"
 
 
 # ---------------------------------------------------------------------------

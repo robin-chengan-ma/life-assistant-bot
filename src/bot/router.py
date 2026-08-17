@@ -74,21 +74,16 @@ _FINANCE_ADD_TRIGGERS = {"/add_transaction", "我要記帳"}
 _FINANCE_BACKFILL_TRIGGERS = {"/backfill_transaction", "我要補記帳"}
 _MY_TRANSACTIONS_TRIGGERS = {"/my_transactions", "我的記帳紀錄"}
 _FINANCE_SUMMARY_TRIGGERS = {"/my_finance_summary", "我的記帳摘要"}
-# 2026-08-04（Step 2.2，見 robinson SPEC.md FR-45～FR-48）：體態管理模組觸發詞，設計比照記帳/心情小記。
-_SET_HEIGHT_TRIGGERS = {"/set_height", "設定身高"}
-# 2026-08-08 追加（FR-46 擴充）：腰圍為參考指標，觸發詞設計與身高完全對稱。
-_SET_WAIST_TRIGGERS = {"/set_waist", "設定腰圍"}
-_LOG_WEIGHT_TRIGGERS = {"/log_weight", "我要記錄體重"}
-_BACKFILL_WEIGHT_TRIGGERS = {"/backfill_weight", "我要補記體重"}
-_MY_WEIGHT_LOGS_TRIGGERS = {"/my_weight_logs", "我的體重紀錄"}
 # 2026-08-16（Phase 6 第二批 2c）：運動全面改選單觸發，舊文字觸發詞
 # （/log_exercise、/backfill_exercise、/my_exercise_logs 等）已移除，入口改為
 # 「📝 日常紀錄」→「🏃 運動」子選單。
 # 2026-08-16（Phase 6 第二批 2g）：飲食全面改選單觸發，舊文字觸發詞
 # （/log_diet、/backfill_diet、/my_diet_logs 等）已移除，入口改為
 # 「📝 日常紀錄」→「🍚 飲食」子選單。
-_SET_BODY_GOAL_TRIGGERS = {"/set_body_goal", "我要設定體態管理目標"}
-_MY_BODY_GOALS_TRIGGERS = {"/my_body_goals", "我的體態目標"}
+# 2026-08-17（Phase 6 第二批 2h）：體態管理全面改選單觸發，舊文字觸發詞（/set_height、
+# /set_waist、/log_weight、/backfill_weight、/my_weight_logs、/set_body_goal 等）已移除，
+# 不提供舊指令相容期，入口改為「📝 日常紀錄」→「⚖️ 體態」子選單，見 menu.py／commands.py
+# 體態子選單首頁區塊說明。
 # 2026-08-08（Step 3.3，見 robinson SPEC.md FR-27、FR-26 決策 5）：證照題庫作答與彈性排程調整，
 # `certificate` 功能開關本身是 owner_only（見 templates.py FEATURE_LIST），這兩個觸發詞只放在
 # is_owner 分支，比照 _SET_TOGGLE_TRIGGERS 等既有 Owner 專屬觸發詞的位置。
@@ -143,6 +138,14 @@ _FINAL_CONFIRM_FLOWS = {
     "pending_clean_all_dialog_final_confirm",
     "pending_clean_target_dialog_final_confirm",
     "pending_save_knowledge_final_confirm",
+    # 2026-08-17（Phase 6 第二批 2h）：體態摘要→二次確認關卡，語音只能貼出轉錄文字讓使用者
+    # 確認，不能直接觸發這幾個「最終執行確認」狀態，見 handle_voice_message() 內的說明。
+    "pending_body_height_confirm",
+    "pending_body_waist_confirm",
+    "pending_body_weight_confirm",
+    "body_weight_delete_confirm",
+    "pending_goal_confirm",
+    "goal_delete_confirm",
 }
 
 
@@ -356,23 +359,6 @@ def handle_message(
     if text in _FINANCE_SUMMARY_TRIGGERS:
         # 2026-08-04（FR-44）：單次查詢當月記帳文字摘要，不需要對話狀態機。
         return commands.handle_finance_summary(db, user_id)
-    if text in _SET_HEIGHT_TRIGGERS:
-        # 2026-08-04（Step 2.2，見 robinson SPEC.md FR-46）：設定身高，單輪。
-        return commands.start_set_height(state_store, telegram_user_id, user_id)
-    if text in _SET_WAIST_TRIGGERS:
-        # 2026-08-08 追加（FR-46 擴充）：設定腰圍，單輪，設計與身高完全對稱。
-        return commands.start_set_waist(state_store, telegram_user_id, user_id)
-    if text in _LOG_WEIGHT_TRIGGERS:
-        return commands.start_weight_log(state_store, telegram_user_id, user_id)
-    if text in _BACKFILL_WEIGHT_TRIGGERS:
-        return commands.start_weight_backfill(state_store, telegram_user_id, user_id)
-    if text in _MY_WEIGHT_LOGS_TRIGGERS:
-        return commands.start_weight_list(db, state_store, telegram_user_id, user_id)
-    if text in _SET_BODY_GOAL_TRIGGERS:
-        # 2026-08-04（FR-46～FR-48）：設定體態管理目標，先問類型。
-        return commands.start_body_goal(state_store, telegram_user_id, user_id)
-    if text in _MY_BODY_GOALS_TRIGGERS:
-        return commands.start_body_goal_list(db, state_store, telegram_user_id, user_id)
     if text in _COMPLAINT_TRIGGERS:
         # 2026-08-02（Step 1.9，見 robinson SPEC.md FR-60）：固定提問，不經過 LLM。
         return commands.start_complaint(state_store, telegram_user_id, user_id)
@@ -496,6 +482,9 @@ def handle_callback_query(
         if key == "diet":
             # 2026-08-16（Phase 6 第二批 2g）。
             return commands.start_diet_menu()
+        if key == "body":
+            # 2026-08-17（Phase 6 第二批 2h）。
+            return commands.start_body_menu()
         return menu.daily_log_not_yet_implemented_reply()
 
     if data.startswith("permission:"):
@@ -699,6 +688,10 @@ def handle_callback_query(
             return commands.handle_exercise_delete(db, state_store, telegram_user_id, user["id"], exercise_log_id), menu.back_to_main_menu_keyboard()
         if action == "confirm_save":
             return commands.handle_exercise_confirm_save(db, state_store, telegram_user_id), None
+        if action == "goal":
+            # 2026-08-17（Phase 6 第二批 2h）：導到體態模組共用的目標子流程，`goal_type` 預設
+            # 「運動」，跳過「請選類型」那題；返回鍵導回這個運動子選單。
+            return commands.start_body_goal_menu("exercise", "exercise")
         return commands.start_exercise_menu()
 
     if data.startswith("diet:"):
@@ -732,7 +725,51 @@ def handle_callback_query(
             return commands.handle_diet_delete(db, state_store, telegram_user_id, user["id"], diet_log_id), menu.back_to_main_menu_keyboard()
         if action == "confirm_save":
             return commands.handle_diet_confirm_save(db, state_store, telegram_user_id), None
+        if action == "goal":
+            # 2026-08-17（Phase 6 第二批 2h）：導到體態模組共用的目標子流程，`goal_type` 預設
+            # 「飲食」，跳過「請選類型」那題；返回鍵導回這個飲食子選單。
+            return commands.start_body_goal_menu("diet", "diet")
         return commands.start_diet_menu()
+
+    if data.startswith("body:"):
+        # 2026-08-17（Phase 6 第二批 2h，FR-6e／FR-45／FR-46）：體態子選單（身高/腰圍/體重/
+        # 我的體態紀錄）與三個子功能共用的 `body:goal:*` 目標子流程。
+        user = _get_identified_user(db, telegram_user_id)
+        if user is None:
+            return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
+        action = data[len("body:") :]
+
+        if action.startswith("goal"):
+            return _dispatch_body_goal_callback(db, state_store, telegram_user_id, user["id"], action, calendar_client=calendar_client)
+
+        if action == "height":
+            return commands.start_body_height(state_store, telegram_user_id, user["id"]), None
+        if action == "height_confirm_save":
+            return commands.handle_body_height_confirm_save(db, state_store, telegram_user_id), None
+        if action == "waist":
+            return commands.start_body_waist(state_store, telegram_user_id, user["id"]), None
+        if action == "waist_confirm_save":
+            return commands.handle_body_waist_confirm_save(db, state_store, telegram_user_id), None
+        if action == "weight_new":
+            return commands.start_body_weight_new(state_store, telegram_user_id, user["id"]), None
+        if action == "weight_backfill":
+            return commands.start_body_weight_backfill(state_store, telegram_user_id, user["id"]), None
+        if action == "weight_confirm_save":
+            return commands.handle_body_weight_confirm_save(db, state_store, telegram_user_id, calendar_client=calendar_client)
+        if action == "summary":
+            return commands.start_body_summary(db, user["id"])
+        if action == "weight_list":
+            return commands.handle_body_weight_list(db, user["id"])
+        if action.startswith("weight_edit:"):
+            weight_log_id = int(action[len("weight_edit:") :])
+            return commands.start_body_weight_edit(db, state_store, telegram_user_id, user["id"], weight_log_id), None
+        if action.startswith("weight_delete:"):
+            weight_log_id = int(action[len("weight_delete:") :])
+            return commands.start_body_weight_delete_confirm(db, state_store, telegram_user_id, user["id"], weight_log_id)
+        if action.startswith("weight_confirm_delete:"):
+            weight_log_id = int(action[len("weight_confirm_delete:") :])
+            return commands.handle_body_weight_delete(db, state_store, telegram_user_id, user["id"], weight_log_id), menu.back_to_main_menu_keyboard()
+        return commands.start_body_menu()
 
     # 未知／格式不符的 callback_data（例如過期或偽造），保守導回主選單，不當例外處理。
     return menu.MAIN_MENU_TEXT, menu.build_main_menu_keyboard(is_owner=is_owner)
@@ -743,6 +780,45 @@ def _get_identified_user(db: CloudSQLClient, telegram_user_id: int) -> dict | No
     if auth.is_owner(telegram_user_id):
         return auth.get_or_create_owner(db, telegram_user_id)
     return auth.find_user_by_telegram_id(db, telegram_user_id)
+
+
+def _dispatch_body_goal_callback(
+    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int, action: str, calendar_client=None
+):
+    """`body:goal*` callback 分派（2026-08-17，Phase 6 第二批 2h）：體重/運動/飲食三個子功能
+    共用的目標子流程，不管是從「⚖️ 體態」子選單，還是從「🏃 運動」／「🍚 飲食」子選單的
+    「🎯 目標」按鈕點進來的，都走這裡；`goal_type`（`-` 代表不限定）與 `source`（決定各層
+    「返回」按鈕要導回哪個子選單）都直接編碼在 `callback_data` 裡，不用額外查狀態。"""
+    if action == "goal":
+        return commands.start_body_goal_menu(None, "body")
+    if action == "goal:confirm_save":
+        return commands.handle_goal_confirm_save(db, state_store, telegram_user_id, calendar_client=calendar_client), None
+
+    parts = action[len("goal:") :].split(":")
+    sub_action = parts[0]
+
+    if sub_action == "menu":
+        goal_type = None if parts[1] == "-" else parts[1]
+        return commands.start_body_goal_menu(goal_type, parts[2])
+    if sub_action == "new":
+        goal_type = None if parts[1] == "-" else parts[1]
+        return commands.start_body_goal_new(state_store, telegram_user_id, user_id, goal_type, parts[2]), None
+    if sub_action == "list":
+        goal_type = None if parts[1] == "-" else parts[1]
+        return commands.start_body_goal_list(db, user_id, goal_type, parts[2])
+    if sub_action == "edit":
+        goal_id = int(parts[1])
+        return commands.start_body_goal_edit(db, state_store, telegram_user_id, user_id, goal_id, parts[2]), None
+    if sub_action == "delete":
+        goal_id = int(parts[1])
+        return commands.start_body_goal_delete_confirm(db, state_store, telegram_user_id, user_id, goal_id, parts[2])
+    if sub_action == "confirm_delete":
+        goal_id = int(parts[1])
+        return (
+            commands.handle_goal_delete(db, state_store, telegram_user_id, user_id, goal_id, calendar_client=calendar_client),
+            menu.back_to_main_menu_keyboard(),
+        )
+    return commands.start_body_goal_menu(None, "body")
 
 
 def handle_photo_message(
@@ -1083,28 +1159,22 @@ def _dispatch_active_flow(
         return commands.handle_transaction_action_choice_step(db, llm_client, state_store, telegram_user_id, text)
     if flow == "pending_transaction_delete_confirm":
         return commands.handle_transaction_delete_confirm_step(db, llm_client, state_store, telegram_user_id, text)
-    # 2026-08-04（Step 2.2，見 robinson SPEC.md FR-45～FR-48）：體態管理多輪對話流，結構比照記帳。
-    if flow == "pending_height_value":
-        return commands.handle_height_value_step(db, state_store, telegram_user_id, text)
-    if flow == "pending_waist_value":
-        # 2026-08-08 追加（FR-46 擴充）：設定腰圍，單輪，設計與身高完全對稱。
-        return commands.handle_waist_value_step(db, state_store, telegram_user_id, text)
-    if flow == "pending_waist_offer":
-        # 2026-08-08 追加（FR-46 擴充）：記體重後「順便問要不要記腰圍」的回覆，見
-        # commands.handle_weight_value_step() 的觸發時機說明。
-        return commands.handle_waist_offer_step(db, state_store, telegram_user_id, text)
-    if flow == "pending_weight_backfill_date":
-        return commands.handle_weight_backfill_date_step(llm_client, state_store, telegram_user_id, text)
-    if flow == "pending_weight_value":
-        return commands.handle_weight_value_step(
-            db, state_store, telegram_user_id, text, calendar_client=calendar_client
-        )
-    if flow == "pending_weight_list_action":
-        return commands.handle_weight_list_action_step(state_store, telegram_user_id, text)
-    if flow == "pending_weight_action_choice":
-        return commands.handle_weight_action_choice_step(db, llm_client, state_store, telegram_user_id, text)
-    if flow == "pending_weight_delete_confirm":
-        return commands.handle_weight_delete_confirm_step(db, llm_client, state_store, telegram_user_id, text)
+    # 2026-08-17（Phase 6 第二批 2h，見 robinson SPEC.md FR-45／FR-46）：體態管理全面改選單
+    # 觸發＋摘要→二次確認，結構比照運動（2c）／飲食（2g）。
+    if flow == "pending_body_height_value":
+        return commands.handle_body_height_value_step(state_store, telegram_user_id, text)
+    if flow == "pending_body_waist_value":
+        return commands.handle_body_waist_value_step(state_store, telegram_user_id, text)
+    if flow == "pending_body_waist_offer":
+        # 記體重後「順便問要不要記腰圍」的回覆，見 commands.handle_body_weight_confirm_save()
+        # 的觸發時機說明。
+        return commands.handle_body_waist_offer_step(db, state_store, telegram_user_id, text)
+    if flow == "pending_body_weight_backfill_date":
+        return commands.handle_body_weight_backfill_date_step(llm_client, state_store, telegram_user_id, text)
+    if flow == "pending_body_weight_value":
+        return commands.handle_body_weight_value_step(db, state_store, telegram_user_id, text)
+    if flow in ("pending_body_height_confirm", "pending_body_waist_confirm", "pending_body_weight_confirm", "body_weight_delete_confirm"):
+        return commands.handle_body_confirm_text(state_store, telegram_user_id)
     if flow == "pending_exercise_backfill_date":
         return commands.handle_exercise_backfill_date_step(llm_client, state_store, telegram_user_id, text)
     if flow == "pending_exercise_activity":
@@ -1150,18 +1220,12 @@ def _dispatch_active_flow(
             state_store, telegram_user_id, text, privacy_llm_client=privacy_llm_client
         )
     if flow == "pending_goal_deadline":
-        return commands.handle_goal_deadline_step(db, llm_client, state_store, telegram_user_id, text)
+        return commands.handle_goal_deadline_step(llm_client, state_store, telegram_user_id, text)
     if flow == "pending_goal_calendar_sync":
-        # 2026-08-05（FR-66c、ADR-17）：只有講清楚期限的目標才會走到這一題，見 handle_goal_deadline_step。
-        return commands.handle_goal_calendar_sync_step(
-            db, llm_client, state_store, telegram_user_id, text, calendar_client=calendar_client
-        )
-    if flow == "pending_goal_list_action":
-        return commands.handle_goal_list_action_step(db, state_store, telegram_user_id, text)
-    if flow == "pending_goal_cancel_confirm":
-        return commands.handle_goal_cancel_confirm_step(
-            db, llm_client, state_store, telegram_user_id, text, calendar_client=calendar_client
-        )
+        # 只有新增流程、講清楚期限的目標才會走到這一題，見 handle_goal_deadline_step。
+        return commands.handle_goal_calendar_sync_step(llm_client, state_store, telegram_user_id, text)
+    if flow in ("pending_goal_confirm", "goal_delete_confirm"):
+        return commands.handle_goal_confirm_text(state_store, telegram_user_id)
     # 2026-08-04（Step 2.3，見 robinson SPEC.md FR-53）：設定家人生日，結構比照 /set_toggle。
     if flow == "pending_family_birthday_select":
         return commands.handle_family_birthday_select_step(db, state_store, telegram_user_id, text)

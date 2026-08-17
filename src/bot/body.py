@@ -1,13 +1,19 @@
-"""體態管理純邏輯（對應 docs/specs/robinson/SPEC.md FR-45～FR-48，Step 2.2）。
+"""體態管理純邏輯（對應 docs/specs/SPEC.md FR-45／FR-45a／FR-46，Phase 6 第二批 2h）。
 
 負責：身高／腰圍設定、體重/運動/飲食三個子功能的紀錄 CRUD（含補記/更新/刪除，從一開始就內建，
 理由同記帳模組）、BMI 計算與分級、運動消耗卡路里與飲食三大營養素的 LLM 估算、體態目標（三個子
-功能共用一張表）的設定/查詢/取消、FR-45 三種預警情境的判斷與推播。不處理任何 Telegram 對話流程，
-那是 src/bot/commands.py 的責任，保持這個模組是純粹的資料操作與計算，方便獨立測試。
+功能共用一張表）的設定/查詢/編輯/刪除、FR-45 三種預警情境的判斷與推播。不處理任何 Telegram 對話
+流程，那是 src/bot/commands.py 的責任，保持這個模組是純粹的資料操作與計算，方便獨立測試。
 
 2026-08-08 追加（FR-46 擴充）：新增腰圍（`waist_cm`）設定，設計比照身高——存在 `users` 表、
 「設定一次、變動才修正」，不像體重需要每天記錄的歷史表。腰圍刻意定位為「參考指標、非必要」：
 `calculate_bmi()` 不使用腰圍，缺少腰圍不影響 BMI 計算或任何既有功能。
+
+2026-08-17 修正（Phase 6 第二批 2h，見 docs/ADR/discuss/robinson.md）：合理範圍改採 FR-46
+最終定案數字——身高 140～200 公分（原本 220 上限過寬）、腰圍 50～150 公分（原本 40～200 過寬）、
+體重新增上限 150 公斤（原本只有下限 40）；新增 `get_body_summary()` 供「我的體態紀錄」一次組出
+身高／最新體重／腰圍／BMI 四項摘要；新增 `update_goal()` 供目標「✏️ 編輯」重新走一次目標值/
+期限輸入後寫回，取代原本「要調整只能取消重設」的限制。
 
 2026-08-04 經 AskUserQuestion 確認的設計決策：
 ① 運動消耗卡路里改用 LLM 估算（而非 MET 公式），符合 FR-56g 情境3「用自然口吻回覆＋估算免責
@@ -37,13 +43,14 @@ from submodules.cloudsql.client import CloudSQLClient
 _TAIWAN_TZ = ZoneInfo("Asia/Taipei")
 _logger = logging.getLogger(__name__)
 
-# FR-46 合理範圍檢查：成人身高約 140～220 公分、體重約 40 公斤以上。
+# FR-46 合理範圍檢查（2026-08-17 定案數字，見模組 docstring）。
 _MIN_HEIGHT_CM = 140.0
-_MAX_HEIGHT_CM = 220.0
+_MAX_HEIGHT_CM = 200.0
 _MIN_WEIGHT_KG = 40.0
-# 2026-08-08 追加（FR-46 擴充）：腰圍合理範圍，比身高體重寬鬆，因為只是參考指標、非必要欄位。
-_MIN_WAIST_CM = 40.0
-_MAX_WAIST_CM = 200.0
+_MAX_WEIGHT_KG = 150.0
+# 2026-08-08 追加（FR-46 擴充）：腰圍合理範圍；2026-08-17 收斂為 50～150 公分（見模組 docstring）。
+_MIN_WAIST_CM = 50.0
+_MAX_WAIST_CM = 150.0
 
 # BMI 分級標準（衛福部國健署標準），供 format_bmi_note() 組健康提醒文字。
 _BMI_CATEGORIES: list[tuple[float, str]] = [
@@ -70,8 +77,13 @@ _DEADLINE_REMINDER_DAYS_BEFORE = 7
 
 
 def is_height_reasonable(height_cm: float) -> bool:
-    """FR-46 合理範圍檢查：成人身高約 140～220 公分。"""
+    """FR-46 合理範圍檢查：成人身高約 140～200 公分。"""
     return _MIN_HEIGHT_CM <= height_cm <= _MAX_HEIGHT_CM
+
+
+def height_range_text() -> str:
+    """組出身高合理範圍的提示文字（含單位），供超出範圍時原地反問使用。"""
+    return f"{_MIN_HEIGHT_CM:.0f}～{_MAX_HEIGHT_CM:.0f} 公分"
 
 
 def set_height(db: CloudSQLClient, user_id: int, height_cm: float) -> None:
@@ -98,8 +110,13 @@ def get_height(db: CloudSQLClient, user_id: int) -> float | None:
 
 
 def is_waist_reasonable(waist_cm: float) -> bool:
-    """FR-46 合理範圍檢查：成人腰圍約 40～200 公分（比身高體重寬鬆，畢竟只是參考用途）。"""
+    """FR-46 合理範圍檢查：成人腰圍約 50～150 公分（比身高體重寬鬆，畢竟只是參考用途）。"""
     return _MIN_WAIST_CM <= waist_cm <= _MAX_WAIST_CM
+
+
+def waist_range_text() -> str:
+    """組出腰圍合理範圍的提示文字（含單位），供超出範圍時原地反問使用。"""
+    return f"{_MIN_WAIST_CM:.0f}～{_MAX_WAIST_CM:.0f} 公分"
 
 
 def set_waist(db: CloudSQLClient, user_id: int, waist_cm: float) -> None:
@@ -123,8 +140,13 @@ def get_waist(db: CloudSQLClient, user_id: int) -> float | None:
 
 
 def is_weight_reasonable(weight_kg: float) -> bool:
-    """FR-46 合理範圍檢查：成人體重約 40 公斤以上。"""
-    return weight_kg >= _MIN_WEIGHT_KG
+    """FR-46 合理範圍檢查：成人體重約 40～150 公斤（2026-08-17 新增上限）。"""
+    return _MIN_WEIGHT_KG <= weight_kg <= _MAX_WEIGHT_KG
+
+
+def weight_range_text() -> str:
+    """組出體重合理範圍的提示文字（含單位），供超出範圍時原地反問使用。"""
+    return f"{_MIN_WEIGHT_KG:.0f}～{_MAX_WEIGHT_KG:.0f} 公斤"
 
 
 def calculate_bmi(weight_kg: float, height_cm: float) -> float:
@@ -187,6 +209,43 @@ def latest_weight(db: CloudSQLClient, user_id: int) -> float | None:
     """查詢使用者最新一筆體重紀錄的數值，供目標達成判斷、飲食/運動估算等情境參考使用。"""
     logs = list_weight_logs(db, user_id, limit=1)
     return float(logs[0]["weight_kg"]) if logs else None
+
+
+def get_body_summary(db: CloudSQLClient, user_id: int) -> dict:
+    """FR-46（2026-08-17 新增）：「我的體態紀錄」一次組出身高／最新體重／腰圍／BMI 四項。
+    體重抓最新一筆（不限今天）；BMI 缺身高或體重任一項就無法計算。回傳
+    `{"height_cm", "weight_kg", "waist_cm", "bmi", "bmi_category"}`，缺紀錄的欄位為 None。"""
+    height_cm = get_height(db, user_id)
+    weight_kg = latest_weight(db, user_id)
+    waist_cm = get_waist(db, user_id)
+    bmi = None
+    bmi_category = None
+    if height_cm is not None and weight_kg is not None:
+        bmi = calculate_bmi(weight_kg, height_cm)
+        bmi_category = classify_bmi(bmi)
+    return {
+        "height_cm": height_cm,
+        "weight_kg": weight_kg,
+        "waist_cm": waist_cm,
+        "bmi": bmi,
+        "bmi_category": bmi_category,
+    }
+
+
+def format_body_summary(summary: dict) -> str:
+    """把 `get_body_summary()` 的回傳值格式化成使用者看的文字，缺紀錄顯示「尚無紀錄」，
+    BMI 無法計算時顯示「無法計算」。"""
+    height_text = f"{summary['height_cm']:.1f} 公分" if summary["height_cm"] is not None else "尚無紀錄"
+    weight_text = f"{summary['weight_kg']:.1f} 公斤" if summary["weight_kg"] is not None else "尚無紀錄"
+    waist_text = f"{summary['waist_cm']:.1f} 公分" if summary["waist_cm"] is not None else "尚無紀錄"
+    bmi_text = f"{summary['bmi']:.1f}（{summary['bmi_category']}）" if summary["bmi"] is not None else "無法計算"
+    return (
+        "這是你目前的體態紀錄：\n\n"
+        f"身高：{height_text}\n"
+        f"體重：{weight_text}\n"
+        f"腰圍：{waist_text}\n"
+        f"BMI：{bmi_text}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -476,6 +535,41 @@ def create_goal(
         except Exception:
             _logger.exception("體態目標（id=%s）同步至重要日子失敗，目標本身已成功建立", goal_id)
     return goal_id
+
+
+def update_goal(
+    db: CloudSQLClient,
+    goal_id: int,
+    target_description: str,
+    target_value: float | None = None,
+    baseline_value: float | None = None,
+    target_date: date | None = None,
+) -> None:
+    """FR-46（2026-08-17 新增）：目標「✏️ 編輯」重新走一次目標值/期限輸入後寫回，取代原本
+    「要調整就取消重設」的限制。編輯後期限可能改變，`deadline_reminder_sent` 重置為 False
+    讓 7 天前提醒重新計算一次；`achieved_notified` 不動（編輯中的目標理論上還是 active）。
+    重要日子同步（`sync_body_goal`）比照 `create_goal()` 的失敗降級處理。"""
+    db.update(
+        "body_goals",
+        {
+            "target_description": target_description,
+            "target_value": target_value,
+            "baseline_value": baseline_value,
+            "target_date": target_date,
+            "deadline_reminder_sent": False,
+        },
+        where="id = %s",
+        params=(goal_id,),
+    )
+    try:
+        sync_body_goal(db, goal_id)
+    except Exception:
+        _logger.exception("體態目標（id=%s）編輯後同步至重要日子失敗，目標本身已成功更新", goal_id)
+
+
+def get_goal(db: CloudSQLClient, goal_id: int) -> dict | None:
+    """依 id 查詢單筆體態目標，供編輯流程確認擁有者與帶出原始值使用。"""
+    return db.select("body_goals", where="id = %s", params=(goal_id,), fetch_one=True)
 
 
 def set_calendar_event_id(db: CloudSQLClient, goal_id: int, event_id: str) -> None:

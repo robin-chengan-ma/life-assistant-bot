@@ -9,9 +9,13 @@ from src.bot import body
 
 def test_is_height_reasonable_boundaries():
     assert body.is_height_reasonable(140) is True
-    assert body.is_height_reasonable(220) is True
+    assert body.is_height_reasonable(200) is True
     assert body.is_height_reasonable(139.9) is False
-    assert body.is_height_reasonable(220.1) is False
+    assert body.is_height_reasonable(200.1) is False
+
+
+def test_height_range_text():
+    assert body.height_range_text() == "140～200 公分"
 
 
 def test_get_height_returns_none_when_user_not_found(fake_db):
@@ -31,10 +35,14 @@ def test_set_and_get_height(fake_db):
 
 
 def test_is_waist_reasonable_boundaries():
-    assert body.is_waist_reasonable(40) is True
-    assert body.is_waist_reasonable(200) is True
-    assert body.is_waist_reasonable(39.9) is False
-    assert body.is_waist_reasonable(200.1) is False
+    assert body.is_waist_reasonable(50) is True
+    assert body.is_waist_reasonable(150) is True
+    assert body.is_waist_reasonable(49.9) is False
+    assert body.is_waist_reasonable(150.1) is False
+
+
+def test_waist_range_text():
+    assert body.waist_range_text() == "50～150 公分"
 
 
 def test_get_waist_returns_none_when_user_not_found(fake_db):
@@ -55,7 +63,13 @@ def test_set_and_get_waist(fake_db):
 
 def test_is_weight_reasonable():
     assert body.is_weight_reasonable(40) is True
+    assert body.is_weight_reasonable(150) is True
     assert body.is_weight_reasonable(39.9) is False
+    assert body.is_weight_reasonable(150.1) is False
+
+
+def test_weight_range_text():
+    assert body.weight_range_text() == "40～150 公斤"
 
 
 def test_calculate_bmi():
@@ -115,6 +129,57 @@ def test_latest_weight_returns_most_recent(fake_db):
     body.create_weight_log(fake_db, 1, 80.0, date(2026, 8, 1))
     body.create_weight_log(fake_db, 1, 78.0, date(2026, 8, 5))
     assert body.latest_weight(fake_db, 1) == 78.0
+
+
+# --- 我的體態紀錄摘要（2026-08-17，FR-46）---
+
+
+def test_get_body_summary_all_missing(fake_db):
+    user_id = fake_db.insert("users", {"telegram_user_id": 1, "role": "Robin", "is_owner": True})
+    summary = body.get_body_summary(fake_db, user_id)
+    assert summary == {
+        "height_cm": None, "weight_kg": None, "waist_cm": None, "bmi": None, "bmi_category": None,
+    }
+
+
+def test_get_body_summary_full(fake_db):
+    user_id = fake_db.insert("users", {"telegram_user_id": 1, "role": "Robin", "is_owner": True})
+    body.set_height(fake_db, user_id, 173.0)
+    body.set_waist(fake_db, user_id, 80.0)
+    body.create_weight_log(fake_db, user_id, 70.0, date(2026, 8, 1))
+    body.create_weight_log(fake_db, user_id, 68.0, date(2026, 8, 10))
+
+    summary = body.get_body_summary(fake_db, user_id)
+    assert summary["height_cm"] == 173.0
+    assert summary["weight_kg"] == 68.0
+    assert summary["waist_cm"] == 80.0
+    assert round(summary["bmi"], 1) == round(body.calculate_bmi(68.0, 173.0), 1)
+    assert summary["bmi_category"] == body.classify_bmi(summary["bmi"])
+
+
+def test_get_body_summary_bmi_none_without_height(fake_db):
+    user_id = fake_db.insert("users", {"telegram_user_id": 1, "role": "Robin", "is_owner": True})
+    body.create_weight_log(fake_db, user_id, 68.0, date(2026, 8, 1))
+    summary = body.get_body_summary(fake_db, user_id)
+    assert summary["bmi"] is None
+
+
+def test_format_body_summary_all_missing():
+    text = body.format_body_summary(
+        {"height_cm": None, "weight_kg": None, "waist_cm": None, "bmi": None, "bmi_category": None}
+    )
+    assert text.count("尚無紀錄") == 3
+    assert "無法計算" in text
+
+
+def test_format_body_summary_full():
+    text = body.format_body_summary(
+        {"height_cm": 173.0, "weight_kg": 68.0, "waist_cm": 80.0, "bmi": 22.7, "bmi_category": "正常"}
+    )
+    assert "173.0 公分" in text
+    assert "68.0 公斤" in text
+    assert "80.0 公分" in text
+    assert "22.7（正常）" in text
 
 
 # --- 運動 ---
@@ -292,6 +357,32 @@ def test_create_list_cancel_goal(fake_db):
 
 def test_format_goal_list_empty():
     assert "還沒有設定中的體態目標" in body.format_goal_list([])
+
+
+def test_get_goal_returns_row(fake_db):
+    goal_id = body.create_goal(fake_db, 1, "weight", "瘦到 60kg", target_value=60, baseline_value=75)
+    row = body.get_goal(fake_db, goal_id)
+    assert row["id"] == goal_id
+    assert row["target_description"] == "瘦到 60kg"
+
+
+def test_get_goal_returns_none_when_missing(fake_db):
+    assert body.get_goal(fake_db, 9999) is None
+
+
+def test_update_goal_overwrites_fields_and_resets_deadline_reminder(fake_db):
+    goal_id = body.create_goal(
+        fake_db, 1, "weight", "瘦到 60kg", target_value=60, baseline_value=75, target_date=date(2026, 9, 1)
+    )
+    fake_db.update("body_goals", {"deadline_reminder_sent": True}, where="id = %s", params=(goal_id,))
+
+    body.update_goal(fake_db, goal_id, "瘦到 58kg", target_value=58, baseline_value=75, target_date=date(2026, 10, 1))
+
+    row = body.get_goal(fake_db, goal_id)
+    assert row["target_description"] == "瘦到 58kg"
+    assert float(row["target_value"]) == 58
+    assert row["target_date"] == date(2026, 10, 1)
+    assert row["deadline_reminder_sent"] is False
 
 
 # --- Google Calendar 同步（FR-66c，2026-08-05，見 ADR-17） ---

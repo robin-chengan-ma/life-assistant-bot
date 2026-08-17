@@ -515,3 +515,113 @@ Robin 追加要求「語音辨識結果可能跟使用者實際講的內容有�
 **後果**：2g 開工後，`menu.py`／`commands.py`／`body.py`／`router.py`／`webhook.py` 均會異動；`tests/bot/test_commands.py`（飲食區塊全面改寫）／`tests/bot/test_router.py`（新增 `diet:*` 整合測試＋語音確認相關測試）／`tests/bot/test_menu.py`（`diet` 移出開發中名單斷言）／`tests/bot/test_voice.py`／`tests/bot/test_webhook.py`（語音/callback_query 分支回傳值與 Client 注入異動）皆需要同步改寫，範圍明顯大於 2c～2f 任一批（兩個架構層級改動疊加）。
 
 **2026-08-16 開工進度（程式碼完成，尚未測試/未 commit）**：實作按設計內容①～⑥完成，`ast.parse` 語法驗證通過，人工比對既有 2c／2f 慣例確認 flow 命名、按鈕式二次確認、`callback_data` 前綴分派、「不提供舊指令相容期」等既定模式一致。**這批 Claude 沙箱完全沒有執行 `pytest`**——跟 2d／2e／2f「依賴鏈過深」的情況更進一步：本機 VM（`device_bash`）本身沒有網路，裝不了任何套件；嘗試把整個 repo 打包搬進雲端沙箱執行也因為 `tests/`／`submodules/` 依賴鏈規模（142 個 Python 檔案）風險過高而作罷，比照既有慣例改為只做語法驗證＋人工比對。**既有測試尚未改寫**：`tests/bot/test_router.py`／`test_voice.py`／`test_webhook.py`／`test_commands.py`／`test_menu.py` 都還沒動，預期既有語音相關測試斷言（例如「轉錄後直接回覆 XXX」）會因為新增的 `pending_voice_confirm` 確認關卡而全部失敗，飲食相關既有測試也會因為函式簽名／flow 名稱全面改寫而失敗，需要 Robin 本機跑一次 `python3 -m pytest tests/ -q` 把完整失敗清單回報回來，Claude 才能針對性修正測試、確認沒有遺漏的邊界情況，之後才能進到 commit 步驟。
+
+## 2026-08-17 日常紀錄－體態（Phase 6 第二批 2h）前置討論：範圍拆分與三批決策
+
+**狀態**：pending（本篇記錄拆批決策與已定案細節，尚未開工，各批仍需個別提出 SDD 實作計畫並等待確認）
+
+**背景**：規劃「日常紀錄－體態」（2h）時發現目標設定功能（`/set_body_goal`，體重/運動/飲食共用）在 2c／2g 都被漏掉，補回時進一步發現運動紀錄模組需要改版，且使用者提出六個模組（飲食/體態/運動/記帳/考試/收藏清單）都要有「設定目標」，範圍已超出單一批次，經討論拆成三批。
+
+**拆批與順序（已定案）**：
+1. 日常紀錄－體態（2h）：身高/腰圍/體重紀錄選單化＋範圍修正＋「我的體態紀錄」正名擴充＋體重目標按鈕（先用既有結構化欄位，不等 LLM 輔助解析）
+2. 運動紀錄改版（Mobile App＋Telegram 同步）
+3. 六模組目標泛化（飲食/體態/運動/記帳/考試/收藏清單，方案A：結構化為主、LLM 輔助解析）
+
+理由：體態批次風險最低、可獨立驗收；運動改版牽動表單欄位，須在目標泛化之前定型，避免目標欄位設計要跟著表單改版重做。
+
+**體態管理範圍（批次1，2h）已定案細節**：
+- 身高 140～200 公分、腰圍 50～150 公分、體重 40～150 公斤，超出範圍原地反問並明講區間與單位
+- 「我的體態紀錄」（原「我的體重紀錄」正名）：顯示身高／體重／腰圍／BMI 四項；缺紀錄顯示「尚無紀錄」；體重抓最新一筆（不限今天）；BMI 缺身高或體重時顯示「無法計算」
+- 子選單單層：設定身高／設定腰圍／記錄體重／補記體重／我的體態紀錄／🎯 目標／🔙 返回
+- 目標設定/查看/取消（`start_body_goal`／`start_body_goal_list`）分拆到體重/運動/飲食三個子選單各自掛「🎯 目標」按鈕，不再需要「先選類型」步驟，沿用既有 `pending_goal_deadline`／`pending_goal_calendar_sync` 共用邏輯
+- 摘要→二次確認比照運動/飲食既有模式
+
+**運動紀錄改版（批次2）已定案細節**（Mobile App 與 Telegram 同步修正，取代現行「時間／熱量」雙頁籤設計，需同步修正 FR-47）：
+- 類別選「其他」時新增全域類別（不需 Owner 審核，重複名稱以同義詞合併），新增一張類別表，現有固定類別（跑步/重訓/游泳等）一併搬進新表
+- 移除「輸入方式」頁籤，改成單一表單：持續時間（分鐘，必填）／心率（bpm，選填）／補充內容（選填，placeholder「請描述詳細內容...」）
+- 刪除「重訓強度與組數」特殊分支，強度組數改由使用者寫進「補充內容」自由文字，AI 估算消耗熱量時一併參考「補充內容」
+- 下方「是否交由 AI 計算消耗熱量？」是／否；選「否，人工輸入」時顯示「消耗熱量（大卡）」輸入框，placeholder「請輸入數字」，沿用既有 `1～5,000` 大卡範圍限制
+- 舊運動紀錄資料直接刪除，不做欄位相容回填，由新版重新開始累積
+
+**六模組目標泛化（批次3）已定案方向**：採方案A「結構化為主、LLM 輔助解析」——使用者輸入自由文字目標，LLM 嘗試抽取目標值／單位／期限等結構化欄位；能抽出結構化欄位的模組維持自動達成判斷與通知，抽不出來的欄位/模組退化成純文字目標、只能手動標記完成（比照現有飲食目標的既定設計）。適用模組：飲食、體態、運動、記帳、考試、收藏清單。欄位設計與各模組達成判斷規則留待該批次個別提出 SDD 計畫時定案。
+
+
+## 2026-08-17 補充：目標編輯/多目標並存（批次1）與🎯目標追蹤新選單（批次3）
+
+**狀態**：pending
+
+**批次1（體態）範圍追加**：
+- 目標清單改支援「編輯」（重新走一次目標值/期限輸入，帶出舊值）＋「刪除」（沿用既有二次確認），取代原本「這版不支援修改目標內容，要調整就取消重設」的舊限制
+- 確認允許同一使用者、同一模組同時存在多筆進行中目標（`body_goals` 無 unique 限制、`check_weight_goal_achieved()` 已用迴圈掃全部 active 目標，資料層不需改，只是選單清單/按鈕要能列出多筆並各自操作）
+- 體態/運動/飲食子選單「🎯 目標」按鈕點進去改成「➕ 新增／📋 查看清單」兩層，查看清單比照運動/飲食既有清單模式改按鈕式編輯/刪除
+
+**批次3（六模組目標泛化）新增「🎯 目標追蹤」主選單**：
+- `menu.py` `MAIN_MENU_ITEMS` 新增「🎯 目標追蹤」項目
+- 點擊後列出已支援目標功能的模組按鈕（例如「飲食」「體態」，隨批次3各模組陸續支援目標而增加）
+- 選模組後列出該模組未過期（active 且未超過期限，或無期限）的目標清單供選擇；沒有目標時顯示「查無資料」
+- 選一個目標後顯示該目標的最新快取摘要（依「過去一個月」「過去一週」紀錄生成建議與方向、提及距離截止日還有多久、加油打氣文字），**沒有設定期限的目標不顯示「距離截止日」這段**
+- 摘要為每日排程（**統一凌晨 01:00** 跑）產生的快取內容，Telegram 端純顯示最新一份，不即時生成、不可操作，下方只有「🔙 返回主頁面」按鈕
+- 需新增快取摘要表（例如 `goal_summaries`）存每個目標最新一份 AI 生成內容，及對應每日排程任務
+
+## 2026-08-17 日常紀錄－體態（Phase 6 第二批 2h）實作完成
+
+**狀態**：accepted（批次1／2h 範圍，取代上方兩篇「日常紀錄－體態（Phase 6 第二批 2h）前置討論」
+「補充：目標編輯/多目標並存與🎯目標追蹤新選單」pending 段落中屬於批次1的部分；FR-45a／批次2／
+批次3 相關段落仍為 pending，維持原狀）
+
+**背景**：批次1「日常紀錄－體態」正式開工前，先與 Robin 逐項確認實作計畫（含兩個待確認情境：
+運動/飲食「🎯 目標」按鈕要統一走 `body:goal:*` 共用入口還是各自前綴、目標編輯要不要對飲食目標
+特殊處理只改期限不重打敘述），Robin 選擇「方案B：統一走 `body:goal:*`」與「方案A：三種類型編輯
+介面完全對稱，都重新走一次目標值/期限輸入」兩個推薦方案，並額外提醒語音+確認機制也要一併涵蓋。
+
+**設計內容**：
+①**`src/bot/body.py`**：合理範圍常數收斂為身高 140～200 公分、腰圍 50～150 公分、體重新增上限
+150 公斤（`_MAX_HEIGHT_CM`／`_MIN_WAIST_CM`／`_MAX_WAIST_CM`／`_MAX_WEIGHT_KG`）；新增
+`height_range_text()`／`waist_range_text()`／`weight_range_text()` 動態組出範圍提示文字，避免
+文案與常數各自維護；新增 `get_body_summary()`／`format_body_summary()` 供「我的體態紀錄」一次
+組出身高／最新體重／腰圍／BMI 四項；新增 `update_goal()`／`get_goal()` 供目標「✏️ 編輯」使用。
+②**`src/bot/commands.py`**：刪除六個舊指令函式（`start_set_height`／`start_set_waist`／
+`start_weight_log`／`start_weight_backfill`／`start_weight_list`／`start_body_goal` 及對應舊
+`handle_*_step`）；新增 `start_body_menu()` 組 7 顆按鈕子選單；身高/腰圍/體重三個子功能全面改
+「問值 → 摘要＋確認送出/取消按鈕（`pending_body_*_confirm`）→ 確認才寫入」，體重紀錄清單改
+`handle_body_weight_list()` 按鈕式編輯/刪除；腰圍「順便問一次」（`pending_body_waist_offer`）
+維持原本低摩擦、不用摘要確認的設計，比照舊版。目標子流程全面重寫成 `body:goal:*` 共用入口：
+`start_body_goal_menu(goal_type, source)` 組「➕新增／📋查看清單」兩層，`goal_type`（預設值，
+`None` 代表不限定）與 `source`（決定「返回」按鈕導回哪個子選單）直接編碼在 `callback_data`
+裡，不额外查狀態；`_start_goal_value_question()` 統一處理新增與編輯（`goal_id` 是否為 `None`
+區分），編輯時刻意跳過 Calendar 同步問句、沿用原本 `sync_to_calendar`／
+`google_calendar_event_id`（已知的刻意簡化，避免這批另外重寫「編輯時改同步設定」邏輯）；新增
+`_build_goal_confirm_summary()` 統一組摘要＋確認按鈕（`pending_goal_confirm`，FINAL）。
+③**`src/bot/menu.py`**：`body` 從 `_DAILY_LOG_NOT_YET_IMPLEMENTED_KEYS` 移除。
+④**`src/bot/router.py`**：新增 `body:*` 分派區塊與 `_dispatch_body_goal_callback()` 輔助函式
+統一處理 `body:goal:*`；`exercise:`／`diet:` 分派區塊各補 `action == "goal"` 導到
+`start_body_goal_menu()` 並預設對應 `goal_type`；`daily_log:body` 導到 `start_body_menu()`；
+`_FINAL_CONFIRM_FLOWS` 新增 `pending_body_height_confirm`／`pending_body_waist_confirm`／
+`pending_body_weight_confirm`／`body_weight_delete_confirm`／`pending_goal_confirm`／
+`goal_delete_confirm` 六個新的摘要→二次確認 flow（語音只能貼出轉錄文字讓使用者確認，不能
+直接觸發這幾個最終執行狀態，理由同既有運動/飲食摘要確認關卡）；移除六個舊指令觸發詞常數
+與 `_dispatch_active_flow()` 對應的舊 flow 判斷式。
+⑤**`webhook.py`**：檢查後確認沒有殘留舊指令觸發詞判斷，無需異動。
+
+**理由**：`body:goal:*` 統一入口避免 `router.py`／`commands.py` 為運動/飲食/體態三個入口各寫一份
+重複的目標 CRUD 邏輯，且跟批次3「六模組目標泛化」的擴充方向一致（之後新增模組只是多一種
+`goal_type` 預設值）；目標編輯採「三種類型介面完全對稱、都重新走一次輸入」是刻意不做「只改
+一部分」的特例，理由是批次1範圍應聚焦體態模組本身，介面體驗細緻優化留給批次3所有模組一起
+統一處理，避免現在做局部特例、之後泛化時還要拆掉重寫。
+
+**執行結果（2026-08-17，程式碼完成＋測試綠燈，尚未 commit）**：因為 Cowork 沙箱本機
+（`device_bash`）連不到網路、裝不了 `pytest`／`ruff`（見 `docs/ADR/debug/robinson.md`
+既有「Sandbox network limits」記錄），這次改用「把整包 repo 打包 tar 進雲端沙箱、在雲端
+裝好完整依賴鏈跑滿整套測試、通過後再把最終檔案寫回本機」的流程，不是只做語法驗證。完整
+`python3 -m pytest -q`：**1842 個測試全過**（原本 1809 個 baseline 全過，新增/改寫 33 個
+與體態相關的測試案例）；`ruff check .` 全過。異動檔案：`src/bot/body.py`、
+`src/bot/commands.py`、`src/bot/router.py`、`src/bot/menu.py`、
+`tests/bot/test_body.py`、`tests/bot/test_body_commands.py`（大幅重寫）、
+`tests/bot/test_body_router.py`（大幅重寫）、`tests/bot/test_menu.py`、
+`tests/bot/test_router.py`、`docs/specs/SPEC.md`、`docs/specs/PROGRESS.md`。
+
+**已知的刻意簡化（未來若要調整需另外討論）**：
+- 目標編輯不支援「只改期限」，一律重新走完整輸入（見上方理由）
+- 目標編輯完全不碰 Calendar 同步設定，沿用建立當下的選擇
+- 目標刪除確認取消時導回的清單固定不篩選類型（`body:goal:list:-:<source>`），不記得原本篩選
+  的 `goal_type`，屬於次要 UX 簡化，不影響功能正確性

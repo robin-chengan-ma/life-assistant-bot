@@ -62,8 +62,8 @@ def test_daily_log_menu_items_and_not_yet_implemented_split():
     assert menu.is_daily_log_not_yet_implemented("mood") is False
     assert menu.is_daily_log_not_yet_implemented("exercise") is False
     assert menu.is_daily_log_not_yet_implemented("diet") is False
-    for key in ("body", "finance"):
-        assert menu.is_daily_log_not_yet_implemented(key) is True
+    assert menu.is_daily_log_not_yet_implemented("body") is False
+    assert menu.is_daily_log_not_yet_implemented("finance") is True
 
 
 def test_daily_log_not_yet_implemented_reply_points_back_to_daily_log_menu():

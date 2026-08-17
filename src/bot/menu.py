@@ -45,6 +45,13 @@ Inline Keyboard，比照 `collections` 的單層選單做法。候選機制維�
 三大營養素與熱量；同批也把全站語音功能改成「轉錄成功先貼出文字給使用者確認，確認後
 才接回原本流程」（見 `router.py` 的 `pending_voice_confirm`／`voice_confirm:accept`），
 影響範圍不限於飲食，也涵蓋既有的心情／運動／待辦等語音入口。
+
+2026-08-17（Phase 6 第二批 2h，見 docs/ADR/discuss/robinson.md）：`body`（體態）接上
+`src/bot/commands.py` 改寫過的身高/腰圍/體重/目標邏輯，從 `_DAILY_LOG_NOT_YET_IMPLEMENTED_KEYS`
+移除；`finance` 維持「功能開發中」。子選單（設定身高／設定腰圍／記錄體重／補記體重／我的體態
+紀錄／🎯 目標／🔙 返回）由 `commands.start_body_menu()` 直接組出 Inline Keyboard，比照 `diet`
+的單層子選單做法；運動／飲食子選單也各自補上一顆「🎯 目標」按鈕，統一導到體態模組共用的
+`body:goal:*` 目標子流程。
 """
 
 # key、label 依 FR-6e 定案順序；owner_only 決定這個項目是否只有 Owner 看得到。
@@ -80,9 +87,10 @@ DAILY_LOG_MENU_ITEMS = [
     {"key": "finance", "label": "💰 記帳"},
 ]
 
-# 2026-08-16（Phase 6 第二批 2g）：`diet`（飲食）接上真正邏輯，移出開發中名單；`body`／
-# `finance` 維持「功能開發中」，留給後續子批次。
-_DAILY_LOG_NOT_YET_IMPLEMENTED_KEYS = {"body", "finance"}
+# 2026-08-16（Phase 6 第二批 2g）：`diet`（飲食）接上真正邏輯，移出開發中名單。
+# 2026-08-17（Phase 6 第二批 2h）：`body`（體態）接上真正邏輯，移出開發中名單；`finance`
+# 維持「功能開發中」，留給後續子批次。
+_DAILY_LOG_NOT_YET_IMPLEMENTED_KEYS = {"finance"}
 
 DAILY_LOG_MENU_TEXT = "日常紀錄，請選擇要記錄的項目："
 

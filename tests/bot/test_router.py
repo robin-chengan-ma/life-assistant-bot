@@ -860,16 +860,31 @@ def test_daily_log_submenu_shows_mood_and_exercise_buttons(fake_db, monkeypatch)
     assert "daily_log:diet" in callback_datas
 
 
-def test_daily_log_body_still_not_yet_implemented(fake_db, monkeypatch):
-    """body／finance 這批不接邏輯，維持「開發中」提示（diet 已於 2026-08-16 Phase 6 第二批 2g
-    接上真正邏輯，改由 test_log_diet_food_full_flow／test_log_diet_water_full_flow 涵蓋）。"""
+def test_daily_log_finance_still_not_yet_implemented(fake_db, monkeypatch):
+    """finance 這批不接邏輯，維持「開發中」提示（body 已於 2026-08-17 Phase 6 第二批 2h
+    接上真正邏輯，見 test_daily_log_body_starts_body_menu；diet 已於 2026-08-16 Phase 6
+    第二批 2g 接上真正邏輯，改由 test_log_diet_food_full_flow／test_log_diet_water_full_flow
+    涵蓋）。"""
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    store = ConversationStateStore()
+
+    reply, keyboard = router.handle_callback_query(fake_db, store, FAMILY_ID, "daily_log:finance")
+
+    assert "開發中" in reply
+    assert keyboard["inline_keyboard"][0][0]["callback_data"] == "menu:daily_log"
+
+
+def test_daily_log_body_starts_body_menu(fake_db, monkeypatch):
+    """2026-08-17（Phase 6 第二批 2h）：body 已接上真正邏輯，`daily_log:body` 進入體態子選單，
+    完整流程見 tests/bot/test_body_router.py。"""
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     store = ConversationStateStore()
 
     reply, keyboard = router.handle_callback_query(fake_db, store, FAMILY_ID, "daily_log:body")
 
-    assert "開發中" in reply
-    assert keyboard["inline_keyboard"][0][0]["callback_data"] == "menu:daily_log"
+    assert "體態" in reply
+    callbacks = [button["callback_data"] for row in keyboard["inline_keyboard"] for button in row]
+    assert "body:height" in callbacks
 
 
 def test_daily_log_diet_starts_diet_menu(fake_db, monkeypatch):
