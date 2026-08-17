@@ -177,6 +177,22 @@ def test_handle_exercise_duration_step_invalid_reprompts(fake_db):
 # --- 飲食 ---
 
 
+def test_handle_diet_backfill_date_step_clear_asks_water_for_that_date(fake_db, monkeypatch):
+    """迴歸測試（見 docs/ADR/debug/robinson.md 2026-08-16「飲食補記日期解析 NameError」）：
+    `handle_diet_backfill_date_step()` 原本呼叫不存在的 `_parse_date_description()`，實機補記
+    「昨天」直接 500 例外；正確做法要比照 `handle_exercise_backfill_date_step()` 用
+    `_parse_key_value_block(llm_client.generate_text(_BACKFILL_DATE_PARSE_PROMPT.format(...)))`。"""
+    monkeypatch.setattr(commands, "_now", lambda: commands.datetime(2026, 8, 4, 9, 0, tzinfo=commands._TAIWAN_TZ))
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_diet_backfill_date", "target_user_id": 42})
+    llm_client = _FakeLLMClient(response_text="STATUS: CLEAR\nDATE: 2026-08-03")
+
+    reply, _keyboard = commands.handle_diet_backfill_date_step(fake_db, llm_client, store, telegram_user_id=1, text="昨天")
+
+    assert "飲水" in reply
+    assert store.get(1)["diet_date"] == date(2026, 8, 3)
+
+
 def test_diet_food_flow_estimates_macros(fake_db):
     store = ConversationStateStore()
     reply, _keyboard = commands.start_diet_log(fake_db, store, telegram_user_id=1, user_id=42)

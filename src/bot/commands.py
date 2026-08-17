@@ -6,13 +6,29 @@ import logging
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from src.bot import auth, body, finance, friend_chat, knowledge, menu, mood, notifications, privacy, templates, toggles
-from src.bot import certificate_answer, certificate_quiz, certificate_schedule
-from src.bot import certificate_exam_scores, certificate_goals, certificate_stats
+from src.bot import (
+    auth,
+    body,
+    certificate_answer,
+    certificate_exam_scores,
+    certificate_goals,
+    certificate_quiz,
+    certificate_schedule,
+    certificate_stats,
+    finance,
+    friend_chat,
+    job_search,
+    knowledge,
+    menu,
+    mood,
+    notifications,
+    privacy,
+    templates,
+    toggles,
+    youtube,
+)
 from src.bot import complaint as complaint_module
-from src.bot import job_search
 from src.bot import todo as todo_module
-from src.bot import youtube
 from src.bot.state import ConversationStateStore
 from submodules.cloudsql.client import CloudSQLClient
 
@@ -2765,12 +2781,19 @@ def handle_diet_backfill_date_step(db: CloudSQLClient, llm_client, state_store: 
     哪些題目（沿用 `_start_diet_new_for_date()`）。"""
     state = state_store.get(telegram_user_id)
     target_user_id = state["target_user_id"]
-    parsed = _parse_date_description(llm_client, text)
+    parsed = _parse_key_value_block(
+        llm_client.generate_text(
+            _BACKFILL_DATE_PARSE_PROMPT.format(feature_label="飲食", date_reply=text, current_date_text=_current_date_text())
+        )
+    )
+    if parsed.get("STATUS") != "CLEAR":
+        return _BACKFILL_DATE_UNCLEAR_REPLY
+
     diet_date = _parse_date_only(parsed.get("DATE", ""))
     if diet_date is None:
-        return "不好意思，我沒看懂是哪一天，可以再說清楚一點嗎？（例如：8/1、昨天、上週三）"
+        return _BACKFILL_DATE_UNCLEAR_REPLY
     if diet_date > _now().date():
-        return "補記的日期不能是未來喔，麻煩重新輸入！"
+        return "不能補記還沒發生的未來日期喔，麻煩再講一次要補記哪一天！"
 
     return _start_diet_new_for_date(db, state_store, telegram_user_id, target_user_id, diet_date)
 

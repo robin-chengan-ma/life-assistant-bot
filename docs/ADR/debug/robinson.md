@@ -46,3 +46,21 @@ python3 -m pytest tests/ -q
 ```
 
 第一輪 `test_body_router.py::test_log_exercise_full_flow` 因忘記拆解 `router.handle_message` 在 `pending_exercise_heart_rate` 這一步回傳的 `(文字, keyboard)` tuple 而失敗一次，已修正（改成 `reply4, _keyboard4 = router.handle_message(...)`）；Robin 重新測試後前者 201 項全過，後者 1787 passed／3 failed（僅剩既有 `ffmpeg` 環境問題，與本次無關），本次修復確認完成。
+
+## 2026-08-16 飲食補記日期解析 NameError（2g 部署後實機驗收發現）
+
+**現象**：Robin 部署 commit `a6b49ba`（2g 飲食功能）後實機驗收，先在「🍚 飲食」新增今天一筆飲食紀錄，接著按「🕐 補記」，在對話框直接輸入「昨天」，Telegram 回覆系統錯誤訊息，Robin 私訊收到完整 Traceback：
+
+```
+File "src/bot/commands.py", line 2768, in handle_diet_backfill_date_step
+    parsed = _parse_date_description(llm_client, text)
+NameError: name '_parse_date_description' is not defined
+```
+
+**排查過程**：`commands.py` 裡其餘三個「補記日期」步驟（`handle_weight_backfill_date_step()`、`handle_exercise_backfill_date_step()`，以及待辦事項／重要日子等模組各自的補記步驟）都是呼叫 `_parse_key_value_block(llm_client.generate_text(_BACKFILL_DATE_PARSE_PROMPT.format(feature_label=..., date_reply=text, current_date_text=_current_date_text())))` 這套既有的日期解析慣例，`commands.py` 裡從來沒有定義過 `_parse_date_description()` 這個函式；2g 撰寫 `handle_diet_backfill_date_step()` 時誤植了一個不存在的函式名稱，屬於單純的手誤，且完全沒有對應的單元測試涵蓋補記步驟（`tests/bot/test_body_commands.py` 只有飲食新增流程的測試，漏了補記），所以 Claude 沙箱的 `ast.parse` 語法檢查（只驗證語法樹合法，不執行程式碼、不做名稱解析）與 Robin 本機 `pytest tests/ -q`（1805 passed）都沒有抓到這個執行期才會炸掉的 `NameError`，直到部署後實機驗收才第一次真的呼叫到這行程式碼。
+
+**根因**：2g 撰寫 `handle_diet_backfill_date_step()` 時對照既有補記步驟慣例手誤打錯函式名稱（`_parse_date_description` 不存在，正確應為 `_parse_key_value_block(llm_client.generate_text(_BACKFILL_DATE_PARSE_PROMPT.format(...)))`），且沒有對應單元測試覆蓋這個函式，導致這個純語法上合法、但執行期一定會炸的錯誤一路漏到實機驗收階段才浮現。
+
+**修復方式**：`src/bot/commands.py` 的 `handle_diet_backfill_date_step()` 改成比照 `handle_exercise_backfill_date_step()` 的既有寫法：呼叫 `_parse_key_value_block(llm_client.generate_text(_BACKFILL_DATE_PARSE_PROMPT.format(feature_label="飲食", date_reply=text, current_date_text=_current_date_text())))`，並補上 `parsed.get("STATUS") != "CLEAR"` 時回傳既有的 `_BACKFILL_DATE_UNCLEAR_REPLY`（原本漏掉這個分支，日期講不清楚時會直接把 `None` 傳進 `_parse_date_only()` 的上一步就沒有攔到「STATUS 不是 CLEAR」的情況）。新增 `tests/bot/test_body_commands.py::test_handle_diet_backfill_date_step_clear_asks_water_for_that_date` 補上這個函式原本完全沒有的單元測試覆蓋，驗證「昨天」這類描述能正確解析並接著問飲水。
+
+**驗證方式**：Claude 沙箱執行 `ast.parse` 語法檢查通過；待 Robin 本機執行 `python3 -m pytest tests/ -q` 確認新增測試通過且無新增迴歸，並在部署後於 Telegram 重新測試「新增今天飲食紀錄→補記昨天→輸入『昨天』」這個原本會炸掉的路徑，確認能正常接著問飲水/食物。
