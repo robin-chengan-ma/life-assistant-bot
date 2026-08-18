@@ -36,7 +36,7 @@ updated: 2026-08-18
 
 | 日期 | 對應 FR | 任務內容 | 開發者 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- | --- |
-| 2026-08-18 | FR-6a／FR-6b／FR-51～FR-53 | 移除最後五個 Slash Command：`/rule`、`/my_toggles`、`/set_toggle`、`/set_family_birthday`、`/friend_chat`；同步刪除舊版本人／代管功能開關與家人生日文字狀態機，保留對應選單與「陪我聊聊」自然語言入口 | Codex | 程式與文件完成／待 Robin 測試 | 聚焦 Router／Commands 測試 206 passed；全專案 `pytest -q`：1785 passed、1 項第三方 `pydub` warning；`ruff check .` 與 `git diff --check` 通過。 |
+| 2026-08-18 | FR-6a／FR-6b／FR-51～FR-53 | 移除最後五個 Slash Command：`/rule`、`/my_toggles`、`/set_toggle`、`/set_family_birthday`、`/friend_chat`；同步刪除舊版本人／代管功能開關與家人生日文字狀態機，保留對應選單與「陪我聊聊」自然語言入口 | Codex | 已 commit／待 push、部署與 Robin 實機測試 | commit `759fbf5`。聚焦 Router／Commands 測試 206 passed；全專案 `pytest -q`：1785 passed、1 項第三方 `pydub` warning；`ruff check .` 與 `git diff --check` 通過。 |
 | 2026-08-18 | FR-6c／FR-77 | 功能模式 10 分鐘逾時、草稿 30 分鐘保護、跨功能三選一、草稿恢復二選一與固定別名選單導引；移除客訴、持久化知識庫、逐則對話與長摘要的執行程式、Mobile 分析入口及相關測試 | Codex | 完成（已 push／部署／實機驗收） | commit `1601f34`。Codex 全專案 `pytest -q`：1822 passed、1 項第三方 `pydub` warning；`ruff check .`、`git diff --check` 通過，Robin 本機亦回報測試通過。正式盤點：`complaints` 0 筆、`knowledge_base` 5 筆、`conversation_logs` 180 筆、`conversation_summaries` 1 筆，均僅外鍵指向 `users.id`。Robin 已二次核准 `0094_drop_cancelled_chat_tables.sql`，並明確決定不留備份、直接刪除；舊 migration 保留，`0094` 不使用 `CASCADE`。 |
 | 2026-08-18 | 一般對話 FR-1～FR-17 | 一般對話縮限與媒體防呆：改為不落地的 10 分鐘短期上下文；停止正式路由的知識庫、逐則對話與長摘要讀寫；圖片依說明處理或預設整理；語音／音檔先確認轉錄；長按語音超時鎖定改為 5 分鐘並取消 15 分鐘修正限制；音檔不限時；影片及其他檔案統一拒絕 | Codex | 完成（已 push／實機驗收；部署狀態未單獨回報） | commit `5c0c093`、文件 commit `e78b01c`（2026-08-18）。Codex 全專案 `pytest -q`：1849 passed、19 skipped、1 項第三方 `pydub` warning；Robin 已完成 push 與 Telegram 實機驗收，結果正常。19 項 skip 為已取消的舊知識／清除對話流程測試。三張舊資料表的 DROP 尚未建立，須完成正式資料量盤點並取得 Robin 二次核准；固定拒絕文案為「我只能處理對話框文字、語音、圖片和音檔喔！」 |
 | 2026-08-18 | FR-1～FR-4a／FR-6e～FR-6g／FR-20a／FR-72a／FR-74b | 功能開關與排程設定選單化：角色分流、三項 Owner 功能開關、個人通知開關、唯讀系統工作、統一重要日子／目標／旅遊日期發送器，並移除未記帳與未完成考題催促 | Codex | 完成（已 push／實機驗收；部署狀態未單獨回報） | commit `669accc`、文件 commit `fe5f828`（2026-08-18）。Robin 已回報 push 並完成 Telegram 實機測試，結果正常；未另行回報 Render 部署狀態。新增 `schedule_settings.py`、`scheduled_notifications.py`、migration `0093` 與對應測試；關閉通知不停止背景工作，關閉功能則停止整個功能。Codex `pytest -q`：1918 passed（1 項第三方 warning）；`ruff check .` 與 `git diff --check` 全數通過。 |
@@ -257,6 +257,7 @@ updated: 2026-08-18
 
 | 日期 | 版本 / commit | 異動摘要 | 開發者 |
 | --- | --- | --- | --- |
+| 2026-08-18 | `759fbf5` | 移除最後五個舊版 Slash Command、過時狀態機與相關測試，保留選單及陪聊自然語言入口 | Codex |
 | 2026-08-18 | `b67cce0` | 補記 0084 Migration 修復 commit、測試與待部署狀態 | Codex |
 | 2026-08-18 | `07e986a` | 修正 0084 重複新增 `exercise_logs.note`，補回歸測試並同步 migration 實際狀態 | Codex |
 | 2026-08-18 | `1601f34` | 完成 FR-6c 草稿保護、固定別名入口與 FR-77 取消功能清理，新增經核准的 `0094` 刪表 migration | Codex |
