@@ -13,7 +13,7 @@ updated: 2026-08-18
 
 | 日期 | 對應 FR | 任務內容 | 開發者 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- | --- |
-| 2026-08-18 | 一般對話 FR-1～FR-17 | 一般對話縮限與媒體防呆：改為不落地的 10 分鐘短期上下文；停止正式路由的知識庫、逐則對話與長摘要讀寫；圖片依說明處理或預設整理；語音／音檔先確認轉錄；長按語音超時鎖定改為 5 分鐘並取消 15 分鐘修正限制；音檔不限時；影片及其他檔案統一拒絕 | Codex | 程式與文件完成／Robin 測試通過／待 commit、push、部署 | Codex 全專案 `pytest -q`：1849 passed、19 skipped、1 項第三方 `pydub` warning；Robin 已回報測試正常。19 項 skip 為已取消的舊知識／清除對話流程測試。三張舊資料表的 DROP 尚未建立，須完成正式資料量盤點並取得 Robin 二次核准；固定拒絕文案為「我只能處理對話框文字、語音、圖片和音檔喔！」 |
+| 2026-08-18 | 一般對話 FR-1～FR-17 | 一般對話縮限與媒體防呆：改為不落地的 10 分鐘短期上下文；停止正式路由的知識庫、逐則對話與長摘要讀寫；圖片依說明處理或預設整理；語音／音檔先確認轉錄；長按語音超時鎖定改為 5 分鐘並取消 15 分鐘修正限制；音檔不限時；影片及其他檔案統一拒絕 | Codex | 已 commit／Robin 測試通過／待 push、部署 | commit `5c0c093`（2026-08-18）。Codex 全專案 `pytest -q`：1849 passed、19 skipped、1 項第三方 `pydub` warning；Robin 已回報測試正常。19 項 skip 為已取消的舊知識／清除對話流程測試。三張舊資料表的 DROP 尚未建立，須完成正式資料量盤點並取得 Robin 二次核准；固定拒絕文案為「我只能處理對話框文字、語音、圖片和音檔喔！」 |
 | 2026-08-18 | FR-1～FR-4a／FR-6e～FR-6g／FR-20a／FR-72a／FR-74b | 功能開關與排程設定選單化：角色分流、三項 Owner 功能開關、個人通知開關、唯讀系統工作、統一重要日子／目標／旅遊日期發送器，並移除未記帳與未完成考題催促 | Codex | 完成（已 push／實機驗收；部署狀態未單獨回報） | commit `669accc`、文件 commit `fe5f828`（2026-08-18）。Robin 已回報 push 並完成 Telegram 實機測試，結果正常；未另行回報 Render 部署狀態。新增 `schedule_settings.py`、`scheduled_notifications.py`、migration `0093` 與對應測試；關閉通知不停止背景工作，關閉功能則停止整個功能。Codex `pytest -q`：1918 passed（1 項第三方 warning）；`ruff check .` 與 `git diff --check` 全數通過。 |
 | 2026-08-18 | FR-19k／FR-20 | 系統事故收件與康復通知選單化：事故及 Robin Telegram→Email 備援送達狀態落地，Owner 先選事故、再勾選實際收過事故通知的家人，預覽後二次確認發送 | Codex | 完成（已 push／實機驗收；部署狀態未單獨回報） | commit `e761deb`、文件 commit `92dc623`（2026-08-18）。Robin 已回報 push 並完成 Telegram 實機測試，結果正常；未另行回報 Render 部署狀態。 |
 | 2026-08-18 | FR-24／FR-26／FR-30a～FR-30b／FR-6e | 考試設定選單化：主選單改名、證照名冊、目標／每日題數／正式考試紀錄四個子選單；TOEIC 固定三軌題數、非 TOEIC 尚無題庫提示、區間覆蓋不可重疊、正式成績補充內容 | Codex | 完成（已 push／實機驗收；部署狀態未單獨回報） | commit `20fd6c7`（2026-08-18）；文件 commit `bde3731`。Robin 已回報 push 並完成 Telegram 實機測試，結果正常。見 `docs/ADR/discuss/skill-growth.md` 2026-08-18 ADR-31。全專案 `pytest -q`：1921 passed（1 項第三方 `pydub` deprecation warning）；`ruff check .` 與 `git diff --check` 全數通過。 |
@@ -231,6 +231,8 @@ updated: 2026-08-18
 
 | 日期 | 版本 / commit | 異動摘要 | 開發者 |
 | --- | --- | --- | --- |
+| 2026-08-18 | `5c0c093` | 限縮一般對話並完善圖片、語音、音檔與不支援格式防呆 | Codex |
+| 2026-08-18 | `fe5f828` | 補記功能開關與排程設定提交紀錄 | Codex |
 | 2026-08-18 | `669accc` | 功能開關與排程設定選單化，並統一目標與行程日期通知 | Codex |
 | 2026-08-18 | `92dc623` | 補記康復通知 commit 與 push／實機驗收狀態 | Codex |
 | 2026-08-18 | `e761deb` | 康復通知改為可選事故與收件人，並落地 Telegram／Email 送達狀態 | Codex |
@@ -379,7 +381,8 @@ updated: 2026-08-18
 
 | 日期 | Branch／版本 | 遠端 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- |
-| 2026-08-18 | `main`／`669accc` | GitHub | 待推版 | 功能 commit 已建立；待 Robin 連同本次 PROGRESS 同步 commit 一併 push |
+| 2026-08-18 | `main`／`5c0c093` | GitHub | 待推版 | 一般對話功能 commit 已建立；待 Robin 連同本次 PROGRESS 同步 commit 一併 push |
+| 2026-08-18 | `main`／`669accc`＋`fe5f828` | GitHub | 完成 | 08/18 Robin 已推版，並完成 Telegram 實機驗收 |
 | 2026-08-17 | `main`／`85db061` | GitHub | 完成 | 08/17 Robin已推版（含 `27c8476`／`85db061` 兩筆，六模組目標泛化＋批次3補做） |
 | 2026-08-17 | `main`／`a6fd474` | GitHub | 完成 | 08/17 Robin 已推版；Render 已自動部署，migration 0084 已於開機時自動套用成功 |
 | 2026-08-17 | `main`／`30c5303` | GitHub | 完成 | 08/17 Robin 已推版（隨 `a6fd474` 一併確認，`30c5303` 為其祖先 commit） |
