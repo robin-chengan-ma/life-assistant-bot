@@ -342,36 +342,25 @@ RED（寫失敗的測試）
 
 ### 目錄結構慣例（實際現況）
 
-目前程式仍維持根目錄 `main.py`、`src/`、`mobile/` 與 `submodules/`；Phase 6 的目標目錄已定案，但尚未完成實體搬移。執行任務時必須依下表辨識現況，不得因目標架構已定案就引用尚不存在的路徑。
+本專案維持根目錄 `main.py`、`src/`、`mobile/` 與 `submodules/`。原 Phase 6 NFR-14～NFR-15 目錄遷移已於 2026-08-18 取消；不得再以該規格為由搬移既有程式或切換部署入口。
 
-| 資料夾 | 對應六層選單 | 現況 |
+| 資料夾 | 現行責任 | 現況 |
 | --- | --- | --- |
-| `src/api/` | `backend/src/api/` | Flask HTTP 路由層，符合規範 |
-| `src/services/` | `backend/src/services/` | 商業邏輯層，符合規範，但只涵蓋部分較新功能 |
-| `src/bot/` | `backend/api/telegram/` + `backend/services/`（混合，**已知技術債**） | Telegram Bot 路由、指令、商業邏輯、Gemini 與部分資料存取混雜；Phase 6 將依責任拆至 `api/telegram/`、`services/`、`repositories/`、`agents/`、`jobs/` 等位置；不得再擴充巨型 `commands.py` 或 `router.py` |
-| `src/migrations/` | `backend/src/repositories/` 的一部分 | 資料庫 schema migration SQL 檔案 |
-| `mobile/` | `mobile/` | Expo / React Native App |
-| `submodules/` | `submodules/` | 已符合規範：`calendar/`、`cloudsql/`、`email/`、`gdrive/`、`job104/`、`llm/`、`newsfeed/`、`retry/`、`telegram/`、`voice/`、`youtube/`，每個都有獨立 `client.py`／`README.md`／`.env.example`／`requirements.txt`，命名對應實際基礎設施（不是 GCP 服務名） |
-| `deploy/` | `deploy/` | 目前只有根目錄 `Dockerfile`，沒有獨立 `deploy/` 資料夾（規模小，未拆出，沒有 `docker-compose.yml` 或 GitHub Actions） |
+| `src/api/` | Flask HTTP 路由 | 現行 Mobile App API 入口 |
+| `src/services/` | 商業邏輯 | 涵蓋部分較新功能，維持現況 |
+| `src/bot/` | Telegram Bot | 路由、指令、商業邏輯、Gemini 與部分資料存取仍位於此處；不得再擴充巨型 `commands.py` 或 `router.py`，但不進行跨頂層目錄搬遷 |
+| `src/migrations/` | 資料庫 Migration | PostgreSQL schema migration SQL 檔案 |
+| `mobile/` | Mobile App | Expo / React Native App |
+| `submodules/` | 外部服務 Client | `calendar/`、`cloudsql/`、`email/`、`gdrive/`、`job104/`、`llm/`、`newsfeed/`、`retry/`、`telegram/`、`voice/`、`youtube/`；不放專案商業邏輯 |
+| `deploy/` | 部署資產 | 目前只有根目錄 `Dockerfile`，不另拆資料夾 |
 | `docs/specs/` | — | `SPEC.md`（定案）／`PROGRESS.md`（進度）／`DRAFT.md`（未定案），舊版分散 spec 封存於 `docs/specs/_archive/` |
 | `docs/ADR/discuss/`、`docs/ADR/debug/` | — | 按功能拆檔的討論與除錯紀錄 |
 | `docs/reference/` | — | API／DB Schema 等技術參考文件 |
 | `docs/templates/` | — | 可攜式母版（`AGENTS-TEMPLATE.md` 等），供未來新專案複製使用 |
 
-尚未實體建立的層：`backend/`、`data/` 與 `backend/agents/`。目前 Gemini Prompt／Tool 仍混在 `src/bot/`；104 職缺、技術新聞／RSS、YouTube 等資料收集也仍與後端排程耦合。
+### 取消的 Phase 6 架構遷移
 
-### Phase 6 目標目錄（已定案／待遷移）
-
-| 目標資料夾 | 責任 |
-| --- | --- |
-| `backend/` | 現有 `main.py` 與 `src/` 的最終歸屬；包含 Mobile HTTP API、Telegram 輸入介面、商業服務、Repository、Gemini Agent、背景 Job、驗證、設定與 Migration |
-| `mobile/` | 維持根目錄平級，不歸入後端；負責 Expo／React Native App |
-| `data/` | 只放可獨立執行的資料收集、解析、清洗、標準化與去重 Pipeline，例如 104、技術新聞／RSS、YouTube；不得放 Telegram 或即時 Gemini 對話 |
-| `submodules/` | 維持根目錄平級，只放跨專案可重用的外部服務 Client，不放專案商業流程 |
-
-後端依賴固定為 `api → services → repositories → DB／外部服務`。Telegram Webhook／選單／Callback 歸 `backend/api/telegram/`；Gemini Prompt／Tool 歸 `backend/agents/`；排程觸發、權限、寫入與推播規則歸 `backend/jobs/`／`services/`。第一階段不建立空的 `schemas/`，欄位驗證依功能放入 `validators/`；只有真的出現跨 API 共用 DTO／序列化需求才新增 Schema 層。
-
-目錄遷移採小步驟進行，不得把取消功能清理、資料表 DROP、`src/bot/` 拆層、根目錄搬移與部署入口切換合成一次不可回退的大改版。正式依據見 `docs/specs/SPEC.md` FR-77／NFR-14～NFR-15 與 `docs/ADR/discuss/robinson.md` 2026-08-15 條目。
+原定將 `main.py`／`src/` 搬入 `backend/`，並拆建 `backend/api`、`backend/services`、`backend/repositories`、`backend/agents` 與 `data/` 的 NFR-14～NFR-15 已取消。此取消不影響 FR-77：已正式取消的客訴、持久化知識庫與長期對話記憶，仍須依核准流程清除其路由、流程、測試與資料表。任何 DROP 仍須先完成資料量、依賴、備份與回滾盤點並取得 Robin 二次確認。
 
 ### 覆蓋率與安全要求微調
 

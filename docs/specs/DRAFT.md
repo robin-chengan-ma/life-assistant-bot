@@ -13,6 +13,7 @@ updated: 2026-08-18
 
 ## 已取消
 
+- 2026-08-18：NFR-14～NFR-15 架構遷移正式取消；本專案不再將 `main.py`／`src/` 搬至 `backend/`，不拆建 `backend/api`、`backend/services`、`backend/repositories`、`backend/agents` 或 `data/`，也不為此調整部署入口。維持目前已完成實測的目錄與執行方式，避免大範圍搬遷造成既有功能回歸；FR-6c 與 FR-77 仍保留在 Roadmap — 詳見 `docs/ADR/discuss/robinson.md` 2026-08-18「取消 NFR-14～NFR-15 架構遷移」條目
 - 2026-08-18：FR-15「成功傳送語音後 15 分鐘內不得再用語音修正」及其提示文案、`media_uploads.created_at` 修正窗口判斷正式取消；轉錄結果已改為執行前確認，聽錯時可立即重新傳語音或直接打字修正 — 詳見 `docs/ADR/discuss/voice-safety.md` 2026-08-18「取消 15 分鐘語音修正限制」條目
 - 2026-08-15：Telegram 查無答案後教學、家庭／個人持久化知識庫讀寫與刪除、逐則對話紀錄、長記憶摘要，以及清除全部／指定主題知識與對話等功能正式取消；附屬的高風險語音逐字確認流程也隨適用功能取消。一般對話改用靜態人格 Prompt 與不落地的 10 分鐘短期上下文，對應路由、狀態、摘要排程與 `knowledge_base`／`conversation_logs`／`conversation_summaries` 三張資料表已排入 Phase 6 清理 — 詳見 `docs/ADR/discuss/robinson.md` 2026-08-15「移除持久化知識庫與對話記憶」及「淘汰路由、資料表與後端分層重構」條目
 - 2026-08-15：除 Telegram 平台必要的 `/start` 外，所有一般使用者與 Owner Slash Commands 正式取消且不保留相容期，功能全面改由權限化選單與引導式對話處理 — 詳見 `docs/ADR/discuss/robinson.md` 2026-08-15「全面移除 Slash Commands」條目
