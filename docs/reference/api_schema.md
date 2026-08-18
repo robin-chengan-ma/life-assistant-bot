@@ -59,15 +59,14 @@ updated: 2026-08-18
 
 | 項目 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `/function` | 已實作（`src/bot/commands.py::handle_function`） | FR-9（chat-core）／FR-56、FR-56a～c | 功能總覽（獨立小型 LLM 呼叫，僅列名稱＋一句話簡述＋權限）；細節追問併入一般聊天核心 context，不走此路由 |
-| 一般聊天核心 | 已實作（`src/bot/chat.py::handle_chat_message`） | FR-9～FR-12、FR-56c | 路由層最終 fallback；組 context（人格／家人背景／個人知識庫／最近 10 則對話）呼叫 Gemini，查無答案附 `【NOT_FOUND】` 標記進入 `pending_user_knowledge`，主動要求記住則附 `【REQUEST_SAVE】` 進入 `pending_save_knowledge_confirm` |
-| `pending_user_knowledge` | 已實作 | FR-4 | 同一次 LLM 呼叫判斷下一則訊息是「提供答案」（`【SAVE_ANSWER】`，寫入 `knowledge_base`）、「拒絕記錄」（`【DECLINE_SAVE】`）或「無關新問題」（正常回答並清狀態） |
-| `pending_name_confirm` | 已實作 | FR-3(e) | 偵測到人名疑似打字誤植（同音/形似字）時反問確認，下一則回覆判斷確認或否認 |
-| `/clean-all-dialog` | 已實作（`src/bot/commands.py::start_clean_all_dialog_confirm`） | FR-10 | 觸發後先反問確認筆數才執行清除（不會動知識庫），2026-08-01 起改為先確認再執行，見 `docs/ADR/discuss/chat-core.md` |
-| `pending_clean_all_dialog_confirm` | 已實作 | FR-10 | 單次 LLM 判斷 CONFIRM/CANCEL，非 CONFIRM 一律視為取消 |
-| `pending_save_knowledge_confirm` | 已實作 | FR-11、ADR-8 | 反問確認主動新增知識的內容與分類；伺服器端依 `auth.is_owner()` 現場強制決定可寫入共用或僅個人範圍，不信任模型判斷 |
-| `/clean-target-dialog` | 已實作（`src/bot/commands.py::start_clean_target_dialog_confirm`） | FR-12、ADR-8 | 依主題撈候選（對話紀錄＋知識庫），LLM 判斷相關性後反問確認；共用知識庫僅 Owner 觸發才納入候選 |
-| `pending_clean_target_dialog_confirm` | 已實作 | FR-12、ADR-8 | 確認後 `conversation_logs` 軟刪除、`knowledge_base` 硬刪除 |
+| `/function` | 現行舊程式仍存在／已排入移除 | 已取消 | 正式規格已取消功能總覽與細節追問，Phase 6 須移除路由、處理函式及測試；功能探索改由 Telegram 可見選單提供 |
+| 一般聊天核心 | 已完成縮限（`src/bot/chat.py::handle_chat_message`） | 一般對話 FR-1～FR-13 | 僅含本人結構化資料唯讀查詢、使用者內容整理分析及功能導引；只保留依 Telegram 使用者隔離的 10 分鐘記憶體上下文，逾時或切換選單清除，不直接異動正式資料、即時上網、讀寫知識庫或落地聊天紀錄 |
+| `pending_user_knowledge` | 現行舊程式仍存在／已排入移除 | 已取消 | 查無答案後教學與知識庫寫入流程已取消，Phase 6 須移除狀態、路由、處理函式及測試 |
+| `pending_name_confirm` | 現行舊程式仍存在／已排入移除 | 已取消 | 依持久化知識庫比對人名的流程已取消，Phase 6 須移除相關狀態與測試 |
+| `/clean-all-dialog`／確認狀態 | 現行舊程式仍存在／已排入移除 | 已取消 | 清除全部對話與摘要功能已取消，Phase 6 須移除路由、狀態、處理函式及測試 |
+| `pending_save_knowledge_confirm` | 現行舊程式仍存在／已排入移除 | 已取消 | 主動新增知識功能已取消，Phase 6 須移除狀態、路由、處理函式及測試 |
+| `/clean-target-dialog` | 現行舊程式仍存在／已排入移除 | 已取消 | 依主題刪除知識與對話功能已取消，Phase 6 須移除路由、狀態、處理函式及測試 |
+| `pending_clean_target_dialog_confirm` | 現行舊程式仍存在／已排入移除 | 已取消 | 清除指定主題知識／對話功能已取消，Phase 6 須連同相關狀態、路由與測試移除 |
 
 ## 個資偵測與遮蔽機制
 
@@ -79,7 +78,9 @@ updated: 2026-08-18
 
 | 項目 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| 語音訊息（內部路由） | 已實作（`src/bot/router.py::handle_voice_message`、`src/bot/voice.py`） | FR-14、FR-15、FR-16a、FR-17 | 檢查順序：最終執行確認短路（FR-16a）→ 10 分鐘上限鎖定中 → 本則超時（觸發鎖定 15 分鐘）→ 15 分鐘修正窗口；通過後下載並轉出文字，直接當成打字輸入復用 `handle_message()` 既有邏輯，不另建流程；細節與各次修正見 `docs/ADR/discuss/chat-core.md` ADR-9、`docs/ADR/discuss/submodules-core.md` |
+| Telegram 長按語音（內部路由） | 已實作 | FR-14、FR-16b | 最長 10 分鐘，超過後拒絕並鎖定語音功能 5 分鐘；成功轉錄後先顯示文字與「✅ 正確，繼續」，確認後才接回原流程。已取消 15 分鐘修正限制，聽錯可立即重新傳語音 |
+| 上傳音檔（內部路由） | 已實作 | FR-13、FR-16b、FR-17 | 與 Telegram 長按語音分流，不套用 10 分鐘上限或 5 分鐘鎖定；轉錄成功後同樣先要求確認文字 |
+| 圖片與不支援檔案（內部路由） | 已實作 | FR-2、FR-13、FR-17 | 圖片無說明時預設辨識並整理重點，有說明時依說明處理；影片、Video Note、PDF、Office 文件、壓縮檔及其他格式固定回覆「我只能處理對話框文字、語音、圖片和音檔喔！」 |
 
 ## 影像辨識
 

@@ -13,7 +13,8 @@ updated: 2026-08-18
 
 ## 已取消
 
-- 2026-08-15：Telegram 家庭／個人持久化知識庫、逐則對話紀錄與長記憶摘要功能正式取消；改用靜態人格 Prompt 與不落地的 10 分鐘短期上下文，對應路由與三張資料表已排入 Phase 6 清理 — 詳見 `docs/ADR/discuss/robinson.md` 2026-08-15「移除持久化知識庫與對話記憶」及「淘汰路由、資料表與後端分層重構」條目
+- 2026-08-18：FR-15「成功傳送語音後 15 分鐘內不得再用語音修正」及其提示文案、`media_uploads.created_at` 修正窗口判斷正式取消；轉錄結果已改為執行前確認，聽錯時可立即重新傳語音或直接打字修正 — 詳見 `docs/ADR/discuss/voice-safety.md` 2026-08-18「取消 15 分鐘語音修正限制」條目
+- 2026-08-15：Telegram 查無答案後教學、家庭／個人持久化知識庫讀寫與刪除、逐則對話紀錄、長記憶摘要，以及清除全部／指定主題知識與對話等功能正式取消；附屬的高風險語音逐字確認流程也隨適用功能取消。一般對話改用靜態人格 Prompt 與不落地的 10 分鐘短期上下文，對應路由、狀態、摘要排程與 `knowledge_base`／`conversation_logs`／`conversation_summaries` 三張資料表已排入 Phase 6 清理 — 詳見 `docs/ADR/discuss/robinson.md` 2026-08-15「移除持久化知識庫與對話記憶」及「淘汰路由、資料表與後端分層重構」條目
 - 2026-08-15：除 Telegram 平台必要的 `/start` 外，所有一般使用者與 Owner Slash Commands 正式取消且不保留相容期，功能全面改由權限化選單與引導式對話處理 — 詳見 `docs/ADR/discuss/robinson.md` 2026-08-15「全面移除 Slash Commands」條目
 - 2026-08-15：Telegram `/function`、中文觸發詞「我要看所有功能」及功能總覽／細節追問正式取消，後續由可見功能選單取代 — 詳見 `docs/ADR/discuss/robinson.md` 2026-08-15「使用規則選單與功能總覽移除」條目
 - 2026-08-15：「客訴回饋」功能正式取消；Telegram／Mobile App 入口、API、流程與 `complaints` 資料表已排入 Phase 6 清理 — 詳見 `docs/ADR/discuss/robinson.md` 2026-08-15「權限管理的使用者建檔、功能授權與推播設定」及「淘汰路由、資料表與後端分層重構」條目

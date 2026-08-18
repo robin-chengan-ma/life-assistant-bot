@@ -102,7 +102,7 @@ def test_extract_voice_returns_file_id_duration_and_mime_type_for_voice():
     payload = {
         "message": {"from": {"id": 123}, "voice": {"file_id": "v1", "duration": 42, "mime_type": "audio/ogg"}}
     }
-    assert webhook._extract_voice(payload) == (123, "v1", 42, "audio/ogg")
+    assert webhook._extract_voice(payload) == (123, "v1", 42, "audio/ogg", False)
 
 
 def test_extract_voice_returns_none_when_file_id_missing():
@@ -112,7 +112,7 @@ def test_extract_voice_returns_none_when_file_id_missing():
 
 def test_extract_voice_defaults_duration_and_mime_type_when_missing():
     payload = {"message": {"from": {"id": 123}, "voice": {"file_id": "v1"}}}
-    assert webhook._extract_voice(payload) == (123, "v1", None, "audio/ogg")
+    assert webhook._extract_voice(payload) == (123, "v1", None, "audio/ogg", False)
 
 
 def test_extract_voice_handles_uploaded_audio_message():
@@ -123,12 +123,12 @@ def test_extract_voice_handles_uploaded_audio_message():
             "audio": {"file_id": "a1", "duration": 180, "mime_type": "audio/mpeg"},
         }
     }
-    assert webhook._extract_voice(payload) == (123, "a1", 180, "audio/mpeg")
+    assert webhook._extract_voice(payload) == (123, "a1", 180, "audio/mpeg", True)
 
 
 def test_extract_voice_defaults_mime_type_for_audio_without_mime_type():
     payload = {"message": {"from": {"id": 123}, "audio": {"file_id": "a1", "duration": 180}}}
-    assert webhook._extract_voice(payload) == (123, "a1", 180, "audio/ogg")
+    assert webhook._extract_voice(payload) == (123, "a1", 180, "audio/ogg", True)
 
 
 def test_extract_voice_prefers_voice_when_both_present():

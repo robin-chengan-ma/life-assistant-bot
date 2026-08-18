@@ -63,7 +63,7 @@ _EMPTY_REPLY_FALLBACK = "不好意思，我剛剛好像沒接上你的話，可�
 # 目前支援文字、圖片、語音（voice 與 audio 兩種訊息類型都算，見 _extract_voice），
 # 收到其他格式（文件/影片/貼圖等）直接回這句拒絕，不進入 DB/Gemini 流程，符合 FR-17
 # 「僅支援圖片與音檔兩種格式」的承諾。
-_UNSUPPORTED_FORMAT_REPLY = "這個檔案格式我沒辦法處理喔，只能看懂圖片和音檔！"
+_UNSUPPORTED_FORMAT_REPLY = "我只能處理對話框文字、語音、圖片和音檔喔！"
 _UNSUPPORTED_FILE_KEYS = ("document", "video", "video_note", "animation", "sticker")
 
 # 見 docs/specs/platform-auth/SPEC.md FR-7a：Telegram 在沒收到 200 時會自動重送同一則
@@ -450,8 +450,8 @@ def _extract_photo(payload: dict) -> tuple[int, str, str | None] | None:
     return telegram_user_id, file_id, message.get("caption")
 
 
-def _extract_voice(payload: dict) -> tuple[int, str, int | None, str] | None:
-    """從 Telegram Update JSON 取出 (telegram_user_id, file_id, duration_seconds, mime_type)。
+def _extract_voice(payload: dict) -> tuple[int, str, int | None, str, bool] | None:
+    """取出 (telegram_user_id, file_id, duration, mime_type, is_uploaded_audio)。
 
     2026-08-01 修正（見 robinson SPEC.md FR-17）：涵蓋 `message.voice`（使用者按錄音鍵
     傳送的語音訊息，固定 OGG/OPUS）與 `message.audio`（使用者上傳的音檔，可能是
@@ -464,6 +464,7 @@ def _extract_voice(payload: dict) -> tuple[int, str, int | None, str] | None:
     message = payload.get("message") or {}
     from_user = message.get("from") or {}
     telegram_user_id = from_user.get("id")
+    is_uploaded_audio = "audio" in message and "voice" not in message
     media = message.get("voice") or message.get("audio")
     if telegram_user_id is None or not media:
         return None
@@ -471,7 +472,7 @@ def _extract_voice(payload: dict) -> tuple[int, str, int | None, str] | None:
     if not file_id:
         return None
     mime_type = media.get("mime_type") or "audio/ogg"
-    return telegram_user_id, file_id, media.get("duration"), mime_type
+    return telegram_user_id, file_id, media.get("duration"), mime_type, is_uploaded_audio
 
 
 def _extract_callback_query(payload: dict) -> tuple[int, str, str] | None:
@@ -657,7 +658,7 @@ def telegram_webhook():
                 privacy_llm_client=_build_privacy_llm_client(),
             )
         elif voice_extracted is not None:
-            _, file_id, duration_seconds, mime_type = voice_extracted
+            _, file_id, duration_seconds, mime_type, is_uploaded_audio = voice_extracted
             gdrive_client = GDriveClient(
                 refresh_token=os.environ["GDRIVE_OAUTH_REFRESH_TOKEN"],
                 client_id=os.environ["GDRIVE_OAUTH_CLIENT_ID"],
@@ -681,6 +682,7 @@ def telegram_webhook():
                 llm_client=llm_client,
                 text_llm_client=text_llm_client,
                 mime_type=mime_type,
+                is_uploaded_audio=is_uploaded_audio,
                 voice_lockout_store=_voice_lockout_store,
                 privacy_llm_client=_build_privacy_llm_client(),
                 calendar_client=_build_calendar_client(),

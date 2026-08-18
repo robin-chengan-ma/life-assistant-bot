@@ -30,26 +30,12 @@ _AWAITING_PASSCODE_REPLY = "請輸入通關密碼："
 _PASSCODE_BIND_FAILED_REPLY = "通關密碼不正確或已失效，請重新輸入，或輸入 /start 重新開始。"
 _PERMISSION_DENIED_REPLY = "無法使用這個功能。"
 
-# 2026-08-01（Step 1.4，robinson SPEC.md FR-14／FR-15）：語音訊息的擋下情境固定文案，
-# 都在下載/上傳/轉文字之前就先擋下，避免浪費 Drive／Groq 額度，見 src/bot/voice.py 模組 docstring。
-# 2026-08-02 起 FR-14 拆成兩條獨立規則：_VOICE_DURATION_LIMIT_REPLY 是「這一則太長」的當下拒絕，
-# _VOICE_DURATION_LOCKOUT_REPLY 是「之前超時過，15 分鐘全面鎖定中」；_VOICE_CORRECTION_WINDOW_REPLY
-# 則是 FR-15「只鎖修正情境」，三者觸發條件互不相同。
 _VOICE_DURATION_LIMIT_REPLY = (
     "這則語音超過 10 分鐘囉，我沒辦法處理這麼長的語音，麻煩分段傳送或改用打字喔！"
-    "接下來 15 分鐘語音功能會暫時鎖定，這段期間麻煩先用打字。"
+    "接下來 5 分鐘語音功能會暫時鎖定，這段期間麻煩先用打字。"
 )
 _VOICE_DURATION_LOCKOUT_REPLY = (
     "剛剛語音超過 10 分鐘，語音功能鎖定中，這段期間麻煩先用打字，超過鎖定時間會自動恢復喔！"
-)
-_VOICE_CORRECTION_WINDOW_REPLY = "你剛剛才傳過語音，15 分鐘內麻煩先用打字修正或補充喔，超過 15 分鐘語音模式就會自動恢復！"
-
-# 2026-08-02 追加：語音成功轉出文字後（代表 FR-15 修正窗口已經開始），主動附註提醒，不要讓使用者
-# 只能靠「又傳一次語音被拒絕」才被動發現這 15 分鐘語音功能被鎖定；鎖定到期時目前沒有主動通知
-# （機器人本身被動回應訊息，沒有排程推播機制），使用者下次互動時語音自然就能用了。
-_VOICE_TRANSCRIBED_REMINDER = (
-    "\n\n（提醒：接下來 15 分鐘內如果想修正或補充剛剛這則語音的內容，麻煩先用打字喔，"
-    "超過 15 分鐘語音功能就會恢復正常！）"
 )
 
 # 2026-08-15（Phase 6 第二批 2a，見 docs/specs/SPEC.md FR-6a）：`/start` 是 FR-6a 定案下
@@ -57,7 +43,6 @@ _VOICE_TRANSCRIBED_REMINDER = (
 # 的 Owner 建立使用者流程已改為選單驅動，見 commands.start_permission_menu()。
 _START_TRIGGERS = {"/start"}
 _RULE_TRIGGERS = {"/rule", "我要看使用規則"}
-_FUNCTION_TRIGGERS = {"/function", "我要看所有功能"}
 _MY_TOGGLES_TRIGGERS = {"/my_toggles", "我的功能設定"}
 _SET_TOGGLE_TRIGGERS = {"/set_toggle", "設定家人功能開關"}
 # 2026-08-04（Step 2.3，見 robinson SPEC.md FR-53）：Owner 專屬，補齊家人生日資料，設計比照 /set_toggle。
@@ -108,19 +93,10 @@ _ERROR_RESOLUTION_PATTERN = re.compile(r"^錯誤ID=(?P<report_id>\d+)\s*已處�
 _UPLOADED_FILE_PATTERN = re.compile(r"^已上傳\s*(?P<filename>.+)$")
 # 2026-08-02（Step 1.9，見 robinson SPEC.md FR-60）：任何身分皆可觸發客訴收集流程。
 _COMPLAINT_TRIGGERS = {"/complaint", "我要客訴你"}
-_CLEAN_ALL_DIALOG_TRIGGERS = {"/clean-all-dialog", "我想要刪除所有對話紀錄"}
-# 2026-08-01（chat-core SPEC.md FR-12）：/clean-target-dialog 的主題是自由文字，無法用固定
-# 觸發詞集合窮舉，改用 regex 擷取「我想刪除有關 OOO 的紀錄」或 `/clean-target-dialog OOO` 的主題。
-_CLEAN_TARGET_DIALOG_PATTERN = re.compile(
-    r"^(?:/clean-target-dialog\s+(?P<topic1>.+)|我想刪除有關(?P<topic2>.+)的紀錄)$"
-)
 
 # 2026-08-02（FR-16a）：這幾個「最終執行確認」狀態是唯二不能被新語音訊息直接覆蓋清除的 flow，
 # 見 handle_voice_message() 內的說明。
 _FINAL_CONFIRM_FLOWS = {
-    "pending_clean_all_dialog_final_confirm",
-    "pending_clean_target_dialog_final_confirm",
-    "pending_save_knowledge_final_confirm",
     # 2026-08-17（Phase 6 第二批 2h）：體態摘要→二次確認關卡，語音只能貼出轉錄文字讓使用者
     # 確認，不能直接觸發這幾個「最終執行確認」狀態，見 handle_voice_message() 內的說明。
     "pending_body_height_confirm",
@@ -156,16 +132,15 @@ def handle_message(
 ) -> str:
     """處理一則來自 Telegram 的文字訊息，回傳要回覆的文字。
 
-    `llm_client`（`GEMINI_API_BOT_KEY`）與 `text_llm_client`（`GEMINI_API_TEXT_KEY`，長記憶摘要用，
-    見 chat-core SPEC.md ADR-3）在訊息落入一般聊天核心、或 `pending_clean_all_dialog_confirm`
-    反問確認流程（見 FR-10 追加修正）時會用到，`image_llm_clients`
+    `llm_client`（`GEMINI_API_BOT_KEY`）在訊息落入一般聊天核心時使用；`text_llm_client`
+    保留供其他既有文字分析流程注入。`image_llm_clients`
     （`GEMINI_API_IMAGE_KEY1`/`KEY2`，見 robinson SPEC.md ADR-13）只有在使用者處於圖片辨識反問
     澄清流程（`pending_image_confirm`）時才會用到，其餘指令/對話流程分支都不需要；正式環境一律由
     webhook.py 注入，這裡預設 None 只是為了讓不涉及該流程的既有測試不用逐一補上假的 LLM Client。
 
-    `via_voice`（2026-08-02，robinson SPEC.md FR-16a）：這則文字是不是語音轉出來的——由
+    `via_voice`：這則文字是不是語音轉出來的——由
     `handle_voice_message()` 呼叫這裡時固定傳 `True`，webhook.py 處理一般文字訊息時維持預設的
-    `False`。只有 `pending_*_final_confirm` 這幾個「最終執行確認」狀態會用到，見
+    `False`。只有仍有效的 `pending_*_final_confirm` 高風險狀態會用到，見
     `_dispatch_active_flow()`；其餘分支不受影響。
 
     `privacy_llm_client`（2026-08-02，見 docs/specs/privacy-masking/SPEC.md）：個資遮蔽 LLM 語意層
@@ -274,8 +249,6 @@ def handle_message(
 
     if text in _RULE_TRIGGERS:
         return commands.handle_rule()
-    if text in _FUNCTION_TRIGGERS:
-        return commands.handle_function(db, llm_client)
     if text in _FRIEND_CHAT_TRIGGERS:
         # 2026-08-08（Step 3.5，見 robinson SPEC.md FR-51、FR-52、ADR-22）：好友模式陪伴聊天，
         # 單次生成完整回覆，不需要對話狀態機。
@@ -283,17 +256,6 @@ def handle_message(
     if text in _COMPLAINT_TRIGGERS:
         # 2026-08-02（Step 1.9，見 robinson SPEC.md FR-60）：固定提問，不經過 LLM。
         return commands.start_complaint(state_store, telegram_user_id, user_id)
-    if text in _CLEAN_ALL_DIALOG_TRIGGERS:
-        # 2026-08-01 起改為先反問確認，不再直接刪除，見 commands.start_clean_all_dialog_confirm。
-        return commands.start_clean_all_dialog_confirm(db, state_store, telegram_user_id, user_id)
-    target_match = _CLEAN_TARGET_DIALOG_PATTERN.match(text)
-    if target_match:
-        # 2026-08-01（FR-12）：主題式清除，範圍依 is_owner 決定要不要納入共用知識庫，見
-        # commands.start_clean_target_dialog_confirm。
-        topic = (target_match.group("topic1") or target_match.group("topic2")).strip()
-        return commands.start_clean_target_dialog_confirm(
-            db, llm_client, state_store, telegram_user_id, user_id, is_owner, topic
-        )
 
     return chat.handle_chat_message(
         db, llm_client, text_llm_client, state_store, telegram_user_id, user_id, text,
@@ -354,6 +316,9 @@ def handle_callback_query(
         if isinstance(result, tuple):
             return result
         return result, None
+
+    # 一般對話只保留目前對話頁面的短期上下文；切換到任何選單即清除。
+    chat.clear_short_context(telegram_user_id)
 
     if data == "menu:main":
         state_store.clear(telegram_user_id)
@@ -1182,15 +1147,16 @@ def handle_voice_message(
     llm_client=None,
     text_llm_client=None,
     mime_type: str = "audio/ogg",
+    is_uploaded_audio: bool = False,
     voice_lockout_store: ConversationStateStore | None = None,
     privacy_llm_client=None,
     calendar_client=None,
 ) -> str | tuple[str, dict | None]:
-    """處理使用者傳來的語音/音檔訊息（對應 robinson SPEC.md FR-14、FR-15、FR-17、ADR-12、ADR-13）。
+    """處理使用者傳來的 Telegram 長按語音或上傳音檔。
 
     2026-08-16（全站語音確認機制）：轉錄成功時回傳 `(text, keyboard)` 二元組（貼出轉錄文字＋
     「✅ 正確，繼續」按鈕），比照 `handle_callback_query()` 的回傳慣例；其餘提早擋下的分支
-    （未綁定、鎖定中、超過長度限制、修正窗口內）維持回傳純 `str`，呼叫端（webhook.py）需要
+    （未綁定、鎖定中、超過長度限制）維持回傳純 `str`，呼叫端（webhook.py）需要
     比照文字訊息分支用 `isinstance(x, tuple)` 拆解。
 
     涵蓋 Telegram 的 `voice`（錄音鍵語音訊息）與 `audio`（使用者上傳的音檔）兩種類型，
@@ -1198,8 +1164,8 @@ def handle_voice_message(
     （webhook.py）依實際訊息類型傳入，供 `voice.transcribe_and_upload()` 決定正確的
     Drive 副檔名與轉錄請求格式（見 src/bot/voice.py 模組 docstring）。
 
-    FR-14（10 分鐘上限）／FR-15（15 分鐘修正窗口）刻意排在下載語音檔之前檢查，通過後才
-    下載、上傳 Drive、記錄 media_uploads、呼叫 Groq Whisper 轉文字。
+    FR-14 的 10 分鐘上限與 5 分鐘超時鎖定只套用 Telegram 長按語音，並刻意排在下載前檢查；
+    上傳音檔不套用兩項限制。通過後才下載、上傳 Drive、記錄 media_uploads 並轉錄。
 
     2026-08-16（全站語音確認機制，見 docs/ADR/discuss/voice-safety.md）：轉出來的文字**不會**
     再直接當成使用者「打字輸入」丟進 `handle_message()`——語音辨識結果可能跟使用者實際講的
@@ -1212,20 +1178,15 @@ def handle_voice_message(
 
     2026-08-02（FR-16a）：如果目前卡在 `_FINAL_CONFIRM_FLOWS` 這幾個「最終執行確認」狀態，
     語音一定會被拒絕（這一步只接受打字），所以**在下載/轉錄之前就直接短路回覆**，比照
-    FR-14/FR-15「先擋才不浪費額度」的一貫原則——沒必要為了一個註定被拒絕的結果，還是先花一次
+    FR-14「先擋才不浪費額度」的一貫原則——沒必要為了一個註定被拒絕的結果，還是先花一次
     Drive 上傳＋Groq 轉錄的額度。這裡也刻意不清除該狀態，讓使用者可以直接補一則打字訊息完成
     最終確認，不用整個流程重來。
 
-    2026-08-02（Robin 釐清 FR-14 其實有兩條規則）：`voice_lockout_store`（獨立於 `state_store`
+    `voice_lockout_store`（獨立於 `state_store`
     的另一個 `ConversationStateStore` 實例，正式環境由 webhook.py 建立並長期持有）記錄「這位
-    使用者最近一次是否因單次語音超過 10 分鐘而被鎖定」——這 15 分鐘內語音功能整體關閉，跟
-    FR-15 只鎖「修正情境」是兩條獨立規則。呼叫端沒傳的話（例如既有測試不關心這個行為）就地
-    建立一個新的、不會跨呼叫共用的 store，等於停用這個檢查，不影響其餘行為。
-
-    2026-08-02（Robin 問鎖定/解除有沒有提醒使用者）：轉錄成功時代表 FR-15 修正窗口正式開始，
-    在 `handle_message()` 的回覆後面主動附註一句提醒（見 `_VOICE_TRANSCRIBED_REMINDER`），
-    不讓使用者只能靠「又傳一次語音被拒絕」才被動發現被鎖定；鎖定解除本身沒有主動通知
-    （機器人是被動回應訊息的架構，沒有排程推播機制，下次互動語音自然就恢復可用）。
+    使用者最近一次是否因單次語音超過 10 分鐘而被鎖定」——5 分鐘內長按語音功能關閉。
+    呼叫端沒傳的話（例如既有測試不關心這個行為）就地
+    建立一個新的、不會跨呼叫共用的 store，等於停用跨呼叫鎖定檢查，不影響其餘行為。
     """
     user = _get_identified_user(db, telegram_user_id)
     if user is None:
@@ -1239,14 +1200,12 @@ def handle_voice_message(
         # `text` 內容（見 commands.py），這裡帶空字串即可，不需要真的轉出語音內容。
         return handle_message(db, state_store, telegram_user_id, "", via_voice=True)
 
-    if voice.is_locked_out_from_duration_violation(voice_lockout_store, telegram_user_id):
-        return _VOICE_DURATION_LOCKOUT_REPLY
-
-    if voice.exceeds_duration_limit(duration_seconds):
-        voice.mark_duration_violation(voice_lockout_store, telegram_user_id)
-        return _VOICE_DURATION_LIMIT_REPLY
-    if voice.is_within_correction_window(db, user["id"]):
-        return _VOICE_CORRECTION_WINDOW_REPLY
+    if not is_uploaded_audio:
+        if voice.is_locked_out_from_duration_violation(voice_lockout_store, telegram_user_id):
+            return _VOICE_DURATION_LOCKOUT_REPLY
+        if voice.exceeds_duration_limit(duration_seconds):
+            voice.mark_duration_violation(voice_lockout_store, telegram_user_id)
+            return _VOICE_DURATION_LIMIT_REPLY
 
     voice_bytes = telegram_client.get_file_bytes(file_id)
     transcribed_text = voice.transcribe_and_upload(
@@ -1266,8 +1225,8 @@ def handle_voice_message(
     )
     reply = (
         f"我聽到的內容是：\n\n「{transcribed_text}」\n\n"
-        "請問這樣正確嗎？如果正確請按下面按鈕；如果不正確，請直接用文字打出正確內容送出"
-        "（這次先別再用語音喔）：" + _VOICE_TRANSCRIBED_REMINDER
+        "請問這樣正確嗎？如果正確請按下面按鈕；如果不正確，可以直接重新傳送語音，"
+        "或用文字打出正確內容。"
     )
     keyboard = {"inline_keyboard": [[{"text": "✅ 正確，繼續", "callback_data": "voice_confirm:accept"}]]}
     return reply, keyboard
@@ -1352,45 +1311,8 @@ def _dispatch_active_flow(
     if flow == "achievement":
         # 2026-08-16（Phase 6 第二批 2e，FR-6e／FR-6h／FR-76）：成果展示手動新增多步驟流程。
         return achievements.handle_step(state_store, telegram_user_id, text)
-    if flow == "pending_user_knowledge":
-        # 2026-07-31（ADR-6）：不再無條件把這則訊息當成答案存檔，改由同一次 LLM 呼叫判斷
-        # 這是在提供答案、拒絕記錄、還是問了個無關的新問題，見 chat.handle_chat_message。
-        return chat.handle_chat_message(
-            db, llm_client, text_llm_client, state_store, telegram_user_id,
-            state["target_user_id"], text, pending_question=state.get("original_question"),
-            privacy_llm_client=privacy_llm_client,
-        )
-    if flow == "pending_name_confirm":
-        # 2026-08-01（ADR-7）：打字誤植改為先反問確認，等使用者這則回覆才真正回答原本的問題。
-        return chat.handle_chat_message(
-            db, llm_client, text_llm_client, state_store, telegram_user_id,
-            state["target_user_id"], text, confirming_question=state.get("original_question"),
-            privacy_llm_client=privacy_llm_client,
-        )
     if flow == "pending_image_confirm":
         return image.handle_image_confirm_step(image_llm_clients, state_store, telegram_user_id, text)
-    if flow == "pending_clean_all_dialog_confirm":
-        # 2026-08-01：/clean-all-dialog 先反問確認，這一輪由使用者的回覆判斷要不要進入最終確認。
-        return commands.handle_clean_all_dialog_confirm_step(db, llm_client, state_store, telegram_user_id, text)
-    if flow == "pending_clean_all_dialog_final_confirm":
-        # 2026-08-02（FR-16a）：最終執行確認，只接受打字逐字輸入固定關鍵字，語音一律拒絕。
-        return commands.handle_clean_all_dialog_final_confirm_step(
-            db, state_store, telegram_user_id, text, via_voice
-        )
-    if flow == "pending_save_knowledge_confirm":
-        # 2026-08-01（FR-11）：主動新增知識先反問確認，這一輪判斷確定/取消並整理出分類與內容。
-        return commands.handle_save_knowledge_confirm_step(db, llm_client, state_store, telegram_user_id, text)
-    if flow == "pending_save_knowledge_final_confirm":
-        # 2026-08-02（FR-16a）：最終儲存確認，只接受打字逐字輸入固定關鍵字，語音一律拒絕。
-        return commands.handle_save_knowledge_final_confirm_step(db, state_store, telegram_user_id, text, via_voice)
-    if flow == "pending_clean_target_dialog_confirm":
-        # 2026-08-01（FR-12）：主題式清除先反問確認，這一輪判斷確定/取消並進入最終確認。
-        return commands.handle_clean_target_dialog_confirm_step(db, llm_client, state_store, telegram_user_id, text)
-    if flow == "pending_clean_target_dialog_final_confirm":
-        # 2026-08-02（FR-16a）：最終執行確認，只接受打字逐字輸入固定關鍵字，語音一律拒絕。
-        return commands.handle_clean_target_dialog_final_confirm_step(
-            db, state_store, telegram_user_id, text, via_voice
-        )
     # 2026-08-02（Step 1.7，見 robinson SPEC.md FR-31、FR-31a、FR-32）：待辦事項新增（時間→提醒→
     # 行事曆同步→摘要確認）與查詢清單後標記完成/取消，各自對應的 flow 分派，見 commands.py
     # 模組內「待辦事項」區塊說明；2026-08-16（Phase 6 第二批 2f）新增選單按鈕入口

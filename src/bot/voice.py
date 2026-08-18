@@ -1,4 +1,4 @@
-"""語音辨識邏輯（對應 docs/specs/robinson/SPEC.md FR-14、FR-15、FR-17、ADR-12、ADR-13）。
+"""語音與上傳音檔的辨識邏輯。
 
 處理使用者傳來的「語音內容」——涵蓋 Telegram 的 `voice`（錄音鍵語音訊息）與 `audio`
 （使用者上傳的音樂/錄音檔）兩種訊息類型，FR-17 承諾「圖片與音檔兩種格式都支援」，
@@ -14,23 +14,9 @@ media_uploads（`media_type='audio'`）→ 呼叫 Groq Whisper 轉出文字。�
 呼叫端把它一路透傳進來，用於 Drive 上傳、檔名副檔名、Groq 轉錄請求三處，避免把 MP3 檔案
 誤標成 `.ogg`。
 
-FR-14（10 分鐘上限）／FR-15（15 分鐘修正窗口）這兩項檢查刻意設計成「不需要下載語音檔、
-不需要呼叫任何外部服務就能判斷」，比照 webhook.py 對不支援檔案格式的既有作法先擋下、
-避免浪費 Drive／Groq 額度：FR-14 用 Telegram 訊息本身就帶的 `duration` 秒數判斷（呼叫端
-負責在下載前先呼叫 `exceeds_duration_limit()`）；FR-15 用 `media_uploads` 裡該使用者最近
-一筆 `audio` 記錄的時間判斷（`is_within_correction_window()`），不需要額外的資料表或
-記憶體狀態。
-
-2026-08-02 追加（Robin 釐清 FR-14／FR-15 其實是兩條獨立規則，都要做）：
-1. **FR-14 規則 1**（`mark_duration_violation()`／`is_locked_out_from_duration_violation()`）：
-   單次錄音「本身」超過 10 分鐘時，語音功能整體鎖定 15 分鐘——這段期間內任何語音訊息
-   （不限於「修正」情境）都會被拒絕。因為超時的語音一開始就不會呼叫
-   `transcribe_and_upload()`（不會寫入 `media_uploads`），無法沿用 FR-15 查 DB 時間戳記的
-   作法，改用純記憶體儲存（比照 `src/bot/state.py` 的 `ConversationStateStore`／ADR-2 慣例：
-   process 重啟會重置，可接受）記錄「最近一次超時的時間點」。
-2. **FR-15**（既有）：只要成功轉出文字（代表這則語音本身沒超過 10 分鐘），15 分鐘內若使用者
-   還想再用語音「修正」剛剛的結果，一樣要拒絕、提醒改用打字——語意上鎖定的是「修正這件事」，
-   跟規則 1「單純因為太長而鎖」是兩個不同觸發條件，只是巧合都設定成 15 分鐘。
+Telegram 長按語音以訊息內的 `duration` 在下載前檢查 10 分鐘上限；超時後用記憶體狀態鎖定
+5 分鐘，避免浪費 Drive／Groq 額度。使用者上傳的 `audio` 音檔不套用這組時長與鎖定規則。
+兩種輸入完成轉錄後都由 router 顯示文字並等待使用者確認；若有誤，可立即重新傳送或打字修正。
 """
 from datetime import datetime, timedelta, timezone
 
@@ -39,8 +25,7 @@ from src.bot.state import ConversationStateStore
 from submodules.cloudsql.client import CloudSQLClient
 
 _MAX_DURATION_SECONDS = 600  # FR-14：語音訊息超過 10 分鐘強制中斷處理
-_CORRECTION_WINDOW_MINUTES = 15  # FR-15：語音送出後 15 分鐘內僅能用打字修正
-_DURATION_LOCKOUT_MINUTES = 15  # FR-14 規則 1：單次錄音超過 10 分鐘時，語音功能整體鎖定 15 分鐘
+_DURATION_LOCKOUT_MINUTES = 5
 
 # 依 Telegram 回報的 mime_type 決定存到 Drive 時用的副檔名；voice 訊息固定 audio/ogg，
 # audio 訊息（使用者上傳的音檔）常見類型列在這裡，沒對應到的一律 fallback 成 ogg——
@@ -79,31 +64,12 @@ def mark_duration_violation(
 def is_locked_out_from_duration_violation(
     lockout_store: ConversationStateStore, telegram_user_id: int, now: datetime | None = None
 ) -> bool:
-    """FR-14 規則 1：該使用者是否還在「上次因單次語音超過 10 分鐘」觸發的 15 分鐘全面鎖定內——
-    這段期間語音功能整體關閉，跟 FR-15 的 `is_within_correction_window()`（只鎖「修正」情境）
-    是兩條獨立規則。
-    """
+    """是否仍在長按語音超過 10 分鐘所觸發的 5 分鐘鎖定內。"""
     state = lockout_store.get(telegram_user_id)
     if state is None:
         return False
     now = now or datetime.now(timezone.utc)
     return now - state["violated_at"] < timedelta(minutes=_DURATION_LOCKOUT_MINUTES)
-
-
-def is_within_correction_window(db: CloudSQLClient, user_id: int, now: datetime | None = None) -> bool:
-    """FR-15：該使用者是否還在「上一則語音送出後 15 分鐘內」的修正窗口——
-    這段期間內若再傳語音，要拒絕並提醒改用打字，強制使用者用免費的文字修正，
-    不要每次都重新花一次 Groq 額度重新辨識。
-
-    只看最近一筆成功處理（已寫入 media_uploads）的語音記錄；被這個檢查擋下的嘗試本身
-    不會產生新的 media_uploads 記錄，不會延長窗口。
-    """
-    now = now or datetime.now(timezone.utc)
-    rows = db.select("media_uploads", where="user_id = %s AND media_type = %s", params=(user_id, "audio"))
-    if not rows:
-        return False
-    latest_created_at = max(row["created_at"] for row in rows)
-    return now - latest_created_at < timedelta(minutes=_CORRECTION_WINDOW_MINUTES)
 
 
 def build_upload_filename(
@@ -129,8 +95,7 @@ def transcribe_and_upload(
 
     `mime_type` 由呼叫端依 Telegram 訊息類型（`voice` 固定 `audio/ogg`；`audio` 依
     Telegram 回報的實際類型）傳入，一路用於 Drive 上傳、檔名副檔名、Groq 轉錄請求三處。
-    上傳／記錄動作本身就是 FR-15 修正窗口的起點（見 `is_within_correction_window`），
-    所以這支函式只在「確定要處理」（已通過 FR-14／FR-15 檢查）的語音/音檔訊息上呼叫。
+    呼叫端會先完成適用的長按語音時長檢查；上傳音檔不套用該限制。
     """
     extension = _infer_extension(mime_type)
     gdrive_url = gdrive_client.upload_file(

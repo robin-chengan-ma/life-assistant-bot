@@ -58,18 +58,18 @@ def test_is_locked_out_from_duration_violation_false_when_no_prior_violation():
     assert voice.is_locked_out_from_duration_violation(lockout_store, telegram_user_id=1) is False
 
 
-def test_is_locked_out_from_duration_violation_true_within_fifteen_minutes():
+def test_is_locked_out_from_duration_violation_true_within_five_minutes():
     lockout_store = ConversationStateStore()
     now = datetime(2026, 8, 2, 12, 0, 0, tzinfo=timezone.utc)
-    voice.mark_duration_violation(lockout_store, telegram_user_id=1, now=now - timedelta(minutes=10))
+    voice.mark_duration_violation(lockout_store, telegram_user_id=1, now=now - timedelta(minutes=4))
 
     assert voice.is_locked_out_from_duration_violation(lockout_store, telegram_user_id=1, now=now) is True
 
 
-def test_is_locked_out_from_duration_violation_false_after_fifteen_minutes():
+def test_is_locked_out_from_duration_violation_false_after_five_minutes():
     lockout_store = ConversationStateStore()
     now = datetime(2026, 8, 2, 12, 0, 0, tzinfo=timezone.utc)
-    voice.mark_duration_violation(lockout_store, telegram_user_id=1, now=now - timedelta(minutes=16))
+    voice.mark_duration_violation(lockout_store, telegram_user_id=1, now=now - timedelta(minutes=6))
 
     assert voice.is_locked_out_from_duration_violation(lockout_store, telegram_user_id=1, now=now) is False
 
@@ -87,97 +87,6 @@ def test_mark_duration_violation_defaults_to_current_time():
     voice.mark_duration_violation(lockout_store, telegram_user_id=1)
 
     assert voice.is_locked_out_from_duration_violation(lockout_store, telegram_user_id=1) is True
-
-
-# --- is_within_correction_window（FR-15）---
-
-
-def test_is_within_correction_window_false_when_no_prior_voice(fake_db):
-    assert voice.is_within_correction_window(fake_db, user_id=1) is False
-
-
-def test_is_within_correction_window_true_within_fifteen_minutes(fake_db):
-    now = datetime(2026, 8, 1, 12, 0, 0, tzinfo=timezone.utc)
-    fake_db.insert(
-        "media_uploads",
-        {
-            "user_id": 1,
-            "media_type": "audio",
-            "gdrive_url": "https://drive/prev",
-            "created_at": now - timedelta(minutes=10),
-        },
-    )
-
-    assert voice.is_within_correction_window(fake_db, user_id=1, now=now) is True
-
-
-def test_is_within_correction_window_false_after_fifteen_minutes(fake_db):
-    now = datetime(2026, 8, 1, 12, 0, 0, tzinfo=timezone.utc)
-    fake_db.insert(
-        "media_uploads",
-        {
-            "user_id": 1,
-            "media_type": "audio",
-            "gdrive_url": "https://drive/prev",
-            "created_at": now - timedelta(minutes=16),
-        },
-    )
-
-    assert voice.is_within_correction_window(fake_db, user_id=1, now=now) is False
-
-
-def test_is_within_correction_window_ignores_other_users(fake_db):
-    now = datetime(2026, 8, 1, 12, 0, 0, tzinfo=timezone.utc)
-    fake_db.insert(
-        "media_uploads",
-        {
-            "user_id": 999,
-            "media_type": "audio",
-            "gdrive_url": "https://drive/someone-else",
-            "created_at": now - timedelta(minutes=1),
-        },
-    )
-
-    assert voice.is_within_correction_window(fake_db, user_id=1, now=now) is False
-
-
-def test_is_within_correction_window_ignores_image_uploads(fake_db):
-    now = datetime(2026, 8, 1, 12, 0, 0, tzinfo=timezone.utc)
-    fake_db.insert(
-        "media_uploads",
-        {
-            "user_id": 1,
-            "media_type": "image",
-            "gdrive_url": "https://drive/photo",
-            "created_at": now - timedelta(minutes=1),
-        },
-    )
-
-    assert voice.is_within_correction_window(fake_db, user_id=1, now=now) is False
-
-
-def test_is_within_correction_window_uses_latest_of_multiple_rows(fake_db):
-    now = datetime(2026, 8, 1, 12, 0, 0, tzinfo=timezone.utc)
-    fake_db.insert(
-        "media_uploads",
-        {
-            "user_id": 1,
-            "media_type": "audio",
-            "gdrive_url": "https://drive/old",
-            "created_at": now - timedelta(minutes=30),
-        },
-    )
-    fake_db.insert(
-        "media_uploads",
-        {
-            "user_id": 1,
-            "media_type": "audio",
-            "gdrive_url": "https://drive/recent",
-            "created_at": now - timedelta(minutes=5),
-        },
-    )
-
-    assert voice.is_within_correction_window(fake_db, user_id=1, now=now) is True
 
 
 # --- build_upload_filename ---

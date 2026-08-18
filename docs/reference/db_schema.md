@@ -229,7 +229,7 @@ Migration：`0093_create_notification_preferences.sql`。`updated_at` 由資料�
 
 | 資料表 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `media_uploads` | 已建立 | ADR-13（圖片）／FR-14、FR-15（語音沿用） | 圖片/語音上傳的 Google Drive 網址記錄；`created_at` 同時作為語音 15 分鐘修正窗口判斷依據 |
+| `media_uploads` | 已建立 | ADR-13（圖片）／FR-14（語音沿用） | 圖片／語音／音檔上傳的 Google Drive 網址記錄；`created_at` 僅作建立時間，已不再用於舊 FR-15 的 15 分鐘語音修正窗口判斷 |
 
 <details>
 <summary>SQL 與設計理由</summary>

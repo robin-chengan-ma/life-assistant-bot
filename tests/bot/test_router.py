@@ -1,6 +1,7 @@
 from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 
+import pytest
 from PIL import Image
 
 from src.bot import commands, menu, router, templates, voice
@@ -110,7 +111,18 @@ def test_known_family_member_other_text_gets_chat_core_reply(fake_db, monkeypatc
 
     assert reply == "今天台北是晴天喔！"
     logs = fake_db.select("conversation_logs", where="user_id = %s", params=(1,))
-    assert len(logs) == 2
+    assert logs == []
+
+
+def test_switching_to_menu_clears_short_chat_context(fake_db, monkeypatch):
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+    cleared_user_ids = []
+    monkeypatch.setattr(router.chat, "clear_short_context", cleared_user_ids.append)
+
+    router.handle_callback_query(fake_db, store, FAMILY_ID, "menu:main")
+
+    assert cleared_user_ids == [FAMILY_ID]
 
 
 # --- Owner（Robin） ---
@@ -485,6 +497,7 @@ def test_recovered_command_ignored_for_non_owner(fake_db, monkeypatch):
     assert telegram_client.sent == []
 
 
+@pytest.mark.skip(reason="持久化知識教學流程已取消")
 def test_chat_core_unknown_reply_sets_pending_user_knowledge_state(fake_db, monkeypatch):
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
@@ -502,6 +515,7 @@ def test_chat_core_unknown_reply_sets_pending_user_knowledge_state(fake_db, monk
     }
 
 
+@pytest.mark.skip(reason="持久化知識教學流程已取消")
 def test_pending_user_knowledge_flow_saves_via_router_when_llm_judges_it_an_answer(fake_db, monkeypatch):
     # ADR-6：是否存檔改由 LLM 判斷（【SAVE_ANSWER】標記），router 要把 pending_question 傳進去
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
@@ -522,6 +536,7 @@ def test_pending_user_knowledge_flow_saves_via_router_when_llm_judges_it_an_answ
     assert rows[0]["content"] == "今天台北是晴天"
 
 
+@pytest.mark.skip(reason="持久化知識教學流程已取消")
 def test_pending_user_knowledge_flow_treats_unrelated_new_question_normally_via_router(fake_db, monkeypatch):
     # Robin 回報：問「陳東東是誰」被回不知道後換問「吳凱吉是誰」，被誤存成陳東東的答案；
     # 模型判斷是無關新問題時不輸出任何標記，router 應該照一般回答處理，不寫入知識庫。
@@ -542,6 +557,7 @@ def test_pending_user_knowledge_flow_treats_unrelated_new_question_normally_via_
     assert len(rows) == 0
 
 
+@pytest.mark.skip(reason="持久化知識比對流程已取消")
 def test_pending_name_confirm_flow_continues_via_router(fake_db, monkeypatch):
     # 2026-08-01（ADR-7）：打字誤植先反問確認，router 要正確帶 confirming_question 分派下去。
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
@@ -559,6 +575,7 @@ def test_pending_name_confirm_flow_continues_via_router(fake_db, monkeypatch):
     assert store.get(FAMILY_ID) is None
 
 
+@pytest.mark.skip(reason="持久化知識教學流程已取消")
 def test_owner_pending_user_knowledge_flow_declines_via_router(fake_db, monkeypatch):
     monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
     store = ConversationStateStore()
@@ -576,6 +593,7 @@ def test_owner_pending_user_knowledge_flow_declines_via_router(fake_db, monkeypa
 # --- /clean-all-dialog（docs/specs/chat-core/SPEC.md FR-10，2026-08-01 起改為先確認再執行）---
 
 
+@pytest.mark.skip(reason="清除對話流程已取消")
 def test_known_family_member_triggering_clean_all_dialog_only_asks_for_confirmation_first(fake_db, monkeypatch):
     # Robin 回報：原本一觸發 /clean-all-dialog 就直接刪除，沒有給反悔機會；改為先反問確認，
     # 並且要告知目前有幾筆對話紀錄，這一步驟本身不應該真的刪除任何東西。
@@ -597,6 +615,7 @@ def test_known_family_member_triggering_clean_all_dialog_only_asks_for_confirmat
     assert len(logs) == 2  # 還沒真的刪除
 
 
+@pytest.mark.skip(reason="清除對話流程已取消")
 def test_clean_all_dialog_confirm_flow_moves_to_final_confirm_when_user_confirms(fake_db, monkeypatch):
     # 2026-08-02（FR-16a）：第一輪 CONFIRM 只會進入最終確認狀態，不會馬上刪除。
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
@@ -614,6 +633,7 @@ def test_clean_all_dialog_confirm_flow_moves_to_final_confirm_when_user_confirms
     assert len(logs) == 1
 
 
+@pytest.mark.skip(reason="清除對話流程已取消")
 def test_clean_all_dialog_final_confirm_flow_deletes_when_typed_keyword(fake_db, monkeypatch):
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
@@ -629,6 +649,7 @@ def test_clean_all_dialog_final_confirm_flow_deletes_when_typed_keyword(fake_db,
     assert logs == []
 
 
+@pytest.mark.skip(reason="清除對話流程已取消")
 def test_clean_all_dialog_final_confirm_flow_rejects_voice_sourced_reply(fake_db, monkeypatch):
     # 語音轉出來的文字即使剛好是「確認執行」也不能通過最終確認，避免語音聽錯就誤刪不可逆的資料。
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
@@ -645,6 +666,7 @@ def test_clean_all_dialog_final_confirm_flow_rejects_voice_sourced_reply(fake_db
     assert len(logs) == 1
 
 
+@pytest.mark.skip(reason="清除對話流程已取消")
 def test_clean_all_dialog_confirm_flow_keeps_logs_when_user_cancels(fake_db, monkeypatch):
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
@@ -661,6 +683,7 @@ def test_clean_all_dialog_confirm_flow_keeps_logs_when_user_cancels(fake_db, mon
     assert len(logs) == 1
 
 
+@pytest.mark.skip(reason="主動新增知識流程已取消")
 def test_pending_save_knowledge_confirm_flow_moves_to_final_confirm_via_router(fake_db, monkeypatch):
     # 2026-08-01（FR-11）：主動新增知識反問確認後，下一輪要正確分派到 commands。
     # 2026-08-02（FR-16a）：CONFIRM 後改為先進入最終確認，不會馬上寫入。
@@ -1480,6 +1503,7 @@ def test_complaint_full_flow_records_and_notifies_robin(fake_db, monkeypatch):
 # --- /clean-target-dialog（docs/specs/chat-core/SPEC.md FR-12）---
 
 
+@pytest.mark.skip(reason="依主題清除知識與對話流程已取消")
 def test_known_family_member_can_trigger_clean_target_dialog_by_natural_language(fake_db, monkeypatch):
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
@@ -1495,6 +1519,7 @@ def test_known_family_member_can_trigger_clean_target_dialog_by_natural_language
     assert store.get(FAMILY_ID)["topic"] == "范麗芳"
 
 
+@pytest.mark.skip(reason="依主題清除知識與對話流程已取消")
 def test_clean_target_dialog_topic_containing_pii_is_not_masked(fake_db, monkeypatch):
     # 2026-08-02（privacy-masking SPEC.md FR-7）：這支指令的 topic 刻意不遮蔽，因為使用者很可能
     # 就是要用個資內容當關鍵字搜尋要刪除的紀錄，遮蔽會讓比對用的關鍵字直接消失、功能失效。
@@ -1518,6 +1543,7 @@ def test_clean_target_dialog_topic_containing_pii_is_not_masked(fake_db, monkeyp
     assert "跟「0912345678」有關" in reply
 
 
+@pytest.mark.skip(reason="依主題清除知識與對話流程已取消")
 def test_owner_can_trigger_clean_target_dialog_via_slash_command_with_topic(fake_db, monkeypatch):
     monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
     fake_db.insert("knowledge_base", {"category": "general_family", "user_id": None, "content": "范麗芳是媽媽"})
@@ -1530,6 +1556,7 @@ def test_owner_can_trigger_clean_target_dialog_via_slash_command_with_topic(fake
     assert "跟「范麗芳」有關" in reply
 
 
+@pytest.mark.skip(reason="依主題清除知識與對話流程已取消")
 def test_clean_target_dialog_confirm_flow_deletes_after_typed_final_confirm(fake_db, monkeypatch):
     # 2026-08-02（FR-16a）：CONFIRM 後先進入最終確認，要再打字輸入「確認執行」才會真的刪除。
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
@@ -1565,6 +1592,7 @@ def test_clean_target_dialog_confirm_flow_deletes_after_typed_final_confirm(fake
     assert logs == []
 
 
+@pytest.mark.skip(reason="清除對話流程已取消")
 def test_owner_can_trigger_clean_all_dialog_confirmation_via_slash_command(fake_db, monkeypatch):
     monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
     store = ConversationStateStore()
@@ -1833,7 +1861,7 @@ def test_handle_voice_message_does_not_enforce_lockout_when_store_not_provided(f
     assert final_reply == templates.APPENDIX_A_TEXT
 
 
-def test_handle_voice_message_rejects_within_correction_window(fake_db, monkeypatch):
+def test_handle_voice_message_allows_immediate_rerecording(fake_db, monkeypatch):
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     fake_db.insert(
@@ -1848,14 +1876,39 @@ def test_handle_voice_message_rejects_within_correction_window(fake_db, monkeypa
     store = ConversationStateStore()
     telegram_client = _FakeTelegramClient(b"raw-ogg")
 
-    reply = router.handle_voice_message(
+    reply, keyboard = router.handle_voice_message(
         fake_db, store, FAMILY_ID, "voice123", 30,
         telegram_client, _FakeGDriveClient(), _FakeVoiceClient(),
     )
 
-    assert reply == router._VOICE_CORRECTION_WINDOW_REPLY
-    assert telegram_client.last_file_id is None  # 修正窗口內不該去下載語音檔
-    assert len(fake_db.select("media_uploads")) == 1  # 沒有新增第二筆
+    assert "我聽到的內容" in reply
+    assert keyboard is not None
+    assert telegram_client.last_file_id == "voice123"
+    assert len(fake_db.select("media_uploads")) == 2
+
+
+def test_handle_uploaded_audio_ignores_voice_duration_limit(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+    telegram_client = _FakeTelegramClient(b"long-audio")
+
+    reply, keyboard = router.handle_voice_message(
+        fake_db,
+        store,
+        FAMILY_ID,
+        "audio123",
+        3600,
+        telegram_client,
+        _FakeGDriveClient(),
+        _FakeVoiceClient(),
+        mime_type="audio/mpeg",
+        is_uploaded_audio=True,
+    )
+
+    assert "我聽到的內容" in reply
+    assert keyboard is not None
+    assert telegram_client.last_file_id == "audio123"
 
 
 def test_handle_voice_message_transcribes_and_routes_as_text(fake_db, monkeypatch):
@@ -1884,7 +1937,7 @@ def test_handle_voice_message_transcribes_and_routes_as_text(fake_db, monkeypatc
     assert final_reply == templates.APPENDIX_A_TEXT
 
 
-def test_handle_voice_message_masks_pii_in_transcribed_text_before_logging(fake_db, monkeypatch):
+def test_handle_voice_message_masks_pii_without_persisting_chat(fake_db, monkeypatch):
     # 2026-08-02（privacy-masking SPEC.md）：語音轉出文字含個資時，天然經過
     # handle_message() → chat.handle_chat_message() 遮蔽，conversation_logs 存的不是明碼。
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
@@ -1908,7 +1961,7 @@ def test_handle_voice_message_masks_pii_in_transcribed_text_before_logging(fake_
     )
     assert "0912345678" not in final_reply
     logs = fake_db.select("conversation_logs", where="user_id = %s", params=(user_id,))
-    assert logs[0]["content"] == "我的手機是 [已遮蔽個資]"
+    assert logs == []
 
 
 def test_handle_voice_message_passes_through_mime_type_for_uploaded_audio(fake_db, monkeypatch):
@@ -1947,6 +2000,7 @@ def test_handle_voice_message_works_for_owner(fake_db, monkeypatch):
     assert owner_row is not None
 
 
+@pytest.mark.skip(reason="持久化知識流程已取消")
 def test_handle_voice_message_preserves_stale_pending_flow_as_resume_state(fake_db, monkeypatch):
     """2026-08-16（全站語音確認機制）：語音進來前若卡在某個未完成流程，先貼出轉錄文字請使用者
     確認「聽對了嗎」，原本卡住的流程原封不動保留成 `resume_state`，不會被語音蓋掉／憑空清掉；
@@ -1977,6 +2031,7 @@ def test_handle_voice_message_preserves_stale_pending_flow_as_resume_state(fake_
     assert store.get(FAMILY_ID) is None
 
 
+@pytest.mark.skip(reason="清除對話最終確認流程已取消")
 def test_handle_voice_message_short_circuits_final_confirm_without_downloading_or_transcribing(
     fake_db, monkeypatch
 ):
@@ -2007,9 +2062,8 @@ def test_handle_voice_message_short_circuits_final_confirm_without_downloading_o
     assert len(logs) == 1
 
 
-def test_handle_voice_message_short_circuits_final_confirm_even_within_correction_window(fake_db, monkeypatch):
-    # 最終確認狀態的短路檢查排在 FR-15 修正窗口檢查之前，兩者都會拒絕，但要驗證的是回覆內容
-    # 正確對應到最終確認的拒絕文案（而不是被 FR-15 的「15 分鐘內麻煩先用打字」蓋過去）。
+@pytest.mark.skip(reason="知識最終確認流程已取消")
+def test_handle_voice_message_short_circuits_final_confirm_even_with_prior_audio(fake_db, monkeypatch):
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     fake_db.insert(
@@ -2031,7 +2085,6 @@ def test_handle_voice_message_short_circuits_final_confirm_even_within_correctio
     )
 
     assert "打字" in reply
-    assert reply != router._VOICE_CORRECTION_WINDOW_REPLY
     assert telegram_client.last_file_id is None
 
 
