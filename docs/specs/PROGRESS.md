@@ -16,13 +16,12 @@ updated: 2026-08-18
 
 | 範圍 | 目前狀態 | 依據／剩餘工作 |
 | --- | --- | --- |
-| Telegram Phase 6 選單化、功能開關、排程、一般對話、FR-6c 草稿保護、FR-77 取消功能清理 | 完成（已 push／部署／實機驗收）；Mobile 殘留修正已 commit／待 push 與部署 | 既有功能 commit `1601f34`；migration 修復 commit `07e986a`。Render 於 2026-08-18 12:25 依序成功套用 0084～0094，0094 已完成四張取消功能資料表清理；Mobile 客訴與舊錯誤結案死程式已由 commit `fb8c616` 移除。 |
+| Telegram Phase 6 選單化、功能開關、排程、一般對話、FR-6c 草稿保護、FR-77 取消功能清理 | 完成（已 push／部署／實機驗收）；Mobile 殘留修正已 push、待部署與實機驗收確認 | 既有功能 commit `1601f34`；migration 修復 commit `07e986a`。Render 於 2026-08-18 12:25 依序成功套用 0084～0094，0094 已完成四張取消功能資料表清理；Mobile 客訴與舊錯誤結案死程式已由 commit `fb8c616` 移除並推送。 |
 | FR-72b 帳號層隱私數字遮罩 | 完成 | Mobile 與 Telegram 共用 `users.privacy_mask_enabled`；Telegram 資料查詢已套用遮罩。 |
 | FR-19j～FR-20 跨平台系統錯誤治理 | 已 push／部署；Telegram 管理頁已實機確認 | commit `005752b`、文件 commit `94eea15` 已在 `origin/main`。Owner Telegram 錯誤管理畫面已由 Robin 提供實機截圖確認；Mobile API 未預期 5xx 事故通報、10 分鐘合併、受影響者追蹤與跨平台康復通知已實作，Mobile 真實 5xx 不刻意於正式環境製造事故。 |
-| Telegram 重構後 Mobile 跨端相容修正 | 已 commit／待 push、部署與實機驗收 | commit `fb8c616`。一般生活模組不再受舊 `feature_toggles` 關閉；Mobile 客訴與舊錯誤結案程式徹底移除；考試成績顯示 `note`；求職 Top 推薦排除關閉職缺、契合度分布保留全部本期分析。無 Migration、無正式資料刪除；Robin 已回報本機測試通過。 |
+| Telegram 重構後 Mobile 跨端相容修正 | 已 push／待部署與實機驗收確認 | commit `fb8c616` 與文件 commit `fa9f03c` 已在 `origin/main`。一般生活模組不再受舊 `feature_toggles` 關閉；Mobile 客訴與舊錯誤結案程式徹底移除；考試成績顯示 `note`；求職 Top 推薦排除關閉職缺、契合度分布保留全部本期分析。無 Migration、無正式資料刪除；Robin 已回報本機測試通過。 |
 | FR-6a／FR-6b 舊 Slash Command 入口清理 | 完成 | Slash Command 只保留 `/start`；`/rule`、`/my_toggles`、`/set_toggle`、`/set_family_birthday`、`/friend_chat` 及舊文字狀態機、死程式與過時測試均已移除。功能改由使用規則選單、功能開關與排程設定、重要日子設定及自然語言「陪我聊聊」提供。 |
-| 求職分析欄位、圖表、API 調整 | 待討論／未排入 Roadmap | 尚缺欄位、流程、圖表、API 與驗收條件；見 `DRAFT.md`。 |
-| 考試成績模組進一步調整 | 待討論／未排入 Roadmap | 考試設定選單化已完成；其他調整範圍尚未定案，見 `DRAFT.md`。 |
+| Mobile 分析頁、目標摘要、成果置頂、求職與考試頁改版（FR-64b～FR-64d／FR-76b） | 已定案／已排入 Roadmap／尚未開工 | 共用圖表與日期規則、區間唯讀／最近紀錄操作、逾期待辦、體態三頁籤、記帳與心情簡化、收藏目標、求職與考試資訊架構、跨端成果置頂均已逐項確認；開工前須先盤點 API／Schema，Migration SQL 另行提案核准。 |
 | 英文口說／其他語言學習、非 TOEIC 證照題庫、完整 README | 擱置／未排入 Roadmap | 只放 `DRAFT.md`，不列為當前待開發任務。 |
 
 ## 目前修復中
@@ -37,6 +36,7 @@ updated: 2026-08-18
 
 | 日期 | 對應 FR | 任務內容 | 開發者 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- | --- |
+| 2026-08-18 | FR-64b～FR-64d／FR-76b | 定案 Mobile 分析頁、共用目標摘要、紀錄分區、圖表座標、逾期待辦、體態／記帳／心情、收藏目標、求職／考試頁及跨端成果置頂規格 | Codex | 規格完成／尚未開工 | 已由 DRAFT 移入 SPEC；討論脈絡見 `docs/ADR/discuss/mobile-app.md` 2026-08-18 系列 accepted 條目。開工前需提出分批計畫，置頂時間與里程碑類型如需 Schema 變更，Migration SQL 必須另行審核。 |
 | 2026-08-18 | 功能開關 FR-3／FR-30／FR-41b／FR-77 | Telegram 大重構後 Mobile 跨端盤點與相容修正：一般功能忽略舊開關、清除客訴與舊錯誤結案殘留、顯示正式考試備註、區分關閉職缺的推薦與歷史分布 | Codex | 已 commit／待 push、部署與實機驗收 | commit `fb8c616`。TDD RED：聚焦測試 3 failed；GREEN：API／Service 聚焦測試 59 passed。全專案 `pytest -q`：1793 passed、1 項第三方 `pydub` warning；Mobile `tsc --noEmit`、`ruff check .`、`git diff --check` 通過；Robin 已回報本機測試通過。無 Migration、無資料刪除。 |
 | 2026-08-18 | FR-19j～FR-20 | 異常通知、康復通知與 Owner 系統錯誤管理擴充至 Mobile App 事故；新增 Telegram 管理選單、Mobile 5xx 通報、10 分鐘去重、受影響者關聯、處理追蹤與跨平台康復通知 | Codex | 已 push／部署；Telegram 管理頁已實機確認 | commit `005752b`、文件 commit `94eea15` 已在 `origin/main`。Robin 已核准 migration `0095`；Owner 管理頁由 Robin 提供正式 Telegram 截圖確認。移除舊「錯誤ID=N 已處理：…」與 Mobile 結案 API；Mobile 當下只回安全文案且僅通知 Owner。Codex 聚焦測試 332 passed；全專案 `pytest -q`：1791 passed、1 項第三方 `pydub` warning；`ruff check .`、`git diff --check` 通過。Mobile 真實 5xx 未刻意於正式環境製造事故。 |
 | 2026-08-18 | FR-6a／FR-6b／FR-51～FR-53 | 移除最後五個 Slash Command：`/rule`、`/my_toggles`、`/set_toggle`、`/set_family_birthday`、`/friend_chat`；同步刪除舊版本人／代管功能開關與家人生日文字狀態機，保留對應選單與「陪我聊聊」自然語言入口 | Codex | 完成（已 push／部署／實機驗收） | commit `759fbf5`、文件 commit `6ceed9d`。聚焦 Router／Commands 測試 206 passed；全專案 `pytest -q`：1785 passed、1 項第三方 `pydub` warning；`ruff check .` 與 `git diff --check` 通過。Robin 已回報 push 並完成全部實機測試。 |
