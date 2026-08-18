@@ -71,32 +71,6 @@ def test_fixed_notifications_all_have_calendar_summary():
         assert entry["calendar_summary"]
 
 
-# --- 生日解析 ---
-
-
-def test_parse_birthday_input_full_date_with_dash():
-    assert notifications.parse_birthday_input("1999-04-22") == date(1999, 4, 22)
-
-
-def test_parse_birthday_input_full_date_with_slash():
-    assert notifications.parse_birthday_input("1999/4/22") == date(1999, 4, 22)
-
-
-def test_parse_birthday_input_month_day_only_uses_placeholder_year():
-    assert notifications.parse_birthday_input("10/6") == date(1900, 10, 6)
-    assert notifications.parse_birthday_input("10-6") == date(1900, 10, 6)
-
-
-def test_parse_birthday_input_invalid_date_returns_none():
-    assert notifications.parse_birthday_input("2/30") is None
-    assert notifications.parse_birthday_input("不知道") is None
-    assert notifications.parse_birthday_input("") is None
-
-
-def test_parse_birthday_input_full_date_invalid_values_returns_none():
-    assert notifications.parse_birthday_input("1999-13-40") is None
-
-
 # --- 推播主流程 ---
 
 
@@ -316,38 +290,3 @@ def test_check_and_push_swallows_calendar_event_creation_failure(fake_db):
         "important_notifications_log", where="notification_key = %s AND year = %s", params=("new_year", 2026)
     )
     assert len(log_row) == 1
-
-
-# --- 設定家人生日 ---
-
-
-def test_list_family_members_returns_all_bound_users(fake_db):
-    _bind_user(fake_db, 1, "Robin", is_owner=True)
-    _bind_user(fake_db, 2, "爸爸")
-
-    members = notifications.list_family_members(fake_db)
-
-    assert len(members) == 2
-
-
-def test_format_family_member_prompt_shows_existing_birthday(fake_db):
-    members = [
-        {"id": 1, "role": "Robin", "birthday": None},
-        {"id": 2, "role": "爸爸", "birthday": date(1970, 8, 1)},
-    ]
-    text = notifications.format_family_member_prompt(members)
-    assert "1. Robin（尚未設定）" in text
-    assert "2. 爸爸（目前：08/01）" in text
-
-
-def test_format_family_member_prompt_empty():
-    assert "還沒有任何已綁定的使用者" in notifications.format_family_member_prompt([])
-
-
-def test_set_birthday_updates_user(fake_db):
-    user_id = _bind_user(fake_db, 1, "弟媳")
-
-    notifications.set_birthday(fake_db, user_id, date(1998, 3, 15))
-
-    row = fake_db.select("users", where="id = %s", params=(user_id,), fetch_one=True)
-    assert row["birthday"] == date(1998, 3, 15)

@@ -28,12 +28,11 @@ updated: 2026-08-18
 | `POST /telegram/webhook` | 已實作（`src/bot/webhook.py`） | FR-1、FR-2、FR-5～FR-8、FR-17 | 所有使用者文字/圖片/語音/按鈕點擊更新的統一入口，依 Update 類型分流（`callback_query` 獨立路由／不支援格式直接拒絕／圖片轉圖片訊息路由／語音轉文字後併入文字路由／其餘文字依內容路由）；`handle_message()`／`handle_photo_message()`／`handle_voice_message()` 拋出未預期例外一律記錄 Traceback＋安全用語回覆＋仍回 HTTP 200，避免 Telegram 重試風暴（見 `docs/ADR/discuss/service-resilience.md`）；`callback_query` 走獨立精簡安全網，見下方說明 |
 | `/start` | 已實作（`src/bot/router.py::handle_message`） | FR-3、FR-4c、FR-6a | 唯一保留的 Slash Command（2026-08-15 起取代 `/set_invite_codes` 等舊指令）；未綁定使用者按下後才進入「等待通關密碼」狀態、下一則文字才驗證密碼；已綁定使用者（含 Owner）按下顯示主選單（`src/bot/menu.py`） |
 | `callback_query`（Inline Keyboard 按鈕） | 已實作（`src/bot/router.py::handle_callback_query`、`src/bot/webhook.py::_handle_callback_query_update`） | FR-4、FR-6c、FR-6e | 按下主選單／權限管理選單按鈕觸發；每個分支重新驗證 `auth.is_owner()`（FR-6c，不信任前端選單是否顯示過這顆按鈕）；一律先呼叫 `answerCallbackQuery` 避免 Telegram 客戶端卡在轉圈狀態 |
-| `/rule` | 已實作（`src/bot/commands.py::handle_rule`） | FR-6d、FR-55 | 回傳固定使用規則全文（附錄 A），不經 LLM；亦可由主選單「使用規則」按鈕觸發 |
+| `menu:rule` | 已實作（`src/bot/commands.py::handle_rule`） | FR-6d、FR-55 | 主選單「📋 使用規則」回傳固定使用規則全文（附錄 A），不經 LLM |
 | ~~`/set_invite_codes`~~ | 2026-08-15 已移除 | FR-6a | 已由 `/start`＋主選單「權限管理」（`src/bot/commands.py::start_permission_menu`／`handle_permission_callback`／`handle_permission_step`）取代；舊指令使用者會收到 Telegram 預設的「指令不存在」提示，不提供相容期，見 `docs/ADR/discuss/robinson.md` 2026-08-15「Phase 6 第二批 2a 實作計畫」 |
 
-> **現況差異（待修正）**：SPEC FR-6a／FR-6b 規定 Slash Command 只保留 `/start`，但現行
-> `src/bot/router.py` 仍接受 `/rule`、`/my_toggles`、`/set_toggle`、`/set_family_birthday`、`/friend_chat`。
-> Reference 依程式現況記錄；這些入口尚待移除，不得因主選單已可用就宣告 FR-6a／FR-6b 全數完成。
+> Slash Command 只保留 `/start`。`/rule`、`/my_toggles`、`/set_toggle`、`/set_family_birthday`、
+> `/friend_chat` 已於 2026-08-18 移除，不保留相容期。
 
 ## 服務健康與治理
 
@@ -57,8 +56,7 @@ updated: 2026-08-18
 
 | 項目 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `/my_toggles` | 已實作（`src/bot/commands.py::start_my_toggles`） | FR-2、FR-2a | 列出自己的功能開/關狀態，輸入編號切換；首次觸發先補齊全部功能開關預設值 |
-| `/set_toggle` | 已實作（`src/bot/commands.py::start_set_toggle`） | FR-2a | 僅 Owner；先選要調整的使用者，再進入與 `/my_toggles` 相同的編號切換畫面 |
+| `menu:schedule` → `schedule:*` | 已實作（`src/bot/schedule_settings.py`） | FR-2、FR-2a、FR-6f～FR-6g | 一般使用者設定自己的通知；Owner 額外操作三項 Owner 功能開關。舊版本人編號切換與代管家人開關流程已移除 |
 
 ## Gemini 對話核心
 
@@ -139,7 +137,7 @@ updated: 2026-08-18
 
 | 項目 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `/set_family_birthday` | 已實作（`src/bot/commands.py::start_set_family_birthday`） | FR-53 | 僅 Owner；設計比照 `/set_toggle`，補齊尚未知道生日的家人資料（寫入 `users.birthday`） |
+| `menu:important_days` | 已實作（`src/bot/important_days.py`） | FR-53、FR-72a | 新增生日或其他日期提醒一律走重要日子設定；舊 `/set_family_birthday` 與寫入 `users.birthday` 的對話流程已移除 |
 | FR-53／FR-53f 固定節日與生日推播（借用 `/healthz` 頻率，非獨立路由） | 已實作（`src/bot/notifications.py::check_and_push_important_notifications`） | FR-53、FR-53f | 台灣時間 08:00 檢查固定節日清單（元旦/除夕初一/掃墓/中秋/端午/父親節/母親節，農曆用 `lunarcalendar` 即時計算）與家人生日；生日/父親節/母親節全員皆收到但主角本人/其他人文案差異化，掃墓提醒限固定名單（Robin/爸爸/媽媽/弟弟/弟媳/阿姨）；年度推播去重靠 `important_notifications_log` |
 
 ## Google Calendar 整合
@@ -177,7 +175,7 @@ updated: 2026-08-18
 
 | 項目 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `/friend_chat` | 已實作（`src/bot/commands.py::start_friend_chat`） | FR-51、FR-52 | 「陪我聊聊」；`friend_mode` 開關非 owner_only，所有使用者皆可用；動態讀取這位使用者已開啟且近 7 天有資料的所有功能模組近況（`friend_chat.py::_DATA_PROVIDERS` 登記表），交給 LLM 生成陪伴式回覆，內容自然涵蓋心情趨勢文字/emoji 摘要（不做圖表），僅被動觸發、不含主動關懷推播 |
+| 自然語言「陪我聊聊」 | 已實作（`src/bot/commands.py::start_friend_chat`） | FR-51、FR-52 | `friend_mode` 開關非 owner_only，所有使用者皆可用；動態讀取這位使用者已開啟且近 7 天有資料的所有功能模組近況，交給 LLM 生成陪伴式回覆；舊 `/friend_chat` 已移除 |
 
 ## 求職模組
 

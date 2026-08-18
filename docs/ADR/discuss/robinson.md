@@ -1143,3 +1143,15 @@ YouTube 主題訂閱設定子選單結構；`router.py` 移除 `/my_youtube_topi
 **理由**：將逾時與草稿規則集中於單一儲存層，可避免每個功能各自實作出不一致行為；固定別名比對不使用 LLM，避免誤判後直接異動資料。
 
 **後果**：正式環境唯讀盤點為 `complaints=0`、`knowledge_base=5`、`conversation_logs=180`、`conversation_summaries=1`；四張表均只有指向 `users.id` 的外鍵，沒有其他資料表引用它們。Robin 於 2026-08-18 明確回覆「核准 0094」完成二次確認；實作以不含 `CASCADE` 的 `0094_drop_cancelled_chat_tables.sql` 刪除四表。Robin 在測試通過後再次明確指示「不必留備份，直接刪表」，因此部署不保留這 186 筆舊資料；舊 migration 仍保留不改寫，若日後需重建只能恢復空 schema，無法復原已刪資料。
+
+## 2026-08-18 [標籤：使用者] 移除最後五個 Slash Command
+
+**狀態**：accepted
+
+**背景**：FR-6a／FR-6b 已定案 Slash Command 只保留 `/start`，但 Router 尚殘留 `/rule`、`/my_toggles`、`/set_toggle`、`/set_family_birthday`、`/friend_chat` 與兩套舊文字狀態機。
+
+**決策**：五個 Slash Command 全數移除且不保留相容期；`/rule` 改由「📋 使用規則」選單提供，`/my_toggles` 與 `/set_toggle` 由「⏰ 功能開關與排程設定」取代，`/set_family_birthday` 改由重要日子設定新增提醒，`/friend_chat` 只保留自然語言「陪我聊聊」。舊版本人／代管功能開關與家人生日文字狀態機、專用 helper 及過時測試一併刪除。
+
+**理由**：避免舊入口繞過目前的權限化選單與一致互動規則，也避免已無正式入口的死程式持續造成維護誤判。
+
+**後果**：Telegram 收到上述五段 Slash 文字時會落入一般聊天，不再執行正式功能；主選單 Callback 與「陪我聊聊」自然語言仍維持原功能。`/start` 是唯一有效 Slash Command。

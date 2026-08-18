@@ -16,10 +16,10 @@ updated: 2026-08-18
 
 | 範圍 | 目前狀態 | 依據／剩餘工作 |
 | --- | --- | --- |
-| Telegram Phase 6 選單化、功能開關、排程、一般對話、FR-6c 草稿保護、FR-77 取消功能清理 | 程式完成（已 push／實機驗收）；DB migration 修復已 commit、待 push／部署 | 既有功能 commit `1601f34`；migration 修復 commit `07e986a`。2026-08-18 實際查詢確認 `schema_migrations` 沒有 `0084`～`0094`：0084 重複新增既有 `exercise_logs.note`，使後續 migration 全數被阻塞；待 Robin push 後重新部署驗證。 |
+| Telegram Phase 6 選單化、功能開關、排程、一般對話、FR-6c 草稿保護、FR-77 取消功能清理 | 完成（已 push／部署／實機驗收） | 既有功能 commit `1601f34`；migration 修復 commit `07e986a`。Render 於 2026-08-18 12:25 依序成功套用 0084～0094，0094 已完成四張取消功能資料表清理。 |
 | FR-72b 帳號層隱私數字遮罩 | 完成 | Mobile 與 Telegram 共用 `users.privacy_mask_enabled`；Telegram 資料查詢已套用遮罩。 |
 | FR-19k Owner 系統錯誤管理呈現 | 部分完成／Roadmap 待開發 | Telegram／Email／未送達狀態已落地；Owner 可集中查看的系統錯誤管理選單／頁面尚未完成。 |
-| FR-6a／FR-6b 舊 Slash Command 入口清理 | 部分完成／Roadmap 待修正 | 多數功能已選單化，但 Router 與測試仍保留 `/rule`、`/my_toggles`、`/set_toggle`、`/set_family_birthday`、`/friend_chat`，與「只保留 `/start`」的現行 SPEC 不一致。 |
+| FR-6a／FR-6b 舊 Slash Command 入口清理 | 完成 | Slash Command 只保留 `/start`；`/rule`、`/my_toggles`、`/set_toggle`、`/set_family_birthday`、`/friend_chat` 及舊文字狀態機、死程式與過時測試均已移除。功能改由使用規則選單、功能開關與排程設定、重要日子設定及自然語言「陪我聊聊」提供。 |
 | 求職分析欄位、圖表、API 調整 | 待討論／未排入 Roadmap | 尚缺欄位、流程、圖表、API 與驗收條件；見 `DRAFT.md`。 |
 | 考試成績模組進一步調整 | 待討論／未排入 Roadmap | 考試設定選單化已完成；其他調整範圍尚未定案，見 `DRAFT.md`。 |
 | 英文口說／其他語言學習、非 TOEIC 證照題庫、完整 README | 擱置／未排入 Roadmap | 只放 `DRAFT.md`，不列為當前待開發任務。 |
@@ -28,7 +28,7 @@ updated: 2026-08-18
 
 | 日期 | 範圍 | 問題／處理 | 開發者 | 狀態 | 驗證 |
 | --- | --- | --- | --- | --- | --- |
-| 2026-08-18 | Migration `0084`～`0094` | `0025` 已建立 `exercise_logs.note`，未套用的 `0084` 又執行 `ADD COLUMN note`，Render 啟動 migration 因 `DuplicateColumn` 中斷，導致 `module_goals` 等後續資料表不存在、`0094` 取消功能資料表也未刪除。已移除 0084 的重複加欄並補回歸測試。 | Codex | 已 commit／待 push、部署 | commit `07e986a`。RED：聚焦測試 1 failed；GREEN：聚焦測試 1 passed。全專案 `pytest -q`：1823 passed、1 項第三方 `pydub` warning；`ruff check .`、`git diff --check` 通過。正式 DB 尚待部署後確認 0084～0094 全數出現在 `schema_migrations`。 |
+| 2026-08-18 | Migration `0084`～`0094` | `0025` 已建立 `exercise_logs.note`，未套用的 `0084` 又執行 `ADD COLUMN note`，Render 啟動 migration 因 `DuplicateColumn` 中斷，導致 `module_goals` 等後續資料表不存在、`0094` 取消功能資料表也未刪除。已移除 0084 的重複加欄並補回歸測試。 | Codex | 完成（已 push／部署） | commit `07e986a`、文件 commit `b67cce0`。RED：聚焦測試 1 failed；GREEN：聚焦測試 1 passed。全專案 `pytest -q`：1823 passed、1 項第三方 `pydub` warning；`ruff check .`、`git diff --check` 通過。Render 於 12:25 明確記錄 0084～0094 共 11 筆全數完成，服務正常啟動。 |
 
 ## 歷史時程與任務紀錄
 
@@ -36,6 +36,7 @@ updated: 2026-08-18
 
 | 日期 | 對應 FR | 任務內容 | 開發者 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- | --- |
+| 2026-08-18 | FR-6a／FR-6b／FR-51～FR-53 | 移除最後五個 Slash Command：`/rule`、`/my_toggles`、`/set_toggle`、`/set_family_birthday`、`/friend_chat`；同步刪除舊版本人／代管功能開關與家人生日文字狀態機，保留對應選單與「陪我聊聊」自然語言入口 | Codex | 程式與文件完成／待 Robin 測試 | 聚焦 Router／Commands 測試 206 passed；全專案 `pytest -q`：1785 passed、1 項第三方 `pydub` warning；`ruff check .` 與 `git diff --check` 通過。 |
 | 2026-08-18 | FR-6c／FR-77 | 功能模式 10 分鐘逾時、草稿 30 分鐘保護、跨功能三選一、草稿恢復二選一與固定別名選單導引；移除客訴、持久化知識庫、逐則對話與長摘要的執行程式、Mobile 分析入口及相關測試 | Codex | 完成（已 push／部署／實機驗收） | commit `1601f34`。Codex 全專案 `pytest -q`：1822 passed、1 項第三方 `pydub` warning；`ruff check .`、`git diff --check` 通過，Robin 本機亦回報測試通過。正式盤點：`complaints` 0 筆、`knowledge_base` 5 筆、`conversation_logs` 180 筆、`conversation_summaries` 1 筆，均僅外鍵指向 `users.id`。Robin 已二次核准 `0094_drop_cancelled_chat_tables.sql`，並明確決定不留備份、直接刪除；舊 migration 保留，`0094` 不使用 `CASCADE`。 |
 | 2026-08-18 | 一般對話 FR-1～FR-17 | 一般對話縮限與媒體防呆：改為不落地的 10 分鐘短期上下文；停止正式路由的知識庫、逐則對話與長摘要讀寫；圖片依說明處理或預設整理；語音／音檔先確認轉錄；長按語音超時鎖定改為 5 分鐘並取消 15 分鐘修正限制；音檔不限時；影片及其他檔案統一拒絕 | Codex | 完成（已 push／實機驗收；部署狀態未單獨回報） | commit `5c0c093`、文件 commit `e78b01c`（2026-08-18）。Codex 全專案 `pytest -q`：1849 passed、19 skipped、1 項第三方 `pydub` warning；Robin 已完成 push 與 Telegram 實機驗收，結果正常。19 項 skip 為已取消的舊知識／清除對話流程測試。三張舊資料表的 DROP 尚未建立，須完成正式資料量盤點並取得 Robin 二次核准；固定拒絕文案為「我只能處理對話框文字、語音、圖片和音檔喔！」 |
 | 2026-08-18 | FR-1～FR-4a／FR-6e～FR-6g／FR-20a／FR-72a／FR-74b | 功能開關與排程設定選單化：角色分流、三項 Owner 功能開關、個人通知開關、唯讀系統工作、統一重要日子／目標／旅遊日期發送器，並移除未記帳與未完成考題催促 | Codex | 完成（已 push／實機驗收；部署狀態未單獨回報） | commit `669accc`、文件 commit `fe5f828`（2026-08-18）。Robin 已回報 push 並完成 Telegram 實機測試，結果正常；未另行回報 Render 部署狀態。新增 `schedule_settings.py`、`scheduled_notifications.py`、migration `0093` 與對應測試；關閉通知不停止背景工作，關閉功能則停止整個功能。Codex `pytest -q`：1918 passed（1 項第三方 warning）；`ruff check .` 與 `git diff --check` 全數通過。 |
@@ -74,7 +75,7 @@ updated: 2026-08-18
 | 2026-08-15 | FR-6c | 定案 Telegram 功能模式切換、10 分鐘逾時、草稿保護與功能名稱確認入口 | Codex | 完成（已 push／部署／實機驗收） | 2026-08-18 補充確認：模式逾時後草稿保留至 30 分鐘且期間可一般聊天；只有已有輸入的新增／編輯流程算草稿，每位使用者每個功能最多一份且可跨功能並存；再次進入原功能須先顯示草稿摘要並提供繼續／放棄；自然語言採固定名稱／別名，只導向選單、不使用 LLM 猜測或直接異動資料。權限檢查套用選單、Callback、文字／語音名稱偵測與模式切換 |
 | 2026-08-15 | FR-4～FR-8／FR-10～FR-12 | 停用持久化家庭／個人知識庫、逐則對話與長記憶，改用靜態人格 Prompt 及 10 分鐘記憶體上下文 | Codex | 完成（已 push／部署／實機驗收） | 對應路由、流程與三張資料表已納入 FR-77 Phase 6 清理；DROP 前仍須完成依賴、備份與回滾審核 |
 | 2026-08-15 | FR-2／FR-9a／FR-9b | 縮限 Telegram 一般對話為個人資料彈性查詢、內容整理分析及功能導引；正式資料異動一律走選單 | Codex | 完成（已 push／部署／實機驗收） | 持久化知識庫與對話記憶已另行定案停用，只保留 10 分鐘記憶體上下文 |
-| 2026-08-15 | FR-6a／FR-6b | Telegram 除 `/start` 外全面取消 Slash Commands，所有一般與 Owner 操作改由權限化選單及引導式對話 | Codex | 部分完成／待清理 | 大多數功能已選單化，但 Router 仍保留 `/rule`、`/my_toggles`、`/set_toggle`、`/set_family_birthday`、`/friend_chat`；自然語言／語音功能名稱確認入口仍保留。 |
+| 2026-08-15 | FR-6a／FR-6b | Telegram 除 `/start` 外全面取消 Slash Commands，所有一般與 Owner 操作改由權限化選單及引導式對話 | Codex | 完成（2026-08-18） | 最後五個舊指令及兩套過時文字狀態機已移除；自然語言／語音功能名稱確認入口仍保留。 |
 | 2026-08-15 | FR-5／FR-6／FR-56 | Telegram「使用規則」改為固定模板選單並精簡文案；取消 `/function` 與功能總覽／細節追問 | Codex | 完成（已 push／部署／實機驗收） | 精簡模板沿用於首次綁定歡迎，刪除條目後重新連號 |
 | 2026-08-15 | | 建立新專案與未來新功能的資料模型準則，並明定本專案既有表不因整理目的刪除重建 | Codex | 完成 | 同步 AGENTS、通用 Template 與 DB Schema Reference；純文件治理，未執行 Migration |
 | 2026-08-15 | FR-2～FR-4／FR-4a～FR-4d | Phase 6 第一批（認證／使用者綁定）：新增 `nickname`／`family_title`／`is_active`、通關密碼 24 小時到期與 5 次錯誤鎖定 30 分鐘、`create_user_and_invite()`／`resend_passcode()`／`set_user_active()` | Claude | 完成（已部署／實機驗收） | 範圍刻意只做後端資料模型與核心驗證邏輯，Owner「權限管理」選單化流程延後到下一批（Telegram 選單與狀態機）一起做，避免與選單重構混在同一不可回退批次；`try_bind_invite_code()` 對外行為相容，`router.py` 呼叫端未變動；鎖定計數存 process 記憶體不落地（理由見 db_schema.md 0083 條目）；新增 `tests/bot/test_auth.py` 27 項測試全數通過，Robin 本機亦已覆核通過。**2026-08-15 追加修正**：`0083` 把 `invite_codes.expires_at` 改 NOT NULL 後，發現既有 `/set_invite_codes` 指令流程（`src/bot/commands.py`）未帶該欄位會直接寫入失敗，已補上 `expires_at`／`family_title`／`is_active`，屬本批次內部迴歸修正，未變更該指令對外行為。**2026-08-15 Robin 實機確認**：Render 部署後 Migration `0083` 已自動套用，`/set_invite_codes` 寫入正常、家人帳號輸入密碼綁定成功 |
@@ -256,6 +257,7 @@ updated: 2026-08-18
 
 | 日期 | 版本 / commit | 異動摘要 | 開發者 |
 | --- | --- | --- | --- |
+| 2026-08-18 | `b67cce0` | 補記 0084 Migration 修復 commit、測試與待部署狀態 | Codex |
 | 2026-08-18 | `07e986a` | 修正 0084 重複新增 `exercise_logs.note`，補回歸測試並同步 migration 實際狀態 | Codex |
 | 2026-08-18 | `1601f34` | 完成 FR-6c 草稿保護、固定別名入口與 FR-77 取消功能清理，新增經核准的 `0094` 刪表 migration | Codex |
 | 2026-08-18 | `f7cd89c` | 定案 FR-6c 草稿保護細節，取消 NFR-14～NFR-15 架構遷移並保留 FR-77 清理範圍 | Codex |
@@ -410,6 +412,7 @@ updated: 2026-08-18
 
 | 日期 | Branch／版本 | 遠端 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- |
+| 2026-08-18 | `main`／`07e986a`＋`b67cce0` | GitHub | 完成 | 08/18 Robin 已推版，Render 隨後成功套用 0084～0094 |
 | 2026-08-18 | `main`／`1601f34`＋`0a857cc` | GitHub | 完成 | 08/18 Robin 已推版，並完成 Telegram 實機驗收；`origin/main` 已確認 |
 | 2026-08-18 | `main`／`5c0c093`＋`e78b01c` | GitHub | 完成 | 08/18 Robin 已推版，並完成 Telegram 實機驗收 |
 | 2026-08-18 | `main`／`669accc`＋`fe5f828` | GitHub | 完成 | 08/18 Robin 已推版，並完成 Telegram 實機驗收 |
@@ -444,8 +447,9 @@ updated: 2026-08-18
 
 | 日期 | 版本／範圍 | 環境 | 狀態 | 驗證 |
 | --- | --- | --- | --- | --- |
-| 2026-08-18 | FR-6c／FR-77（commit `1601f34`，migration `0094`） | Render 正式環境／Telegram 實機 | 部分完成 | Robin 已完成程式流程實機驗收；DB 查核確認 0094 被 0084 失敗阻塞，四張取消功能資料表尚未刪除 |
-| 2026-08-18 | 功能開關與排程、康復通知、考試設定、一般對話 | Render 正式環境／Telegram 實機 | 部分完成 | Robin 已分批完成程式流程實機驗收；DB 查核確認 `0091`～`0094` 均未套用，待修復 0084 後依序補套 |
+| 2026-08-18 | Migration 0084～0094 修復（commit `07e986a`） | Render 正式環境／Neon | 完成 | 12:25 Render 啟動紀錄確認 11 筆 migration 依序完成，服務正常啟動；0094 已執行取消功能資料表清理 |
+| 2026-08-18 | FR-6c／FR-77（commit `1601f34`，migration `0094`） | Render 正式環境／Telegram 實機 | 完成 | Robin 已完成程式流程實機驗收；0094 已於 12:25 成功套用 |
+| 2026-08-18 | 功能開關與排程、康復通知、考試設定、一般對話 | Render 正式環境／Telegram 實機 | 完成 | Robin 已分批完成程式流程實機驗收；`0091`～`0094` 已於 12:25 成功套用 |
 | 2026-08-17 | FR-47／FR-47a（運動紀錄改版批次2，commit `a6fd474`） | Render＋Vercel 正式環境／Telegram 實機＋Mobile 實體手機 | 完成 | Robin 已確認並完成實機驗收 |
 | 2026-08-17 | FR-45／FR-46（日常紀錄－體態批次1，commit `30c5303`） | Render 正式環境／Telegram 實機 | 完成 | Robin 已確認並完成實機驗收 |
 | 2026-08-16 | FR-31／FR-31a／FR-31b／FR-32／FR-56e／FR-66a（Phase 6 第二批 2f，commit `eabed3b`） | Render 正式環境／Telegram 實機 | 完成 | Robin 已確認並完成實機驗收（選單新增、自然語言入口、摘要確認按鈕、清單按鈕標記完成/取消、舊指令失效皆正常） |

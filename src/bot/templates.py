@@ -1,6 +1,6 @@
 """靜態文字範本，皆不經過 LLM 生成（節省 Token，且措辭已經 Robin 逐字核准）。"""
 
-# 對應 robinson SPEC.md 附錄 A，FR-6d（綁定成功歡迎訊息）與 FR-55（/rule）共用同一份文案。
+# 對應 robinson SPEC.md 附錄 A，FR-6d（綁定成功歡迎訊息）與 FR-55（使用規則選單）共用同一份文案。
 # 2026-08-18 Robin 直接於對話中核准的最終逐字版本（非 SPEC 先行流程，見對話記錄與
 # docs/ADR/discuss/robinson.md 2026-08-18 條目）；SPEC.md FR-5 已同步更新以反映這份文字為現行
 # 已套用版本。若要再調整措辭，須先更新 robinson SPEC.md 附錄 A 並記錄變更，不可直接改這裡。

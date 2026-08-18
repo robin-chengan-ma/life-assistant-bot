@@ -2,8 +2,7 @@
 FR-53f、ADR-30）。
 
 負責：固定節日（元旦/父親節/母親節/掃墓提醒/中秋/端午/除夕/初一）的西曆日期計算、生日比對、
-收件人範圍與文案分流、年度推播去重判斷與推播。不處理任何 Telegram 對話流程，那是
-src/bot/commands.py 的責任（本模組只有「設定家人生日」用到的資料操作函式跟 commands.py 共用）。
+收件人範圍與文案分流、年度推播去重判斷與推播。不處理 Telegram 對話流程。
 
 2026-08-04 經 AskUserQuestion 確認的設計決策：
 ① 農曆節日（除夕/初一/中秋/端午）改用 `lunarcalendar` 套件即時計算西曆日期（純 Python 計算、
@@ -22,8 +21,7 @@ src/bot/commands.py 的責任（本模組只有「設定家人生日」用到的
 
 家人生日資料來源：`users.birthday`（`0028_add_birthday_to_users.sql`），只比對月/日，不比對年份
 （`_matches_month_day()`）；已知的 5 位家人生日已由 Robin 提供並寫入 `0030_seed_family_birthdays.sql`，
-其餘家人（弟媳/大妹婿/小妹婿/阿姨等）的生日待 Robin 之後用「設定家人生日」指令自行補上
-（`set_family_birthday()`／`format_family_member_prompt()`，見 `commands.py`）。
+其餘生日若要新增提醒，一律由「重要日子設定」建立，不再寫入 `users.birthday`。
 """
 import logging
 from datetime import date, datetime, timedelta, timezone
@@ -300,55 +298,3 @@ def check_and_push_important_notifications(
         _mark_sent(db, notification_key, year)
         if calendar_client is not None:
             _create_all_day_calendar_event(calendar_client, f"{birthday_user['role']} 生日", today)
-
-
-# ---------------------------------------------------------------------------
-# 設定家人生日（Owner 專屬，補齊尚未知道生日的家人資料）
-# ---------------------------------------------------------------------------
-
-
-def list_family_members(db: CloudSQLClient) -> list[dict]:
-    """查詢所有已綁定的使用者（含 Robin），供「設定家人生日」流程選擇對象。"""
-    return _get_all_bound_users(db)
-
-
-def format_family_member_prompt(members: list[dict]) -> str:
-    """組出讓使用者選擇要設定生日的家人編號清單文字。"""
-    if not members:
-        return "目前還沒有任何已綁定的使用者喔！"
-    lines = ["要設定誰的生日呢？請幫我選一個：", ""]
-    for index, member in enumerate(members, start=1):
-        birthday = member.get("birthday")
-        birthday_part = f"（目前：{birthday:%m/%d}）" if birthday else "（尚未設定）"
-        lines.append(f"{index}. {member['role']}{birthday_part}")
-    return "\n".join(lines)
-
-
-def parse_birthday_input(text: str) -> date | None:
-    """把使用者輸入的生日文字解析成日期；接受「YYYY-MM-DD」「YYYY/M/D」或只給「M/D」
-    （不確定出生年份時可以只給月/日，年份用占位年 1900，比對生日一律只看月/日不看年份）。
-    無法解析或日期不合理（例如 2/30）一律回傳 None，交由呼叫端反問。
-    """
-    text = text.strip()
-    for separator in ("-", "/"):
-        parts = text.split(separator)
-        if len(parts) == 3:
-            year_str, month_str, day_str = parts
-            if year_str.isdigit() and month_str.isdigit() and day_str.isdigit():
-                try:
-                    return date(int(year_str), int(month_str), int(day_str))
-                except ValueError:
-                    return None
-        if len(parts) == 2:
-            month_str, day_str = parts
-            if month_str.isdigit() and day_str.isdigit():
-                try:
-                    return date(1900, int(month_str), int(day_str))
-                except ValueError:
-                    return None
-    return None
-
-
-def set_birthday(db: CloudSQLClient, user_id: int, birthday: date) -> None:
-    """設定/更新使用者的生日（FR-53）。"""
-    db.update("users", {"birthday": birthday}, where="id = %s", params=(user_id,))

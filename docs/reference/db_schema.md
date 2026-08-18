@@ -120,7 +120,7 @@ CREATE TABLE invite_codes (
 
 | Migration | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `0094_drop_cancelled_chat_tables.sql` | 未套用（被 0084 阻塞） | FR-77 | 將移除 `knowledge_base`、`conversation_logs`、`conversation_summaries`；舊 migration 保留不改寫，且不使用 `CASCADE` |
+| `0094_drop_cancelled_chat_tables.sql` | 已套用 | FR-77 | 已移除 `knowledge_base`、`conversation_logs`、`conversation_summaries`；舊 migration 保留不改寫，且未使用 `CASCADE` |
 
 ## 功能開關系統
 
@@ -150,7 +150,7 @@ CREATE TABLE feature_toggles (
 
 | 資料表 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `notification_preferences` | 待套用（0093 被 0084 阻塞） | FR-6f～FR-6g／FR-20a | 每位使用者、每種通知的接收開關與可選推播小時；關閉通知不停止來源功能或背景工作 |
+| `notification_preferences` | 已套用 | FR-6f～FR-6g／FR-20a | 每位使用者、每種通知的接收開關與可選推播小時；關閉通知不停止來源功能或背景工作 |
 
 ```sql
 CREATE TABLE notification_preferences (
@@ -264,7 +264,7 @@ CREATE INDEX idx_mood_journals_user_id ON mood_journals (user_id);
 
 | Migration | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `0094_drop_cancelled_chat_tables.sql` | 未套用（被 0084 阻塞） | FR-77 | 同批將移除空的 `complaints`；不使用 `CASCADE` |
+| `0094_drop_cancelled_chat_tables.sql` | 已套用 | FR-77 | 同批已移除空的 `complaints`；未使用 `CASCADE` |
 
 ## 記帳
 
@@ -316,12 +316,12 @@ CREATE TABLE budget_overrides (
 | 資料表 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
 | `body_weight_logs` | 已建立 | FR-46 | 體重歷史紀錄，`weight_kg >= 40` 為最後防線檢查 |
-| `exercise_categories` | 待套用（0084 修復中） | FR-47a | 全域共用運動類別表，新增自訂類別採正規化比對＋LLM 語意判斷兩段式同義詞合併 |
-| `exercise_logs` | 0084 前舊結構 | FR-47／FR-47a、FR-64 | 目前仍有 `input_mode`／`training_details` 且尚無 `category_id`；0084 套用後才切換為新版單一表單結構 |
+| `exercise_categories` | 已套用 | FR-47a | 全域共用運動類別表，新增自訂類別採正規化比對＋LLM 語意判斷兩段式同義詞合併 |
+| `exercise_logs` | 已套用 0084 新結構 | FR-47／FR-47a、FR-64 | 已移除 `input_mode`／`training_details` 並新增 `category_id`；使用新版單一表單結構 |
 | `diet_logs` | 已建立 | FR-48、FR-64 | 飲食與飲水共用一表，營養數值可由 AI 估算或人工輸入並保留來源 |
 | `body_goals` | 已建立 | FR-45～FR-48／FR-72a | 體重/運動/飲食三子功能共用一表（`goal_type` 區分）；`important_day_id` 連結期限事件；`target_unit`／`target_direction` 為批次3新增，供飲食目標存結構化單位與自動達成判斷方向 |
-| `module_goals` | 待套用（0085 被 0084 阻塞） | FR-41b／FR-73a／FR-45a（批次3） | 記帳／收藏清單通用目標表（`module_key` 區分），設計精神比照 `body_goals`；`important_day_id` 連結期限事件；`sync_to_calendar`／`google_calendar_event_id` 為批次3補做新增，供 Google Calendar 同步 |
-| `goal_summaries` | 待套用（0086 被 0084 阻塞） | FR-45a（批次3） | 🎯 目標追蹤每日排程（01:00）快取摘要，`goal_source` 區分來源表（`body_goals`／`module_goals`／`certificate_goals`），只保留最新一份快取 |
+| `module_goals` | 已套用 | FR-41b／FR-73a／FR-45a（批次3） | 記帳／收藏清單通用目標表（`module_key` 區分），設計精神比照 `body_goals`；`important_day_id` 連結期限事件；`sync_to_calendar`／`google_calendar_event_id` 為批次3補做新增，供 Google Calendar 同步 |
+| `goal_summaries` | 已套用 | FR-45a（批次3） | 🎯 目標追蹤每日排程（01:00）快取摘要，`goal_source` 區分來源表（`body_goals`／`module_goals`／`certificate_goals`），只保留最新一份快取 |
 
 <details>
 <summary>SQL 與設計理由</summary>
@@ -510,7 +510,7 @@ CREATE TABLE important_notifications_log (
 | `certificate_questions`（原 `toeic_questions`） | 已建立 | FR-25a～FR-25c | 證照題庫軌道一（照片/音檔上傳建題），2026-08-07 泛用化支援任意證照類型 |
 | `toeic_vocab_questions` | 已建立 | FR-25d、FR-25e | TOEIC 題庫軌道二（Gemini 即時生成單字題），刻意維持 TOEIC 專用不隨軌道一泛用化 |
 | `answer_logs` | 已建立 | FR-27、FR-29 | 作答紀錄，跨軌道一/二共用一表；`assignment_id`（2026-08-08 追加）精準對應「今天這一批」 |
-| `certificate_profiles` | 待套用（0091 被 0084 阻塞） | FR-30a | Owner 證照名冊；TOEIC 為內建項目，自訂證照以停用保留歷史資料 |
+| `certificate_profiles` | 已套用 | FR-30a | Owner 證照名冊；TOEIC 為內建項目，自訂證照以停用保留歷史資料 |
 | `certificate_goals` | 已建立 | FR-24／FR-72a | 證照準備目標（UPSERT，每人每 `exam_type` 一筆）；`important_day_id` 連結考試日期事件 |
 | `exam_official_scores` | 已建立／待擴充 | FR-30／FR-30b | 正式應考成績，僅新增與查詢；`0091` 新增選填補充內容 |
 | `certificate_daily_settings` | 已建立／待擴充 | FR-26／FR-30a | 每日出題數量與新題／複習比例；`0091` 新增 TOEIC 三軌固定題數 |

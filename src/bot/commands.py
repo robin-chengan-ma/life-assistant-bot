@@ -21,10 +21,8 @@ from src.bot import (
     job_search,
     menu,
     mood,
-    notifications,
     privacy,
     templates,
-    toggles,
     youtube,
 )
 from src.bot import todo as todo_module
@@ -66,7 +64,7 @@ def _voice_blocked_final_confirm_reply() -> str:
 
 
 def handle_rule() -> str:
-    """/rule：回傳規範文本，不經過 LLM 生成。"""
+    """「📋 使用規則」選單：回傳規範文本，不經過 LLM 生成。"""
     return templates.APPENDIX_A_TEXT
 
 
@@ -198,83 +196,6 @@ def handle_permission_step(
             return "已恢復該使用者，對方需要重新登入或重新綁定。"
         new_code = auth.resend_passcode(db, target_user_id)
         return f"已重發通關密碼：{new_code}\n（舊密碼已立即失效，此密碼僅能使用一次，24 小時內有效）"
-
-    raise ValueError(f"未知的對話狀態：{state}")
-
-
-def start_my_toggles(
-    db: CloudSQLClient,
-    state_store: ConversationStateStore,
-    telegram_user_id: int,
-    user_id: int,
-) -> str:
-    """/my_toggles：補齊使用者自己的預設開關資料，列出目前狀態並進入切換模式。"""
-    toggles.ensure_default_toggles(db, user_id)
-    toggle_list = toggles.get_toggles(db, user_id)
-    state_store.set(telegram_user_id, {"flow": "toggle", "step": "awaiting_index", "target_user_id": user_id})
-    return toggles.format_toggle_list(toggle_list)
-
-
-def start_set_toggle(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int) -> str:
-    """/set_toggle：僅 Owner 觸發，列出所有已綁定的非 Owner 使用者供選擇要代管誰的開關。"""
-    candidates = [u for u in db.select("users") if u["telegram_user_id"] is not None and not u["is_owner"]]
-    if not candidates:
-        return "目前還沒有其他家人綁定成功，沒有可以代管的對象喔！"
-
-    state_store.set(
-        telegram_user_id,
-        {"flow": "set_toggle", "step": "awaiting_user_selection", "candidates": [u["id"] for u in candidates]},
-    )
-    lines = ["請問要調整哪一位家人的功能開關？", ""]
-    for index, user in enumerate(candidates, start=1):
-        lines.append(f"{index}. {user['role']}")
-    return "\n".join(lines)
-
-
-def handle_toggle_step(
-    db: CloudSQLClient,
-    state_store: ConversationStateStore,
-    telegram_user_id: int,
-    text: str,
-) -> str:
-    """依目前對話狀態處理 /my_toggles、/set_toggle 流程中輸入的下一句話。"""
-    state = state_store.get(telegram_user_id)
-    step = state.get("step") if state else None
-
-    if step == "awaiting_user_selection":
-        if text in _EXIT_PHRASES:
-            state_store.clear(telegram_user_id)
-            return "好的，已結束功能開關代管模式！"
-
-        candidates = state["candidates"]
-        if not text.isdigit() or not (1 <= int(text) <= len(candidates)):
-            return f"請輸入 1～{len(candidates)} 之間的編號喔！"
-
-        target_user_id = candidates[int(text) - 1]
-        toggles.ensure_default_toggles(db, target_user_id)
-        toggle_list = toggles.get_toggles(db, target_user_id)
-        state_store.set(
-            telegram_user_id,
-            {"flow": "set_toggle", "step": "awaiting_index", "target_user_id": target_user_id},
-        )
-        return toggles.format_toggle_list(toggle_list)
-
-    if step == "awaiting_index":
-        if text in _EXIT_PHRASES:
-            state_store.clear(telegram_user_id)
-            return "好的，已結束功能開關設定模式！"
-
-        target_user_id = state["target_user_id"]
-        if not text.isdigit():
-            return "請輸入數字編號喔！"
-
-        result = toggles.toggle_by_index(db, target_user_id, int(text))
-        if result is None:
-            return "編號不存在，請重新輸入喔！"
-
-        status = "開啟" if result["is_enabled"] else "關閉"
-        toggle_list = toggles.get_toggles(db, target_user_id)
-        return f"已將「{result['name']}」切換為{status}！\n\n{toggles.format_toggle_list(toggle_list)}"
 
     raise ValueError(f"未知的對話狀態：{state}")
 
@@ -3180,75 +3101,6 @@ def handle_goal_delete(
 
 
 # ---------------------------------------------------------------------------
-# 設定家人生日（2026-08-04，Step 2.3，見 robinson SPEC.md FR-53）
-#
-# 僅 Owner（Robin）能觸發，用來補齊 `0030_seed_family_birthdays.sql` 沒有涵蓋到的家人生日
-# （弟媳/大妹婿/小妹婿/阿姨等）。流程比照 /set_toggle：先列出所有已綁定使用者供選編號
-# （pending_family_birthday_select），選定後再問生日（pending_family_birthday_date），
-# 格式解析交給 notifications.parse_birthday_input()，失敗就停留在原地反問，不清空狀態。
-# ---------------------------------------------------------------------------
-
-
-def start_set_family_birthday(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int) -> str:
-    """/set_family_birthday：僅 Owner 觸發，列出所有已綁定使用者供選擇要設定誰的生日。"""
-    members = notifications.list_family_members(db)
-    if not members:
-        return "目前還沒有任何已綁定的使用者，沒有可以設定生日的對象喔！"
-
-    state_store.set(
-        telegram_user_id,
-        {
-            "flow": "pending_family_birthday_select",
-            "candidates": [member["id"] for member in members],
-        },
-    )
-    return notifications.format_family_member_prompt(members)
-
-
-def handle_family_birthday_select_step(
-    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, text: str
-) -> str:
-    """處理 `pending_family_birthday_select` 狀態下使用者輸入的編號，選定要設定生日的對象。"""
-    state = state_store.get(telegram_user_id)
-    if text in _EXIT_PHRASES:
-        state_store.clear(telegram_user_id)
-        return "好的，已結束設定家人生日模式！"
-
-    candidates = state["candidates"]
-    if not text.isdigit() or not (1 <= int(text) <= len(candidates)):
-        return f"請輸入 1～{len(candidates)} 之間的編號，或輸入「結束」離開喔！"
-
-    target_user_id = candidates[int(text) - 1]
-    state_store.set(
-        telegram_user_id,
-        {"flow": "pending_family_birthday_date", "target_user_id": target_user_id},
-    )
-    return "請問生日是幾月幾號呢？可以直接給「YYYY-MM-DD」，不確定出生年份的話給「M/D」也可以！"
-
-
-def handle_family_birthday_date_step(
-    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, text: str
-) -> str:
-    """處理 `pending_family_birthday_date` 狀態下使用者輸入的生日文字，解析失敗就停留原地反問。"""
-    state = state_store.get(telegram_user_id)
-    if text in _EXIT_PHRASES:
-        state_store.clear(telegram_user_id)
-        return "好的，已結束設定家人生日模式！"
-
-    birthday = notifications.parse_birthday_input(text)
-    if birthday is None:
-        return "生日格式看不懂喔，麻煩用「YYYY-MM-DD」或「M/D」再給我一次！"
-
-    target_user_id = state["target_user_id"]
-    notifications.set_birthday(db, target_user_id, birthday)
-    state_store.clear(telegram_user_id)
-
-    target_user = db.select("users", where="id = %s", params=(target_user_id,), fetch_one=True)
-    role = target_user["role"] if target_user else "這位家人"
-    return f"已經記下 {role} 的生日了，之後到了會自動提醒大家喔！"
-
-
-# ---------------------------------------------------------------------------
 # 證照題庫作答與彈性排程調整（2026-08-08 追加，Step 3.3，見 robinson SPEC.md FR-27、FR-28、
 # FR-26、ADR-20 決策 3～6）
 #
@@ -4047,7 +3899,7 @@ def handle_youtube_topic_remove_confirmed(
 
 
 def start_friend_chat(db: CloudSQLClient, llm_client, user_id: int) -> str:
-    """「陪我聊聊」／`/friend_chat`：被動觸發的好友模式陪伴聊天（FR-51、FR-52，ADR-22）。
+    """「陪我聊聊」：被動觸發的好友模式陪伴聊天（FR-51、FR-52，ADR-22）。
 
     全體使用者皆可用（`friend_mode` 開關 `owner_only=False`），單輪生成完整回覆，不走多輪對話
     狀態機（見 ADR-22 後果）；動態讀取這位使用者已開啟且近期有資料的所有功能模組近況（見

@@ -66,14 +66,17 @@ def test_unknown_user_with_empty_text_gets_prompt(fake_db, monkeypatch):
 
 # --- 已綁定的一般使用者 ---
 
-def test_known_family_member_can_trigger_rule(fake_db, monkeypatch):
+def test_removed_slash_commands_fall_back_to_chat_core(fake_db, monkeypatch):
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     store = ConversationStateStore()
+    llm_client = _FakeLLMClient(response_text="我不太懂這個指令耶！")
 
-    reply = router.handle_message(fake_db, store, FAMILY_ID, "/rule")
+    for command in ("/rule", "/my_toggles", "/set_toggle", "/set_family_birthday", "/friend_chat"):
+        reply = router.handle_message(fake_db, store, FAMILY_ID, command, llm_client=llm_client)
 
-    assert reply == templates.APPENDIX_A_TEXT
+        assert reply == "我不太懂這個指令耶！"
+        assert store.get(FAMILY_ID) is None
 
 
 def test_known_family_member_cannot_trigger_owner_only_setup_flow(fake_db, monkeypatch):
@@ -117,9 +120,9 @@ def test_owner_first_message_creates_owner_row(fake_db, monkeypatch):
     monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
     store = ConversationStateStore()
 
-    reply = router.handle_message(fake_db, store, ROBIN_ID, "/rule")
+    reply, _keyboard = router.handle_message(fake_db, store, ROBIN_ID, "/start")
 
-    assert reply == templates.APPENDIX_A_TEXT
+    assert reply == menu.MAIN_MENU_TEXT
     owner_row = fake_db.select("users", where="telegram_user_id = %s", params=(ROBIN_ID,), fetch_one=True)
     assert owner_row is not None
     assert owner_row["is_owner"] is True
@@ -276,112 +279,6 @@ def test_family_member_binding_auto_creates_default_toggles(fake_db, monkeypatch
     bound = fake_db.select("users", where="telegram_user_id = %s", params=(FAMILY_ID,), fetch_one=True)
     rows = fake_db.select("feature_toggles", where="user_id = %s", params=(bound["id"],))
     assert len(rows) == 10
-
-
-def test_known_family_member_can_trigger_my_toggles(fake_db, monkeypatch):
-    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
-    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
-    store = ConversationStateStore()
-
-    reply = router.handle_message(fake_db, store, FAMILY_ID, "我的功能設定")
-
-    assert "1. " in reply
-    assert store.get(FAMILY_ID)["flow"] == "toggle"
-
-
-def test_known_family_member_toggle_flow_continues_via_router(fake_db, monkeypatch):
-    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
-    user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
-    store = ConversationStateStore()
-    router.handle_message(fake_db, store, FAMILY_ID, "/my_toggles")
-
-    reply = router.handle_message(fake_db, store, FAMILY_ID, "1")
-
-    assert "切換為" in reply
-    assert store.get(FAMILY_ID) == {"flow": "toggle", "step": "awaiting_index", "target_user_id": user_id}
-
-
-def test_known_family_member_cannot_trigger_owner_only_set_toggle(fake_db, monkeypatch):
-    """權限邊界測試：家人輸入 Owner 專屬 /set_toggle，不應被授予代管他人開關的能力（改落入一般聊天核心）。"""
-    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
-    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
-    store = ConversationStateStore()
-    llm_client = _FakeLLMClient(response_text="我不太懂這個指令耶！")
-
-    reply = router.handle_message(fake_db, store, FAMILY_ID, "/set_toggle", llm_client=llm_client)
-
-    assert reply == "我不太懂這個指令耶！"
-    assert store.get(FAMILY_ID) is None
-
-
-def test_owner_can_trigger_my_toggles_for_self(fake_db, monkeypatch):
-    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
-    store = ConversationStateStore()
-
-    reply = router.handle_message(fake_db, store, ROBIN_ID, "/my_toggles")
-
-    assert "1. " in reply
-    owner_row = fake_db.select("users", where="telegram_user_id = %s", params=(ROBIN_ID,), fetch_one=True)
-    assert store.get(ROBIN_ID) == {"flow": "toggle", "step": "awaiting_index", "target_user_id": owner_row["id"]}
-
-
-def test_owner_set_toggle_with_no_family_bound_yet(fake_db, monkeypatch):
-    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
-    store = ConversationStateStore()
-
-    reply = router.handle_message(fake_db, store, ROBIN_ID, "/set_toggle")
-
-    assert "沒有" in reply
-    assert store.get(ROBIN_ID) is None
-
-
-def test_owner_can_delegate_toggle_for_family_member(fake_db, monkeypatch):
-    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
-    dad_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
-    store = ConversationStateStore()
-
-    select_reply = router.handle_message(fake_db, store, ROBIN_ID, "/set_toggle")
-    list_reply = router.handle_message(fake_db, store, ROBIN_ID, "1")
-    toggle_reply = router.handle_message(fake_db, store, ROBIN_ID, "1")
-
-    assert "爸爸" in select_reply
-    assert "1. " in list_reply
-    assert "切換為" in toggle_reply
-    rows = fake_db.select("feature_toggles", where="user_id = %s", params=(dad_id,))
-    assert any(not r["is_enabled"] for r in rows)
-
-
-# --- 設定家人生日（FR-53，Step 2.3）---
-
-
-def test_known_family_member_cannot_trigger_owner_only_set_family_birthday(fake_db, monkeypatch):
-    """權限邊界測試：家人輸入 Owner 專屬 /set_family_birthday，不應被授予設定生日的能力（改落入一般聊天核心）。"""
-    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
-    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
-    store = ConversationStateStore()
-    llm_client = _FakeLLMClient(response_text="我不太懂這個指令耶！")
-
-    reply = router.handle_message(fake_db, store, FAMILY_ID, "/set_family_birthday", llm_client=llm_client)
-
-    assert reply == "我不太懂這個指令耶！"
-    assert store.get(FAMILY_ID) is None
-
-
-def test_owner_can_complete_set_family_birthday_flow(fake_db, monkeypatch):
-    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
-    sister_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "大妹婿", "is_owner": False})
-    store = ConversationStateStore()
-
-    select_reply = router.handle_message(fake_db, store, ROBIN_ID, "設定家人生日")
-    date_reply = router.handle_message(fake_db, store, ROBIN_ID, "1")
-    save_reply = router.handle_message(fake_db, store, ROBIN_ID, "1988-11-20")
-
-    assert "大妹婿" in select_reply
-    assert "幾月幾號" in date_reply
-    assert "大妹婿" in save_reply
-    assert store.get(ROBIN_ID) is None
-    row = fake_db.select("users", where="id = %s", params=(sister_id,), fetch_one=True)
-    assert row["birthday"] == date(1988, 11, 20)
 
 
 # --- 一般聊天核心（docs/specs/chat-core/SPEC.md）---
@@ -1348,7 +1245,7 @@ def test_pending_image_confirm_flow_continues_via_router(fake_db, monkeypatch):
 
 
 class _FakeVoiceClient:
-    def __init__(self, response_text="/rule"):
+    def __init__(self, response_text="我要記帳"):
         self.response_text = response_text
         self.last_audio_bytes = None
         self.last_filename = None
@@ -1437,7 +1334,7 @@ def test_handle_voice_message_allows_voice_again_after_lockout_expires(fake_db, 
     store = ConversationStateStore()
     lockout_store = ConversationStateStore()
     voice.mark_duration_violation(lockout_store, FAMILY_ID, now=datetime.now(timezone.utc) - timedelta(minutes=16))
-    voice_client = _FakeVoiceClient(response_text="/rule")
+    voice_client = _FakeVoiceClient(response_text="我要記帳")
 
     reply, keyboard = router.handle_voice_message(
         fake_db, store, FAMILY_ID, "voice789", 30,
@@ -1447,12 +1344,12 @@ def test_handle_voice_message_allows_voice_again_after_lockout_expires(fake_db, 
 
     # 2026-08-16（全站語音確認機制）：轉錄成功先貼出文字＋確認按鈕，不直接分派；
     # 按下「✅ 正確，繼續」後才真的接回原本流程並拿到最終回覆。
-    assert "/rule" in reply
+    assert "我要記帳" in reply
     assert keyboard["inline_keyboard"][0][0]["callback_data"] == "voice_confirm:accept"
     assert voice_client.last_audio_bytes == b"raw-ogg"
 
     final_reply, _final_keyboard = router.handle_callback_query(fake_db, store, FAMILY_ID, "voice_confirm:accept")
-    assert final_reply == templates.APPENDIX_A_TEXT
+    assert final_reply == "要進入「記帳」功能嗎？"
 
 
 def test_handle_voice_message_does_not_enforce_lockout_when_store_not_provided(fake_db, monkeypatch):
@@ -1461,18 +1358,18 @@ def test_handle_voice_message_does_not_enforce_lockout_when_store_not_provided(f
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     store = ConversationStateStore()
-    voice_client = _FakeVoiceClient(response_text="/rule")
+    voice_client = _FakeVoiceClient(response_text="我要記帳")
 
     reply, keyboard = router.handle_voice_message(
         fake_db, store, FAMILY_ID, "voice999", 30,
         _FakeTelegramClient(b"raw-ogg"), _FakeGDriveClient(), voice_client,
     )
 
-    assert "/rule" in reply
+    assert "我要記帳" in reply
     assert keyboard["inline_keyboard"][0][0]["callback_data"] == "voice_confirm:accept"
 
     final_reply, _final_keyboard = router.handle_callback_query(fake_db, store, FAMILY_ID, "voice_confirm:accept")
-    assert final_reply == templates.APPENDIX_A_TEXT
+    assert final_reply == "要進入「記帳」功能嗎？"
 
 
 def test_handle_voice_message_allows_immediate_rerecording(fake_db, monkeypatch):
@@ -1530,7 +1427,7 @@ def test_handle_voice_message_transcribes_and_routes_as_text(fake_db, monkeypatc
     fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     store = ConversationStateStore()
     telegram_client = _FakeTelegramClient(b"raw-ogg-bytes")
-    voice_client = _FakeVoiceClient(response_text="/rule")
+    voice_client = _FakeVoiceClient(response_text="我要記帳")
 
     reply, keyboard = router.handle_voice_message(
         fake_db, store, FAMILY_ID, "voice123", 30,
@@ -1538,7 +1435,7 @@ def test_handle_voice_message_transcribes_and_routes_as_text(fake_db, monkeypatc
     )
 
     # 2026-08-16（全站語音確認機制）：轉錄成功先貼出文字＋確認按鈕請使用者確認，不直接分派。
-    assert "/rule" in reply
+    assert "我要記帳" in reply
     assert keyboard["inline_keyboard"][0][0]["callback_data"] == "voice_confirm:accept"
     assert telegram_client.last_file_id == "voice123"
     assert voice_client.last_audio_bytes == b"raw-ogg-bytes"
@@ -1546,9 +1443,9 @@ def test_handle_voice_message_transcribes_and_routes_as_text(fake_db, monkeypatc
     assert len(rows) == 1
     assert rows[0]["media_type"] == "audio"
 
-    # 按下「✅ 正確，繼續」後，轉出來的文字（"/rule"）比照一般文字訊息，走完整的指令分派。
+    # 按下「✅ 正確，繼續」後，轉錄的功能別名比照一般文字訊息走選單導引。
     final_reply, _final_keyboard = router.handle_callback_query(fake_db, store, FAMILY_ID, "voice_confirm:accept")
-    assert final_reply == templates.APPENDIX_A_TEXT
+    assert final_reply == "要進入「記帳」功能嗎？"
 
 
 def test_handle_voice_message_masks_pii_without_persisting_chat(fake_db, monkeypatch):
@@ -1581,7 +1478,7 @@ def test_handle_voice_message_passes_through_mime_type_for_uploaded_audio(fake_d
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     store = ConversationStateStore()
-    voice_client = _FakeVoiceClient(response_text="/rule")
+    voice_client = _FakeVoiceClient(response_text="我要記帳")
 
     router.handle_voice_message(
         fake_db, store, FAMILY_ID, "audio123", 180,
@@ -1596,18 +1493,18 @@ def test_handle_voice_message_passes_through_mime_type_for_uploaded_audio(fake_d
 def test_handle_voice_message_works_for_owner(fake_db, monkeypatch):
     monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
     store = ConversationStateStore()
-    voice_client = _FakeVoiceClient(response_text="/rule")
+    voice_client = _FakeVoiceClient(response_text="我要記帳")
 
     reply, keyboard = router.handle_voice_message(
         fake_db, store, ROBIN_ID, "voice999", 30,
         _FakeTelegramClient(b"raw-ogg"), _FakeGDriveClient(), voice_client,
     )
 
-    assert "/rule" in reply
+    assert "我要記帳" in reply
     assert keyboard["inline_keyboard"][0][0]["callback_data"] == "voice_confirm:accept"
 
     final_reply, _final_keyboard = router.handle_callback_query(fake_db, store, ROBIN_ID, "voice_confirm:accept")
-    assert final_reply == templates.APPENDIX_A_TEXT
+    assert final_reply == "要進入「記帳」功能嗎？"
     owner_row = fake_db.select("users", where="telegram_user_id = %s", params=(ROBIN_ID,), fetch_one=True)
     assert owner_row is not None
 
@@ -1758,7 +1655,7 @@ def test_friend_chat_trigger_dispatches_through_router_for_family_member(fake_db
     store = ConversationStateStore()
     llm_client = _FakeLLMClient(response_text="爸爸最近過得如何呀？")
 
-    reply = router.handle_message(fake_db, store, FAMILY_ID, "/friend_chat", llm_client=llm_client)
+    reply = router.handle_message(fake_db, store, FAMILY_ID, "陪我聊聊", llm_client=llm_client)
 
     assert reply == "爸爸最近過得如何呀？"
     assert "爸爸" in llm_client.last_prompt

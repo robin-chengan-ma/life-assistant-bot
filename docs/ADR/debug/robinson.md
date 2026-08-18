@@ -77,4 +77,6 @@ NameError: name '_parse_date_description' is not defined
 
 **驗證方式**：TDD RED 階段聚焦測試如預期 1 failed；修正後聚焦測試為 1 passed。全專案 `pytest -q` 為 1823 passed、1 項第三方 `pydub` warning；`ruff check .` 與 `git diff --check` 通過。正式環境重新部署後的 0084～0094 套用結果仍待驗證。
 
-**未驗證範圍**：尚未在正式 Neon 執行修正版 migration；部署後必須確認 `schema_migrations` 包含 0084～0094、`module_goals` 等新表存在、四張取消功能資料表已移除，且 Render 不再出現 migration 失敗與 `module_goals` 不存在錯誤。
+**部署驗證**：Robin push `07e986a` 與文件 commit `b67cce0` 後，Render 於 2026-08-18 12:25 依序記錄 0084～0094 共 11 筆 migration 全數完成，接著 Flask 服務正常啟動並通過平台的根路徑 HEAD 檢查。這證明 0084 不再因重複欄位中斷，0085 的 `module_goals` 與 0094 的取消功能資料表清理均已執行。
+
+**未驗證範圍**：尚未另外執行資料庫查詢逐表核對 schema，也尚未觀察下一輪 `/healthz` 背景檢查紀錄；若後續仍出現資料表不存在或 migration 錯誤，需另案排查。

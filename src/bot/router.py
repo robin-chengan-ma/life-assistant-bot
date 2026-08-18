@@ -43,11 +43,6 @@ _VOICE_DURATION_LOCKOUT_REPLY = (
 # 唯一保留的 Slash Command，用於 START 首次驗證及重新顯示主選單；取代舊版 `/set_invite_codes`
 # 的 Owner 建立使用者流程已改為選單驅動，見 commands.start_permission_menu()。
 _START_TRIGGERS = {"/start"}
-_RULE_TRIGGERS = {"/rule", "我要看使用規則"}
-_MY_TOGGLES_TRIGGERS = {"/my_toggles", "我的功能設定"}
-_SET_TOGGLE_TRIGGERS = {"/set_toggle", "設定家人功能開關"}
-# 2026-08-04（Step 2.3，見 robinson SPEC.md FR-53）：Owner 專屬，補齊家人生日資料，設計比照 /set_toggle。
-_SET_FAMILY_BIRTHDAY_TRIGGERS = {"/set_family_birthday", "設定家人生日"}
 # 2026-08-16（Phase 6 第二批 2f）：待辦事項清單查詢全面改選單觸發（「✅ 待辦事項」→「📋 查看
 # 清單」），舊文字觸發詞（/my_todos、「我的待辦事項」）已移除，見 menu.py／commands.py 待辦
 # 事項區塊說明。
@@ -56,7 +51,7 @@ _SET_FAMILY_BIRTHDAY_TRIGGERS = {"/set_family_birthday", "設定家人生日"}
 # 「📝 日常紀錄」→「😊 心情」子選單，見 menu.py `DAILY_LOG_MENU_ITEMS`。
 # 2026-08-08（Step 3.5，見 robinson SPEC.md FR-51、FR-52、ADR-22）：好友模式陪伴聊天，`friend_mode`
 # 開關 owner_only=False，所有使用者皆可用，放在共用觸發詞區塊；單輪生成完整回覆，不需要對話狀態機。
-_FRIEND_CHAT_TRIGGERS = {"/friend_chat", "陪我聊聊"}
+_FRIEND_CHAT_TRIGGERS = {"陪我聊聊"}
 # 2026-08-18（批次5）：記帳全面改選單觸發，舊文字觸發詞（/set_budget、/add_transaction、
 # /backfill_transaction、/my_transactions、/my_finance_summary、/finance_goal、
 # /my_finance_goals 等）已移除，不提供舊指令相容期，入口改為「📝 日常紀錄」→「💰 記帳」子選單，
@@ -217,12 +212,6 @@ def handle_message(
         owner_row = auth.get_or_create_owner(db, telegram_user_id)
         user_id = owner_row["id"]
 
-        if text in _SET_TOGGLE_TRIGGERS:
-            return commands.start_set_toggle(db, state_store, telegram_user_id)
-        if text in _SET_FAMILY_BIRTHDAY_TRIGGERS:
-            return commands.start_set_family_birthday(db, state_store, telegram_user_id)
-        if text in _MY_TOGGLES_TRIGGERS:
-            return commands.start_my_toggles(db, state_store, telegram_user_id, user_id)
         error_resolution_match = _ERROR_RESOLUTION_PATTERN.match(text)
         if error_resolution_match:
             # 2026-08-09（見 robinson SPEC.md FR-19j）：系統錯誤解法記錄語句，不走多輪對話，
@@ -271,11 +260,6 @@ def handle_message(
 
         user_id = user["id"]
 
-        if text in _MY_TOGGLES_TRIGGERS:
-            return commands.start_my_toggles(db, state_store, telegram_user_id, user_id)
-
-    if text in _RULE_TRIGGERS:
-        return commands.handle_rule()
     if text in _FRIEND_CHAT_TRIGGERS:
         # 2026-08-08（Step 3.5，見 robinson SPEC.md FR-51、FR-52、ADR-22）：好友模式陪伴聊天，
         # 單次生成完整回覆，不需要對話狀態機。
@@ -1565,11 +1549,6 @@ def _dispatch_active_flow(
         return commands.handle_module_goal_calendar_sync_step(llm_client, state_store, telegram_user_id, text)
     if flow in ("pending_module_goal_confirm", "module_goal_delete_confirm"):
         return commands.handle_module_goal_confirm_text(state_store, telegram_user_id)
-    # 2026-08-04（Step 2.3，見 robinson SPEC.md FR-53）：設定家人生日，結構比照 /set_toggle。
-    if flow == "pending_family_birthday_select":
-        return commands.handle_family_birthday_select_step(db, state_store, telegram_user_id, text)
-    if flow == "pending_family_birthday_date":
-        return commands.handle_family_birthday_date_step(db, state_store, telegram_user_id, text)
     # 2026-08-08（Step 3.3，見 robinson SPEC.md FR-27、FR-26 決策 5、6）：證照題庫作答（一次一題）
     # 與彈性排程調整（選 exam_type → 自由描述 → LLM 分類語意 → SPREAD 需額外確認提案）。
     if flow == "pending_quiz_answer":
@@ -1665,4 +1644,4 @@ def _dispatch_active_flow(
         return commands.handle_external_job_background_step(
             db, state_store, telegram_user_id, text, privacy_llm_client=privacy_llm_client
         )
-    return commands.handle_toggle_step(db, state_store, telegram_user_id, text)
+    raise ValueError(f"未知的對話狀態：{state}")

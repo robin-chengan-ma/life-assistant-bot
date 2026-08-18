@@ -20,8 +20,8 @@ def test_extract_message_returns_none_when_text_missing():
 
 
 def test_extract_message_returns_user_id_and_text_for_valid_message():
-    payload = {"message": {"from": {"id": 123}, "text": "/rule"}}
-    assert webhook.extract_message(payload) == (123, "/rule")
+    payload = {"message": {"from": {"id": 123}, "text": "/start"}}
+    assert webhook.extract_message(payload) == (123, "/start")
 
 
 # --- _extract_photo：純函式 ---
@@ -218,7 +218,7 @@ def test_webhook_routes_valid_message_and_sends_reply(client, monkeypatch):
     mock_telegram_client_cls = MagicMock(return_value=mock_telegram_instance)
     monkeypatch.setattr(webhook, "TelegramClient", mock_telegram_client_cls)
 
-    payload = {"message": {"from": {"id": 123}, "text": "/rule"}}
+    payload = {"message": {"from": {"id": 123}, "text": "/start"}}
     response = client.post("/telegram/webhook", json=payload)
 
     assert response.status_code == 200
@@ -228,7 +228,7 @@ def test_webhook_routes_valid_message_and_sends_reply(client, monkeypatch):
         mock_db_instance,
         webhook._state_store,
         123,
-        "/rule",
+        "/start",
         llm_client=mock_bot_llm_instance,
         text_llm_client=mock_text_llm_instance,
         privacy_llm_client=None,
@@ -404,7 +404,7 @@ def test_webhook_routes_valid_message_with_privacy_key_set(client, monkeypatch):
     monkeypatch.setattr(webhook, "LLMClient", MagicMock(side_effect=_fake_llm_client))
     monkeypatch.setattr(webhook, "TelegramClient", MagicMock(return_value=MagicMock()))
 
-    payload = {"message": {"from": {"id": 123}, "text": "/rule"}}
+    payload = {"message": {"from": {"id": 123}, "text": "/start"}}
     response = client.post("/telegram/webhook", json=payload)
 
     assert response.status_code == 200
