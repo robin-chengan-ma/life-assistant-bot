@@ -18,7 +18,8 @@ updated: 2026-08-18
 > 「羅賓森 Mobile App」區塊，其餘功能全部透過 Telegram 對話觸發，不是真正的 HTTP REST 端點；
 > 只有 Mobile App 對應的 `src/api/` 底下 Flask Blueprint 是對外 HTTP API。② Mobile App 的
 > `app_collections.py`／`app_life_exploration.py` 對應 FR-73～FR-76a；`app_important_days.py`
-> （重要日子設定）已上線並納入 FR-72a／FR-74b。自訂重要日子的通用 Telegram 發送器尚未實作，現行 API 只負責管理資料與通知設定。
+> （重要日子設定）已上線並納入 FR-72a／FR-74b。通用 Telegram 發送器已由
+> `src/bot/scheduled_notifications.py` 實作，每日 08:00 處理自訂重要日子、已同步目標與旅遊行程。
 
 ## 平台核心入口
 
@@ -29,6 +30,10 @@ updated: 2026-08-18
 | `callback_query`（Inline Keyboard 按鈕） | 已實作（`src/bot/router.py::handle_callback_query`、`src/bot/webhook.py::_handle_callback_query_update`） | FR-4、FR-6c、FR-6e | 按下主選單／權限管理選單按鈕觸發；每個分支重新驗證 `auth.is_owner()`（FR-6c，不信任前端選單是否顯示過這顆按鈕）；一律先呼叫 `answerCallbackQuery` 避免 Telegram 客戶端卡在轉圈狀態 |
 | `/rule` | 已實作（`src/bot/commands.py::handle_rule`） | FR-6d、FR-55 | 回傳固定使用規則全文（附錄 A），不經 LLM；亦可由主選單「使用規則」按鈕觸發 |
 | ~~`/set_invite_codes`~~ | 2026-08-15 已移除 | FR-6a | 已由 `/start`＋主選單「權限管理」（`src/bot/commands.py::start_permission_menu`／`handle_permission_callback`／`handle_permission_step`）取代；舊指令使用者會收到 Telegram 預設的「指令不存在」提示，不提供相容期，見 `docs/ADR/discuss/robinson.md` 2026-08-15「Phase 6 第二批 2a 實作計畫」 |
+
+> **現況差異（待修正）**：SPEC FR-6a／FR-6b 規定 Slash Command 只保留 `/start`，但現行
+> `src/bot/router.py` 仍接受 `/rule`、`/my_toggles`、`/set_toggle`、`/set_family_birthday`、`/friend_chat`。
+> Reference 依程式現況記錄；這些入口尚待移除，不得因主選單已可用就宣告 FR-6a／FR-6b 全數完成。
 
 ## 服務健康與治理
 
@@ -88,25 +93,25 @@ updated: 2026-08-18
 
 | 項目 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `/my_todos` | 已實作（`src/bot/commands.py::start_todo_list`） | FR-31b、FR-32 | 列出 `pending` 待辦（依時間排序），支援單一時間點與區間（FR-31b）兩種顯示；輸入編號可標記完成/取消；新增待辦本身走一般聊天的三輪反問流程，不是這支路由觸發 |
+| `/my_todos` | 2026-08 已移除 | FR-31b、FR-32 | 既有處理邏輯已改由權限化選單與 Callback 進入；舊 Slash Command／文字觸發詞不保留相容期。 |
 
 ## 心情小記
 
 | 項目 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `/mood_journal` | 已實作（`src/bot/commands.py::start_mood_journal`） | FR-49、FR-50、FR-56h | 心情分類（固定 6 選一）→ 日記內容 → 個人成就三選一提示（可跳過）三輪反問；全程不需 LLM；日記/成就內容套用個資遮蔽 |
-| `/backfill_mood` | 已實作（`src/bot/commands.py::start_mood_backfill`） | FR-49 | 先問補記日期（LLM 解析，僅接受今天或過去），確定後接入 `/mood_journal` 既有三輪流程 |
-| `/my_mood_journals` | 已實作（`src/bot/commands.py::start_mood_list`） | FR-49 | 列出最近 10 筆，輸入編號可更新（重走分類/內容兩輪）或刪除（簡單一輪 CONFIRM/CANCEL，不套用 FR-16a） |
+| `/mood_journal` | 2026-08 已移除 | FR-49、FR-50、FR-56h | 既有處理邏輯已改由權限化選單與 Callback 進入；舊 Slash Command／文字觸發詞不保留相容期。 |
+| `/backfill_mood` | 2026-08 已移除 | FR-49 | 既有處理邏輯已改由權限化選單與 Callback 進入；舊 Slash Command／文字觸發詞不保留相容期。 |
+| `/my_mood_journals` | 2026-08 已移除 | FR-49 | 既有處理邏輯已改由權限化選單與 Callback 進入；舊 Slash Command／文字觸發詞不保留相容期。 |
 
 ## 記帳
 
 | 項目 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `/set_budget` | 已實作（`src/bot/commands.py::start_finance_budget`） | FR-41、FR-41a | 多輪設定：全局預設或特定月份覆蓋（`budget_overrides`），已有舊值先反問確認 |
-| `/add_transaction` | 已實作（`src/bot/commands.py::start_finance_add`） | FR-42 | 交易類型→分類→金額→備註四輪反問；僅補記日期/更新刪除選擇/刪除確認需要 LLM |
-| `/backfill_transaction` | 已實作（`src/bot/commands.py::start_finance_backfill`） | FR-42 | 先問補記日期（僅接受今天或過去），確定後接入 `/add_transaction` 同一組四輪反問 |
-| `/my_transactions` | 已實作（`src/bot/commands.py::start_finance_list`） | FR-42 | 列出最近 10 筆，輸入編號可更新或刪除 |
-| `/my_finance_summary` | 已實作（`src/bot/commands.py::handle_finance_summary`） | FR-44 | 單次查詢：當月支出/收入、預算使用率、分類佔比、與上月比較 |
+| `/set_budget` | 2026-08 已移除 | FR-41、FR-41a | 既有處理邏輯已改由權限化選單與 Callback 進入；舊 Slash Command／文字觸發詞不保留相容期。 |
+| `/add_transaction` | 2026-08 已移除 | FR-42 | 既有處理邏輯已改由權限化選單與 Callback 進入；舊 Slash Command／文字觸發詞不保留相容期。 |
+| `/backfill_transaction` | 2026-08 已移除 | FR-42 | 既有處理邏輯已改由權限化選單與 Callback 進入；舊 Slash Command／文字觸發詞不保留相容期。 |
+| `/my_transactions` | 2026-08 已移除 | FR-42 | 既有處理邏輯已改由權限化選單與 Callback 進入；舊 Slash Command／文字觸發詞不保留相容期。 |
+| `/my_finance_summary` | 2026-08 已移除 | FR-44 | 既有處理邏輯已改由權限化選單與 Callback 進入；舊 Slash Command／文字觸發詞不保留相容期。 |
 | FR-43 記帳預算門檻預警（借用 `/healthz` 頻率，非獨立路由） | 已實作（`src/bot/finance.py::check_and_push_budget_alerts`） | FR-43 | 50% 門檻僅每月 15 日前檢查、80% 門檻整月檢查，各自每月最多推播一次 |
 | FR-44a 月底自動月報推播（借用 `/healthz` 頻率，非獨立路由） | 已實作（`src/bot/finance.py::check_and_push_monthly_report`） | FR-44a | 每月最後一天 21:00，對「有生效預算或當月有交易」的使用者推播月度摘要 |
 
@@ -114,19 +119,19 @@ updated: 2026-08-18
 
 | 項目 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `/set_height` | 已實作（`src/bot/commands.py::start_set_height`） | FR-46 | 設定身高，單輪；「設定一次、變動才修正」，合理範圍檢查見 `src/bot/body.py::is_height_reasonable` |
-| `/set_waist` | 已實作（`src/bot/commands.py::start_set_waist`） | FR-46 | 2026-08-08 新增；設定腰圍，40～200 公分（`body.py::is_waist_reasonable`），設計與身高完全對稱；純參考指標，不影響 BMI 計算 |
-| `/log_weight` | 已實作（`src/bot/commands.py::start_weight_log`） | FR-46 | 記錄體重，合理範圍檢查見 `body.py::is_weight_reasonable`；記錄後自動算出 BMI 並附健康提醒文字（`body.py::format_bmi_note`），同時即時檢查體重目標是否達成 |
-| `/backfill_weight` | 已實作（`src/bot/commands.py::start_weight_backfill`） | FR-46 | 先問補記日期，確定後接入 `/log_weight` 同一組流程 |
-| `/my_weight_logs` | 已實作（`src/bot/commands.py::start_weight_list`） | FR-46 | 列出體重紀錄，輸入編號可更新或刪除 |
-| `/log_exercise` | 已實作（`src/bot/commands.py::start_exercise_log`） | FR-47 | 記錄運動，先問項目；卡路里消耗改用 LLM 估算（`body.py::estimate_exercise_calories`），非 MET 公式 |
-| `/backfill_exercise` | 已實作（`src/bot/commands.py::start_exercise_backfill`） | FR-47 | 先問補記日期，確定後接入 `/log_exercise` 同一組流程 |
-| `/my_exercise_logs` | 已實作（`src/bot/commands.py::start_exercise_list`） | FR-47 | 列出運動紀錄，輸入編號可更新或刪除 |
-| `/log_diet` | 已實作（`src/bot/commands.py::start_diet_log`） | FR-48 | 記錄飲食，先問類型；三大營養素改用 LLM 拆算（`body.py::estimate_diet_macros`），附誤差聲明 |
-| `/backfill_diet` | 已實作（`src/bot/commands.py::start_diet_backfill`） | FR-48 | 先問補記日期，確定後接入 `/log_diet` 同一組流程 |
-| `/my_diet_logs` | 已實作（`src/bot/commands.py::start_diet_list`） | FR-48 | 列出飲食紀錄，輸入編號可更新或刪除；飲食目標不做自動達成判斷，只能手動取消 |
-| `/set_body_goal` | 已實作（`src/bot/commands.py::start_body_goal`） | FR-45～FR-48／FR-72a | 設定體態管理目標，先問類型；體重/運動/飲食三種目標共用 `body_goals` 表；有明確期限時預設同步至重要日子 |
-| `/my_body_goals` | 已實作（`src/bot/commands.py::start_body_goal_list`） | FR-45～FR-48 | 列出進行中目標，輸入編號可取消 |
+| `/set_height` | 2026-08 已移除 | FR-46 | 既有處理邏輯已改由權限化選單與 Callback 進入；舊 Slash Command／文字觸發詞不保留相容期。 |
+| `/set_waist` | 2026-08 已移除 | FR-46 | 既有處理邏輯已改由權限化選單與 Callback 進入；舊 Slash Command／文字觸發詞不保留相容期。 |
+| `/log_weight` | 2026-08 已移除 | FR-46 | 既有處理邏輯已改由權限化選單與 Callback 進入；舊 Slash Command／文字觸發詞不保留相容期。 |
+| `/backfill_weight` | 2026-08 已移除 | FR-46 | 既有處理邏輯已改由權限化選單與 Callback 進入；舊 Slash Command／文字觸發詞不保留相容期。 |
+| `/my_weight_logs` | 2026-08 已移除 | FR-46 | 既有處理邏輯已改由權限化選單與 Callback 進入；舊 Slash Command／文字觸發詞不保留相容期。 |
+| `/log_exercise` | 2026-08 已移除 | FR-47 | 既有處理邏輯已改由權限化選單與 Callback 進入；舊 Slash Command／文字觸發詞不保留相容期。 |
+| `/backfill_exercise` | 2026-08 已移除 | FR-47 | 既有處理邏輯已改由權限化選單與 Callback 進入；舊 Slash Command／文字觸發詞不保留相容期。 |
+| `/my_exercise_logs` | 2026-08 已移除 | FR-47 | 既有處理邏輯已改由權限化選單與 Callback 進入；舊 Slash Command／文字觸發詞不保留相容期。 |
+| `/log_diet` | 2026-08 已移除 | FR-48 | 既有處理邏輯已改由權限化選單與 Callback 進入；舊 Slash Command／文字觸發詞不保留相容期。 |
+| `/backfill_diet` | 2026-08 已移除 | FR-48 | 既有處理邏輯已改由權限化選單與 Callback 進入；舊 Slash Command／文字觸發詞不保留相容期。 |
+| `/my_diet_logs` | 2026-08 已移除 | FR-48 | 既有處理邏輯已改由權限化選單與 Callback 進入；舊 Slash Command／文字觸發詞不保留相容期。 |
+| `/set_body_goal` | 2026-08 已移除 | FR-45～FR-48／FR-72a | 既有處理邏輯已改由權限化選單與 Callback 進入；舊 Slash Command／文字觸發詞不保留相容期。 |
+| `/my_body_goals` | 2026-08 已移除 | FR-45～FR-48 | 既有處理邏輯已改由權限化選單與 Callback 進入；舊 Slash Command／文字觸發詞不保留相容期。 |
 | FR-45 目標達成通知（體重記錄當下即時檢查／運動借用 `/healthz` 頻率排程檢查，非獨立路由） | 已實作（`src/bot/body.py::check_weight_goal_achieved`／`check_and_push_exercise_goal_achievements`） | FR-45 | 體重目標於每次記錄體重時即時判斷方向（要瘦/要增）並達成即標記；運動目標是累積分鐘數，需跨多筆紀錄加總，改借用 `/healthz` 頻率排程檢查 |
 | FR-45 BMI 異常提醒（記錄體重當下就地計算，非獨立路由/排程） | 已實作（`src/bot/body.py::format_bmi_note`） | FR-45 | 記錄體重時就地算出 BMI 並附衛福部國健署標準的健康提醒文字，不經排程 |
 
@@ -163,9 +168,9 @@ updated: 2026-08-18
 
 | 項目 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `/my_youtube_topics` | 已實作（`src/bot/commands.py::handle_my_youtube_topics`） | FR-57a | 單次列出目前設定的 YouTube 技術情報主題 |
-| `/add_youtube_topic` | 已實作（`src/bot/commands.py::start_add_youtube_topic`） | FR-57a | 開始新增一組主題流程 |
-| `/remove_youtube_topic` | 已實作（`src/bot/commands.py::start_remove_youtube_topic`） | FR-57a | 列出目前主題，輸入編號刪除 |
+| `/my_youtube_topics` | 2026-08 已移除 | FR-57a | 既有處理邏輯已改由權限化選單與 Callback 進入；舊 Slash Command／文字觸發詞不保留相容期。 |
+| `/add_youtube_topic` | 2026-08 已移除 | FR-57a | 既有處理邏輯已改由權限化選單與 Callback 進入；舊 Slash Command／文字觸發詞不保留相容期。 |
+| `/remove_youtube_topic` | 2026-08 已移除 | FR-57a | 既有處理邏輯已改由權限化選單與 Callback 進入；舊 Slash Command／文字觸發詞不保留相容期。 |
 | 每週技術情報推播（固定每週四 08:00，借用 `/healthz` 頻率，非獨立路由） | 已實作（`src/bot/youtube.py::check_and_push_weekly_youtube`） | FR-58、FR-59 | 用 YouTube Data API 取候選影片，LLM 語意判讀標題/說明欄/統計數字排序（取代 Rule-based Weight）；多主題採「保底＋輪替」公平曝光機制，30 天內已推播 `video_id` 過濾 |
 
 ## 好友模式
@@ -180,10 +185,10 @@ updated: 2026-08-18
 
 | 項目 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `/set_job_search` | 已實作（`src/bot/commands.py::start_job_search_setup`） | FR-33、FR-34、FR-36 | 開始求職模組設定流程，先問搜尋條件；支援多組搜尋條件、兩階段爬取（列表→詳情頁），並收集履歷/期望工作內容（含結構化年資、期望薪資） |
-| `/add_external_job` | 已實作（`src/bot/commands.py::start_add_external_job`） | FR-40 | 記錄 LinkedIn／Cake 等外部管道職缺，先問管道；外部職缺與 104 職缺共用同一張表（`source` 欄位區分），合成識別碼，一起參與每週評分排名 |
-| `/my_applications` | 已實作（`src/bot/commands.py::handle_my_applications`） | FR-39 | 單次查詢目前各職缺的最新應徵狀態 |
-| 應徵狀態更新語句（regex 直接解析，非多輪對話，非獨立路由） | 已實作（`src/bot/router.py::_APPLICATION_STATUS_PATTERN` → `src/bot/job_search.py::record_application_status`） | FR-39 | 「ID=xxx 職缺 已應徵/已獲得面試/已拿到Offer/已婉拒/未錄取」單行指令直接解析並寫入獨立歷程表 |
+| `/set_job_search` | 2026-08 已移除 | FR-33、FR-34、FR-36 | 既有處理邏輯已改由權限化選單與 Callback 進入；舊 Slash Command／文字觸發詞不保留相容期。 |
+| `/add_external_job` | 2026-08 已移除 | FR-40 | 既有處理邏輯已改由權限化選單與 Callback 進入；舊 Slash Command／文字觸發詞不保留相容期。 |
+| `/my_applications` | 2026-08 已移除 | FR-39 | 既有處理邏輯已改由權限化選單與 Callback 進入；舊 Slash Command／文字觸發詞不保留相容期。 |
+| 應徵狀態更新語句（舊 regex 入口） | 2026-08-18 已移除 | FR-39 | 已改由「求職設定」職缺清單按鈕選擇狀態，不再接受 `ID=...` 文字指令。 |
 | 公司背景 CSV 回填（regex「已上傳 {檔名}」分流，非獨立路由） | 已實作（`src/bot/router.py::_UPLOADED_FILE_PATTERN` → `src/bot/commands.py::handle_company_csv_uploaded`） | FR-35 | 檔名以「104職缺公司.csv」結尾時觸發；Robin 查填公司背景後上傳 Drive 回填，`gdrive_client` 未設定時優雅降級提示稍後再試 |
 | 職缺推薦 Excel 回填（regex「已上傳 {檔名}」分流，非獨立路由） | 已實作（`src/bot/router.py::_UPLOADED_FILE_PATTERN` → `src/bot/commands.py::handle_job_recommendation_excel_uploaded`） | FR-38 | 檔名以「104職缺推薦.xlsx」結尾時觸發；Robin 標記喜好後上傳 Drive 回填 `is_unliked`，與公司背景 CSV 是各自獨立、設計對稱的分流 |
 | 每週爬取＋評分本體（固定每週一 08:00，借用 `/healthz` 頻率，非獨立路由） | 已實作（`src/bot/job_search.py::check_and_run_weekly_job_search`） | FR-33、FR-37、FR-38 | 爬取職缺→新公司背景 CSV 寄送→Gemini 批次契合度評分（僅計算公司背景已回填的職缺）＋雙重排名（全庫／本週新職缺）→技能缺口分析 Excel（三工作表）寄送 |
@@ -259,7 +264,8 @@ updated: 2026-08-18
 
 ### 重要日子設定（`src/api/app_important_days.py`，url_prefix `/api/app/important-days`）
 
-> App 端管理介面與資料結構已完成；Telegram 提醒已正式納入 FR-72a／FR-74b，但通用發送器仍屬待開發，不能因事件已寫入 `important_days` 就視為通知已送達。
+> App 端管理介面與資料結構已完成；Telegram 提醒由統一重要日子發送器處理，
+> 依通知對象、提前天數與個人通知開關發送，並以送達紀錄去重。
 
 | 項目 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |

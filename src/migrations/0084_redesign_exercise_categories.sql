@@ -26,11 +26,11 @@ INSERT INTO exercise_categories (name, normalized_name) VALUES
     ('瑜伽', '瑜伽');
 
 -- 舊運動紀錄直接清空（FR-47a 定案），再改結構。
+-- note 欄位已由 0025 建立，這裡沿用既有欄位，避免重複新增造成整條 migration 中斷。
 TRUNCATE TABLE exercise_logs;
 
 ALTER TABLE exercise_logs
     ADD COLUMN category_id BIGINT REFERENCES exercise_categories(id),
-    ADD COLUMN note TEXT,
     ALTER COLUMN duration_minutes SET NOT NULL,
     DROP COLUMN input_mode,
     DROP COLUMN training_details,

@@ -64,3 +64,17 @@ NameError: name '_parse_date_description' is not defined
 **修復方式**：`src/bot/commands.py` 的 `handle_diet_backfill_date_step()` 改成比照 `handle_exercise_backfill_date_step()` 的既有寫法：呼叫 `_parse_key_value_block(llm_client.generate_text(_BACKFILL_DATE_PARSE_PROMPT.format(feature_label="飲食", date_reply=text, current_date_text=_current_date_text())))`，並補上 `parsed.get("STATUS") != "CLEAR"` 時回傳既有的 `_BACKFILL_DATE_UNCLEAR_REPLY`（原本漏掉這個分支，日期講不清楚時會直接把 `None` 傳進 `_parse_date_only()` 的上一步就沒有攔到「STATUS 不是 CLEAR」的情況）。新增 `tests/bot/test_body_commands.py::test_handle_diet_backfill_date_step_clear_asks_water_for_that_date` 補上這個函式原本完全沒有的單元測試覆蓋，驗證「昨天」這類描述能正確解析並接著問飲水。
 
 **驗證方式**：Claude 沙箱執行 `ast.parse` 語法檢查通過；待 Robin 本機執行 `python3 -m pytest tests/ -q` 確認新增測試通過且無新增迴歸，並在部署後於 Telegram 重新測試「新增今天飲食紀錄→補記昨天→輸入『昨天』」這個原本會炸掉的路徑，確認能正常接著問飲水/食物。
+
+## 2026-08-18 0084 重複新增 note 阻塞後續 Migration
+
+**現象**：Render 啟動時執行 migration，PostgreSQL 回報 `exercise_logs.note` 已存在，migration runner 隨即停止；應用程式因啟動流程容錯仍持續提供服務，但 `/healthz` 的目標期限檢查又回報 `module_goals` 不存在。原定由 0094 刪除的四張取消功能資料表也仍存在。
+
+**排查過程**：查詢正式資料庫 `schema_migrations`，確認沒有任何 `0084` 以上的紀錄；再查 `exercise_logs` 欄位，確認仍是 0084 前結構：已有 `note`、`input_mode`、`training_details`，但沒有 `category_id`。靜態比對 migration 後確認 `0025_create_exercise_logs_table.sql` 已建立 `note`，未曾成功套用的 `0084_redesign_exercise_categories.sql` 卻再次執行 `ADD COLUMN note TEXT`。也逐檔檢查 0085～0094，未發現第二個同類的明顯重複加欄問題。
+
+**根因**：0084 對既有 schema 的前置假設錯誤，重複新增 0025 已建立的欄位。Migration runner 採順序執行且遇錯即停止，因此 0085～0094 全數未套用；`main.py` 捕捉 migration 例外後仍啟動服務，使部署表面可用但 DB schema 落後。
+
+**修復方式**：移除 0084 的 `ADD COLUMN note TEXT`，改為明確註解沿用 0025 既有欄位；保留已定案的清空舊運動紀錄、新增 `category_id` 與其餘 schema 轉換。新增 `tests/migrations/test_migration_sql.py`，鎖定 0025 已有 `note` 且 0084 不得再次新增。
+
+**驗證方式**：TDD RED 階段聚焦測試如預期 1 failed；修正後聚焦測試為 1 passed。全專案 `pytest -q` 為 1823 passed、1 項第三方 `pydub` warning；`ruff check .` 與 `git diff --check` 通過。正式環境重新部署後的 0084～0094 套用結果仍待驗證。
+
+**未驗證範圍**：尚未在正式 Neon 執行修正版 migration；部署後必須確認 `schema_migrations` 包含 0084～0094、`module_goals` 等新表存在、四張取消功能資料表已移除，且 Render 不再出現 migration 失敗與 `module_goals` 不存在錯誤。

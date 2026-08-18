@@ -27,7 +27,7 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 負責�
 | Mobile Web／路由 | React Native Web + Expo Router | React Native Web 0.21／Expo Router 57 | 使用中 | SPA 頁面、登入導向與各分析／設定頁路由 |
 | Mobile 日期／圖片輸入 | `react-native-calendars` + DateTimePicker + `expo-image-picker` | — | 使用中 | 待辦、日期區間、重要日子、時間選擇，以及飲食拍照／相簿選擇 |
 | Mobile 探索地圖 | Leaflet + OpenStreetMap | Leaflet 1.9.4 | 使用中 | Expo Web 顯示探索地圖、已具經緯度的造訪標記與同座標聚合；保留 OpenStreetMap 著作權署名，不採 Expo Maps |
-| 地址轉座標／重新定位 | OpenStreetMap Nominatim | Search API | 已實作（待部署驗收） | 後端代理明確觸發的地址搜尋與探索重新定位；具識別 User-Agent、全應用程序每秒最多一次及 PostgreSQL 快取，不提供即時自動完成 |
+| 地址轉座標／重新定位 | OpenStreetMap Nominatim | Search API | 已部署／實機驗收 | 後端代理明確觸發的地址搜尋與探索重新定位；具識別 User-Agent、全應用程序每秒最多一次及 PostgreSQL 快取，不提供即時自動完成 |
 | Web 框架 | Flask | — | 使用中 | 同步架構，webhook 單一進入點 |
 | 資料庫 | Neon PostgreSQL（psycopg2 + ThreadedConnectionPool） | — | 使用中 | 不用 ORM；連線池上限低（預設 1～5）配合免費額度 |
 | 資料庫 Migration | `src/migrations/` + 開機自動套用 | — | 使用中 | 取代人工貼 SQL；`schema_migrations` 追蹤表 |
@@ -259,7 +259,7 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 負責�
 - FR-67：左上選單導覽＋右上頭像下拉選單，權限矩陣依 `owner_only` 決定可見項目——已實作
 - FR-68：個人基本資訊頁面（唯讀）——已實作
 - FR-72：APP設定（深色模式／字體大小／隱私數字遮罩／修改密碼）——已實作
-- FR-72b：隱私數字遮罩由裝置本機偏好升級為帳號層設定，Mobile App 與 Telegram 查詢共用；現行本機設定已實作，後端同步與 Telegram 套用待 Phase 6 開發
+- FR-72b：隱私數字遮罩為帳號層設定，Mobile App 與 Telegram 查詢共用 `users.privacy_mask_enabled`；Mobile 可透過偏好設定 API 讀寫，Telegram 資料查詢啟用時將數字字元逐位替換為 `*`
 - FR-72a：具明確日期的體態目標（體重／運動／飲食）及考試／證照目標，預設同步為一次性「重要日子」；預設提前 1 天、通知自己並顯示於待辦行事曆，使用者可在重要日子設定調整提醒與通知對象。Telegram 必須以重要日子保存的提醒天數與通知對象作為唯一期限提醒來源；目標名稱／日期更新時同步更新且保留既有提醒設定，目標達成、取消或清除日期時停用連動事件。既有體態目標固定提前 7 天提醒取消，避免重複推播。現行記帳只有月份預算，沒有單一完成日期，本階段不納入同步；資料同步已實作，通用 Telegram 重要日子發送器待重構
 
 **FR-64 生活紀錄輸入擴充（2026-08-14 定案）**
@@ -304,7 +304,7 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 負責�
 **實作階段**
 - Phase 5 Step 5.1：修正新增收藏 Modal 手機版跑版，依 FR-73 精簡收藏欄位並校正既有 Schema／API／UI／測試。
 - Phase 5 Step 5.2：完成 FR-74／FR-74a 旅遊行程、收藏關聯、預估支出與記帳整合。
-- Phase 5 Step 5.3：完成 FR-75 造訪確認、探索快照、地圖聚合、定位失敗清單、收藏地址轉座標與探索地址重新定位；待部署環境設定與實機驗收。
+- Phase 5 Step 5.3：完成 FR-75 造訪確認、探索快照、地圖聚合、定位失敗清單、收藏地址轉座標與探索地址重新定位；已完成部署環境設定與實機驗收。
 - Phase 5 Step 5.4：完成 FR-76／FR-76a 手動成果、成果候選、刪除復原與首頁／選單入口（Mobile App）。
 - Phase 5 Step 5.5：整合測試、Mobile 實機窄螢幕驗收、文件與部署驗證。
 - Phase 6 第二批 2e（2026-08-16）：Telegram 端接上 FR-76／FR-76a 成果展示選單（`src/bot/achievements.py`），直接複用既有 `AppLifeExplorationService`；候選機制維持被動掃描，刪除採直接執行、不提供二次確認與復原（與 Mobile App 差異見 FR-45、FR-76 條文），見 `docs/ADR/discuss/robinson.md` 2026-08-16「Phase 6 第二批 2e」。
