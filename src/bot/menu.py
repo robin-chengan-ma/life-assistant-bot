@@ -58,6 +58,14 @@ Inline Keyboard，比照 `collections` 的單層選單做法。候選機制維�
 KEYS`）；點擊後列出已支援目標功能的模組（見 `GOAL_TRACKING_MODULES`），選模組→選目標→顯示
 `goal_summaries` 最新一份快取摘要，全程唯讀，由 `src/bot/commands.py` 的 `start_goal_tracking_*`
 系列函式與 `src/bot/router.py` 的 `goal_tracking:*` 分派處理。
+
+2026-08-18（批次4，見 docs/ADR/discuss/robinson.md「資料查詢開工前 SDD 計畫確認」，FR-9c／
+FR-9d）：`query`（🔍 資料查詢）接上真正邏輯，從 `_NOT_YET_IMPLEMENTED_KEYS` 移除。可勾選範圍
+只涵蓋 7 個本來就有日期區間概念的模組（見 `QUERY_MODULES`），直接複用 Mobile App 既有的
+`AppAnalyticsService` 各模組唯讀查詢方法，不重寫查詢邏輯；重要日子／收藏與旅遊／成果展示／
+目標追蹤維持只能從各自主選單查看，不併入資料查詢。子選單（選最終日期→模組複選→開始查詢）
+由 `src/bot/query.py` 的 `start_query_menu()` 等函式直接組出 Inline Keyboard，比照
+`important_days` 的做法；`router.py` 的 `query:*` 分派處理。
 """
 
 # key、label 依 FR-6e 定案順序；owner_only 決定這個項目是否只有 Owner 看得到。
@@ -80,9 +88,30 @@ MAIN_MENU_ITEMS = [
 
 # 尚未接上真正邏輯的項目，按下後只回覆固定的「開發中」訊息；2b 起逐批把 key 移出這裡。
 _NOT_YET_IMPLEMENTED_KEYS = {
-    "query",
     "schedule", "tech_intel", "job_search", "certificate", "recovered",
 }
+
+# 2026-08-18（批次4，FR-9c）：資料查詢可勾選的 7 個模組，`analytics_method` 對應
+# `AppAnalyticsService` 上同名的唯讀查詢方法（`src/services/app_analytics.py`），直接複用、
+# 不重寫查詢邏輯；`owner_only` 沿用該服務 `_MODULES` 裡的授權設定。順序依一般使用者/Owner
+# 分組，跟 `MAIN_MENU_ITEMS` 的排序精神一致。
+QUERY_MODULES = [
+    {"key": "todos", "label": "待辦事項", "analytics_method": "todos", "owner_only": False},
+    {"key": "body", "label": "體態分析（飲食／運動／體重）", "analytics_method": "body", "owner_only": False},
+    {"key": "finance", "label": "記帳", "analytics_method": "finance", "owner_only": False},
+    {"key": "mood", "label": "心情趨勢", "analytics_method": "mood", "owner_only": False},
+    {"key": "skills", "label": "技術分享", "analytics_method": "skills", "owner_only": True},
+    {"key": "jobs", "label": "求職分析", "analytics_method": "jobs", "owner_only": True},
+    {"key": "exams", "label": "考試成績", "analytics_method": "exams", "owner_only": True},
+]
+
+
+def visible_query_modules(is_owner: bool) -> list[dict]:
+    return [item for item in QUERY_MODULES if is_owner or not item["owner_only"]]
+
+
+def is_valid_query_module_key(key: str, *, is_owner: bool) -> bool:
+    return any(item["key"] == key for item in visible_query_modules(is_owner))
 
 # 2026-08-16（Phase 6 第二批 2c）：日常紀錄第二層子選單，`callback_data` 固定格式
 # `"daily_log:<key>"`；「日常紀錄」本身不分 Owner／一般使用者，五個子項目共用同一份定義。

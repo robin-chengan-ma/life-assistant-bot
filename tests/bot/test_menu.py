@@ -45,14 +45,22 @@ def test_is_owner_only_key():
 
 def test_is_not_yet_implemented():
     """2026-08-16（Phase 6 第二批 2c／2d／2e／2f）：daily_log、collections、achievements、todo
-    已接上真正邏輯，從「開發中」名單移除。"""
+    已接上真正邏輯，從「開發中」名單移除。2026-08-18（批次4）：query 同樣移除。"""
     assert menu.is_not_yet_implemented("daily_log") is False
     assert menu.is_not_yet_implemented("collections") is False
     assert menu.is_not_yet_implemented("achievements") is False
     assert menu.is_not_yet_implemented("todo") is False
-    assert menu.is_not_yet_implemented("query") is True
+    assert menu.is_not_yet_implemented("query") is False
     assert menu.is_not_yet_implemented("rule") is False
     assert menu.is_not_yet_implemented("permission") is False
+
+
+def test_query_modules_visibility_and_validation():
+    non_owner_keys = {item["key"] for item in menu.visible_query_modules(is_owner=False)}
+    assert non_owner_keys == {"todos", "body", "finance", "mood"}
+    assert menu.is_valid_query_module_key("jobs", is_owner=False) is False
+    assert menu.is_valid_query_module_key("jobs", is_owner=True) is True
+    assert menu.is_valid_query_module_key("not-a-real-key", is_owner=True) is False
 
 
 def test_daily_log_menu_items_and_not_yet_implemented_split():

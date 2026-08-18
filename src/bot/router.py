@@ -11,6 +11,7 @@ from src.bot import (
     important_days,
     job_search,
     menu,
+    query,
     system_errors,
     templates,
     toggles,
@@ -482,6 +483,9 @@ def handle_callback_query(
             # 2026-08-17（批次3，FR-45a）：🎯 目標追蹤主選單首頁。
             state_store.clear(telegram_user_id)
             return commands.start_goal_tracking_menu()
+        if key == "query":
+            # 2026-08-18（批次4，FR-9c／FR-9d）：🔍 資料查詢子選單首頁，直接進入日期選擇。
+            return query.start_query_menu(state_store, telegram_user_id)
         return menu.not_yet_implemented_reply()
 
     if data.startswith("daily_log:"):
@@ -553,6 +557,23 @@ def handle_callback_query(
             return important_days.handle_confirm_save(db, state_store, telegram_user_id, user["id"])
         # 未知的重要日子子動作，導回子選單而不是整個拋例外，比照其餘 callback 的保守做法。
         return important_days.start_important_days_menu()
+
+    if data.startswith("query:"):
+        # 2026-08-18（批次4，FR-9c／FR-9d）：資料查詢日期選擇、模組複選與開始查詢。
+        user = _get_identified_user(db, telegram_user_id)
+        if user is None:
+            return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
+        action = data[len("query:") :]
+        if action in ("date:today", "date:yesterday"):
+            choice = action[len("date:") :]
+            return query.handle_date_quick(state_store, telegram_user_id, is_owner=is_owner, choice=choice)
+        if action.startswith("module:"):
+            module_key = action[len("module:") :]
+            return query.handle_module_toggle(state_store, telegram_user_id, is_owner=is_owner, module_key=module_key)
+        if action == "run":
+            return query.handle_run(db, state_store, telegram_user_id, user, telegram_client=telegram_client)
+        # 未知的資料查詢子動作，導回子選單而不是整個拋例外，比照其餘 callback 的保守做法。
+        return query.start_query_menu(state_store, telegram_user_id)
 
     if data.startswith("goal_tracking:"):
         # 2026-08-17（批次3，FR-45a）：🎯 目標追蹤主選單，全程唯讀。
@@ -1122,6 +1143,13 @@ def _dispatch_active_flow(
         return important_days.handle_step(db, state_store, telegram_user_id, user["id"], text)
     if flow == "important_days_delete_confirm":
         return important_days.handle_delete_confirm_text(state_store, telegram_user_id)
+    if flow == "pending_query_date":
+        # 2026-08-18（批次4，FR-9c）：資料查詢打字輸入最終日期。
+        user = _get_identified_user(db, telegram_user_id)
+        if user is None:
+            return _PERMISSION_DENIED_REPLY
+        is_owner = bool(user.get("is_owner"))
+        return query.handle_date_text(state_store, telegram_user_id, text, is_owner=is_owner, llm_client=llm_client)
     if flow == "collection":
         # 2026-08-16（Phase 6 第二批 2d，FR-6e／FR-6h／FR-75）：收藏清單新增／編輯多步驟流程。
         user = _get_identified_user(db, telegram_user_id)

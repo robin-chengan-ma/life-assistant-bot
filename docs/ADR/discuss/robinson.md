@@ -910,3 +910,63 @@ CHECK IN ('min', 'max')，只有 `goal_type='diet'` 且成功解析出結構化�
 `tests/bot/test_certificate_goals.py`、`tests/bot/test_certificate_exam_scores_commands.py`、
 `tests/bot/test_goal_tracking_router.py`、`tests/services/test_goal_parser.py`、
 `docs/specs/SPEC.md`、`docs/specs/PROGRESS.md`、`docs/reference/db_schema.md`。
+
+## 2026-08-18 [標籤：使用者] 批次4「🔍 資料查詢」開工前 SDD 計畫確認
+
+**狀態**：accepted
+
+**背景**：Telegram 主選單「🔍 資料查詢」（`menu.py` 的 `query` key）自 Phase 6 第二批 2a 起
+一直在 `_NOT_YET_IMPLEMENTED_KEYS`，回覆固定「開發中」訊息。SPEC.md FR-9c／FR-9d 已定案基本
+規則（只查自己的結構化資料、最終日期往前推 6 天含首尾最多 7 個曆日、一次可查多模組、不得執行
+任意 SQL 或大量匯出、遮罩沿用帳號層 Mobile 設定），但沒有列出「哪些模組算在資料查詢裡」，
+開工前依 AGENTS.md SDD 規則先呈現實作計畫並詢問使用者，不能自行腦補範圍。
+
+**討論內容**：
+1. 可查模組範圍：候選有「7 個本來就有日期區間概念的模組（待辦／體態分析／記帳／心情／技術
+   分享／求職分析／考試成績，直接複用 Mobile App 既有 `AppAnalyticsService` 各模組唯讀查詢
+   方法）」與「再加上重要日子／收藏與旅遊／成果展示／目標追蹤」兩個選項；後者這 4 個模組本身
+   沒有「某天發生」的區間概念，各自主選單已有唯讀清單入口。
+2. 日期輸入方式：Telegram 沒有原生行事曆元件，候選「快速按鈕＋文字輸入（比照既有補記日期的
+   LLM 判斷 CLEAR／UNCLEAR 慣例）」與「自訂逐格月曆 Inline Keyboard」。
+3. 多模組查詢結果過長（Telegram 單則訊息上限約 4096 字元）的處理方式：候選「依模組分則訊息
+   送出」與「單則訊息，超過上限就截斷」。
+4. 使用者確認過程中追加兩點要求：①即使某天沒有紀錄，也要在區間內逐日顯示，明確標示「查無
+   紀錄」，不能省略空日；②不要把每個模組的顯示格式寫死，要依照該筆紀錄實際存在的欄位彈性
+   呈現，這個原則套用到全部模組，不是只有記帳。
+
+**決策**：
+- 可查模組範圍＝方案一：只涵蓋 7 個有日期區間概念的模組。重要日子／收藏與旅遊／成果展示／
+  目標追蹤維持只能從各自主選單查看，不併入資料查詢。
+- 日期輸入＝快速按鈕（今天／昨天）＋文字輸入（LLM 判斷 CLEAR／UNCLEAR，但跟既有「補記」不同，
+  這裡明確允許未來日期，不因為是未來日期就判定 UNCLEAR）。
+- 長內容處理＝依模組分則 Telegram 訊息送出，需要 `telegram_client`；沒有提供時優雅降級成合併
+  一則訊息回傳（測試環境／極端情況的保守做法）。
+- 逐日含空日：查詢區間內每一天都要出現，沒有紀錄的日子固定顯示「查無紀錄」。
+- 格式不寫死：`query.py` 的 `_format_record()` 依每筆紀錄實際有的欄位動態組字串，只排除
+  `id`／`user_id`／`can_edit`／`created_at` 等內部欄位；已知欄位有中文標籤對照表，沒列出的
+  欄位直接顯示原始 key，不因為欄位還沒登記進對照表就漏顯示。
+
+**理由**：直接複用 Mobile App 既有查詢邏輯，避免重寫；範圍限定在「有日期區間概念」的模組，
+維持「資料查詢＝查某天發生了什麼」這個明確定義，其餘唯讀清單模組已有各自入口，不需要重複
+一套查詢介面；逐日含空日與格式彈性兩點是使用者明確要求，避免漏看忘記紀錄的日子、也避免日後
+`AppAnalyticsService` 欄位調整時要跟著改寫死的 Telegram 樣板。
+
+**後果**：新增 `src/bot/query.py`；`menu.py` 把 `query` 移出 `_NOT_YET_IMPLEMENTED_KEYS`，
+新增 `QUERY_MODULES`／`visible_query_modules()`／`is_valid_query_module_key()`；`router.py`
+新增 `menu:query`／`query:*` 分派與 `pending_query_date` 文字流程分派。FR-9d「隱私數字遮罩」
+在 Telegram 沒有對應 UI 元件，是新寫的純文字遮罩實作決策——`privacy_mask_enabled=True` 時把
+每個欄位值裡的數字字元逐位替換成 `*`，文字型欄位（備註、心情內容等）不遮罩；這點不影響 Mobile
+既有的 `SensitiveValue` 前端遮罩邏輯，兩端各自實作但共用同一個帳號層旗標。
+
+**執行結果（2026-08-18，程式碼完成＋測試綠燈，尚未 commit）**：沿用同一套「打包整個 repo 進
+雲端沙箱、安裝完整依賴、跑滿整套測試」流程（本機 `device_bash` 仍無網路，見
+`docs/ADR/debug/robinson.md`「Sandbox network limits」）。完整 `python3 -m pytest -q`：
+**1912 個測試全過**（原 1897 個 baseline 全過，新增 15 個：`tests/bot/test_query.py` 全新
+15 項測試涵蓋狀態機、逐日含空日、欄位不寫死、隱私數字遮罩、多模組分則送出／優雅降級、
+router 端到端整合；另外 `tests/bot/test_menu.py` 新增 1 項模組可見性測試，`tests/bot/
+test_router.py` 既有兩項「query 應該還在開發中名單」斷言改寫為「query 已移出名單」）；
+`ruff check .` 對本次異動的檔案全過（既有 `tests/services/test_app_life_exploration.py` 的
+14 項 E701/E702 格式錯誤是本批之前就存在的既有技術債，不在本次異動範圍內，未一併修正）。
+異動檔案：`src/bot/query.py`（新）、`src/bot/menu.py`、`src/bot/router.py`、
+`tests/bot/test_query.py`（新）、`tests/bot/test_menu.py`、`tests/bot/test_router.py`、
+`docs/specs/PROGRESS.md`、`docs/ADR/discuss/robinson.md`。
