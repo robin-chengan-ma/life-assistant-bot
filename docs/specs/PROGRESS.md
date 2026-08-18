@@ -16,10 +16,10 @@ updated: 2026-08-18
 
 | 範圍 | 目前狀態 | 依據／剩餘工作 |
 | --- | --- | --- |
-| Telegram Phase 6 選單化、功能開關、排程、一般對話、FR-6c 草稿保護、FR-77 取消功能清理 | 完成（已 push／部署／實機驗收）；Mobile 殘留修正待提交 | 既有功能 commit `1601f34`；migration 修復 commit `07e986a`。Render 於 2026-08-18 12:25 依序成功套用 0084～0094，0094 已完成四張取消功能資料表清理；2026-08-18 跨端盤點發現並已移除 Mobile 客訴與舊錯誤結案死程式，待 Robin 測試與提交。 |
+| Telegram Phase 6 選單化、功能開關、排程、一般對話、FR-6c 草稿保護、FR-77 取消功能清理 | 完成（已 push／部署／實機驗收）；Mobile 殘留修正已 commit／待 push 與部署 | 既有功能 commit `1601f34`；migration 修復 commit `07e986a`。Render 於 2026-08-18 12:25 依序成功套用 0084～0094，0094 已完成四張取消功能資料表清理；Mobile 客訴與舊錯誤結案死程式已由 commit `fb8c616` 移除。 |
 | FR-72b 帳號層隱私數字遮罩 | 完成 | Mobile 與 Telegram 共用 `users.privacy_mask_enabled`；Telegram 資料查詢已套用遮罩。 |
 | FR-19j～FR-20 跨平台系統錯誤治理 | 已 push／部署；Telegram 管理頁已實機確認 | commit `005752b`、文件 commit `94eea15` 已在 `origin/main`。Owner Telegram 錯誤管理畫面已由 Robin 提供實機截圖確認；Mobile API 未預期 5xx 事故通報、10 分鐘合併、受影響者追蹤與跨平台康復通知已實作，Mobile 真實 5xx 不刻意於正式環境製造事故。 |
-| Telegram 重構後 Mobile 跨端相容修正 | 開發完成／待 Robin 測試與 commit | 一般生活模組不再受舊 `feature_toggles` 關閉；Mobile 客訴與舊錯誤結案程式徹底移除；考試成績顯示 `note`；求職 Top 推薦排除關閉職缺、契合度分布保留全部本期分析。無 Migration、無正式資料刪除。 |
+| Telegram 重構後 Mobile 跨端相容修正 | 已 commit／待 push、部署與實機驗收 | commit `fb8c616`。一般生活模組不再受舊 `feature_toggles` 關閉；Mobile 客訴與舊錯誤結案程式徹底移除；考試成績顯示 `note`；求職 Top 推薦排除關閉職缺、契合度分布保留全部本期分析。無 Migration、無正式資料刪除；Robin 已回報本機測試通過。 |
 | FR-6a／FR-6b 舊 Slash Command 入口清理 | 完成 | Slash Command 只保留 `/start`；`/rule`、`/my_toggles`、`/set_toggle`、`/set_family_birthday`、`/friend_chat` 及舊文字狀態機、死程式與過時測試均已移除。功能改由使用規則選單、功能開關與排程設定、重要日子設定及自然語言「陪我聊聊」提供。 |
 | 求職分析欄位、圖表、API 調整 | 待討論／未排入 Roadmap | 尚缺欄位、流程、圖表、API 與驗收條件；見 `DRAFT.md`。 |
 | 考試成績模組進一步調整 | 待討論／未排入 Roadmap | 考試設定選單化已完成；其他調整範圍尚未定案，見 `DRAFT.md`。 |
@@ -37,7 +37,7 @@ updated: 2026-08-18
 
 | 日期 | 對應 FR | 任務內容 | 開發者 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- | --- |
-| 2026-08-18 | 功能開關 FR-3／FR-30／FR-41b／FR-77 | Telegram 大重構後 Mobile 跨端盤點與相容修正：一般功能忽略舊開關、清除客訴與舊錯誤結案殘留、顯示正式考試備註、區分關閉職缺的推薦與歷史分布 | Codex | 開發完成／待 Robin 測試與 commit | TDD RED：聚焦測試 3 failed；GREEN：API／Service 聚焦測試 59 passed。全專案 `pytest -q`：1793 passed、1 項第三方 `pydub` warning；Mobile `tsc --noEmit`、`ruff check .`、`git diff --check` 通過。無 Migration、無資料刪除。 |
+| 2026-08-18 | 功能開關 FR-3／FR-30／FR-41b／FR-77 | Telegram 大重構後 Mobile 跨端盤點與相容修正：一般功能忽略舊開關、清除客訴與舊錯誤結案殘留、顯示正式考試備註、區分關閉職缺的推薦與歷史分布 | Codex | 已 commit／待 push、部署與實機驗收 | commit `fb8c616`。TDD RED：聚焦測試 3 failed；GREEN：API／Service 聚焦測試 59 passed。全專案 `pytest -q`：1793 passed、1 項第三方 `pydub` warning；Mobile `tsc --noEmit`、`ruff check .`、`git diff --check` 通過；Robin 已回報本機測試通過。無 Migration、無資料刪除。 |
 | 2026-08-18 | FR-19j～FR-20 | 異常通知、康復通知與 Owner 系統錯誤管理擴充至 Mobile App 事故；新增 Telegram 管理選單、Mobile 5xx 通報、10 分鐘去重、受影響者關聯、處理追蹤與跨平台康復通知 | Codex | 已 push／部署；Telegram 管理頁已實機確認 | commit `005752b`、文件 commit `94eea15` 已在 `origin/main`。Robin 已核准 migration `0095`；Owner 管理頁由 Robin 提供正式 Telegram 截圖確認。移除舊「錯誤ID=N 已處理：…」與 Mobile 結案 API；Mobile 當下只回安全文案且僅通知 Owner。Codex 聚焦測試 332 passed；全專案 `pytest -q`：1791 passed、1 項第三方 `pydub` warning；`ruff check .`、`git diff --check` 通過。Mobile 真實 5xx 未刻意於正式環境製造事故。 |
 | 2026-08-18 | FR-6a／FR-6b／FR-51～FR-53 | 移除最後五個 Slash Command：`/rule`、`/my_toggles`、`/set_toggle`、`/set_family_birthday`、`/friend_chat`；同步刪除舊版本人／代管功能開關與家人生日文字狀態機，保留對應選單與「陪我聊聊」自然語言入口 | Codex | 完成（已 push／部署／實機驗收） | commit `759fbf5`、文件 commit `6ceed9d`。聚焦 Router／Commands 測試 206 passed；全專案 `pytest -q`：1785 passed、1 項第三方 `pydub` warning；`ruff check .` 與 `git diff --check` 通過。Robin 已回報 push 並完成全部實機測試。 |
 | 2026-08-18 | FR-6c／FR-77 | 功能模式 10 分鐘逾時、草稿 30 分鐘保護、跨功能三選一、草稿恢復二選一與固定別名選單導引；移除客訴、持久化知識庫、逐則對話與長摘要的執行程式、Mobile 分析入口及相關測試 | Codex | 完成（已 push／部署／實機驗收） | commit `1601f34`。Codex 全專案 `pytest -q`：1822 passed、1 項第三方 `pydub` warning；`ruff check .`、`git diff --check` 通過，Robin 本機亦回報測試通過。正式盤點：`complaints` 0 筆、`knowledge_base` 5 筆、`conversation_logs` 180 筆、`conversation_summaries` 1 筆，均僅外鍵指向 `users.id`。Robin 已二次核准 `0094_drop_cancelled_chat_tables.sql`，並明確決定不留備份、直接刪除；舊 migration 保留，`0094` 不使用 `CASCADE`。 |
@@ -260,6 +260,7 @@ updated: 2026-08-18
 
 | 日期 | 版本 / commit | 異動摘要 | 開發者 |
 | --- | --- | --- | --- |
+| 2026-08-18 | `fb8c616` | 修正 Telegram 重構後 Mobile 功能開關、取消功能殘留、考試備註與關閉職缺分析規則 | Codex |
 | 2026-08-18 | `005752b` | 跨平台系統錯誤管理選單化，納入 Mobile 5xx 事故、去重、受影響者與康復通知 | Codex |
 | 2026-08-18 | `759fbf5` | 移除最後五個舊版 Slash Command、過時狀態機與相關測試，保留選單及陪聊自然語言入口 | Codex |
 | 2026-08-18 | `b67cce0` | 補記 0084 Migration 修復 commit、測試與待部署狀態 | Codex |
