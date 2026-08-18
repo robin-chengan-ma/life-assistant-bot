@@ -16,7 +16,7 @@ updated: 2026-08-18
 
 | 範圍 | 目前狀態 | 依據／剩餘工作 |
 | --- | --- | --- |
-| Telegram Phase 6 選單化、功能開關、排程、一般對話、FR-6c 草稿保護、FR-77 取消功能清理 | 程式完成（已 push／實機驗收）；DB migration 待修復部署 | `origin/main` 已至 `0a857cc`；功能 commit `1601f34`。2026-08-18 實際查詢確認 `schema_migrations` 沒有 `0084`～`0094`：0084 重複新增既有 `exercise_logs.note`，使後續 migration 全數被阻塞；修復與重新部署驗證進行中。 |
+| Telegram Phase 6 選單化、功能開關、排程、一般對話、FR-6c 草稿保護、FR-77 取消功能清理 | 程式完成（已 push／實機驗收）；DB migration 修復已 commit、待 push／部署 | 既有功能 commit `1601f34`；migration 修復 commit `07e986a`。2026-08-18 實際查詢確認 `schema_migrations` 沒有 `0084`～`0094`：0084 重複新增既有 `exercise_logs.note`，使後續 migration 全數被阻塞；待 Robin push 後重新部署驗證。 |
 | FR-72b 帳號層隱私數字遮罩 | 完成 | Mobile 與 Telegram 共用 `users.privacy_mask_enabled`；Telegram 資料查詢已套用遮罩。 |
 | FR-19k Owner 系統錯誤管理呈現 | 部分完成／Roadmap 待開發 | Telegram／Email／未送達狀態已落地；Owner 可集中查看的系統錯誤管理選單／頁面尚未完成。 |
 | FR-6a／FR-6b 舊 Slash Command 入口清理 | 部分完成／Roadmap 待修正 | 多數功能已選單化，但 Router 與測試仍保留 `/rule`、`/my_toggles`、`/set_toggle`、`/set_family_birthday`、`/friend_chat`，與「只保留 `/start`」的現行 SPEC 不一致。 |
@@ -28,7 +28,7 @@ updated: 2026-08-18
 
 | 日期 | 範圍 | 問題／處理 | 開發者 | 狀態 | 驗證 |
 | --- | --- | --- | --- | --- | --- |
-| 2026-08-18 | Migration `0084`～`0094` | `0025` 已建立 `exercise_logs.note`，未套用的 `0084` 又執行 `ADD COLUMN note`，Render 啟動 migration 因 `DuplicateColumn` 中斷，導致 `module_goals` 等後續資料表不存在、`0094` 取消功能資料表也未刪除。已移除 0084 的重複加欄並補回歸測試。 | Codex | 程式修復完成／待重新部署 | RED：聚焦測試 1 failed；GREEN：聚焦測試 1 passed。全專案 `pytest -q`：1823 passed、1 項第三方 `pydub` warning；`ruff check .`、`git diff --check` 通過。正式 DB 尚待部署後確認 0084～0094 全數出現在 `schema_migrations`。 |
+| 2026-08-18 | Migration `0084`～`0094` | `0025` 已建立 `exercise_logs.note`，未套用的 `0084` 又執行 `ADD COLUMN note`，Render 啟動 migration 因 `DuplicateColumn` 中斷，導致 `module_goals` 等後續資料表不存在、`0094` 取消功能資料表也未刪除。已移除 0084 的重複加欄並補回歸測試。 | Codex | 已 commit／待 push、部署 | commit `07e986a`。RED：聚焦測試 1 failed；GREEN：聚焦測試 1 passed。全專案 `pytest -q`：1823 passed、1 項第三方 `pydub` warning；`ruff check .`、`git diff --check` 通過。正式 DB 尚待部署後確認 0084～0094 全數出現在 `schema_migrations`。 |
 
 ## 歷史時程與任務紀錄
 
@@ -256,6 +256,7 @@ updated: 2026-08-18
 
 | 日期 | 版本 / commit | 異動摘要 | 開發者 |
 | --- | --- | --- | --- |
+| 2026-08-18 | `07e986a` | 修正 0084 重複新增 `exercise_logs.note`，補回歸測試並同步 migration 實際狀態 | Codex |
 | 2026-08-18 | `1601f34` | 完成 FR-6c 草稿保護、固定別名入口與 FR-77 取消功能清理，新增經核准的 `0094` 刪表 migration | Codex |
 | 2026-08-18 | `f7cd89c` | 定案 FR-6c 草稿保護細節，取消 NFR-14～NFR-15 架構遷移並保留 FR-77 清理範圍 | Codex |
 | 2026-08-18 | `e78b01c` | 補記一般對話功能 commit 與排程設定推版驗收狀態 | Codex |
