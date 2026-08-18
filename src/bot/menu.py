@@ -92,13 +92,13 @@ MAIN_MENU_ITEMS = [
     {"key": "permission", "label": "🔑 權限管理", "owner_only": True},
     {"key": "tech_intel", "label": "💡 Youtube 技術分享設定", "owner_only": True},
     {"key": "job_search", "label": "💼 求職設定", "owner_only": True},
-    {"key": "certificate", "label": "📖 考試成績", "owner_only": True},
+    {"key": "certificate", "label": "📖 考試設定", "owner_only": True},
     {"key": "recovered", "label": "📢 發送康復通知", "owner_only": True},
 ]
 
 # 尚未接上真正邏輯的項目，按下後只回覆固定的「開發中」訊息；2b 起逐批把 key 移出這裡。
 _NOT_YET_IMPLEMENTED_KEYS = {
-    "schedule", "certificate", "recovered",
+    "schedule", "recovered",
 }
 
 # 2026-08-18（批次4，FR-9c）：資料查詢可勾選的 7 個模組，`analytics_method` 對應

@@ -1,6 +1,6 @@
 ---
 title: Robinson — Robin 與家人們的生活小助手
-updated: 2026-08-17
+updated: 2026-08-18
 owner: Robin
 ---
 
@@ -485,14 +485,16 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 負責�
 
 **功能性需求**
 - FR-22／FR-23：`tech_intel` 開關；`skill_growth_digests` 一天最多三筆（一筆一來源），任一來源失敗只記 log；三個來源皆無內容才推播固定訊息
-- FR-24：`certificate` 開關；`/set_certificate_goal`／`/my_certificate_goals`／`/certificate_advice`（依近 30 天成效與目標生成客製化建議）
+- FR-24：`certificate` 開關；證照準備目標依證照各自設定考試日期與目標分數，並可依近 30 天成效與目標生成客製化建議
 - FR-24a（2026-08-17 新增，批次3；2026-08-17 補做自動達成判斷）：考試準備目標整合進🎯 目標追蹤主選單（FR-45a），沿用既有 `certificate_goals` 表不新建資料表；每日 01:00 排程（`goal_summary_job.py`）依 `certificate_stats.compute_daily_period_stats()` 統計近一週／一個月作答成效生成快取摘要，寫入 `goal_summaries`（`goal_source='certificate_goals'`）；自動達成判斷：使用者透過 `/record_official_score` 記錄「實際應考成績」（`handle_exam_score_value_step()`）後，立即呼叫 `certificate_goals.check_score_achievement()` 跟該 `exam_type` 設定的 `target_score` 做數字比對（兩者皆為 TEXT，只在都能抽出數字時比較，`分數 ≥ 目標分數` 視為達成），達標就在記錄成功的回覆後面附加一句恭喜；`target_score` 或成績本身不是數字（例如「通過／未通過」這類非量化證照）時優雅跳過，不誤判；跟 `/certificate_advice` 既有的即時方向建議並存，互不取代
 - FR-25：TOEIC 每次出題 1 聽力+2 填空+3 單字；軌道一檔名格式泛用化為 `{exam_type}_{test_id}_write/listen_{題號}.{ext}`；軌道二單字題即時生成入庫
-- FR-26：每日出題數量/比例（TOEIC 額外三軌比例）、新題:複習題 7:3，彈性排程支援挪動/取消/區間覆蓋/平攤四種語意（平攤需提案確認才寫入）
+- FR-26：每日出題數量、新題:複習題 7:3，彈性排程支援挪動/取消/區間覆蓋/平攤四種語意（平攤需提案確認才寫入）
 - FR-27：作答只接受 A/B/C/D；正解來自 Robin 拍照上傳的 `_ans` 答案照
 - FR-28：20:00 提醒、23:00 靜默視為跳過
 - FR-29：`/my_quiz_stats` 彈性自然語言問答（不做圖表），排除未作答日子並支援跨區間比較
-- FR-30：`/log_exam_score`／`/my_exam_scores`（正式成績獨立建表，僅查詢不修改）
+- FR-30：正式成績獨立建表，僅查詢不修改；每筆保留證照、應考日期、分數與選填補充內容
+- FR-30a（2026-08-18 定案，見 `docs/ADR/discuss/skill-growth.md` 對應日期條目）：Owner 主選單「📖 考試成績」改為「📖 考試設定」，改用 `certificate_settings:*` 權限化選單並取代既有文字／Slash Command 入口。子選單固定為「證照設定／目標／每日題數設定／實際考試紀錄」。證照設定使用 Owner 專屬名冊：TOEIC 預設存在；可新增其他證照、停用自訂證照，但不得實體刪除歷史資料。尚無題庫的自訂證照仍可設定目標與記錄正式成績；每日題數頁必須明示不會推播題目。所有資料寫入採摘要與按鈕式二次確認。
+- FR-30b（2026-08-18 定案）：每日題數設定依證照獨立保存。非 TOEIC 只可設定每日總題數；TOEIC 使用固定「聽力／讀寫／單字」題數，總題數自動加總。可建立、查看、編輯與刪除不重疊的日期區間覆蓋；題數為 0 表示該區間不出題，區間刪除必須二次確認。正式考試紀錄新增選填補充內容，但維持只新增與查詢、不提供修改或刪除。
 
 **實作階段**
 - Phase 3 Step 3.1（每日技術分享）、Step 3.2（TOEIC 建題庫）、Step 3.3（推播/作答/成效/正式成績）全數完成，Phase 3 主線於 1185 個測試時全過
@@ -532,6 +534,9 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 負責�
 - FR-38：技能缺口分析以 104 職缺 ID 為單位；雙重排名（全庫／本週新職缺）；Excel 三工作表寄送，Robin 標記喜好後回填 `is_unliked`
 - FR-39：應徵狀態 Telegram 語句記錄（任意狀態可直接設定，含「未錄取/已婉拒」）；獨立歷程表；`/my_applications` 查詢
 - FR-40：外部管道職缺共用同一張表（`source` 欄位區分），合成識別碼，一起參與每週評分排名
+- FR-41（2026-08-18 定案，見 `docs/ADR/discuss/job-search.md` 對應日期條目）：主選單「💼 求職分析」改名「💼 求職設定」，全面選單化（`job_search:*`），取代舊有文字觸發詞（`/set_job_search`、`ID=XXX 職缺已應徵`等），比照 `collections.py`／`achievements.py` 的單層子選單模式。子選單 10 項：我的履歷（可編輯／清空）、期望工作內容（可編輯／清空）、必要條件設定（年資／期望薪資上下限，原 FR-36 `save_profile()` 五欄位中拆出的三個結構化欄位，`users.years_of_experience`／`expected_salary_min`／`expected_salary_max`，獨立於履歷／期望工作內容之外）、職缺關鍵字設定（`job_search_criteria` 清單，可新增／個別刪除）、職缺清單（唯讀，依 `score` 排序）、已應徵職缺設定／獲得面試職缺設定／拿到 offer 職缺設定（各自依 `job_applications` 最新狀態過濾，可改狀態）、職缺已關閉設定（可人工覆寫 `is_closed`）、其他平台職缺（沿用既有 `add_external_job()` 邏輯，改選單觸發）。履歷／期望工作內容／職缺關鍵字設定各自獨立清空或刪除，互不影響其餘欄位（不再是 FR-36 原本「一輪對話全部覆蓋」的設計）
+- FR-41a（2026-08-18 定案，見 `docs/ADR/discuss/job-search.md` 對應日期條目）：`job_postings` 新增 `is_closed_manual_override` 欄位，人工於「職缺已關閉設定」手動切換時寫入；旗標為 `TRUE` 時，每週爬蟲 `upsert_job_posting()` 的自動 `is_closed` 判斷須跳過該筆，避免蓋掉人工設定；人工再切回「開啟」時同步清回 `FALSE`
+- FR-41 實作尚未開始，見 PROGRESS.md 待排入項目
 
 **實作階段**
 - Phase 4 Step 4.1～4.3：全數完成

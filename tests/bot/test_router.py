@@ -2055,14 +2055,16 @@ def _seed_certificate_assignment_for_router(fake_db, user_id, **overrides):
     return fake_db.insert("certificate_daily_assignments", row)
 
 
-def test_start_quiz_trigger_presents_question_and_sets_state(fake_db, monkeypatch):
+def test_certificate_settings_quiz_button_presents_question_and_sets_state(fake_db, monkeypatch):
     monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
     owner_row = fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
     qid = _seed_certificate_question_for_router(fake_db)
     _seed_certificate_assignment_for_router(fake_db, owner_row, certificate_question_id=qid)
     store = ConversationStateStore()
 
-    reply = router.handle_message(fake_db, store, ROBIN_ID, "開始作答")
+    reply, _keyboard = router.handle_callback_query(
+        fake_db, store, ROBIN_ID, "certificate_settings:quiz:start"
+    )
 
     assert "第 1/1 題" in reply
     assert store.get(ROBIN_ID)["flow"] == "pending_quiz_answer"
@@ -2074,197 +2076,11 @@ def test_pending_quiz_answer_flow_dispatches_through_router(fake_db, monkeypatch
     qid = _seed_certificate_question_for_router(fake_db)
     _seed_certificate_assignment_for_router(fake_db, owner_row, certificate_question_id=qid)
     store = ConversationStateStore()
-    router.handle_message(fake_db, store, ROBIN_ID, "開始作答")
+    router.handle_callback_query(fake_db, store, ROBIN_ID, "certificate_settings:quiz:start")
 
     reply = router.handle_message(fake_db, store, ROBIN_ID, "A")
 
     assert "✅ 答對了" in reply
-    assert store.get(ROBIN_ID) is None
-
-
-def test_adjust_quiz_schedule_trigger_and_flow_dispatches_through_router(fake_db, monkeypatch):
-    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
-    fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
-    _seed_certificate_question_for_router(fake_db)
-    store = ConversationStateStore()
-    llm_client = _FakeLLMClient(response_text="INTENT: CANCEL")
-
-    start_reply = router.handle_message(fake_db, store, ROBIN_ID, "調整出題排程")
-    assert start_reply == commands._QUIZ_SCHEDULE_INTENT_ASK
-    assert store.get(ROBIN_ID)["flow"] == "pending_quiz_schedule_intent"
-
-    confirm_reply = router.handle_message(fake_db, store, ROBIN_ID, "今天不想做了", llm_client=llm_client)
-    assert "取消" in confirm_reply
-    assert store.get(ROBIN_ID) is None
-
-
-def test_adjust_quiz_schedule_with_multiple_exam_types_dispatches_choice_step(fake_db, monkeypatch):
-    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
-    fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
-    _seed_certificate_question_for_router(fake_db, exam_type="ielts")
-    _seed_certificate_question_for_router(fake_db, exam_type="toeic", question_number=1)
-    store = ConversationStateStore()
-
-    choice_ask_reply = router.handle_message(fake_db, store, ROBIN_ID, "調整出題排程")
-    assert "1. ielts" in choice_ask_reply
-    assert store.get(ROBIN_ID)["flow"] == "pending_quiz_schedule_exam_type_choice"
-
-    intent_ask_reply = router.handle_message(fake_db, store, ROBIN_ID, "1")
-    assert intent_ask_reply == commands._QUIZ_SCHEDULE_INTENT_ASK
-    assert store.get(ROBIN_ID)["flow"] == "pending_quiz_schedule_intent"
-
-
-def test_adjust_quiz_schedule_spread_confirm_dispatches_through_router(fake_db, monkeypatch):
-    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
-    fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
-    _seed_certificate_question_for_router(fake_db)
-    fake_db.insert(
-        "certificate_daily_settings",
-        {"user_id": 1, "exam_type": "ielts", "daily_question_count": 3, "review_ratio_new": 7, "review_ratio_review": 3},
-    )
-    store = ConversationStateStore()
-    router.handle_message(fake_db, store, ROBIN_ID, "調整出題排程")
-    spread_llm_client = _FakeLLMClient(response_text="INTENT: SPREAD")
-    router.handle_message(fake_db, store, ROBIN_ID, "平攤到最近幾天", llm_client=spread_llm_client)
-    assert store.get(ROBIN_ID)["flow"] == "pending_quiz_schedule_spread_confirm"
-
-    confirm_llm_client = _FakeLLMClient(response_text="STATUS: CONFIRM")
-    confirm_reply = router.handle_message(fake_db, store, ROBIN_ID, "OK", llm_client=confirm_llm_client)
-
-    assert "完成" in confirm_reply
-    assert store.get(ROBIN_ID) is None
-
-
-# --- 正式成績／證照目標／方向建議／成效彈性文字問答（Step 3.3 剩餘範圍，見 robinson SPEC.md
-# FR-30、FR-24、FR-29、ADR-19）---
-# 這裡只驗證觸發詞路由與 flow 狀態分派本身接得起來，完整邏輯已在
-# tests/bot/test_certificate_exam_scores_commands.py／test_certificate_goals_commands.py／
-# test_certificate_stats_commands.py 涵蓋。
-
-
-def test_log_exam_score_trigger_and_flow_dispatches_through_router(fake_db, monkeypatch):
-    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
-    fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
-    store = ConversationStateStore()
-
-    ask_exam_type = router.handle_message(fake_db, store, ROBIN_ID, "我要記錄正式成績")
-    assert store.get(ROBIN_ID)["flow"] == "pending_exam_score_exam_type"
-    assert "1." not in ask_exam_type  # 尚未有任何候選清單，改用開放式提示（無編號清單）
-
-    ask_date = router.handle_message(fake_db, store, ROBIN_ID, "toeic")
-    assert store.get(ROBIN_ID)["flow"] == "pending_exam_score_date"
-    assert "應考" in ask_date
-
-    llm_client = _FakeLLMClient(response_text="STATUS: CLEAR\nDATE: 2026-08-01")
-    router.handle_message(fake_db, store, ROBIN_ID, "8/1", llm_client=llm_client)
-    assert store.get(ROBIN_ID)["flow"] == "pending_exam_score_value"
-
-    confirm_reply = router.handle_message(fake_db, store, ROBIN_ID, "850 分")
-    assert "toeic" in confirm_reply
-    assert "850 分" in confirm_reply
-    assert store.get(ROBIN_ID) is None
-    assert len(fake_db.select("exam_official_scores")) == 1
-
-
-def test_my_exam_scores_trigger_returns_summary(fake_db, monkeypatch):
-    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
-    owner_row = fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
-    fake_db.insert(
-        "exam_official_scores",
-        {"user_id": owner_row, "exam_type": "toeic", "exam_date": date(2026, 8, 1), "score": "850"},
-    )
-    store = ConversationStateStore()
-
-    reply = router.handle_message(fake_db, store, ROBIN_ID, "我的正式成績")
-
-    assert "toeic" in reply
-    assert "850" in reply
-    assert store.get(ROBIN_ID) is None
-
-
-def test_set_certificate_goal_trigger_and_flow_dispatches_through_router(fake_db, monkeypatch):
-    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
-    fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
-    store = ConversationStateStore()
-
-    router.handle_message(fake_db, store, ROBIN_ID, "設定證照目標")
-    assert store.get(ROBIN_ID)["flow"] == "pending_certificate_goal_exam_type"
-
-    ask_target_date = router.handle_message(fake_db, store, ROBIN_ID, "toeic")
-    assert store.get(ROBIN_ID)["flow"] == "pending_certificate_goal_target_date"
-    assert "目標考試時間" in ask_target_date
-
-    ask_target_score = router.handle_message(fake_db, store, ROBIN_ID, "跳過")
-    assert store.get(ROBIN_ID)["flow"] == "pending_certificate_goal_target_score"
-    assert "目標分數" in ask_target_score
-
-    confirm_reply = router.handle_message(fake_db, store, ROBIN_ID, "850")
-    assert "toeic" in confirm_reply
-    assert store.get(ROBIN_ID) is None
-    assert len(fake_db.select("certificate_goals")) == 1
-
-
-def test_my_certificate_goals_trigger_returns_summary(fake_db, monkeypatch):
-    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
-    owner_row = fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
-    fake_db.insert(
-        "certificate_goals", {"user_id": owner_row, "exam_type": "toeic", "target_date": None, "target_score": "850"}
-    )
-    store = ConversationStateStore()
-
-    reply = router.handle_message(fake_db, store, ROBIN_ID, "我的證照目標")
-
-    assert "toeic" in reply
-    assert "850" in reply
-
-
-def test_certificate_advice_trigger_single_candidate_dispatches_through_router(fake_db, monkeypatch):
-    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
-    owner_row = fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
-    fake_db.insert(
-        "answer_logs",
-        {
-            "user_id": owner_row, "certificate_question_id": 1, "vocab_question_id": None,
-            "exam_type": "toeic", "question_type": "write", "is_correct": True,
-            "answered_on": commands._now().date(), "assignment_id": None,
-        },
-    )
-    store = ConversationStateStore()
-    llm_client = _FakeLLMClient(response_text="繼續加油，多練習聽力！")
-
-    reply = router.handle_message(fake_db, store, ROBIN_ID, "給我讀書建議", llm_client=llm_client)
-
-    assert "toeic" in reply
-    assert "繼續加油" in reply
-    assert store.get(ROBIN_ID) is None
-
-
-def test_my_quiz_stats_trigger_and_flow_dispatches_through_router(fake_db, monkeypatch):
-    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
-    owner_row = fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
-    fake_db.insert(
-        "answer_logs",
-        {
-            "user_id": owner_row, "certificate_question_id": 1, "vocab_question_id": None,
-            "exam_type": "toeic", "question_type": "write", "is_correct": True,
-            "answered_on": date(2026, 8, 3), "assignment_id": None,
-        },
-    )
-    store = ConversationStateStore()
-
-    ask_reply = router.handle_message(fake_db, store, ROBIN_ID, "查詢我的成效")
-    assert ask_reply == commands._QUIZ_STATS_INITIAL_ASK
-    assert store.get(ROBIN_ID)["flow"] == "pending_quiz_stats_query"
-
-    llm_client = _FakeLLMClient(
-        response_text=(
-            "STATUS: CLEAR\nEXAM_TYPE: toeic\nSCOPE: DAILY\nPERIOD_START: 2026-08-01\n"
-            "PERIOD_END: 2026-08-07\nCOMPARE: NO"
-        )
-    )
-    answer_reply = router.handle_message(fake_db, store, ROBIN_ID, "上週答對幾題", llm_client=llm_client)
-
-    assert "toeic" in answer_reply
     assert store.get(ROBIN_ID) is None
 
 

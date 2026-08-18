@@ -161,17 +161,11 @@ updated: 2026-08-15
 
 | 項目 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `/start_quiz` | 已實作（`src/bot/commands.py::start_quiz_answer`） | FR-27 | 依序作答目前所有待作答的證照題庫題目，正解來自 Robin 拍照上傳的 `_ans` 答案照，不用 AI 推論 |
-| `/adjust_quiz_schedule` | 已實作（`src/bot/commands.py::start_quiz_schedule_adjust`） | FR-26 | 彈性排程調整流程，支援 MOVE（挪到別天）/CANCEL（取消不補不挪）/RANGE（區間覆蓋）/SPREAD（平攤到接下來幾天，需提案確認才寫入）四種語意 |
-| `/log_exam_score` | 已實作（`src/bot/commands.py::start_log_exam_score`） | FR-30 | 記錄正式應考成績，獨立建表僅查詢不修改 |
-| `/my_exam_scores` | 已實作（`src/bot/commands.py::handle_my_exam_scores`） | FR-30 | 單次查詢正式成績列表，不經對話狀態機 |
-| `/set_certificate_goal` | 已實作（`src/bot/commands.py::start_set_certificate_goal`） | FR-24／FR-72a | 設定證照準備目標；有明確考試日期時預設同步至重要日子，覆寫日期時同步更新 |
-| `/my_certificate_goals` | 已實作（`src/bot/commands.py::handle_my_certificate_goals`） | FR-24 | 單次查詢證照準備目標列表，不經對話狀態機 |
-| `/certificate_advice` | 已實作（`src/bot/commands.py::start_certificate_advice`） | FR-24 | 依近 30 天作答成效與目標，用 LLM 生成客製化讀書建議方向 |
-| `/my_quiz_stats` | 已實作（`src/bot/commands.py::start_quiz_stats_query`） | FR-29 | 彈性自然語言問答查詢作答成效，不做圖表，排除未作答日子並支援跨區間比較 |
+| `menu:certificate`／`certificate_settings:*` | 已實作（`src/bot/certificate_settings.py`） | FR-24／FR-26／FR-30a～FR-30b | Owner 專屬考試設定選單；提供證照名冊、目標、每日題數、不可重疊日期區間及正式成績新增／查詢，所有寫入均先摘要再按鈕確認 |
+| `certificate_settings:quiz:start` | 已實作（轉接 `src/bot/commands.py::start_quiz_answer`） | FR-27 | 依序作答目前所有待作答題目；舊 `/start_quiz` 與文字觸發詞已移除 |
 | 每日技術分享收集（固定 23:00，借用 `/healthz` 頻率，非獨立路由） | 已實作（`src/bot/skill_growth.py::collect_and_store_daily_digest`） | FR-22、FR-23 | 收集 TLDR 電子報＋IThome／TechCrunch 當天新聞，各來源各自經 Gemini 產出摘要，寫入 `skill_growth_digests`（一天最多三筆，一筆一來源） |
 | 每日技術分享推播（隔天固定 08:00，借用 `/healthz` 頻率，非獨立路由） | 已實作（`src/bot/skill_growth.py::check_and_push_daily_digest`） | FR-22、FR-23 | 讀取前一晚 23:00 收集結果，拆成最多三則獨立訊息推播；任一來源失敗只記 log，三個來源皆無內容才推播固定訊息 |
-| TOEIC 每日出題推播（固定 08:00，借用 `/healthz` 頻率，非獨立路由） | 已實作（`src/bot/certificate_quiz.py::check_and_push_daily_quiz`） | FR-26 | 依當日生效的出題數量/比例設定（`certificate_daily_settings`／`certificate_daily_schedule_overrides`，見 `src/bot/certificate_schedule.py`）寫入當日題目指派並推播通知 |
+| TOEIC 每日出題推播（固定 08:00，借用 `/healthz` 頻率，非獨立路由） | 已實作（`src/bot/certificate_quiz.py::check_and_push_daily_quiz`） | FR-26 | 依當日生效的固定聽力／讀寫／單字題數（全局或日期區間覆蓋）寫入當日題目指派並推播；舊比例欄位僅作相容 fallback |
 | TOEIC 作答提醒（固定 20:00，借用 `/healthz` 頻率，非獨立路由） | 已實作（`src/bot/certificate_answer.py::check_and_push_answer_reminders`） | FR-28 | 若還有題目沒作答，提醒一次；23:00 靜默視為跳過（不主動通知，但仍可跨日晚補答） |
 
 ## YouTube 技術情報模組

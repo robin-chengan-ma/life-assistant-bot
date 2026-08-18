@@ -4,6 +4,7 @@ import re
 from src.bot import (
     achievements,
     auth,
+    certificate_settings,
     chat,
     collections,
     commands,
@@ -85,19 +86,7 @@ _FRIEND_CHAT_TRIGGERS = {"/friend_chat", "陪我聊聊"}
 # /set_waist、/log_weight、/backfill_weight、/my_weight_logs、/set_body_goal 等）已移除，
 # 不提供舊指令相容期，入口改為「📝 日常紀錄」→「⚖️ 體態」子選單，見 menu.py／commands.py
 # 體態子選單首頁區塊說明。
-# 2026-08-08（Step 3.3，見 robinson SPEC.md FR-27、FR-26 決策 5）：證照題庫作答與彈性排程調整，
-# `certificate` 功能開關本身是 owner_only（見 templates.py FEATURE_LIST），這兩個觸發詞只放在
-# is_owner 分支，比照 _SET_TOGGLE_TRIGGERS 等既有 Owner 專屬觸發詞的位置。
-_START_QUIZ_TRIGGERS = {"/start_quiz", "開始作答"}
-_ADJUST_QUIZ_SCHEDULE_TRIGGERS = {"/adjust_quiz_schedule", "調整出題排程"}
-# 2026-08-08 追加（Step 3.3 剩餘範圍，見 robinson SPEC.md FR-30、FR-24、FR-29、ADR-19）：正式成績
-# 記錄／查詢、證照目標設定／查詢／方向建議、成效彈性文字問答，同樣皆為 Owner 專屬。
-_LOG_EXAM_SCORE_TRIGGERS = {"/log_exam_score", "我要記錄正式成績"}
-_MY_EXAM_SCORES_TRIGGERS = {"/my_exam_scores", "我的正式成績"}
-_SET_CERTIFICATE_GOAL_TRIGGERS = {"/set_certificate_goal", "設定證照目標"}
-_MY_CERTIFICATE_GOALS_TRIGGERS = {"/my_certificate_goals", "我的證照目標"}
-_CERTIFICATE_ADVICE_TRIGGERS = {"/certificate_advice", "給我讀書建議"}
-_MY_QUIZ_STATS_TRIGGERS = {"/my_quiz_stats", "查詢我的成效"}
+# 2026-08-18（FR-30a）：考試管理改由 `certificate_settings:*` 選單進入，移除舊文字與 Slash 入口。
 # 2026-08-18（Youtube 技術分享設定選單化，見 docs/ADR/discuss/robinson.md、
 # docs/ADR/discuss/youtube-intel.md 對應日期條目）：YouTube 技術情報主題管理全面改選單觸發，
 # 舊文字觸發詞（`/my_youtube_topics`、`/add_youtube_topic`、`/remove_youtube_topic` 等）已移除，
@@ -235,30 +224,6 @@ def handle_message(
             return commands.start_my_toggles(db, state_store, telegram_user_id, user_id)
         if text in _RECOVERED_TRIGGERS:
             return commands.handle_recovered(db, telegram_client)
-        if text in _START_QUIZ_TRIGGERS:
-            # 2026-08-08（FR-27）：開始依序作答目前所有待作答的證照題庫題目。
-            return commands.start_quiz_answer(db, state_store, telegram_user_id, user_id)
-        if text in _ADJUST_QUIZ_SCHEDULE_TRIGGERS:
-            # 2026-08-08（FR-26 決策 5、6）：開始彈性排程調整流程（MOVE/CANCEL/RANGE/SPREAD）。
-            return commands.start_quiz_schedule_adjust(db, state_store, telegram_user_id, user_id)
-        if text in _LOG_EXAM_SCORE_TRIGGERS:
-            # 2026-08-08（FR-30）：開始記錄正式應考成績流程。
-            return commands.start_log_exam_score(db, state_store, telegram_user_id, user_id)
-        if text in _MY_EXAM_SCORES_TRIGGERS:
-            # 2026-08-08（FR-30）：查詢正式成績（單次列表，不經對話狀態機）。
-            return commands.handle_my_exam_scores(db, user_id)
-        if text in _SET_CERTIFICATE_GOAL_TRIGGERS:
-            # 2026-08-08（FR-24）：開始設定證照準備目標流程。
-            return commands.start_set_certificate_goal(db, state_store, telegram_user_id, user_id)
-        if text in _MY_CERTIFICATE_GOALS_TRIGGERS:
-            # 2026-08-08（FR-24）：查詢證照準備目標（單次列表，不經對話狀態機）。
-            return commands.handle_my_certificate_goals(db, user_id)
-        if text in _CERTIFICATE_ADVICE_TRIGGERS:
-            # 2026-08-08（FR-24）：依近 30 天成效與目標，用 LLM 生成方向建議。
-            return commands.start_certificate_advice(db, llm_client, state_store, telegram_user_id, user_id)
-        if text in _MY_QUIZ_STATS_TRIGGERS:
-            # 2026-08-08（FR-29）：開始成效彈性文字問答流程。
-            return commands.start_quiz_stats_query(db, state_store, telegram_user_id, user_id)
         error_resolution_match = _ERROR_RESOLUTION_PATTERN.match(text)
         if error_resolution_match:
             # 2026-08-09（見 robinson SPEC.md FR-19j）：系統錯誤解法記錄語句，不走多輪對話，
@@ -444,6 +409,9 @@ def handle_callback_query(
         if key == "job_search":
             state_store.clear(telegram_user_id)
             return job_settings.start_menu()
+        if key == "certificate":
+            state_store.clear(telegram_user_id)
+            return certificate_settings.start_menu()
         return menu.not_yet_implemented_reply()
 
     if data.startswith("daily_log:"):
@@ -703,6 +671,79 @@ def handle_callback_query(
         if action == "confirm_save":
             return achievements.handle_confirm_save(db, state_store, telegram_user_id, user["id"])
         return achievements.start_achievements_menu()
+
+    if data.startswith("certificate_settings:"):
+        if not is_owner:
+            return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
+        user = _get_identified_user(db, telegram_user_id)
+        if user is None:
+            return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
+        action = data[len("certificate_settings:") :]
+        if action == "menu":
+            state_store.clear(telegram_user_id)
+            return certificate_settings.start_menu()
+        if action == "profiles":
+            return certificate_settings.start_profiles(db, user["id"])
+        if action == "profile:add":
+            return certificate_settings.start_profile_add(state_store, telegram_user_id, user["id"]), None
+        if action == "profile:confirm_add":
+            return certificate_settings.confirm_profile_add(db, state_store, telegram_user_id)
+        if action.startswith("profile:confirm_toggle:"):
+            return certificate_settings.confirm_profile_toggle(db, state_store, telegram_user_id, user["id"], int(action.rsplit(":", 1)[1]))
+        if action.startswith("profile:toggle:"):
+            return certificate_settings.start_profile_toggle(db, state_store, telegram_user_id, user["id"], int(action.rsplit(":", 1)[1]))
+        if action.startswith("profile:"):
+            return certificate_settings.start_profile_detail(db, user["id"], int(action.rsplit(":", 1)[1]))
+        if action == "goals":
+            return certificate_settings.start_goals(db, user["id"])
+        if action == "goal:confirm":
+            return certificate_settings.confirm_goal(db, state_store, telegram_user_id)
+        if action.startswith("goal:"):
+            profile = certificate_settings.profile_by_id(db, user["id"], int(action.rsplit(":", 1)[1]))
+            return (certificate_settings.start_goal_set(state_store, telegram_user_id, user["id"], profile), None) if profile else certificate_settings.start_goals(db, user["id"])
+        if action == "daily":
+            return certificate_settings.start_daily(db, user["id"])
+        if action == "quiz:start":
+            return commands.start_quiz_answer(db, state_store, telegram_user_id, user["id"]), None
+        if action == "daily:confirm":
+            return certificate_settings.confirm_daily(db, state_store, telegram_user_id)
+        if action.startswith("daily:set:"):
+            profile = certificate_settings.profile_by_id(db, user["id"], int(action.rsplit(":", 1)[1]))
+            return (certificate_settings.start_daily_set(state_store, telegram_user_id, user["id"], profile), None) if profile else certificate_settings.start_daily(db, user["id"])
+        if action == "range:confirm":
+            return certificate_settings.confirm_range(db, state_store, telegram_user_id)
+        if action.startswith("range:confirm_delete:"):
+            _, _, profile_id, override_id = action.split(":")
+            profile = certificate_settings.profile_by_id(db, user["id"], int(profile_id))
+            return certificate_settings.confirm_range_delete(db, state_store, telegram_user_id, user["id"], profile, int(override_id)) if profile else certificate_settings.start_daily(db, user["id"])
+        if action.startswith("range:delete:"):
+            _, _, profile_id, override_id = action.split(":")
+            profile = certificate_settings.profile_by_id(db, user["id"], int(profile_id))
+            return certificate_settings.start_range_delete(db, state_store, telegram_user_id, user["id"], profile, int(override_id)) if profile else certificate_settings.start_daily(db, user["id"])
+        if action.startswith("range:edit:"):
+            _, _, profile_id, override_id = action.split(":")
+            profile = certificate_settings.profile_by_id(db, user["id"], int(profile_id))
+            return (certificate_settings.start_range_edit(db, state_store, telegram_user_id, user["id"], profile, int(override_id)), None) if profile else certificate_settings.start_daily(db, user["id"])
+        if action.startswith("range:add:"):
+            profile = certificate_settings.profile_by_id(db, user["id"], int(action.rsplit(":", 1)[1]))
+            return (certificate_settings.start_range_edit(db, state_store, telegram_user_id, user["id"], profile), None) if profile else certificate_settings.start_daily(db, user["id"])
+        if action.startswith("range:"):
+            profile = certificate_settings.profile_by_id(db, user["id"], int(action.rsplit(":", 1)[1]))
+            return certificate_settings.start_range_list(db, user["id"], profile) if profile else certificate_settings.start_daily(db, user["id"])
+        if action == "scores":
+            return certificate_settings.start_scores(db, user["id"])
+        if action == "score:confirm":
+            return certificate_settings.confirm_score(db, state_store, telegram_user_id)
+        if action.startswith("score:add:"):
+            profile = certificate_settings.profile_by_id(db, user["id"], int(action.rsplit(":", 1)[1]))
+            return (certificate_settings.start_score_add(state_store, telegram_user_id, user["id"], profile), None) if profile else certificate_settings.start_scores(db, user["id"])
+        if action.startswith("daily:"):
+            profile = certificate_settings.profile_by_id(db, user["id"], int(action.rsplit(":", 1)[1]))
+            return certificate_settings.daily_summary(db, user["id"], profile) if profile else certificate_settings.start_daily(db, user["id"])
+        if action.startswith("score:"):
+            profile = certificate_settings.profile_by_id(db, user["id"], int(action.rsplit(":", 1)[1]))
+            return certificate_settings.score_list(db, user["id"], profile) if profile else certificate_settings.start_scores(db, user["id"])
+        return certificate_settings.start_menu()
 
     if data.startswith("youtube_settings:"):
         # 2026-08-18（Youtube 技術分享設定選單化，見 docs/ADR/discuss/robinson.md、
@@ -1482,6 +1523,18 @@ def _dispatch_active_flow(
         return commands.handle_certificate_advice_exam_type_step(db, llm_client, state_store, telegram_user_id, text)
     if flow == "pending_quiz_stats_query":
         return commands.handle_quiz_stats_query_step(db, llm_client, state_store, telegram_user_id, text)
+    if flow == "certificate_profile_add":
+        return certificate_settings.handle_profile_add_text(state_store, telegram_user_id, text)
+    if flow in {"certificate_score_date", "certificate_score_value", "certificate_score_note"}:
+        return certificate_settings.handle_score_text(state_store, telegram_user_id, text)
+    if flow.startswith("certificate_daily_") and flow != "certificate_daily_confirm":
+        return certificate_settings.handle_daily_text(state_store, telegram_user_id, text)
+    if flow in {"certificate_goal_date", "certificate_goal_score"}:
+        return certificate_settings.handle_goal_text(state_store, telegram_user_id, text)
+    if flow.startswith("certificate_range_") and flow not in {
+        "certificate_range_confirm", "certificate_range_delete_confirm",
+    }:
+        return certificate_settings.handle_range_text(db, state_store, telegram_user_id, text)
     # 2026-08-18（Youtube 技術分享設定選單化，見 docs/ADR/discuss/robinson.md、
     # docs/ADR/discuss/youtube-intel.md 對應日期條目）：YouTube 技術情報主題新增／移除確認。
     if flow == "youtube_topic_add":

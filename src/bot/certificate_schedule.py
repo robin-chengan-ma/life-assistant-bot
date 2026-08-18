@@ -92,6 +92,34 @@ def apply_range_override(
     )
 
 
+def list_range_overrides(
+    db: CloudSQLClient, user_id: int, exam_type: str
+) -> list[dict]:
+    """依起日列出區間覆蓋，供設定頁管理。"""
+    rows = db.select(
+        "certificate_daily_schedule_overrides",
+        where="user_id = %s AND exam_type = %s",
+        params=(user_id, exam_type),
+    )
+    return sorted(rows, key=lambda row: (row["start_date"], row["end_date"]))
+
+
+def has_overlapping_override(
+    db: CloudSQLClient,
+    user_id: int,
+    exam_type: str,
+    start_date: date,
+    end_date: date,
+    exclude_id: int | None = None,
+) -> bool:
+    for row in list_range_overrides(db, user_id, exam_type):
+        if exclude_id is not None and row["id"] == exclude_id:
+            continue
+        if start_date <= row["end_date"] and row["start_date"] <= end_date:
+            return True
+    return False
+
+
 # --- 語意④：平攤（先算提案，確認後才寫入） ---
 
 

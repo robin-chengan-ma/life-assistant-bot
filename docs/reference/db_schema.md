@@ -22,8 +22,8 @@ updated: 2026-08-18
 > 看 SQL 語法＋說明設計理由→取得同意」，才會存成 `src/migrations/` 底下的檔案，經 commit/push 由
 > Render 自動部署套用（實際套用時間以資料庫 `schema_migrations` 追蹤表為準）。
 >
-> 本文件目前涵蓋到 migration `0061`（`system_error_reports`）為止；`0062` 之後（Mobile App 帳密欄位、
-> 探索紀錄／旅遊模組、成就系統等）尚未回頭補登，見 `src/migrations/` 目錄與 `docs/specs/SPEC.md`
+> 本文件多數章節涵蓋到 migration `0061`（`system_error_reports`）；後續異動依功能逐步補登，
+> 考試設定與求職設定已涵蓋至 `0091`。其他 `0062` 之後的異動見 `src/migrations/` 與 `docs/specs/SPEC.md`
 > 對應功能區塊掌握最新範圍。CREATE TABLE 語法只保留欄位定義本身，`COMMENT ON` 逐欄註解請直接看
 > 對應 migration 檔案，不在此重複。
 
@@ -550,14 +550,36 @@ CREATE TABLE important_notifications_log (
 | `certificate_questions`（原 `toeic_questions`） | 已建立 | FR-25a～FR-25c | 證照題庫軌道一（照片/音檔上傳建題），2026-08-07 泛用化支援任意證照類型 |
 | `toeic_vocab_questions` | 已建立 | FR-25d、FR-25e | TOEIC 題庫軌道二（Gemini 即時生成單字題），刻意維持 TOEIC 專用不隨軌道一泛用化 |
 | `answer_logs` | 已建立 | FR-27、FR-29 | 作答紀錄，跨軌道一/二共用一表；`assignment_id`（2026-08-08 追加）精準對應「今天這一批」 |
+| `certificate_profiles` | 待套用 | FR-30a | Owner 證照名冊；TOEIC 為內建項目，自訂證照以停用保留歷史資料 |
 | `certificate_goals` | 已建立 | FR-24／FR-72a | 證照準備目標（UPSERT，每人每 `exam_type` 一筆）；`important_day_id` 連結考試日期事件 |
-| `exam_official_scores` | 已建立 | FR-30 | 正式應考成績，僅查詢不修改，與每日小考作答紀錄分開建表 |
-| `certificate_daily_settings` | 已建立 | FR-26 | 每日出題數量／新題複習題比例／TOEIC 三軌比例設定 |
-| `certificate_daily_schedule_overrides` | 已建立 | FR-26 | 彈性排程的日期區間覆蓋（挪動/取消/區間覆蓋/平攤） |
+| `exam_official_scores` | 已建立／待擴充 | FR-30／FR-30b | 正式應考成績，僅新增與查詢；`0091` 新增選填補充內容 |
+| `certificate_daily_settings` | 已建立／待擴充 | FR-26／FR-30a | 每日出題數量與新題／複習比例；`0091` 新增 TOEIC 三軌固定題數 |
+| `certificate_daily_schedule_overrides` | 已建立／待擴充 | FR-26／FR-30a | 日期區間覆蓋；`0091` 新增 TOEIC 固定題數與不可重疊約束 |
 | `certificate_daily_assignments` | 已建立 | FR-27、FR-28 | 每天實際推播的題目記錄 |
 
 <details>
 <summary>SQL 與設計理由</summary>
+
+```sql
+CREATE TABLE certificate_profiles (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id),
+    certificate_key TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    is_builtin BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (user_id, certificate_key),
+    CHECK (certificate_key = lower(btrim(certificate_key))),
+    CHECK (btrim(display_name) <> '')
+);
+CREATE INDEX idx_certificate_profiles_active
+    ON certificate_profiles (user_id, is_active, display_name);
+```
+`src/migrations/0091_add_certificate_settings_menu_data.sql`
+
+- `certificate_key` 是正規化商業鍵；停用只改 `is_active`，不刪除目標、排程或正式成績。`updated_at` 由資料庫 Trigger 維護。
 
 ```sql
 CREATE TABLE skill_growth_digests (
@@ -667,11 +689,12 @@ CREATE TABLE exam_official_scores (
     exam_type TEXT NOT NULL,
     exam_date DATE NOT NULL,
     score TEXT NOT NULL,
+    note TEXT,  -- 0091 追加
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_exam_official_scores_user_exam_type ON exam_official_scores (user_id, exam_type);
 ```
-`src/migrations/0042_create_exam_official_scores_table.sql`
+`src/migrations/0042_create_exam_official_scores_table.sql`、`0091_add_certificate_settings_menu_data.sql`
 
 - 不加 UNIQUE：同一 `exam_type` 可能多次應考，每次獨立一筆
 
@@ -686,14 +709,17 @@ CREATE TABLE certificate_daily_settings (
     listen_ratio INT,
     write_ratio INT,
     vocab_ratio INT,
+    toeic_listen_count INT,  -- 0091 追加
+    toeic_write_count INT,   -- 0091 追加
+    toeic_vocab_count INT,   -- 0091 追加
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (user_id, exam_type)
 );
 ```
-`src/migrations/0043_create_certificate_daily_settings_table.sql`
+`src/migrations/0043_create_certificate_daily_settings_table.sql`、`0091_add_certificate_settings_menu_data.sql`
 
-- 三軌比例（`listen_ratio`／`write_ratio`／`vocab_ratio`）只有 TOEIC 使用；新題/複習題比例通用所有 `exam_type`，兩組維度刻意分開欄位（見 `docs/ADR/discuss/skill-growth.md` ADR-20）
+- 舊三軌比例欄位保留相容；`0091` 起選單寫入固定聽力／讀寫／單字題數，總題數由三者加總並受 CHECK 約束。
 
 ```sql
 CREATE TABLE certificate_daily_schedule_overrides (
@@ -703,6 +729,9 @@ CREATE TABLE certificate_daily_schedule_overrides (
     start_date DATE NOT NULL,
     end_date DATE NOT NULL,
     daily_question_count INT NOT NULL,
+    toeic_listen_count INT,  -- 0091 追加
+    toeic_write_count INT,   -- 0091 追加
+    toeic_vocab_count INT,   -- 0091 追加
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     CHECK (end_date >= start_date),
     CHECK (daily_question_count >= 0)
@@ -710,9 +739,9 @@ CREATE TABLE certificate_daily_schedule_overrides (
 CREATE INDEX idx_certificate_daily_schedule_overrides_user_exam_type
     ON certificate_daily_schedule_overrides (user_id, exam_type);
 ```
-`src/migrations/0044_create_certificate_daily_schedule_overrides_table.sql`
+`src/migrations/0044_create_certificate_daily_schedule_overrides_table.sql`、`0091_add_certificate_settings_menu_data.sql`
 
-- 比照 `budget_overrides`「全局預設＋特殊區間覆蓋」模式；`daily_question_count=0` 代表取消當天
+- `daily_question_count=0` 代表期間停出；`0091` 以 GiST exclusion constraint 禁止同一使用者、證照的日期區間重疊，TOEIC 固定三軌題數總和必須等於總題數。
 
 ```sql
 CREATE TABLE certificate_daily_assignments (

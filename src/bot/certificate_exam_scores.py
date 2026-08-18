@@ -12,12 +12,25 @@ from datetime import date
 from submodules.cloudsql.client import CloudSQLClient
 
 
-def record_score(db: CloudSQLClient, user_id: int, exam_type: str, exam_date: date, score: str) -> int:
+def record_score(
+    db: CloudSQLClient,
+    user_id: int,
+    exam_type: str,
+    exam_date: date,
+    score: str,
+    note: str | None = None,
+) -> int:
     """新增一筆正式應考成績，回傳新增紀錄的 id。不做 UPSERT——同一 `exam_type` 允許多次應考，
     每次都是獨立一筆（見 ADR-19 決策 7）。"""
     return db.insert(
         "exam_official_scores",
-        {"user_id": user_id, "exam_type": exam_type, "exam_date": exam_date, "score": score},
+        {
+            "user_id": user_id,
+            "exam_type": exam_type,
+            "exam_date": exam_date,
+            "score": score,
+            "note": note,
+        },
     )
 
 
@@ -50,5 +63,6 @@ def format_scores_summary(exam_type: str | None, rows: list[dict]) -> str:
     for row in rows:
         exam_date = row["exam_date"]
         prefix = f"・{row['exam_type']} " if exam_type is None else "・"
-        lines.append(f"{prefix}{exam_date.year}/{exam_date.month}/{exam_date.day}：{row['score']}")
+        note = f"（{row['note']}）" if row.get("note") else ""
+        lines.append(f"{prefix}{exam_date.year}/{exam_date.month}/{exam_date.day}：{row['score']}{note}")
     return "\n".join(lines)

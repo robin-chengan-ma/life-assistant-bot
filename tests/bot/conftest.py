@@ -39,6 +39,7 @@ class FakeCloudSQLClient:
             "certificate_daily_settings": [],
             "certificate_daily_schedule_overrides": [],
             "certificate_daily_assignments": [],
+            "certificate_profiles": [],
             "youtube_topics": [],
             "youtube_pushed_videos": [],
             # 2026-08-09（Step 4.1，見 robinson SPEC.md FR-33~FR-36、ADR-24）：求職模組。

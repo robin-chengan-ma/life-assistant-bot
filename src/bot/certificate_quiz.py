@@ -110,6 +110,24 @@ def _toeic_track_ratios(settings: dict | None) -> tuple[int, int, int]:
     return _DEFAULT_TOEIC_TRACK_RATIOS
 
 
+def effective_toeic_track_counts(
+    db: CloudSQLClient, user_id: int, target_date: date
+) -> tuple[int, int, int] | None:
+    """回傳指定日期的 TOEIC 固定三軌題數；未設定時維持舊比例相容路徑。"""
+    override = get_active_schedule_override(db, user_id, "toeic", target_date)
+    source = override or _get_settings(db, user_id, "toeic")
+    if source and all(
+        source.get(key) is not None
+        for key in ("toeic_listen_count", "toeic_write_count", "toeic_vocab_count")
+    ):
+        return (
+            source["toeic_listen_count"],
+            source["toeic_write_count"],
+            source["toeic_vocab_count"],
+        )
+    return None
+
+
 def _review_ratios(settings: dict | None) -> tuple[int, int]:
     if settings and settings.get("review_ratio_new") and settings.get("review_ratio_review"):
         return settings["review_ratio_new"], settings["review_ratio_review"]
@@ -224,10 +242,14 @@ def _build_assignment_plan(
     review_ratio_new, review_ratio_review = _review_ratios(settings)
 
     if exam_type == "toeic":
-        listen_ratio, write_ratio, vocab_ratio = _toeic_track_ratios(settings)
-        listen_count, write_count, vocab_count = _split_by_ratio(
-            total, [listen_ratio, write_ratio, vocab_ratio]
-        )
+        fixed_counts = effective_toeic_track_counts(db, user_id, target_date)
+        if fixed_counts is None:
+            listen_ratio, write_ratio, vocab_ratio = _toeic_track_ratios(settings)
+            listen_count, write_count, vocab_count = _split_by_ratio(
+                total, [listen_ratio, write_ratio, vocab_ratio]
+            )
+        else:
+            listen_count, write_count, vocab_count = fixed_counts
         track_specs = [
             ("listen", "certificate", listen_count),
             ("write", "certificate", write_count),
