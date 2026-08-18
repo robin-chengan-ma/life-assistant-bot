@@ -13,7 +13,7 @@ updated: 2026-08-18
 
 | 日期 | 對應 FR | 任務內容 | 開發者 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- | --- |
-| 2026-08-18 | FR-1～FR-4a／FR-6e～FR-6g／FR-20a／FR-72a／FR-74b | 功能開關與排程設定選單化：角色分流、三項 Owner 功能開關、個人通知開關、唯讀系統工作、統一重要日子／目標／旅遊日期發送器，並移除未記帳與未完成考題催促 | Codex | 程式與文件完成（待 commit／push／部署／實機驗收） | 新增 `schedule_settings.py`、`scheduled_notifications.py`、migration `0093` 與對應測試；關閉通知不停止背景工作，關閉功能則停止整個功能。Codex `pytest -q`：1918 passed（1 項第三方 warning）；`ruff check .` 與 `git diff --check` 全數通過。 |
+| 2026-08-18 | FR-1～FR-4a／FR-6e～FR-6g／FR-20a／FR-72a／FR-74b | 功能開關與排程設定選單化：角色分流、三項 Owner 功能開關、個人通知開關、唯讀系統工作、統一重要日子／目標／旅遊日期發送器，並移除未記帳與未完成考題催促 | Codex | 已 commit（待 push／部署／實機驗收） | commit `669accc`（2026-08-18）。新增 `schedule_settings.py`、`scheduled_notifications.py`、migration `0093` 與對應測試；關閉通知不停止背景工作，關閉功能則停止整個功能。Codex `pytest -q`：1918 passed（1 項第三方 warning）；`ruff check .` 與 `git diff --check` 全數通過。 |
 | 2026-08-18 | FR-19k／FR-20 | 系統事故收件與康復通知選單化：事故及 Robin Telegram→Email 備援送達狀態落地，Owner 先選事故、再勾選實際收過事故通知的家人，預覽後二次確認發送 | Codex | 完成（已 push／實機驗收；部署狀態未單獨回報） | commit `e761deb`、文件 commit `92dc623`（2026-08-18）。Robin 已回報 push 並完成 Telegram 實機測試，結果正常；未另行回報 Render 部署狀態。 |
 | 2026-08-18 | FR-24／FR-26／FR-30a～FR-30b／FR-6e | 考試設定選單化：主選單改名、證照名冊、目標／每日題數／正式考試紀錄四個子選單；TOEIC 固定三軌題數、非 TOEIC 尚無題庫提示、區間覆蓋不可重疊、正式成績補充內容 | Codex | 完成（已 push／實機驗收；部署狀態未單獨回報） | commit `20fd6c7`（2026-08-18）；文件 commit `bde3731`。Robin 已回報 push 並完成 Telegram 實機測試，結果正常。見 `docs/ADR/discuss/skill-growth.md` 2026-08-18 ADR-31。全專案 `pytest -q`：1921 passed（1 項第三方 `pydub` deprecation warning）；`ruff check .` 與 `git diff --check` 全數通過。 |
 | 2026-08-18 | 求職 FR-41／FR-41a | 「💼 求職分析」改為「💼 求職設定」並接上 `job_search:*` 選單：履歷／期望工作內容獨立編輯與二次確認清空、必要條件三欄位分段設定、職缺關鍵字新增與二次確認刪除、依分數排序的唯讀職缺清單、已應徵／面試／Offer 清單與四種狀態切換、全部職缺的人工關閉／重新開啟，以及既有其他平台職缺流程改由按鈕進入；移除舊 Slash Command、文字觸發詞與 `ID=...職缺...` 文字狀態更新。新增 migration `0090_add_job_posting_manual_closed_override.sql`，人工關閉覆寫旗標為 TRUE 時，週爬蟲不覆寫 `is_closed` | Codex | 完成（已推版／實機驗收） | commit `2c5da38`（2026-08-18）；Robin 已完成 push，Render 已隨 push 部署，並完成 Telegram 實機驗收且結果正常。Robin 於 2026-08-18 本機執行 `pytest -q`：1922 passed（僅 1 項第三方 `pydub` deprecation warning）；`ruff check .`：全數通過。求職相關測試：250 passed。DB Schema Reference 已同步；完整互動決策見 `docs/ADR/discuss/job-search.md` 2026-08-18 補充段落。 |
@@ -230,6 +230,8 @@ updated: 2026-08-18
 
 | 日期 | 版本 / commit | 異動摘要 | 開發者 |
 | --- | --- | --- | --- |
+| 2026-08-18 | `669accc` | 功能開關與排程設定選單化，並統一目標與行程日期通知 | Codex |
+| 2026-08-18 | `92dc623` | 補記康復通知 commit 與 push／實機驗收狀態 | Codex |
 | 2026-08-18 | `e761deb` | 康復通知改為可選事故與收件人，並落地 Telegram／Email 送達狀態 | Codex |
 | 2026-08-18 | `bde3731` | 補記考試設定選單化 commit 與驗收狀態 | Codex |
 | 2026-08-18 | `20fd6c7` | 考試設定選單化：證照名冊、目標、每日／區間題數與正式考試紀錄 | Codex |
@@ -376,6 +378,7 @@ updated: 2026-08-18
 
 | 日期 | Branch／版本 | 遠端 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- |
+| 2026-08-18 | `main`／`669accc` | GitHub | 待推版 | 功能 commit 已建立；待 Robin 連同本次 PROGRESS 同步 commit 一併 push |
 | 2026-08-17 | `main`／`85db061` | GitHub | 完成 | 08/17 Robin已推版（含 `27c8476`／`85db061` 兩筆，六模組目標泛化＋批次3補做） |
 | 2026-08-17 | `main`／`a6fd474` | GitHub | 完成 | 08/17 Robin 已推版；Render 已自動部署，migration 0084 已於開機時自動套用成功 |
 | 2026-08-17 | `main`／`30c5303` | GitHub | 完成 | 08/17 Robin 已推版（隨 `a6fd474` 一併確認，`30c5303` 為其祖先 commit） |
