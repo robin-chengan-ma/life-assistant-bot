@@ -1049,6 +1049,31 @@ callback 觸發，淨增 1 項新選單快照測試）；`ruff check .` 對本�
 `tests/bot/test_menu.py`、`tests/bot/test_goal_tracking_router.py`、
 `docs/specs/SPEC.md`、`docs/specs/PROGRESS.md`、`docs/ADR/discuss/robinson.md`。
 
+## 2026-08-18 [標籤：使用者] 事故收件追蹤與康復通知可選對象
+
+**狀態**：accepted
+
+**背景**：舊 `/recovered` 會直接廣播全部已綁定家人，無法知道哪些人實際收過某次
+事故通知，也沒有收件人選擇與二次確認。Robin 同時補充，Telegram 無法送達
+Owner 錯誤通知時，必須改用 Email 通知 Robin。
+
+**討論內容**：確認康復通知需與具體事故關聯，並保存事故發生當下實際嘗試與成功
+通知的家人。Owner 不應只能全員廣播，而應可在候選名單中自行勾選。
+
+**決策**：「發送康復通知」先列出最近尚未完成康復通知的事故；Owner 選擇
+事故後，候選人僅限該次實際成功收到事故通知的家人，預設全選且可取消勾選。
+必須預覽收件名單與固定文案、再按二次確認；單一失敗不中斷其他人，部分失敗時
+保留事故供重試。舊 `/recovered` 移除。Robin 錯誤通知優先走 Telegram，Telegram 失敗才寄
+`GMAIL_USER`；Email 也失敗時只保留資料庫紀錄與 Log，不建立第三種備援，且 Email
+備援不適用家人通知。
+
+**理由**：康復通知應精準回覆曾收過事故訊息的人，避免不知情家人收到沒有上下文的
+「已康復」。保存送達結果也讓部分失敗能安全重試，不會重複通知已成功的收件人。
+
+**後果**：以 migration `0092` 擴充 `system_error_reports` 的 Owner 送達與康復狀態，並新增
+`system_error_notification_recipients` 保存 incident／recovery 收件人及 sent／failed 結果；
+Telegram 主選單由 `recovery:*` callback 處理事故選擇、收件人勾選、預覽、確認與取消。
+
 ## 2026-08-18 「使用規則」文字模板由 Robin 逐字稿核准＋「技術分享」選單更名接上 YouTube 主題訂閱設定
 
 **狀態**：accepted

@@ -900,7 +900,8 @@ CREATE INDEX idx_job_applications_job_id_104 ON job_applications (job_id_104);
 
 | 資料表 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `system_error_reports` | 已建立 | FR-19j | 系統例外自動記錄與解法追蹤；`error_summary` 寫入前先去除 URL 查詢字串 |
+| `system_error_reports` | 已建立 | FR-19j／FR-19k／FR-20 | 系統例外、Robin Telegram／Email 送達狀態與康復通知狀態；`error_summary` 寫入前先去除 URL 查詢字串 |
+| `system_error_notification_recipients` | 已建立 | FR-19g／FR-20 | 每次事故／康復通知的家人收件人、Telegram 送達結果與時間 |
 
 <details>
 <summary>SQL 與設計理由</summary>
@@ -919,9 +920,17 @@ CREATE TABLE system_error_reports (
 ```
 `src/migrations/0061_create_system_error_reports_table.sql`
 
+Migration `0092_add_system_error_notification_tracking.sql` 新增 `owner_notification_method`、
+`owner_notification_status`、`owner_notified_at`、`recovery_status`、`recovery_sent_at`、
+`updated_at` 與 DB Trigger，並建立 `system_error_notification_recipients`。後者以
+`system_error_report_id` 關聯事故、`user_id` 關聯家人，`notification_type` 限定
+`incident`／`recovery`，`delivery_status` 限定 `sent`／`failed`；索引為
+`(system_error_report_id, notification_type, delivery_status)`。事故刪除時收件紀錄
+`ON DELETE CASCADE`，使用者則 `ON DELETE RESTRICT` 保留通知歷史。
+
 - 讓既有「私訊 Robin＋Drive log 連結」機制額外落地一份可查詢紀錄；`resolution` NULL 代表尚未處理；與 `complaints` 刻意分開（使用者主動客訴 vs 系統主動錯誤回報，性質不同）
 </details>
 
 ## 未分類
 
-（無——所有 33 張資料表皆可依內容明確對應到上述功能分組。）
+（無——所有 34 張資料表皆可依內容明確對應到上述功能分組。）

@@ -1,6 +1,6 @@
 ---
 title: API Schema
-updated: 2026-08-15
+updated: 2026-08-18
 ---
 
 # API Schema
@@ -35,7 +35,7 @@ updated: 2026-08-15
 | 項目 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
 | `GET /healthz` | 已實作，已部署上線 | FR-3（平台）／FR-21（Neon 容量監控）／FR-31a、FR-32（待辦推播） | cron-job.org 每 10 分鐘呼叫的 keep-alive 端點；順便借用同一頻率觸發 `NeonCapacityMonitor`（容量達 80% 私訊 Robin）與待辦到期標記／30 分鐘前提醒／每日 08:00 摘要，皆包 try/except 不影響本端點回應 |
-| `/recovered` | 已實作（`src/bot/commands.py::handle_recovered`） | FR-20 | 僅 Owner；問題修復後廣播「我康復了」給所有已綁定家人（不含 Robin 自己），單一失敗不影響其他人 |
+| `menu:recovered` → `recovery:*` | 已實作（`src/bot/recovery_notifications.py`） | FR-20 | Owner 先選尚未完成康復通知的事故，再勾選該次實際成功收到事故通知的家人；預覽文案與收件人後二次確認。部分失敗保留事故供重試；舊 `/recovered` 入口已移除 |
 | `錯誤ID=N 已處理：{解法}` | 已實作（`src/bot/router.py::_ERROR_RESOLUTION_PATTERN` → `src/bot/system_errors.py::update_resolution`） | FR-19j | Telegram 單行指令，直接 regex 解析（刻意用「錯誤ID=」而非「ID=」開頭，避免跟求職模組的應徵狀態更新語句撞在一起）寫入 `system_error_reports.resolution`，不走多輪對話狀態機；跟 Mobile App `PATCH /api/app/system-errors/<id>/resolution` 共用同一支 `update_resolution()` |
 
 <details>

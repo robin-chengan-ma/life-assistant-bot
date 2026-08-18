@@ -81,3 +81,29 @@ def test_list_error_reports_sorted_newest_first(fake_db):
     rows = system_errors.list_error_reports(fake_db)
 
     assert [row["error_summary"] for row in rows] == ["new", "old"]
+
+
+def test_update_owner_notification_records_email_delivery(fake_db):
+    report_id = system_errors.record_error_report(
+        fake_db, severity="general", triggering_feature="text", error_summary="boom", drive_log_url=None,
+    )
+
+    system_errors.update_owner_notification(fake_db, report_id, "email", True)
+
+    row = fake_db.select("system_error_reports", where="id = %s", params=(report_id,), fetch_one=True)
+    assert row["owner_notification_method"] == "email"
+    assert row["owner_notification_status"] == "sent"
+    assert row["owner_notified_at"] is not None
+
+
+def test_record_incident_notification_failure_has_no_notified_time(fake_db):
+    user_id = fake_db.insert("users", {"telegram_user_id": 2, "role": "媽媽", "is_owner": False})
+    report_id = system_errors.record_error_report(
+        fake_db, severity="critical", triggering_feature="text", error_summary="boom", drive_log_url=None,
+    )
+
+    system_errors.record_notification_result(fake_db, report_id, user_id, "incident", "failed")
+
+    row = fake_db.select("system_error_notification_recipients", fetch_one=True)
+    assert row["delivery_status"] == "failed"
+    assert row["notified_at"] is None

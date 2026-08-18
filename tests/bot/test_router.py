@@ -440,7 +440,7 @@ def test_general_message_with_pii_gets_masked_and_reminder(fake_db, monkeypatch)
     assert "提醒" in reply
 
 
-# --- /recovered（FR-20，Step 1.6，Owner 專屬）---
+# --- 舊 /recovered 入口已移除（FR-20）---
 
 
 class _FakeTelegramClientForRecovered:
@@ -454,17 +454,20 @@ class _FakeTelegramClientForRecovered:
         self.sent.append((chat_id, text))
 
 
-def test_recovered_command_broadcasts_to_family_when_owner(fake_db, monkeypatch):
+def test_recovered_command_is_no_longer_a_broadcast_for_owner(fake_db, monkeypatch):
     monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
     fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
     fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "媽媽", "is_owner": False})
     store = ConversationStateStore()
     telegram_client = _FakeTelegramClientForRecovered()
 
-    reply = router.handle_message(fake_db, store, ROBIN_ID, "/recovered", telegram_client=telegram_client)
+    llm_client = _FakeLLMClient(response_text="請使用主選單。")
+    reply = router.handle_message(
+        fake_db, store, ROBIN_ID, "/recovered", telegram_client=telegram_client, llm_client=llm_client,
+    )
 
-    assert "1 位家人" in reply
-    assert telegram_client.sent == [(FAMILY_ID, commands._RECOVERED_BROADCAST_TEXT)]
+    assert reply == "請使用主選單。"
+    assert telegram_client.sent == []
 
 
 def test_recovered_command_ignored_for_non_owner(fake_db, monkeypatch):

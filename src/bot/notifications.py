@@ -201,7 +201,7 @@ def _mark_sent(db: CloudSQLClient, notification_key: str, year: int) -> None:
 
 def _broadcast(telegram_client, recipients: list[dict], message: str) -> None:
     """推播「同一份訊息」給每一位收件人，單一使用者傳送失敗不影響其他人
-    （比照 `commands.handle_recovered()`）。
+    （比照其他逐一推播流程）。
     """
     _broadcast_pairs(telegram_client, [(user, message) for user in recipients])
 

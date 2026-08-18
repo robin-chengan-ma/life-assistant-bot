@@ -50,6 +50,7 @@ class FakeCloudSQLClient:
             "job_applications": [],
             # 2026-08-09（見 robinson SPEC.md FR-19j）：系統錯誤記錄與解法追蹤。
             "system_error_reports": [],
+            "system_error_notification_recipients": [],
             # 2026-08-15（Phase 6 第二批 2b，見 SPEC.md FR-6e／FR-6h）：重要日子 Telegram 流程，
             # 直接複用 Mobile App 既有的 AppImportantDayService（見
             # src/services/app_important_days.py、tests/services/test_app_important_days.py，
@@ -157,6 +158,8 @@ class FakeCloudSQLClient:
             return row.get("user_id") == params[0] and row.get("media_type") == params[1]
         if where == "telegram_user_id IS NOT NULL AND is_owner = FALSE":
             return row.get("telegram_user_id") is not None and row.get("is_owner") is False
+        if where == "system_error_report_id = %s AND notification_type = %s":
+            return row.get("system_error_report_id") == params[0] and row.get("notification_type") == params[1]
         # 2026-08-02（Step 1.7，見 robinson SPEC.md FR-31/FR-31a/FR-32）：待辦事項模組的查詢條件。
         if where == "user_id = %s AND status = %s":
             return row.get("user_id") == params[0] and row.get("status") == params[1]

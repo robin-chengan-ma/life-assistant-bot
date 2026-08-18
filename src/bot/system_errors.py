@@ -12,6 +12,7 @@
 docs/specs/mobile-app/SPEC.md ADR-1，Phase 4 開工時才會有 App 端程式碼）。
 """
 import re
+from datetime import datetime, timezone
 
 from submodules.cloudsql.client import CloudSQLClient
 
@@ -54,8 +55,39 @@ def record_error_report(
             "error_summary": sanitize_error_summary(error_summary),
             "drive_log_url": drive_log_url,
             "resolution": None,
+            "owner_notification_method": None,
+            "owner_notification_status": "pending",
+            "owner_notified_at": None,
+            "recovery_status": "pending",
+            "recovery_sent_at": None,
         },
     )
+
+
+def record_notification_result(
+    db: CloudSQLClient,
+    report_id: int,
+    user_id: int,
+    notification_type: str,
+    delivery_status: str,
+) -> int:
+    """保存事故或康復通知的實際 Telegram 發送結果。"""
+    return db.insert("system_error_notification_recipients", {
+        "system_error_report_id": report_id,
+        "user_id": user_id,
+        "notification_type": notification_type,
+        "delivery_status": delivery_status,
+        "notified_at": datetime.now(timezone.utc) if delivery_status == "sent" else None,
+    })
+
+
+def update_owner_notification(db: CloudSQLClient, report_id: int, method: str | None, delivered: bool) -> None:
+    """更新 Robin 錯誤通知的 Telegram／Email 送達結果。"""
+    db.update("system_error_reports", {
+        "owner_notification_method": method if delivered else None,
+        "owner_notification_status": "sent" if delivered else "undelivered",
+        "owner_notified_at": datetime.now(timezone.utc) if delivered else None,
+    }, where="id = %s", params=(report_id,))
 
 
 def update_resolution(db: CloudSQLClient, report_id: int, resolution: str) -> bool:

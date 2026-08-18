@@ -138,7 +138,7 @@ def _upload_error_log(filename: str, content: bytes) -> str | None:
         return None
 
 
-def _send_email_fallback(subject: str, body: str) -> None:
+def _send_email_fallback(subject: str, body: str) -> bool:
     """FR-19b 追加：Telegram 本身故障時的備援通知管道（見 robinson SPEC.md ADR-16）。
 
     Telegram 是 Robinson 唯一的對外管道，一旦 Telegram API 本身掛掉或 `TELEGRAM_BOT_TOKEN`
@@ -153,23 +153,25 @@ def _send_email_fallback(subject: str, body: str) -> None:
     gmail_password = os.environ.get("GMAIL_PASSWORD")
     if not gmail_user or not gmail_password:
         _logger.warning("Telegram 私訊 Robin 失敗，且未設定 GMAIL_USER/GMAIL_PASSWORD，無法寄送備援 email 通知")
-        return
+        return False
     try:
         EmailClient(username=gmail_user, password=gmail_password).send_text(
             to=gmail_user, subject=subject, body=body
         )
+        return True
     except Exception:
         _logger.exception("備援 email 通知寄送失敗，Robin 這次完全沒有收到任何主動通知")
+        return False
 
 
 def _notify_robin_of_error(
     feature: str, telegram_user_id: int, input_summary: str, *, severity: str = "general", db=None
-) -> None:
+) -> int | None:
     """FR-19a／FR-19b：例外發生時，除了 log（見呼叫端的 `_logger.exception`），額外私訊 Robin
     完整原始 Traceback，並把完整錯誤 log 上傳 Google Drive、附上專屬連結（見 ADR-15，
     supersede 原本 Step 2.4 規劃的 AI 自主診斷／GitHub PR 機制），讓 Robin 自己判斷原因、決定
-    要不要修復（甚至可另外請 Claude Code 協助排查）；修復後可用 `/recovered`（FR-20）廣播給
-    所有人。Telegram 本身送達失敗時，改寄 email 備援通知（見 ADR-16，`_send_email_fallback()`）。
+    要不要修復（甚至可另外請 Claude Code 協助排查）；修復後由 FR-20 Owner 選單
+    選擇事故與收件人。Telegram 本身送達失敗時，改寄 email 備援通知。
 
     **這個函式只會私訊 Robin 一人**（`ROBIN_TELEGRAM_TOKEN`），觸發當下的一般使用者與其他家人
     完全不會看到這裡的任何內容——他們收到的是 `webhook.py` 主流程另外送出的 `_GENERAL_COLD_REPLY`
@@ -194,8 +196,9 @@ def _notify_robin_of_error(
     owner_chat_id = os.environ.get("ROBIN_TELEGRAM_TOKEN")
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
     if not owner_chat_id or not bot_token:
-        return
+        return None
 
+    report_id = None
     try:
         now = datetime.now(timezone.utc)
         timestamp = now.strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -242,16 +245,29 @@ def _notify_robin_of_error(
             message = _CRITICAL_SEVERITY_BANNER + message
     except Exception:
         _logger.exception("組裝 Robin 錯誤通知內容失敗，無法送出任何通知（含 email 備援）")
-        return
+        return report_id
 
     try:
         TelegramClient(bot_token).send_text(chat_id=owner_chat_id, text=message)
+        if db is not None and report_id is not None:
+            try:
+                system_errors.update_owner_notification(db, report_id, "telegram", True)
+            except Exception:
+                _logger.exception("更新 Robin Telegram 通知送達狀態失敗")
     except Exception:
         _logger.exception("私訊 Robin 錯誤通知失敗（Telegram 本身可能故障），改嘗試 email 備援通知")
-        _send_email_fallback(
+        email_delivered = _send_email_fallback(
             subject=f"🐛 Robinson 系統例外通知（Telegram 無法送達，觸發功能：{feature}）",
             body=message,
         )
+        if db is not None and report_id is not None:
+            try:
+                system_errors.update_owner_notification(
+                    db, report_id, "email" if email_delivered else None, email_delivered
+                )
+            except Exception:
+                _logger.exception("更新 Robin 錯誤通知送達狀態失敗")
+    return report_id
 
 
 def _build_privacy_llm_client() -> LLMClient | None:
@@ -338,7 +354,9 @@ def _is_llm_failure(exc: Exception) -> bool:
     return isinstance(exc, (LLMQuotaGuardError, genai_errors.APIError))
 
 
-def _broadcast_major_illness_to_family(db: CloudSQLClient | None, exclude_telegram_user_id: int) -> None:
+def _broadcast_major_illness_to_family(
+    db: CloudSQLClient | None, exclude_telegram_user_id: int, report_id: int | None = None
+) -> None:
     """FR-19g：LLM 核心服務故障時，除了觸發當下的使用者已經透過主流程的 `reply` 收到
     `_MAJOR_ILLNESS_REPLY`，額外主動廣播同一句話給「所有已綁定的家人帳號」。
 
@@ -349,7 +367,7 @@ def _broadcast_major_illness_to_family(db: CloudSQLClient | None, exclude_telegr
     這個函式發生的任何失敗（DB 查詢失敗、Telegram 送不出去）都只能記 log，絕對不能再往外
     拋出——它本身就是在處理另一個未預期例外的安全網內部，若這裡又炸出新的未預期例外，
     會讓整個安全網失去意義；單一家人傳送失敗不影響其他人，逐一 try/except 後繼續下一位
-    （比照 `commands.handle_recovered()` 廣播「我康復了」的既有寫法）。
+    每位收件人的送達結果獨立記錄，單一失敗不影響其他人。
     """
     if db is None:
         _logger.warning("重大疾病級廣播略過：db 連線不可用")
@@ -362,7 +380,7 @@ def _broadcast_major_illness_to_family(db: CloudSQLClient | None, exclude_telegr
     try:
         family_users = db.select(
             "users",
-            columns=("telegram_user_id",),
+            columns=("id", "telegram_user_id"),
             where="telegram_user_id IS NOT NULL AND is_owner = FALSE",
         )
     except Exception:
@@ -374,10 +392,19 @@ def _broadcast_major_illness_to_family(db: CloudSQLClient | None, exclude_telegr
         target_telegram_user_id = user["telegram_user_id"]
         if target_telegram_user_id == exclude_telegram_user_id:
             continue
+        delivery_status = "sent"
         try:
             telegram_client.send_text(chat_id=target_telegram_user_id, text=_MAJOR_ILLNESS_REPLY)
         except Exception:
+            delivery_status = "failed"
             _logger.exception("重大疾病級廣播給 telegram_user_id=%s 失敗", target_telegram_user_id)
+        if report_id is not None and user.get("id") is not None:
+            try:
+                system_errors.record_notification_result(
+                    db, report_id, user["id"], "incident", delivery_status
+                )
+            except Exception:
+                _logger.exception("記錄重大疾病級廣播送達結果時發生錯誤")
 
 
 def _is_duplicate_update(update_id: int) -> bool:
@@ -600,6 +627,7 @@ def telegram_webhook():
     reply = _GENERAL_COLD_REPLY
     reply_markup = None
     db = None
+    incident_report_id = None
     try:
         db = CloudSQLClient()
         telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
@@ -705,14 +733,15 @@ def telegram_webhook():
         reply_markup = None
         if _is_llm_failure(exc):
             reply = _MAJOR_ILLNESS_REPLY
-            _notify_robin_of_error(error_feature, telegram_user_id, error_input_summary, severity="critical", db=db)
-            _broadcast_major_illness_to_family(db, telegram_user_id)
+            incident_report_id = _notify_robin_of_error(
+                error_feature, telegram_user_id, error_input_summary, severity="critical", db=db
+            )
+            _broadcast_major_illness_to_family(db, telegram_user_id, incident_report_id)
         else:
             reply = _GENERAL_COLD_REPLY
-            _notify_robin_of_error(error_feature, telegram_user_id, error_input_summary, severity="general", db=db)
-    finally:
-        if db is not None:
-            db.close()
+            incident_report_id = _notify_robin_of_error(
+                error_feature, telegram_user_id, error_input_summary, severity="general", db=db
+            )
 
     if not reply or not reply.strip():
         # 沒有例外、純粹是這次處理結果剛好是空字串（例如 Gemini 生成回傳空內容）：
@@ -727,6 +756,7 @@ def telegram_webhook():
         reply_markup = None
 
     if reply:
+        reply_delivery_status = "sent"
         try:
             telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
             # 2026-08-15（Phase 6 第二批 2a）：只有真的有選單按鈕時才多帶這個關鍵字參數，維持既有
@@ -736,8 +766,23 @@ def telegram_webhook():
             else:
                 telegram_client.send_text(chat_id=telegram_user_id, text=reply)
         except Exception:
+            reply_delivery_status = "failed"
             # 傳送失敗（例如 Telegram API 本身出問題）是另一個獨立的失敗模式，不影響前面
             # handle_message 的處理結果，一樣只記錄不往外拋，避免這裡也觸發 Telegram 重試。
             _logger.exception("傳送 Telegram 回覆失敗（telegram_user_id=%s）", telegram_user_id)
+        if db is not None and incident_report_id is not None:
+            try:
+                user = db.select(
+                    "users", where="telegram_user_id = %s", params=(telegram_user_id,), fetch_one=True
+                )
+                if user is not None and not user.get("is_owner"):
+                    system_errors.record_notification_result(
+                        db, incident_report_id, user["id"], "incident", reply_delivery_status
+                    )
+            except Exception:
+                _logger.exception("記錄事故通知送達結果時發生錯誤")
+
+    if db is not None:
+        db.close()
 
     return jsonify({"ok": True}), 200

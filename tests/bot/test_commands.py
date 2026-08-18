@@ -19,16 +19,7 @@ class _FakeLLMClient:
         return self.response_text
 
 
-def test_handle_rule_returns_appendix_a_text():
-    assert commands.handle_rule() == templates.APPENDIX_A_TEXT
-
-
-# --- handle_recovered（FR-20，Step 1.6）---
-
-
 class _FakeTelegramClient:
-    """模擬 submodules.telegram.client.TelegramClient，只實作 handle_recovered 會用到的 send_text。"""
-
     def __init__(self, fail_for_chat_ids=()):
         self.sent = []
         self._fail_for_chat_ids = set(fail_for_chat_ids)
@@ -39,38 +30,8 @@ class _FakeTelegramClient:
         self.sent.append((chat_id, text))
 
 
-def test_handle_recovered_broadcasts_to_all_bound_non_owner_users(fake_db):
-    fake_db.insert("users", {"telegram_user_id": 1, "role": "Robin", "is_owner": True})
-    fake_db.insert("users", {"telegram_user_id": 2, "role": "媽媽", "is_owner": False})
-    fake_db.insert("users", {"telegram_user_id": 3, "role": "爸爸", "is_owner": False})
-    telegram_client = _FakeTelegramClient()
-
-    reply = commands.handle_recovered(fake_db, telegram_client)
-
-    assert {chat_id for chat_id, _ in telegram_client.sent} == {2, 3}
-    assert all(text == commands._RECOVERED_BROADCAST_TEXT for _, text in telegram_client.sent)
-    assert "2 位家人" in reply
-
-
-def test_handle_recovered_excludes_unbound_users(fake_db):
-    fake_db.insert("users", {"telegram_user_id": None, "role": "妹妹", "is_owner": False})
-    telegram_client = _FakeTelegramClient()
-
-    reply = commands.handle_recovered(fake_db, telegram_client)
-
-    assert telegram_client.sent == []
-    assert "0 位家人" in reply
-
-
-def test_handle_recovered_continues_after_one_send_failure(fake_db):
-    fake_db.insert("users", {"telegram_user_id": 2, "role": "媽媽", "is_owner": False})
-    fake_db.insert("users", {"telegram_user_id": 3, "role": "爸爸", "is_owner": False})
-    telegram_client = _FakeTelegramClient(fail_for_chat_ids={2})
-
-    reply = commands.handle_recovered(fake_db, telegram_client)
-
-    assert telegram_client.sent == [(3, commands._RECOVERED_BROADCAST_TEXT)]
-    assert "1 位家人" in reply
+def test_handle_rule_returns_appendix_a_text():
+    assert commands.handle_rule() == templates.APPENDIX_A_TEXT
 
 
 def test_start_clean_all_dialog_confirm_reports_count_and_sets_pending_state(fake_db):

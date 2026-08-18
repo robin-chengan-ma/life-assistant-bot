@@ -14,6 +14,7 @@ from src.bot import (
     job_settings,
     menu,
     query,
+    recovery_notifications,
     system_errors,
     templates,
     toggles,
@@ -54,8 +55,6 @@ _VOICE_TRANSCRIBED_REMINDER = (
 # 唯一保留的 Slash Command，用於 START 首次驗證及重新顯示主選單；取代舊版 `/set_invite_codes`
 # 的 Owner 建立使用者流程已改為選單驅動，見 commands.start_permission_menu()。
 _START_TRIGGERS = {"/start"}
-# 2026-08-02（Step 1.6，見 robinson SPEC.md FR-20）：Owner 專屬，廣播「我康復了」給所有家人。
-_RECOVERED_TRIGGERS = {"/recovered"}
 _RULE_TRIGGERS = {"/rule", "我要看使用規則"}
 _FUNCTION_TRIGGERS = {"/function", "我要看所有功能"}
 _MY_TOGGLES_TRIGGERS = {"/my_toggles", "我的功能設定"}
@@ -172,9 +171,8 @@ def handle_message(
     專用的獨立 Key，只會透傳到 `chat.handle_chat_message()`（見該函式 docstring）；`None` 時遮蔽
     只跑免費的 Regex 層，不影響其餘指令/對話流程分支。
 
-    `telegram_client`（2026-08-02，Step 1.6，見 robinson SPEC.md FR-20）：`/recovered`（廣播
-    「我康復了」給所有已綁定家人）與 `pending_complaint_content`（Step 1.9，FR-62，私訊 Robin
-    客訴分析報告）這兩個分支會用到，其餘分支不需要。
+    `telegram_client`：康復通知確認 callback 與 `pending_complaint_content`（Step 1.9，
+    FR-62，私訊 Robin 客訴分析報告）會用到，其餘分支不需要。
 
     `calendar_client`（2026-08-05，見 robinson SPEC.md FR-66a、ADR-17）：`pending_todo_calendar_sync`
     （建立事件）與 `pending_todo_action_confirm`（標記完成/取消時刪除對應事件）這兩個分支會用到；
@@ -222,8 +220,6 @@ def handle_message(
             return commands.start_set_family_birthday(db, state_store, telegram_user_id)
         if text in _MY_TOGGLES_TRIGGERS:
             return commands.start_my_toggles(db, state_store, telegram_user_id, user_id)
-        if text in _RECOVERED_TRIGGERS:
-            return commands.handle_recovered(db, telegram_client)
         error_resolution_match = _ERROR_RESOLUTION_PATTERN.match(text)
         if error_resolution_match:
             # 2026-08-09（見 robinson SPEC.md FR-19j）：系統錯誤解法記錄語句，不走多輪對話，
@@ -412,7 +408,30 @@ def handle_callback_query(
         if key == "certificate":
             state_store.clear(telegram_user_id)
             return certificate_settings.start_menu()
+        if key == "recovered":
+            state_store.clear(telegram_user_id)
+            return recovery_notifications.start_menu(db)
         return menu.not_yet_implemented_reply()
+
+    if data.startswith("recovery:"):
+        if not is_owner:
+            return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
+        action = data[len("recovery:") :]
+        if action.startswith("incident:"):
+            return recovery_notifications.select_incident(
+                db, state_store, telegram_user_id, int(action.rsplit(":", 1)[1])
+            )
+        if action.startswith("toggle:"):
+            return recovery_notifications.toggle(
+                db, state_store, telegram_user_id, int(action.rsplit(":", 1)[1])
+            )
+        if action == "preview":
+            return recovery_notifications.preview(db, state_store, telegram_user_id)
+        if action == "confirm":
+            return recovery_notifications.confirm(db, state_store, telegram_user_id, telegram_client)
+        if action == "cancel":
+            return recovery_notifications.cancel(state_store, telegram_user_id)
+        return recovery_notifications.start_menu(db)
 
     if data.startswith("daily_log:"):
         # 2026-08-16（Phase 6 第二批 2c，FR-6e）：日常紀錄第二層子選單分派。

@@ -48,11 +48,6 @@ _logger = logging.getLogger(__name__)
 
 _EXIT_PHRASES = {"沒有了", "結束"}
 
-# 2026-08-02（Step 1.6，見 robinson SPEC.md FR-20）：Robin 手動確認修復完成後用來廣播的固定
-# 文案；Phase 1 沒有 Step 2.4 的 AI 自主修復流程，「有沒有修好」完全是 Robin 自己判斷，
-# `/recovered` 只負責「廣播」這個動作本身。
-_RECOVERED_BROADCAST_TEXT = "🎉 主任，我已經完全康復了！剛剛的問題已經修好，現在可以正常為大家服務囉！"
-
 # 2026-08-02（robinson SPEC.md FR-16a）：所有「會實際刪除/寫入資料」的確認流程，在 LLM 判斷
 # 使用者已經表達 CONFIRM 之後，不會馬上執行，而是多一層更嚴格的把關——要求逐字打字輸入這個
 # 固定關鍵字才算數。背景：Robin 指出語音輸入可能被 Whisper 聽錯（例如把「不要」聽成「要」），
@@ -75,28 +70,6 @@ def _voice_blocked_final_confirm_reply() -> str:
 def handle_rule() -> str:
     """/rule：回傳規範文本，不經過 LLM 生成。"""
     return templates.APPENDIX_A_TEXT
-
-
-def handle_recovered(db: CloudSQLClient, telegram_client) -> str:
-    """/recovered（Owner 專屬，見 robinson SPEC.md FR-20）：廣播「我康復了」給所有已綁定家人。
-
-    刻意排除 Robin 自己（`is_owner = TRUE`）：他就是下這個指令的人，不需要廣播給自己，
-    這個函式的回傳值（回覆給 Robin 的確認文字）已經算是給他的直接回饋。單一家人傳送失敗
-    不影響其他人，逐一 try/except、記錄失敗但繼續廣播下一位，最後回報實際成功通知的人數。
-    """
-    family_users = db.select(
-        "users",
-        columns=("telegram_user_id",),
-        where="telegram_user_id IS NOT NULL AND is_owner = FALSE",
-    )
-    notified_count = 0
-    for user in family_users:
-        try:
-            telegram_client.send_text(chat_id=user["telegram_user_id"], text=_RECOVERED_BROADCAST_TEXT)
-            notified_count += 1
-        except Exception:
-            _logger.exception("廣播「我康復了」給 telegram_user_id=%s 失敗", user["telegram_user_id"])
-    return f"好的！已經通知 {notified_count} 位家人我恢復正常運作了！"
 
 
 _CLEAN_ALL_DIALOG_CONFIRM_PROMPT = (

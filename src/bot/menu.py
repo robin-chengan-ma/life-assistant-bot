@@ -98,7 +98,7 @@ MAIN_MENU_ITEMS = [
 
 # 尚未接上真正邏輯的項目，按下後只回覆固定的「開發中」訊息；2b 起逐批把 key 移出這裡。
 _NOT_YET_IMPLEMENTED_KEYS = {
-    "schedule", "recovered",
+    "schedule",
 }
 
 # 2026-08-18（批次4，FR-9c）：資料查詢可勾選的 7 個模組，`analytics_method` 對應
