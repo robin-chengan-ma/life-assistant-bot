@@ -153,7 +153,7 @@ def test_owner_only_modules_are_hidden_from_family_and_protected_on_backend():
 def test_owner_navigation_uses_confirmed_mobile_drawer_order():
     navigation = AppAnalyticsService(FakeDatabase()).navigation(user(is_owner=True))
 
-    assert list(navigation) == ["todos", "body", "finance", "mood", "skills", "jobs", "exams", "complaints"]
+    assert list(navigation) == ["todos", "body", "finance", "mood", "skills", "jobs", "exams"]
 
 
 def test_finance_returns_chart_ready_daily_category_and_income_data():
@@ -272,20 +272,6 @@ def test_body_returns_latest_record_defaults_bmi_and_goal_description():
     assert result["latest_body_record"]["bmi"] == 22.86
     assert result["body_defaults"] == {"height_cm": 175, "weight_kg": 70.0, "waist_cm": 82}
     assert result["goals"][0]["target_description"] == "減重至 65 公斤"
-
-
-def test_complaints_include_user_feedback_and_system_errors_for_owner():
-    db = FakeDatabase(
-        query_rows={
-            "app_analytics:complaints": [{"id": 1, "content": "測試客訴", "created_at": "2026-08-01"}],
-            "app_analytics:system_errors": [{"id": 2, "error_summary": "錯誤", "resolution": None}],
-        }
-    )
-
-    result = AppAnalyticsService(db).complaints(user(is_owner=True), date(2026, 8, 1), date(2026, 8, 7))
-
-    assert result["user_feedback"][0]["content"] == "測試客訴"
-    assert result["system_errors"][0]["resolution"] is None
 
 
 def test_dashboard_returns_summary_and_role_specific_sent_notifications():

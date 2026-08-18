@@ -129,7 +129,6 @@ _MODULES: dict[str, dict[str, Any]] = {
     "skills": {"label": "技術分享", "feature_key": "tech_intel", "owner_only": True, "color": "#D9544D"},
     "jobs": {"label": "求職分析", "feature_key": "job_search", "owner_only": True, "color": "#7656C9"},
     "exams": {"label": "考試成績", "feature_key": "certificate", "owner_only": True, "color": "#D89B20"},
-    "complaints": {"label": "客訴回饋", "feature_key": None, "owner_only": True, "color": "#78827F"},
 }
 
 
@@ -736,25 +735,4 @@ class AppAnalyticsService:
             or self._has_user_data("youtube_pushed_videos", user.database_id),
             "digests": [_json_row(row) for row in digests],
             "videos": [_json_row(row) for row in videos],
-        }
-
-    def complaints(self, user: AuthenticatedUser, start: date, end: date) -> dict[str, Any]:
-        self._authorize(user, "complaints")
-        feedback = self._db.execute_query(
-            """/* app_analytics:complaints */ SELECT c.id, c.content, c.created_at, u.role
-            FROM complaints c JOIN users u ON u.id = c.user_id
-            WHERE DATE(c.created_at AT TIME ZONE 'Asia/Taipei') BETWEEN %s AND %s
-            ORDER BY c.created_at DESC""",
-            (start, end),
-        )
-        errors = self._db.execute_query(
-            """/* app_analytics:system_errors */ SELECT id, occurred_at, severity, triggering_feature,
-            error_summary, drive_log_url, resolution FROM system_error_reports
-            WHERE DATE(occurred_at AT TIME ZONE 'Asia/Taipei') BETWEEN %s AND %s ORDER BY occurred_at DESC""",
-            (start, end),
-        )
-        return {
-            "has_any_data": self._has_data("complaints") or self._has_data("system_error_reports"),
-            "user_feedback": [_json_row(row) for row in feedback],
-            "system_errors": [_json_row(row) for row in errors],
         }

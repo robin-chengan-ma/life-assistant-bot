@@ -59,14 +59,9 @@ updated: 2026-08-18
 
 | 項目 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `/function` | 現行舊程式仍存在／已排入移除 | 已取消 | 正式規格已取消功能總覽與細節追問，Phase 6 須移除路由、處理函式及測試；功能探索改由 Telegram 可見選單提供 |
+| `/function` | 已移除 | 已取消 | 功能探索改由 Telegram 可見選單與固定功能別名導引提供 |
 | 一般聊天核心 | 已完成縮限（`src/bot/chat.py::handle_chat_message`） | 一般對話 FR-1～FR-13 | 僅含本人結構化資料唯讀查詢、使用者內容整理分析及功能導引；只保留依 Telegram 使用者隔離的 10 分鐘記憶體上下文，逾時或切換選單清除，不直接異動正式資料、即時上網、讀寫知識庫或落地聊天紀錄 |
-| `pending_user_knowledge` | 現行舊程式仍存在／已排入移除 | 已取消 | 查無答案後教學與知識庫寫入流程已取消，Phase 6 須移除狀態、路由、處理函式及測試 |
-| `pending_name_confirm` | 現行舊程式仍存在／已排入移除 | 已取消 | 依持久化知識庫比對人名的流程已取消，Phase 6 須移除相關狀態與測試 |
-| `/clean-all-dialog`／確認狀態 | 現行舊程式仍存在／已排入移除 | 已取消 | 清除全部對話與摘要功能已取消，Phase 6 須移除路由、狀態、處理函式及測試 |
-| `pending_save_knowledge_confirm` | 現行舊程式仍存在／已排入移除 | 已取消 | 主動新增知識功能已取消，Phase 6 須移除狀態、路由、處理函式及測試 |
-| `/clean-target-dialog` | 現行舊程式仍存在／已排入移除 | 已取消 | 依主題刪除知識與對話功能已取消，Phase 6 須移除路由、狀態、處理函式及測試 |
-| `pending_clean_target_dialog_confirm` | 現行舊程式仍存在／已排入移除 | 已取消 | 清除指定主題知識／對話功能已取消，Phase 6 須連同相關狀態、路由與測試移除 |
+| 已取消的知識／對話流程 | 已移除 | FR-77 | `pending_user_knowledge`、`pending_name_confirm`、`/clean-all-dialog`、`pending_save_knowledge_confirm`、`/clean-target-dialog` 及相關狀態、處理函式與測試均不再存在 |
 
 ## 個資偵測與遮蔽機制
 
@@ -102,12 +97,6 @@ updated: 2026-08-18
 | `/mood_journal` | 已實作（`src/bot/commands.py::start_mood_journal`） | FR-49、FR-50、FR-56h | 心情分類（固定 6 選一）→ 日記內容 → 個人成就三選一提示（可跳過）三輪反問；全程不需 LLM；日記/成就內容套用個資遮蔽 |
 | `/backfill_mood` | 已實作（`src/bot/commands.py::start_mood_backfill`） | FR-49 | 先問補記日期（LLM 解析，僅接受今天或過去），確定後接入 `/mood_journal` 既有三輪流程 |
 | `/my_mood_journals` | 已實作（`src/bot/commands.py::start_mood_list`） | FR-49 | 列出最近 10 筆，輸入編號可更新（重走分類/內容兩輪）或刪除（簡單一輪 CONFIRM/CANCEL，不套用 FR-16a） |
-
-## 客訴收集
-
-| 項目 | 狀態 | 對應 FR | 說明 |
-| --- | --- | --- | --- |
-| `/complaint` | 已實作（`src/bot/commands.py::start_complaint`） | FR-60～FR-63 | 固定提問（不經 LLM）→ 下一則訊息視為客訴內容，寫入（含個資遮蔽）後立即呼叫 Gemini 分析私訊 Robin（不回傳給客訴本人）；分析/私訊失敗只記 log，不影響已成功記錄 |
 
 ## 記帳
 
@@ -221,7 +210,7 @@ updated: 2026-08-18
 | 項目 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
 | `GET /api/app/dashboard` | 已實作（`dashboard()`） | FR-64 | 首頁摘要卡片資料，複用 `AppAnalyticsService.dashboard()` |
-| `GET /api/app/analytics/<module_key>` | 已實作（`analytics()`） | FR-64 | 唯讀分析頁面資料，`module_key` 對應 todos/body/finance/mood/jobs/exams/skills/complaints；依模組解析查詢日期區間（todos 額外支援月曆區間）；功能開關關閉回 409、越權存取回 403 |
+| `GET /api/app/analytics/<module_key>` | 已實作（`analytics()`） | FR-64 | 唯讀分析頁面資料，`module_key` 對應 todos/body/finance/mood/jobs/exams/skills；依模組解析查詢日期區間（todos 額外支援月曆區間）；功能開關關閉回 409、越權存取回 403 |
 | `PATCH /api/app/system-errors/<id>/resolution` | 已實作（`update_error_resolution()`） | FR-19j | 僅 Owner；App 端補記系統錯誤解法，與 Telegram「錯誤ID=N 已處理：{解法}」共用同一支 `src/bot/system_errors.py::update_resolution()` |
 | `POST /api/app/body/weight-logs` | 已實作（`create_weight_log()`） | FR-64a | App 端手動輸入體重（取代已移除的藍牙體重計整合方案），40～150 公斤範圍檢查，複用 `src/bot/body.py::create_weight_log()` |
 | `POST /api/app/diet/recognize-photo` | 已實作（`recognize_diet_image()`） | FR-64 | 飲食照片辨識（LLM Vision），App 端專屬能力，Telegram 端沒有對應路由 |

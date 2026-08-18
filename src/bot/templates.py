@@ -114,42 +114,4 @@ FEATURE_LIST = [
         ],
     },
     {"key": "important_notify", "name": "重要通知", "owner_only": False, "desc": "節日／生日提醒", "examples": []},
-    {
-        "key": "complaint",
-        "name": "客訴回饋",
-        "owner_only": False,
-        "desc": "輸入「我要客訴你」告訴我們哪裡需要改進",
-        "examples": [],
-    },
 ]
-
-
-def build_function_overview_raw_text() -> str:
-    """組出 /function「總覽」階段要給 LLM 參考的原始素材（功能名稱＋一句話簡述＋權限標記）。
-
-    這不是最終要回給使用者的文字——依 FR-56c，商業邏輯清單只能當內部素材，最終回覆
-    一定要經過 LLM 用 Robinson 人格背景改寫成口語（見 `commands.handle_function`）。
-    """
-    lines = ["羅賓森目前的功能清單：", ""]
-    for feature in FEATURE_LIST:
-        tag = "僅 Robin 可用" if feature["owner_only"] else "全體使用者可用"
-        lines.append(f"- {feature['name']}（{tag}）：{feature['desc']}")
-    return "\n".join(lines)
-
-
-def build_function_manual_text() -> str:
-    """組出完整功能手冊（含情境範例），供一般聊天核心在使用者追問特定功能細節時參考（FR-56a／FR-56b）。
-
-    同樣是內部素材，不可逐字回傳給使用者，須經 LLM 用 Robinson 語氣改寫（FR-56c）。
-    """
-    blocks = []
-    for feature in FEATURE_LIST:
-        tag = "僅 Robin 可用" if feature["owner_only"] else "全體使用者可用"
-        block_lines = [f"【{feature['name']}】（{tag}）", f"能力說明：{feature['desc']}"]
-        if feature["examples"]:
-            block_lines.append("情境範例：")
-            block_lines.extend(f"  - {example}" for example in feature["examples"])
-        else:
-            block_lines.append("情境範例：（此功能尚未實作，暫無範例）")
-        blocks.append("\n".join(block_lines))
-    return "\n\n".join(blocks)

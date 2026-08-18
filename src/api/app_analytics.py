@@ -46,7 +46,6 @@ _ANALYTICS_METHODS = {
     "jobs": "jobs",
     "exams": "exams",
     "skills": "skills",
-    "complaints": "complaints",
 }
 
 

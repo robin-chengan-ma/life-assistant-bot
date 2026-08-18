@@ -4,11 +4,10 @@
 （見 FR-19b）額外落地一份可查詢、可補記解法的紀錄，存進 `system_error_reports` 表。寫入時機
 與私訊同一次流程一起發生（見 webhook.py），本模組只負責純粹的資料操作，方便獨立測試。
 
-跟 `complaints`（使用者主動送出的客訴，FR-60～FR-63）刻意分成兩張表：使用者客訴只是查看，不需要
-解法欄位；系統主動推送的錯誤回報才需要追蹤處理進度，兩者性質不同（2026-08-09 Robin 澄清）。
+這些是系統自動偵測且可追蹤處理狀態的錯誤紀錄，可由 Robin 補記解法。
 
 `resolution` 支援兩個寫入入口共用同一套邏輯：Telegram「錯誤ID=N 已處理：{解法內容}」單行指令
-（見 `src/bot/router.py`）與 Mobile App 客訴回饋頁的「系統錯誤回報」區塊（見
+（見 `src/bot/router.py`）與 Mobile App 的「系統錯誤回報」區塊（見
 docs/specs/mobile-app/SPEC.md ADR-1，Phase 4 開工時才會有 App 端程式碼）。
 """
 import re

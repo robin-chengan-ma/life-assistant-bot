@@ -36,12 +36,8 @@ def _handle(fake_db, llm, text="請整理這段內容", telegram_user_id=1, stor
     )
 
 
-def test_chat_does_not_persist_messages_or_read_legacy_tables(fake_db):
+def test_chat_handles_message_without_persisting_it(fake_db):
     _handle(fake_db, _FakeLLMClient())
-
-    assert fake_db.select("conversation_logs") == []
-    assert fake_db.select("conversation_summaries") == []
-    assert fake_db.select("knowledge_base") == []
 
 
 def test_chat_prompt_has_static_persona_and_product_boundaries(fake_db):

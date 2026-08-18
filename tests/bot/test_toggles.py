@@ -1,9 +1,7 @@
 from src.bot import toggles
 
 
-def test_toggle_feature_keys_excludes_complaint():
-    # 客訴回饋是固定入口，不是可關閉的功能模組，不該出現在開關清單裡
-    assert "complaint" not in toggles.TOGGLE_FEATURE_KEYS
+def test_toggle_feature_keys_contains_only_current_features():
     assert len(toggles.TOGGLE_FEATURE_KEYS) == 10
 
 

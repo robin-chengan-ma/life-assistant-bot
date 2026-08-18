@@ -23,7 +23,7 @@ updated: 2026-08-18
 > Render 自動部署套用（實際套用時間以資料庫 `schema_migrations` 追蹤表為準）。
 >
 > 本文件多數章節涵蓋到 migration `0061`（`system_error_reports`）；後續異動依功能逐步補登，
-> 考試設定、求職設定與通知接收設定已涵蓋至 `0093`。其他 `0062` 之後的異動見 `src/migrations/` 與 `docs/specs/SPEC.md`
+> 考試設定、求職設定與通知接收設定已涵蓋至 `0093`；FR-77 取消功能資料表清理為 `0094`。其他 `0062` 之後的異動見 `src/migrations/` 與 `docs/specs/SPEC.md`
 > 對應功能區塊掌握最新範圍。CREATE TABLE 語法只保留欄位定義本身，`COMMENT ON` 逐欄註解請直接看
 > 對應 migration 檔案，不在此重複。
 
@@ -118,60 +118,11 @@ CREATE TABLE invite_codes (
 
 ## Gemini 對話核心
 
-| 資料表 | 狀態 | 對應 FR | 說明 |
+| Migration | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `knowledge_base` | 已建立 | FR-9（前三類） | 知識庫：`general_persona`／`general_family`（全體共用）／`custom`（個人客製，含 `label` 分類欄位） |
-| `conversation_logs` | 已建立 | FR-9（第④類） | 個人化完整對話歷史，`content` 已過個資遮蔽，`deleted_at` 軟刪除 |
-| `conversation_summaries` | 已建立 | chat-core ADR-3 | 長記憶滾動摘要，每人一筆，`summarized_up_to_log_id` 標記摘要進度 |
+| `0094_drop_cancelled_chat_tables.sql` | 已建立／待部署套用 | FR-77 | 移除 `knowledge_base`、`conversation_logs`、`conversation_summaries`；舊 migration 保留不改寫 |
 
-<details>
-<summary>SQL 與設計理由</summary>
-
-```sql
-CREATE TABLE knowledge_base (
-    id BIGSERIAL PRIMARY KEY,
-    category TEXT NOT NULL CHECK (category IN ('general_persona', 'general_family', 'custom')),
-    user_id BIGINT REFERENCES users(id),
-    content TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX idx_knowledge_base_user_id ON knowledge_base (user_id);
-```
-`src/migrations/0003_create_knowledge_base_table.sql`（建表）、`0006_seed_persona_and_family_knowledge.sql`（種子資料）、`0012_add_label_to_knowledge_base.sql`（2026-08-01 新增 `label TEXT`，供 FR-11 主動記知識分類與 FR-12 刪除範圍判斷參考）
-
-- `category` 用 CHECK 限制三種值；`user_id` 允許 NULL 代表兩種通用類別全體共用，`custom` 才指向特定使用者
-- `general_family` 內容曾兩度用 `UPDATE` 補正（2026-07-31 民國年換算西元年對照修正家庭成員生日誤判、新增阿姨資料；2026-08-01 新增家庭寵物資料），見 `0009`／`0010`／`0011` migrations
-
-```sql
-CREATE TABLE conversation_logs (
-    id BIGSERIAL PRIMARY KEY,
-    user_id BIGINT NOT NULL REFERENCES users(id),
-    role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
-    content TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    deleted_at TIMESTAMPTZ
-);
-CREATE INDEX idx_conversation_logs_user_id_created_at ON conversation_logs (user_id, created_at);
-```
-`src/migrations/0004_create_conversation_logs_table.sql`
-
-- `content` 存的內容已過 FR-13 個資遮蔽，不存未遮蔽原文；`deleted_at` 軟刪除保留稽核軌跡
-
-```sql
-CREATE TABLE conversation_summaries (
-    id BIGSERIAL PRIMARY KEY,
-    user_id BIGINT NOT NULL UNIQUE REFERENCES users(id),
-    summary TEXT NOT NULL DEFAULT '',
-    summarized_up_to_log_id BIGINT NOT NULL DEFAULT 0,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-```
-`src/migrations/0007_create_conversation_summaries_table.sql`
-
-- 每人一筆（UPDATE 覆蓋），backlog 累積到 10 則以上才觸發摘要更新；摘要呼叫用 `GEMINI_API_TEXT_KEY`
-</details>
-
+## 功能開關系統
 ## 功能開關系統
 
 | 資料表 | 狀態 | 對應 FR | 說明 |
@@ -310,27 +261,13 @@ CREATE INDEX idx_mood_journals_user_id ON mood_journals (user_id);
 - `entry_date` 一律由 app 端算好台灣時區日期後寫入，不依賴 DB 預設值（避免 UTC 午夜前後差一天）
 </details>
 
-## 客訴收集
+## 已取消功能資料表清理
 
-| 資料表 | 狀態 | 對應 FR | 說明 |
+| Migration | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `complaints` | 已建立 | FR-60～FR-63 | 客訴/意見回饋原始內容（已過個資遮蔽）；Gemini 分析結果只即時私訊 Robin，刻意不落地存表 |
+| `0094_drop_cancelled_chat_tables.sql` | 已建立／待部署套用 | FR-77 | 同批移除空的 `complaints`；不使用 `CASCADE` |
 
-<details>
-<summary>SQL</summary>
-
-```sql
-CREATE TABLE complaints (
-    id BIGSERIAL PRIMARY KEY,
-    user_id BIGINT NOT NULL REFERENCES users(id),
-    content TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX idx_complaints_user_id ON complaints (user_id);
-```
-`src/migrations/0015_create_complaints_table.sql`
-</details>
-
+## 記帳
 ## 記帳
 
 | 資料表 | 狀態 | 對應 FR | 說明 |
@@ -953,7 +890,7 @@ Migration `0092_add_system_error_notification_tracking.sql` 新增 `owner_notifi
 `(system_error_report_id, notification_type, delivery_status)`。事故刪除時收件紀錄
 `ON DELETE CASCADE`，使用者則 `ON DELETE RESTRICT` 保留通知歷史。
 
-- 讓既有「私訊 Robin＋Drive log 連結」機制額外落地一份可查詢紀錄；`resolution` NULL 代表尚未處理；與 `complaints` 刻意分開（使用者主動客訴 vs 系統主動錯誤回報，性質不同）
+- 讓既有「私訊 Robin＋Drive log 連結」機制額外落地一份可查詢紀錄；`resolution` NULL 代表尚未處理
 </details>
 
 ## 未分類

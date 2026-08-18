@@ -8,6 +8,7 @@ from src.bot import (
     chat,
     collections,
     commands,
+    feature_entry,
     image,
     important_days,
     job_search,
@@ -87,13 +88,10 @@ _FRIEND_CHAT_TRIGGERS = {"/friend_chat", "陪我聊聊"}
 # 而非單純「ID=」開頭，避免跟 `_APPLICATION_STATUS_PATTERN` 的 `ID=<job_id>` 撞在一起。
 _ERROR_RESOLUTION_PATTERN = re.compile(r"^錯誤ID=(?P<report_id>\d+)\s*已處理[:：]\s*(?P<resolution>.+)$")
 # 2026-08-09（見 robinson SPEC.md FR-35e、FR-38e、ADR-24 後果、ADR-26）：帶動態檔名的觸發詞，
-# 設計比照 _CLEAN_TARGET_DIALOG_PATTERN 用 regex 擷取參數；依副檔名/檔名關鍵字分流成兩條各自
+# 依副檔名/檔名關鍵字分流成兩條各自
 # 獨立的回填流程——公司背景 CSV（檔名以「104職缺公司.csv」結尾）與職缺推薦 Excel（檔名以
 # 「104職缺推薦.xlsx」結尾），不需要改動這個 regex 本身，只需要在下方 if/elif 各自擴充。
 _UPLOADED_FILE_PATTERN = re.compile(r"^已上傳\s*(?P<filename>.+)$")
-# 2026-08-02（Step 1.9，見 robinson SPEC.md FR-60）：任何身分皆可觸發客訴收集流程。
-_COMPLAINT_TRIGGERS = {"/complaint", "我要客訴你"}
-
 # 2026-08-02（FR-16a）：這幾個「最終執行確認」狀態是唯二不能被新語音訊息直接覆蓋清除的 flow，
 # 見 handle_voice_message() 內的說明。
 _FINAL_CONFIRM_FLOWS = {
@@ -114,6 +112,36 @@ _FINAL_CONFIRM_FLOWS = {
     "pending_finance_budget_global_confirm",
     "pending_finance_budget_override_confirm",
 }
+
+
+def _entry_feature(data: str) -> str | None:
+    if data.startswith("daily_log:"):
+        return data.removeprefix("daily_log:")
+    if data.startswith("menu:"):
+        key = data.removeprefix("menu:")
+        return None if key in {"main", "rule", "query", "schedule", "permission", "recovered"} else key
+    return None
+
+
+def _draft_resume_prompt(feature: str, summary: str) -> tuple[str, dict]:
+    return (
+        f"這個功能還有一份 30 分鐘內的草稿：\n{summary}\n\n要怎麼處理？",
+        {"inline_keyboard": [
+            [{"text": "✅ 繼續編輯", "callback_data": "draft:resume"}],
+            [{"text": "🗑 放棄草稿", "callback_data": "draft:discard"}],
+        ]},
+    )
+
+
+def _draft_switch_prompt(summary: str) -> tuple[str, dict]:
+    return (
+        f"目前功能還有未送出草稿：\n{summary}\n\n要怎麼處理？",
+        {"inline_keyboard": [
+            [{"text": "💾 保留草稿並切換", "callback_data": "draft:switch_keep"}],
+            [{"text": "🗑 放棄草稿並切換", "callback_data": "draft:switch_discard"}],
+            [{"text": "✏️ 繼續編輯", "callback_data": "draft:switch_continue"}],
+        ]},
+    )
 
 
 def handle_message(
@@ -147,8 +175,7 @@ def handle_message(
     專用的獨立 Key，只會透傳到 `chat.handle_chat_message()`（見該函式 docstring）；`None` 時遮蔽
     只跑免費的 Regex 層，不影響其餘指令/對話流程分支。
 
-    `telegram_client`：康復通知確認 callback 與 `pending_complaint_content`（Step 1.9，
-    FR-62，私訊 Robin 客訴分析報告）會用到，其餘分支不需要。
+    `telegram_client`：康復通知確認 callback 會用到，其餘分支不需要。
 
     `calendar_client`（2026-08-05，見 robinson SPEC.md FR-66a、ADR-17）：`pending_todo_calendar_sync`
     （建立事件）與 `pending_todo_action_confirm`（標記完成/取消時刪除對應事件）這兩個分支會用到；
@@ -253,9 +280,9 @@ def handle_message(
         # 2026-08-08（Step 3.5，見 robinson SPEC.md FR-51、FR-52、ADR-22）：好友模式陪伴聊天，
         # 單次生成完整回覆，不需要對話狀態機。
         return commands.start_friend_chat(db, llm_client, user_id)
-    if text in _COMPLAINT_TRIGGERS:
-        # 2026-08-02（Step 1.9，見 robinson SPEC.md FR-60）：固定提問，不經過 LLM。
-        return commands.start_complaint(state_store, telegram_user_id, user_id)
+    entry = feature_entry.detect(text, is_owner=is_owner)
+    if entry is not None:
+        return feature_entry.confirmation(entry)
 
     return chat.handle_chat_message(
         db, llm_client, text_llm_client, state_store, telegram_user_id, user_id, text,
@@ -294,6 +321,76 @@ def handle_callback_query(
     分支都不需要，`None` 時不影響。呼叫端（webhook.py）比照文字訊息分支注入。
     """
     is_owner = auth.is_owner(telegram_user_id)
+
+    if data.startswith("draft:"):
+        pending = state_store.get(telegram_user_id) or {}
+        flow = pending.get("flow")
+        source_feature = pending.get("source_feature")
+        target_feature = pending.get("target_feature")
+        target_callback = pending.get("target_callback")
+        if data == "draft:resume" and flow == "pending_draft_resume" and target_feature:
+            draft = state_store.restore_draft(telegram_user_id, target_feature)
+            if draft is not None:
+                return "已恢復草稿，請繼續完成剛才的步驟。", None
+        if data == "draft:discard" and flow == "pending_draft_resume" and target_feature and target_callback:
+            state_store.discard_draft(telegram_user_id, target_feature)
+            state_store.clear(telegram_user_id)
+            return handle_callback_query(db, state_store, telegram_user_id, target_callback)
+        if data == "draft:switch_continue" and flow == "pending_feature_switch" and source_feature:
+            state_store.restore_draft(telegram_user_id, source_feature)
+            return "已回到原本草稿，請繼續完成剛才的步驟。", None
+        if data in {"draft:switch_keep", "draft:switch_discard"} and flow == "pending_feature_switch" and target_callback:
+            if data == "draft:switch_discard" and source_feature:
+                state_store.discard_draft(telegram_user_id, source_feature)
+            state_store.clear(telegram_user_id)
+            return handle_callback_query(db, state_store, telegram_user_id, target_callback)
+        return menu.MAIN_MENU_TEXT, menu.build_main_menu_keyboard(is_owner=is_owner)
+
+    if data == "feature_entry:cancel":
+        return menu.MAIN_MENU_TEXT, menu.build_main_menu_keyboard(is_owner=is_owner)
+    if data.startswith("feature_entry:open:"):
+        key = data.removeprefix("feature_entry:open:")
+        entry = feature_entry.by_key(key, is_owner=is_owner)
+        if entry is None:
+            return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
+        return handle_callback_query(
+            db,
+            state_store,
+            telegram_user_id,
+            entry.callback_data,
+            calendar_client=calendar_client,
+            llm_client=llm_client,
+            text_llm_client=text_llm_client,
+            image_llm_clients=image_llm_clients,
+            privacy_llm_client=privacy_llm_client,
+            telegram_client=telegram_client,
+            gdrive_client=gdrive_client,
+        )
+
+    target_feature = _entry_feature(data)
+    if target_feature is not None:
+        active_feature = state_store.active_feature(telegram_user_id)
+        if active_feature and active_feature != target_feature:
+            active_state = state_store.get(telegram_user_id) or {}
+            draft = state_store.get_draft(telegram_user_id, active_feature)
+            if draft is not None:
+                state_store.clear(telegram_user_id, preserve_draft=True)
+                state_store.set(telegram_user_id, {
+                    "flow": "pending_feature_switch",
+                    "source_feature": active_feature,
+                    "target_feature": target_feature,
+                    "target_callback": data,
+                })
+                return _draft_switch_prompt(state_store.summarize(active_state))
+        if active_feature is None:
+            draft = state_store.get_draft(telegram_user_id, target_feature)
+            if draft is not None:
+                state_store.set(telegram_user_id, {
+                    "flow": "pending_draft_resume",
+                    "target_feature": target_feature,
+                    "target_callback": data,
+                })
+                return _draft_resume_prompt(target_feature, state_store.summarize(draft))
 
     if data == "voice_confirm:accept":
         # 2026-08-16（全站語音確認機制）：使用者按下「✅ 正確，繼續」，把轉錄前的
@@ -1567,11 +1664,5 @@ def _dispatch_active_flow(
     if flow == "pending_external_job_background":
         return commands.handle_external_job_background_step(
             db, state_store, telegram_user_id, text, privacy_llm_client=privacy_llm_client
-        )
-    if flow == "pending_complaint_content":
-        # 2026-08-02（Step 1.9，見 robinson SPEC.md FR-61、FR-62）：寫入客訴＋Gemini 分析私訊 Robin。
-        return commands.handle_complaint_content_step(
-            db, llm_client, telegram_client, state_store, telegram_user_id, text,
-            privacy_llm_client=privacy_llm_client,
         )
     return commands.handle_toggle_step(db, state_store, telegram_user_id, text)

@@ -9,7 +9,7 @@ from submodules.cloudsql.client import CloudSQLClient
 # feature_toggles.feature_key 的 CHECK 限制只有這 8 個模組，不含「客訴回饋」
 # （客訴是固定入口，不是可關閉的功能，見 docs/specs/feature-toggles/SPEC.md FR-3）。
 # 名稱直接沿用 templates.FEATURE_LIST，避免同一份功能名稱在兩個地方各寫一次。
-TOGGLE_FEATURE_KEYS = [f["key"] for f in templates.FEATURE_LIST if f["key"] != "complaint"]
+TOGGLE_FEATURE_KEYS = [f["key"] for f in templates.FEATURE_LIST]
 FEATURE_NAMES = {f["key"]: f["name"] for f in templates.FEATURE_LIST}
 
 
