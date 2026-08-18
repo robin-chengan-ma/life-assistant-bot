@@ -7,8 +7,7 @@ export type AnalyticsModule =
   | "mood"
   | "jobs"
   | "exams"
-  | "skills"
-  | "complaints";
+  | "skills";
 
 export type NavigationItem = {
   label: string;
@@ -198,25 +197,6 @@ export type SkillsAnalytics = {
   }>;
 };
 
-export type ComplaintsAnalytics = {
-  has_any_data: boolean;
-  user_feedback: Array<{
-    id: number;
-    content: string;
-    created_at: string;
-    role: string;
-  }>;
-  system_errors: Array<{
-    id: number;
-    occurred_at: string;
-    severity: string;
-    triggering_feature: string | null;
-    error_summary: string;
-    drive_log_url: string | null;
-    resolution: string | null;
-  }>;
-};
-
 export type AnalyticsResponseMap = {
   todos: TodoAnalytics;
   body: BodyAnalytics;
@@ -225,7 +205,6 @@ export type AnalyticsResponseMap = {
   jobs: JobsAnalytics;
   exams: ExamsAnalytics;
   skills: SkillsAnalytics;
-  complaints: ComplaintsAnalytics;
 };
 
 export function getDashboard(request: AuthRequest): Promise<DashboardResponse> {
@@ -250,17 +229,6 @@ export function getAnalytics<M extends AnalyticsModule>(
   }
   const query = queryParams.toString();
   return request<AnalyticsResponseMap[M]>(`/api/app/analytics/${module}?${query}`);
-}
-
-export function updateErrorResolution(
-  request: AuthRequest,
-  reportId: number,
-  resolution: string,
-): Promise<{ message: string }> {
-  return request<{ message: string }>(`/api/app/system-errors/${reportId}/resolution`, {
-    method: "PATCH",
-    body: JSON.stringify({ resolution }),
-  });
 }
 
 export function createWeightLog(
@@ -335,5 +303,5 @@ export function deleteImportantDay(request: AuthRequest, id: number): Promise<{ 
 }
 
 export function canAccessModule(user: AppUser, module: AnalyticsModule): boolean {
-  return !["jobs", "exams", "skills", "complaints"].includes(module) || user.is_owner;
+  return !["jobs", "exams", "skills"].includes(module) || user.is_owner;
 }

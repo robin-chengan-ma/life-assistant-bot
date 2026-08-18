@@ -1,6 +1,6 @@
 ---
 title: 羅賓森 Mobile App — 首頁與各分析頁面 UX 參考
-updated: 2026-08-14
+updated: 2026-08-18
 ---
 
 # 羅賓森 Mobile App — 首頁與各分析頁面 UX 參考
@@ -17,13 +17,13 @@ updated: 2026-08-14
 > 如發現不一致以程式碼與畫面實際呈現為準**。已知一項尚未在 PROGRESS.md／api_schema.md 找到明確上線
 > 佐證的規劃見下方「首頁圖表預覽區」小節的但書。
 >
-> 「客訴回饋」頁的設計決策（含 ADR-1）已完整記錄於 `docs/ADR/discuss/mobile-app.md`，本文件不重複。
+> 「客訴回饋」已正式取消；Mobile 頁面、型別與 API Client 均不保留。
 
 ## 首頁（Dashboard）
 
 對應 `GET /api/app/dashboard`（`AppAnalyticsService.dashboard()`，見 `docs/reference/api_schema.md`
 「羅賓森 Mobile App」區塊）。首頁只放全體使用者共用模組（待辦事項／記帳分析／飲食紀錄／運動紀錄／
-體重紀錄／心情趨勢）＋「重要通知」卡片；求職分析／考試成績／技術分享／客訴回饋（`owner_only`）不放
+體重紀錄／心情趨勢）＋「重要通知」卡片；求職分析／考試成績／技術分享（`owner_only`）不放
 首頁卡片，只透過左上選單進入。
 
 ### 卡片文案模板
@@ -69,7 +69,7 @@ updated: 2026-08-14
 
 規劃：卡片區塊下方放一個帶頁籤的趨勢圖預覽區塊，固定 5 個頁籤——記帳、體重、飲食、運動、心情，各自
 顯示對應模組唯讀分析頁同一份圖表資料的縮圖版本，切換頁籤即時換圖，點擊可跳轉完整分析頁。範圍只涵蓋
-全體共用的 5 個模組，Robin only 四個模組不放進來。
+全體共用的 5 個模組，Robin only 三個模組不放進來。
 
 > **注意**：`docs/specs/PROGRESS.md`／`docs/reference/api_schema.md` 目前只明確記錄
 > `GET /api/app/dashboard` 提供「首頁摘要卡片資料」，沒有找到單獨條目確認這個五頁籤迷你趨勢圖區塊
@@ -96,7 +96,6 @@ updated: 2026-08-14
 | 體態 | 綠 |
 | 待辦 | 藍 |
 | 心情 | 粉紫 |
-| 客訴回饋（Robin only） | 中性灰 |
 | 求職分析（Robin only） | 紫 |
 | 考試成績（Robin only） | 琥珀 |
 | 技術分享（Robin only） | 紅 |
@@ -107,7 +106,7 @@ updated: 2026-08-14
 | --- | --- |
 | 圖表時間範圍 | 所有唯讀分析頁面的趨勢圖預設顯示「過去一週」，使用者可篩選，最長開放到「過去一個月」；篩選變動即時重繪，不需按查詢按鈕 |
 | 缺值處理 | 篩選範圍內某天沒有資料，折線圖在該處直接斷開，不與前後資料點連成一條線（避免誤導成 0 或內插值） |
-| 功能關閉 | 使用者把某模組功能開關關閉時，選單（含有首頁卡片的模組，額外含首頁卡片）仍顯示，但整塊呈現灰底樣式；點擊跳出「請先把功能打開才能使用喔」提示，不進入頁面。Robin only 四個模組沒有首頁卡片，此規則只套用在選單項目上 |
+| 功能關閉 | 一般生活功能全面開放，不讀取舊 `feature_toggles`。只有 Robin 專屬技術分享、求職分析、考試成績保留功能開關；關閉時選單仍顯示灰底，點擊提示先至 Telegram「功能開關與排程設定」開啟 |
 | 完全無資料（從未使用過） | 功能開啟但資料庫完全沒有任何一筆紀錄，顯示「未找到任何一筆資料！」 |
 | 篩選範圍內無資料（曾用過，這段時間沒有） | 顯示「這段期間沒有任何紀錄」，跟上一項文案分開，避免使用者誤以為自己從沒用過這個功能 |
 | 錯誤訊息 | 一律去技術化（比照 `docs/specs/SPEC.md` NFR-6），不顯示 API 錯誤細節或路徑 |
@@ -115,8 +114,7 @@ updated: 2026-08-14
 ## 各模組唯讀分析頁面
 
 對應 `GET /api/app/analytics/<module_key>`（`module_key`：todos/body/finance/mood/jobs/exams/
-skills/complaints，見 `docs/reference/api_schema.md`）。`complaints`（客訴回饋）頁面設計已完整記錄
-於 `docs/ADR/discuss/mobile-app.md` ADR-1，本文件不重複。
+skills，見 `docs/reference/api_schema.md`）。
 
 ### 待辦事項（`todos`）
 
@@ -152,8 +150,8 @@ App、用手機原生行事曆看」的情境，兩者互補、不重複，App �
 ### 求職分析（`jobs`，Robin only）
 
 1. 應徵漏斗：已應徵 → 已獲得面試 → 已拿到 Offer／未錄取或已婉拒，各狀態職缺數量
-2. 契合度分數分布：80～100 高度推薦／60～79 可考慮／60 以下較不合適，三區間各自職缺數量
-3. 本期 Top 推薦清單：職稱、公司、分數、推薦理由摘要，可展開看技能缺口說明（`recommend_reason`／`skill_gap_note`）
+2. 契合度分數分布：80～100 高度推薦／60～79 可考慮／60 以下較不合適，統計本期所有已分析職缺，包含後續已關閉者
+3. 本期 Top 推薦清單：排除 `is_closed=TRUE` 的職缺，再顯示職稱、公司、分數、推薦理由摘要與技能缺口說明（`recommend_reason`／`skill_gap_note`）
 4. 應徵歷程時間軸：依時間列出每個職缺的狀態變化（`job_applications`）
 
 後端正式資料欄位為 `job_postings.score`；Mobile 分析查詢以 `score AS match_score` 維持既有 API 回傳欄位 `match_score`，不得直接查詢不存在的資料庫欄位 `job_postings.match_score`。
@@ -161,7 +159,7 @@ App、用手機原生行事曆看」的情境，兩者互補、不重複，App �
 ### 考試成績（`exams`，Robin only）
 
 1. 各證照目標進度卡片：目標日期倒數天數、目標分數/合格門檻（`certificate_goals`）
-2. 正式成績歷程：`exam_official_scores`，同證照類型考過多次依時間呈現（數字型 `score` 畫趨勢線，非數字如「通過/未通過」改列表呈現）
+2. 正式成績歷程：`exam_official_scores`，同證照類型考過多次依時間呈現，並顯示選填補充內容 `note`（數字型 `score` 畫趨勢線，非數字如「通過/未通過」改列表呈現）
 3. 每日練習正確率趨勢：依 `answer_logs` 算每日/每週正確率折線圖，可依證照類型/題型（write/listen/vocab）切換
 4. 弱點分析：依題型統計哪個類型錯最多
 

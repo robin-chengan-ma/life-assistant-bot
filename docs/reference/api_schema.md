@@ -218,7 +218,7 @@ payload、帳號、密碼或 Token。
 | 項目 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
 | `GET /api/app/dashboard` | 已實作（`dashboard()`） | FR-64 | 首頁摘要卡片資料，複用 `AppAnalyticsService.dashboard()` |
-| `GET /api/app/analytics/<module_key>` | 已實作（`analytics()`） | FR-64 | 唯讀分析頁面資料，`module_key` 對應 todos/body/finance/mood/jobs/exams/skills；依模組解析查詢日期區間（todos 額外支援月曆區間）；功能開關關閉回 409、越權存取回 403 |
+| `GET /api/app/analytics/<module_key>` | 已實作（`analytics()`） | FR-64 | 唯讀分析頁面資料，`module_key` 對應 todos/body/finance/mood/jobs/exams/skills；依模組解析查詢日期區間（todos 額外支援月曆區間）。一般生活模組不讀舊功能開關；Owner 專屬 skills/jobs/exams 關閉回 409，越權存取回 403。jobs 的 Top 推薦排除已關閉職缺但契合度分布保留全部本期分析；exams 正式成績回傳選填 `note` |
 | `PATCH /api/app/system-errors/<id>/resolution` | 已移除 | FR-19j | Mobile App 只作為事故來源；Owner 統一從 Telegram 系統錯誤管理結案 |
 | `POST /api/app/body/weight-logs` | 已實作（`create_weight_log()`） | FR-64a | App 端手動輸入體重（取代已移除的藍牙體重計整合方案），40～150 公斤範圍檢查，複用 `src/bot/body.py::create_weight_log()` |
 | `POST /api/app/diet/recognize-photo` | 已實作（`recognize_diet_image()`） | FR-64 | 飲食照片辨識（LLM Vision），App 端專屬能力，Telegram 端沒有對應路由 |

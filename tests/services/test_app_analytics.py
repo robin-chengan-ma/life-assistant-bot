@@ -130,15 +130,24 @@ def test_date_range_rejects_invalid_short_long_reversed_or_future_ranges(start, 
         parse_date_range(start, end, today=date(2026, 8, 11))
 
 
-def test_disabled_module_is_returned_for_grey_ui_but_cannot_be_opened():
+def test_legacy_general_feature_toggle_does_not_disable_mobile_module():
     db = FakeDatabase(toggles=[{"feature_key": "budget", "is_enabled": False}])
     service = AppAnalyticsService(db)
 
     navigation = service.navigation(user())
 
-    assert navigation["finance"]["is_enabled"] is False
+    assert navigation["finance"]["is_enabled"] is True
+
+
+def test_disabled_owner_feature_is_returned_for_grey_ui_but_cannot_be_opened():
+    db = FakeDatabase(toggles=[{"feature_key": "job_search", "is_enabled": False}])
+    service = AppAnalyticsService(db)
+
+    navigation = service.navigation(user(is_owner=True))
+
+    assert navigation["jobs"]["is_enabled"] is False
     with pytest.raises(FeatureDisabledError):
-        service.finance(user(), date(2026, 8, 1), date(2026, 8, 7))
+        service.jobs(user(is_owner=True), date(2026, 8, 1), date(2026, 8, 7))
 
 
 def test_owner_only_modules_are_hidden_from_family_and_protected_on_backend():
@@ -333,7 +342,7 @@ def test_remaining_analysis_modules_return_chart_ready_payloads():
                 {"job_id_104": "a", "title": "工程師", "status": "interview", "created_at": "2026-08-03"},
             ],
             "app_analytics:exam_goals": [{"exam_type": "TOEIC", "target_date": date(2026, 12, 1), "target_score": "850"}],
-            "app_analytics:exam_scores": [{"exam_type": "TOEIC", "exam_date": date(2026, 8, 1), "score": "700"}],
+            "app_analytics:exam_scores": [{"exam_type": "TOEIC", "exam_date": date(2026, 8, 1), "score": "700", "note": "第一次正式應考"}],
             "app_analytics:exam_practice": [{"date": date(2026, 8, 2), "exam_type": "TOEIC", "question_type": "listen", "total": 2, "correct": 1}],
             "app_analytics:skill_digests": [{"digest_date": date(2026, 8, 1), "source": "ithome", "summary_text": "摘要"}],
             "app_analytics:skill_videos": [{"pushed_on": date(2026, 8, 1), "topic": "AI", "title": "影片", "recommend_reason": "推薦"}],
@@ -352,8 +361,31 @@ def test_remaining_analysis_modules_return_chart_ready_payloads():
     assert "title, match_score" not in jobs_query
     assert jobs["funnel"]["interview"] == 1
     assert jobs["score_distribution"] == {"high": 1, "medium": 1, "low": 1}
-    assert service.exams(user(is_owner=True), start, end)["practice"][0]["correct"] == 1
+    exams = service.exams(user(is_owner=True), start, end)
+    exam_scores_query = next(query for query in db.executed_queries if "app_analytics:exam_scores" in query)
+    assert "score, note" in exam_scores_query
+    assert exams["practice"][0]["correct"] == 1
+    assert exams["official_scores"][0]["note"] == "第一次正式應考"
     assert service.skills(user(is_owner=True), start, end)["videos"][0]["title"] == "影片"
+
+
+def test_jobs_excludes_closed_postings_from_recommendations_but_keeps_distribution():
+    db = FakeDatabase(
+        toggles=[{"feature_key": "job_search", "is_enabled": True}],
+        select_rows={"job_postings": [{"id": 1}]},
+        query_rows={
+            "app_analytics:jobs_postings": [
+                {"job_id_104": "open", "title": "開放職缺", "match_score": 85, "is_closed": False},
+                {"job_id_104": "closed", "title": "關閉職缺", "match_score": 90, "is_closed": True},
+            ],
+            "app_analytics:jobs_timeline": [],
+        },
+    )
+
+    result = AppAnalyticsService(db).jobs(user(is_owner=True), date(2026, 8, 1), date(2026, 8, 7))
+
+    assert [row["job_id_104"] for row in result["recommendations"]] == ["open"]
+    assert result["score_distribution"] == {"high": 2, "medium": 0, "low": 0}
 
 
 def test_todo_calendar_days_include_role_visible_important_notifications_and_birthdays():

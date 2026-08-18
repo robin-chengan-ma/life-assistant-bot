@@ -2,7 +2,7 @@ import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import { Redirect, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Calendar, type DateData } from "react-native-calendars";
-import { ActivityIndicator, Modal, ScrollView, StyleSheet, TextInput } from "react-native";
+import { ActivityIndicator, Modal, ScrollView, StyleSheet } from "react-native";
 
 import { AppPressable as Pressable } from "@/components/AppPressable";
 import { AppText as Text } from "@/components/AppText";
@@ -19,11 +19,9 @@ import { useDashboard } from "@/context/DashboardContext";
 import {
   getAnalytics,
   deleteRecord,
-  updateErrorResolution,
   type AnalyticsModule,
   type AnalyticsResponseMap,
   type BodyAnalytics,
-  type ComplaintsAnalytics,
   type DateRange,
   type ExamsAnalytics,
   type FinanceAnalytics,
@@ -37,7 +35,7 @@ import {
 import { IMPORTANT_DAY_COLOR, uniqueImportantDayLabels } from "@/utils/calendarLabels";
 import { ApiError } from "@/services/authApi";
 
-const MODULES: AnalyticsModule[] = ["todos", "body", "finance", "mood", "jobs", "exams", "skills", "complaints"];
+const MODULES: AnalyticsModule[] = ["todos", "body", "finance", "mood", "jobs", "exams", "skills"];
 const MOOD_SCORE: Record<string, number> = { angry_anxious: 1, sad_down: 2, tired_burned_out: 2.5, neutral: 3, calm_relaxed: 4, happy_excited: 5 };
 const MOOD_LABEL: Record<string, string> = { angry_anxious: "😡 生氣／焦慮", sad_down: "😢 難過／低落", tired_burned_out: "🫠 疲憊／厭世", neutral: "🙂 普通／平淡", calm_relaxed: "😌 平靜／放鬆", happy_excited: "🥳 高興／興奮" };
 const TODO_STATUS: Record<string, { backgroundColor: string; label: string }> = {
@@ -59,7 +57,6 @@ export default function AnalyticsScreen() {
   const [filterCalendarDays, setFilterCalendarDays] = useState<TodoAnalytics["calendar_days"]>({});
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [resolutionDrafts, setResolutionDrafts] = useState<Record<number, string>>({});
   const [savedMessage, setSavedMessage] = useState<string | null>(null);
   const [editing, setEditing] = useState<{ kind: RecordKind; item: RecordItem } | null>(null);
   const [deleting, setDeleting] = useState<{ kind: RecordKind; item: RecordItem } | null>(null);
@@ -94,18 +91,6 @@ export default function AnalyticsScreen() {
       .then((result) => setFilterCalendarDays(result.calendar_days ?? {}))
       .catch(() => setFilterCalendarDays({}));
   }, [authorizedRequest, calendarMonth, module, status]);
-
-  const saveResolution = async (id: number) => {
-    const resolution = (resolutionDrafts[id] ?? "").trim();
-    if (!resolution) { setSavedMessage("請輸入解法"); return; }
-    try {
-      const response = await updateErrorResolution(authorizedRequest, id, resolution);
-      setSavedMessage(response.message);
-      await load();
-    } catch (requestError) {
-      setSavedMessage(requestError instanceof ApiError ? requestError.message : "操作失敗，請稍後再試");
-    }
-  };
 
   const scheduleDelete = () => {
     if (!deleting || pendingDeletion) { setDeleting(null); return; }
@@ -150,7 +135,7 @@ export default function AnalyticsScreen() {
       {loading ? <ActivityIndicator color={colors.primary} size="large" /> : null}
       {error ? <View style={styles.errorCard}><Text style={styles.errorText}>{error}</Text><Pressable onPress={() => void load()}><Text style={styles.retry}>重新載入</Text></Pressable></View> : null}
       {!loading && !error && payload && !hasRangeData && module !== "todos" ? <EmptyState hasAnyData={hasAnyData} /> : null}
-      {!loading && !error && payload && (hasRangeData || module === "todos") ? renderModule(module, payload, range, calendarMonth, setCalendarMonth, scrollViewRef, resolutionDrafts, setResolutionDrafts, saveResolution) : null}
+      {!loading && !error && payload && (hasRangeData || module === "todos") ? renderModule(module, payload, range, calendarMonth, setCalendarMonth, scrollViewRef) : null}
       {!loading && !error && payload ? <EditableRecords module={module} onDelete={setDeleting} onEdit={setEditing} payload={payload} /> : null}
       {savedMessage ? <View style={styles.savedToast}><Text style={styles.savedText}>{savedMessage}</Text>{pendingDeletion ? <Pressable onPress={undoDelete}><Text style={styles.undoText}>復原</Text></Pressable> : null}</View> : null}
       {editing ? <RecordModal authorizedRequest={authorizedRequest} initial={editing.item} kind={editing.kind} onClose={() => setEditing(null)} onSaved={async () => { await load(); setSavedMessage("紀錄已更新"); setTimeout(() => setSavedMessage(null), 2400); }} visible /> : null}
@@ -186,10 +171,9 @@ function rangeHasData(module: AnalyticsModule, payload: AnalyticsResponseMap[Ana
     case "body": { const value = payload as BodyAnalytics; return value.weight.length + value.diet.length + value.exercise.length > 0; }
     case "finance": return (payload as FinanceAnalytics).daily.length > 0;
     case "mood": return (payload as MoodAnalytics).items.length > 0;
-    case "jobs": { const value = payload as JobsAnalytics; return value.recommendations.length + value.timeline.length > 0; }
+    case "jobs": { const value = payload as JobsAnalytics; return value.recommendations.length + value.timeline.length + Object.values(value.score_distribution).reduce((sum, count) => sum + count, 0) > 0; }
     case "exams": { const value = payload as ExamsAnalytics; return value.goals.length + value.official_scores.length + value.practice.length > 0; }
     case "skills": { const value = payload as SkillsAnalytics; return value.digests.length + value.videos.length > 0; }
-    case "complaints": { const value = payload as ComplaintsAnalytics; return value.user_feedback.length + value.system_errors.length > 0; }
   }
 }
 
@@ -200,9 +184,6 @@ function renderModule(
   calendarMonth: string,
   setCalendarMonth: React.Dispatch<React.SetStateAction<string>>,
   scrollViewRef: React.RefObject<ScrollView | null>,
-  drafts: Record<number, string>,
-  setDrafts: React.Dispatch<React.SetStateAction<Record<number, string>>>,
-  saveResolution: (id: number) => Promise<void>,
 ) {
   switch (module) {
     case "todos": return <TodoView calendarMonth={calendarMonth} data={payload as TodoAnalytics} range={range} scrollViewRef={scrollViewRef} setCalendarMonth={setCalendarMonth} />;
@@ -212,7 +193,6 @@ function renderModule(
     case "jobs": return <JobsView data={payload as JobsAnalytics} />;
     case "exams": return <ExamsView data={payload as ExamsAnalytics} />;
     case "skills": return <SkillsView data={payload as SkillsAnalytics} />;
-    case "complaints": return <ComplaintsView data={payload as ComplaintsAnalytics} drafts={drafts} saveResolution={saveResolution} setDrafts={setDrafts} />;
   }
 }
 
@@ -303,15 +283,11 @@ function JobsView({ data }: { data: JobsAnalytics }) {
 function ExamsView({ data }: { data: ExamsAnalytics }) {
   const accuracy = data.practice.map((row) => ({ label: String(row.date ?? ""), value: Number(row.total ?? 0) ? Math.round((Number(row.correct ?? 0) / Number(row.total)) * 100) : 0 }));
   const weak = Object.values(data.practice.reduce<Record<string, { label: string; total: number; wrong: number }>>((result, row) => { const key = String(row.question_type ?? "其他"); const current = result[key] ?? { label: key, total: 0, wrong: 0 }; current.total += Number(row.total ?? 0); current.wrong += Number(row.total ?? 0) - Number(row.correct ?? 0); result[key] = current; return result; }, {}));
-  return <><Section title="證照目標">{data.goals.map((goal, index) => <View key={index} style={styles.listCard}><Text style={styles.itemTitle}>{String(goal.exam_type ?? "證照")}</Text><View style={styles.inlineSensitive}><Text style={styles.bodyText}>目標：</Text>{goal.target_score == null ? <Text style={styles.bodyText}>未設定</Text> : <SensitiveValue style={styles.bodyText}>{String(goal.target_score)}</SensitiveValue>}<Text style={styles.bodyText}>　日期：{String(goal.target_date ?? "未設定")}</Text></View></View>)}</Section><ChartCard title="每日練習正確率"><LineChart series={[{ label: "正確率 %", color: "#D89B20", points: accuracy }]} /></ChartCard><ChartCard title="弱點分析"><BarChart color="#D9544D" data={weak.map((item) => ({ label: item.label, value: item.wrong }))} /></ChartCard><Section title="正式成績歷程">{data.official_scores.map((score, index) => <View key={index} style={styles.listCard}><View style={styles.inlineSensitive}><Text style={styles.itemTitle}>{String(score.exam_type ?? "證照")} · </Text><SensitiveValue style={styles.itemTitle}>{String(score.score ?? "—")}</SensitiveValue></View><Text style={styles.meta}>{String(score.exam_date ?? "")}</Text></View>)}</Section></>;
+  return <><Section title="證照目標">{data.goals.map((goal, index) => <View key={index} style={styles.listCard}><Text style={styles.itemTitle}>{String(goal.exam_type ?? "證照")}</Text><View style={styles.inlineSensitive}><Text style={styles.bodyText}>目標：</Text>{goal.target_score == null ? <Text style={styles.bodyText}>未設定</Text> : <SensitiveValue style={styles.bodyText}>{String(goal.target_score)}</SensitiveValue>}<Text style={styles.bodyText}>　日期：{String(goal.target_date ?? "未設定")}</Text></View></View>)}</Section><ChartCard title="每日練習正確率"><LineChart series={[{ label: "正確率 %", color: "#D89B20", points: accuracy }]} /></ChartCard><ChartCard title="弱點分析"><BarChart color="#D9544D" data={weak.map((item) => ({ label: item.label, value: item.wrong }))} /></ChartCard><Section title="正式成績歷程">{data.official_scores.map((score, index) => <View key={index} style={styles.listCard}><View style={styles.inlineSensitive}><Text style={styles.itemTitle}>{String(score.exam_type ?? "證照")} · </Text><SensitiveValue style={styles.itemTitle}>{String(score.score ?? "—")}</SensitiveValue></View><Text style={styles.meta}>{String(score.exam_date ?? "")}</Text>{score.note ? <Text style={styles.bodyText}>{String(score.note)}</Text> : null}</View>)}</Section></>;
 }
 
 function SkillsView({ data }: { data: SkillsAnalytics }) {
   return <><Section title="每日技術摘要">{data.digests.map((item, index) => <View key={index} style={styles.listCard}><Text style={styles.itemTitle}>{item.source?.toUpperCase() ?? "技術摘要"}</Text><Text style={styles.meta}>{item.digest_date}</Text><Text style={styles.bodyText}>{item.summary_text ?? "今日無內容"}</Text></View>)}</Section><Section title="YouTube 技術情報">{data.videos.map((item, index) => <View key={index} style={styles.listCard}><Text style={styles.itemTitle}>{item.title ?? "舊資料未保存影片標題"}</Text><Text style={styles.meta}>{item.pushed_on} · {item.topic ?? "未分類"}</Text><Text style={styles.bodyText}>{item.recommend_reason ?? "舊資料未保存推薦理由"}</Text></View>)}</Section></>;
-}
-
-function ComplaintsView({ data, drafts, setDrafts, saveResolution }: { data: ComplaintsAnalytics; drafts: Record<number, string>; setDrafts: React.Dispatch<React.SetStateAction<Record<number, string>>>; saveResolution: (id: number) => Promise<void> }) {
-  return <><Section title="使用者客訴">{data.user_feedback.map((item) => <View key={item.id} style={styles.listCard}><Text style={styles.itemTitle}>{item.role}</Text><Text style={styles.meta}>{item.created_at}</Text><Text style={styles.bodyText}>{item.content}</Text></View>)}</Section><Section title="系統錯誤回報">{data.system_errors.map((item) => <View key={item.id} style={styles.listCard}><Text style={styles.itemTitle}>#{item.id} · {item.severity === "critical" ? "重大疾病級" : "一般感冒級"}</Text><Text style={styles.meta}>{item.occurred_at} · {item.triggering_feature ?? "未知功能"}</Text><Text style={styles.bodyText}>{item.error_summary}</Text><TextInput multiline onChangeText={(value) => setDrafts((current) => ({ ...current, [item.id]: value }))} placeholder={item.resolution ?? "輸入解法"} placeholderTextColor={colors.textMuted} style={styles.resolutionInput} value={drafts[item.id] ?? ""} /><Pressable onPress={() => void saveResolution(item.id)} style={styles.saveButton}><Text style={styles.saveText}>儲存解法</Text></Pressable></View>)}</Section></>;
 }
 
 function Section({ children, title }: { children: React.ReactNode; title: string }) { return <View style={styles.section}><Text style={styles.sectionTitle}>{title}</Text>{children}</View>; }
@@ -327,7 +303,6 @@ const styles = StyleSheet.create({
   todoDayCard: { backgroundColor: colors.surface, borderColor: "#1D2422", borderRadius: 15, borderWidth: 1, gap: 10, padding: 15 }, todoDayCardHighlighted: { borderColor: colors.danger, borderWidth: 4 }, todoDayTitle: { color: colors.text, fontSize: 18, fontWeight: "900" }, todoHolidayTitle: { color: colors.danger, fontSize: 13, fontWeight: "800" }, todoNotificationTitle: { color: IMPORTANT_DAY_COLOR, fontSize: 13, fontWeight: "800" }, todoItemCard: { borderColor: "#1D2422", borderRadius: 11, borderWidth: 1, gap: 7, padding: 12 }, todoItemHeading: { alignItems: "flex-start", flexDirection: "row", gap: 10, justifyContent: "space-between" }, todoStatusTag: { backgroundColor: "rgba(255,255,255,0.72)", borderColor: "#1D2422", borderRadius: 12, borderWidth: 1, paddingHorizontal: 9, paddingVertical: 3 }, todoStatusText: { color: colors.text, fontSize: 11, fontWeight: "900" }, todoMeta: { color: colors.text, fontSize: 11 }, todoEmptyText: { color: colors.textMuted, fontSize: 12 },
   metricRow: { flexDirection: "row", flexWrap: "wrap", gap: 12 }, metric: { backgroundColor: colors.surface, borderRadius: 15, flex: 1, minWidth: 150, padding: 17 }, metricLabel: { color: colors.textMuted, fontSize: 12 }, metricValue: { color: colors.text, fontSize: 24, fontWeight: "900", marginTop: 5 },
   timeline: { alignItems: "flex-start", flexDirection: "row", gap: 10, paddingVertical: 5 }, timelineDot: { backgroundColor: "#7656C9", borderRadius: 5, height: 10, marginTop: 5, width: 10 }, flex: { flex: 1 },
-  resolutionInput: { borderColor: colors.border, borderRadius: 10, borderWidth: 1, color: colors.text, fontSize: 16, minHeight: 74, padding: 10, textAlignVertical: "top" }, saveButton: { alignItems: "center", alignSelf: "flex-end", backgroundColor: colors.primary, borderRadius: 9, paddingHorizontal: 15, paddingVertical: 9 }, saveText: { color: colors.white, fontWeight: "800" },
   savedToast: { alignItems: "center", alignSelf: "center", backgroundColor: colors.primaryDark, borderRadius: 20, bottom: 22, flexDirection: "row", gap: 14, paddingHorizontal: 18, paddingVertical: 10, position: "absolute", zIndex: 10 }, savedText: { color: colors.white, fontWeight: "700" }, undoText: { color: "#FFD18A", fontWeight: "900", textDecorationLine: "underline" },
   recordActions: { flexDirection: "row", gap: 8, justifyContent: "flex-end", marginTop: 6 }, recordButton: { borderRadius: 9, paddingHorizontal: 14, paddingVertical: 8 }, editButton: { backgroundColor: colors.primarySoft }, deleteButton: { backgroundColor: "#FAD7D5" }, recordButtonText: { color: colors.primaryDark, fontWeight: "800" }, deleteButtonText: { color: colors.danger, fontWeight: "800" }, telegramHint: { color: colors.textMuted, fontSize: 11, marginTop: 4 },
   bodyRecordValues: { gap: 6 }, bodyRecordValue: { color: colors.text, fontSize: 15, fontWeight: "700" }, inlineSensitive: { alignItems: "baseline", flexDirection: "row", flexWrap: "wrap" }, bodyGoalText: { borderTopColor: colors.border, borderTopWidth: 1, color: colors.primaryDark, fontSize: 13, fontWeight: "800", marginTop: 6, paddingTop: 10 },

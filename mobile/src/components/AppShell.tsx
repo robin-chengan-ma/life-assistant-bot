@@ -21,10 +21,9 @@ const MODULE_ICONS: Record<AnalyticsModule, keyof typeof MaterialCommunityIcons.
   jobs: "briefcase-outline",
   exams: "certificate-outline",
   skills: "lightbulb-on-outline",
-  complaints: "message-alert-outline",
 };
 const COMMON_MODULES: AnalyticsModule[] = ["todos", "body", "finance", "mood"];
-const OWNER_MODULES: AnalyticsModule[] = ["skills", "jobs", "exams", "complaints"];
+const OWNER_MODULES: AnalyticsModule[] = ["skills", "jobs", "exams"];
 const LIFESTYLE_LINKS: Array<{ href: string; icon: keyof typeof MaterialCommunityIcons.glyphMap; label: string; color: string }> = [
   { href: "/collections", icon: "bookmark-multiple-outline", label: "收藏清單", color: "#D39719" },
   { href: "/exploration", icon: "map-marker-radius-outline", label: "探索地圖", color: "#278DA8" },

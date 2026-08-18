@@ -173,7 +173,7 @@ class AppAnalyticsService:
             navigation[module_key] = {
                 "label": config["label"],
                 "color": config["color"],
-                "is_enabled": True if feature_key is None else toggle_values.get(feature_key, True),
+                "is_enabled": toggle_values.get(feature_key, True) if config["owner_only"] else True,
             }
         return navigation
 
@@ -656,7 +656,7 @@ class AppAnalyticsService:
         self._authorize(user, "jobs")
         postings = self._db.execute_query(
             """/* app_analytics:jobs_postings */ SELECT job_id_104, title, score AS match_score,
-            recommend_reason, skill_gap_note, first_seen_at FROM job_postings
+            recommend_reason, skill_gap_note, first_seen_at, is_closed FROM job_postings
             WHERE DATE(first_seen_at AT TIME ZONE 'Asia/Taipei') BETWEEN %s AND %s
             ORDER BY match_score DESC NULLS LAST""",
             (start, end),
@@ -680,11 +680,12 @@ class AppAnalyticsService:
             if score is None:
                 continue
             distribution["high" if score >= 80 else "medium" if score >= 60 else "low"] += 1
+        open_postings = [row for row in postings if not row.get("is_closed", False)]
         return {
             "has_any_data": self._has_data("job_postings"),
             "funnel": funnel,
             "score_distribution": distribution,
-            "recommendations": [_json_row(row) for row in postings[:10]],
+            "recommendations": [_json_row(row) for row in open_postings[:10]],
             "timeline": [_json_row(row) for row in timeline],
         }
 
@@ -696,7 +697,7 @@ class AppAnalyticsService:
             (user.database_id,),
         )
         scores = self._db.execute_query(
-            """/* app_analytics:exam_scores */ SELECT exam_type, exam_date, score
+            """/* app_analytics:exam_scores */ SELECT exam_type, exam_date, score, note
             FROM exam_official_scores WHERE user_id = %s AND exam_date BETWEEN %s AND %s ORDER BY exam_date""",
             (user.database_id, start, end),
         )

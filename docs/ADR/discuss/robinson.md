@@ -1155,3 +1155,17 @@ YouTube 主題訂閱設定子選單結構；`router.py` 移除 `/my_youtube_topi
 **理由**：避免舊入口繞過目前的權限化選單與一致互動規則，也避免已無正式入口的死程式持續造成維護誤判。
 
 **後果**：Telegram 收到上述五段 Slash 文字時會落入一般聊天，不再執行正式功能；主選單 Callback 與「陪我聊聊」自然語言仍維持原功能。`/start` 是唯一有效 Slash Command。
+
+## 2026-08-18 [標籤：使用者] Telegram 重構後 Mobile 跨端相容修正
+
+**狀態**：accepted
+
+**背景**：Telegram 選單化、功能開關收斂、客訴清理、求職設定與考試設定完成後，需逐項比對 Mobile 畫面、API Client、Flask Route、Service 與共用資料，避免一般導覽未顯示的殘留程式或舊資料規則形成跨端落差。
+
+**討論內容**：唯讀盤點確認四項差異：Mobile 分析仍讀取一般功能的舊 `feature_toggles`；客訴頁型別、深連結畫面與舊錯誤結案 API Client 尚存；考試成績未回傳新增加的 `note`；人工關閉職缺仍可能出現在 Mobile 推薦與契合度統計。
+
+**決策**：①一般生活功能在 Mobile 永久直接開放，不再讀取其舊功能開關；只有 Owner 專屬 `tech_intel`、`job_search`、`certificate` 保留開關。②徹底移除 Mobile 的 `complaints` 型別、頁面分支、圖示、深連結與 `PATCH /api/app/system-errors/<id>/resolution` Client；錯誤結案只在 Telegram Owner 選單操作。③考試成績 API 回傳並由 Mobile 顯示正式考試補充內容。④人工關閉職缺不出現在「本期 Top 推薦」，但仍納入契合度分布，保留該期間所有已分析職缺的統計。
+
+**理由**：一般功能已無正式開關，不應被無法操作的歷史資料關閉；已取消或移轉入口的死程式會讓前後端契約失真；考試補充內容屬於正式成績欄位；推薦清單應以仍可應徵為前提，而分布圖服務歷史分析，不應因關閉狀態改寫過去樣本。
+
+**後果**：本批只調整 Application／Mobile 程式與測試，不新增 Migration、不刪除 `feature_toggles` 資料；既有資料表仍由三項 Owner 功能使用。求職模組其他欄位、圖表與 API 改版仍留在 DRAFT，不因本次相容修正擴張範圍。
