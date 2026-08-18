@@ -2318,7 +2318,7 @@ def test_youtube_settings_remove_flow_requires_confirm_button(fake_db, monkeypat
     )
     store = ConversationStateStore()
 
-    list_reply, list_keyboard = router.handle_callback_query(fake_db, store, ROBIN_ID, "youtube_settings:remove")
+    _list_reply, list_keyboard = router.handle_callback_query(fake_db, store, ROBIN_ID, "youtube_settings:remove")
     list_button_texts = [button["text"] for row in list_keyboard["inline_keyboard"] for button in row]
     assert any("AI Agent" in text for text in list_button_texts)
 
@@ -2329,7 +2329,7 @@ def test_youtube_settings_remove_flow_requires_confirm_button(fake_db, monkeypat
     assert store.get(ROBIN_ID)["flow"] == "youtube_topic_remove_confirm"
 
     # 取消（按鈕回主選單前，還沒真的刪除）
-    cancel_reply, _keyboard = router.handle_callback_query(fake_db, store, ROBIN_ID, "youtube_settings:menu")
+    _cancel_reply, _keyboard = router.handle_callback_query(fake_db, store, ROBIN_ID, "youtube_settings:menu")
     assert store.get(ROBIN_ID) is None
     assert len(fake_db.select("youtube_topics", where="user_id = %s", params=(owner_row,))) == 1
 
@@ -2377,15 +2377,15 @@ def test_friend_chat_trigger_dispatches_through_router_for_family_member(fake_db
 # --- 求職模組（Step 4.1，見 robinson SPEC.md FR-33、FR-36、ADR-24） ---
 
 
-def test_job_search_setup_trigger_dispatches_through_router_for_owner(fake_db, monkeypatch):
+def test_job_search_menu_dispatches_through_router_for_owner(fake_db, monkeypatch):
     monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
     fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
     store = ConversationStateStore()
 
-    reply = router.handle_message(fake_db, store, ROBIN_ID, "我最近想要找工作了")
+    reply, keyboard = router.handle_callback_query(fake_db, store, ROBIN_ID, "menu:job_search")
 
-    assert "需求" in reply
-    assert store.get(ROBIN_ID)["flow"] == "pending_job_search_criteria"
+    assert "求職設定" in reply
+    assert keyboard["inline_keyboard"][0][0]["callback_data"] == "job_search:profile:resume"
 
 
 def test_uploaded_company_csv_trigger_dispatches_for_owner(fake_db, monkeypatch):
@@ -2484,43 +2484,39 @@ def test_uploaded_recommendation_excel_trigger_gracefully_degrades_when_gdrive_c
     assert "還沒設定好" in reply
 
 
-def test_job_search_setup_trigger_falls_through_to_chat_for_family_member(fake_db):
-    """權限邊界測試：`job_search` 為 ADR-24 決策 2 的 owner_only 功能，家人的觸發詞應該落入
-    一般聊天核心，而不是被授予求職模組設定流程的能力。"""
+def test_job_search_menu_denies_family_member(fake_db):
     fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     store = ConversationStateStore()
-    llm_client = _FakeLLMClient(response_text="我不太懂這個指令耶！")
+    reply, _ = router.handle_callback_query(fake_db, store, FAMILY_ID, "menu:job_search")
 
-    reply = router.handle_message(fake_db, store, FAMILY_ID, "我最近想要找工作了", llm_client=llm_client)
-
-    assert reply == "我不太懂這個指令耶！"
+    assert "無法使用" in reply
 
 
 # --- 外部管道職缺與應徵成效追蹤（Step 4.3，見 robinson SPEC.md FR-39、FR-40、ADR-27） ---
 
 
-def test_add_external_job_trigger_dispatches_through_router_for_owner(fake_db, monkeypatch):
+def test_add_external_job_callback_dispatches_through_router_for_owner(fake_db, monkeypatch):
     monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
     fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
     store = ConversationStateStore()
 
-    reply = router.handle_message(fake_db, store, ROBIN_ID, "新增外部職缺")
+    reply, _ = router.handle_callback_query(fake_db, store, ROBIN_ID, "job_search:external:add")
 
     assert "管道" in reply
     assert store.get(ROBIN_ID)["flow"] == "pending_external_job_channel"
 
 
-def test_my_applications_trigger_dispatches_for_owner(fake_db, monkeypatch):
+def test_application_status_callback_lists_empty_for_owner(fake_db, monkeypatch):
     monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
     fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
     store = ConversationStateStore()
 
-    reply = router.handle_message(fake_db, store, ROBIN_ID, "我的應徵紀錄")
+    reply, _ = router.handle_callback_query(fake_db, store, ROBIN_ID, "job_search:status:applied")
 
-    assert "還沒有任何應徵紀錄" in reply
+    assert "目前沒有" in reply
 
 
-def test_application_status_trigger_updates_status_and_replies(fake_db, monkeypatch):
+def test_application_status_callback_updates_status_and_replies(fake_db, monkeypatch):
     from src.bot import job_search
 
     monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
@@ -2530,7 +2526,7 @@ def test_application_status_trigger_updates_status_and_replies(fake_db, monkeypa
     )
     store = ConversationStateStore()
 
-    reply = router.handle_message(fake_db, store, ROBIN_ID, f"ID={job_id} 職缺已應徵")
+    reply, _ = router.handle_callback_query(fake_db, store, ROBIN_ID, f"job_search:status:set:{job_id}:applied")
 
     assert "已應徵" in reply
     rows = fake_db.select("job_applications", where=None)
@@ -2538,7 +2534,7 @@ def test_application_status_trigger_updates_status_and_replies(fake_db, monkeypa
     assert rows[0]["status"] == "applied"
 
 
-def test_application_status_trigger_accepts_offer_with_space(fake_db, monkeypatch):
+def test_application_status_callback_accepts_offer(fake_db, monkeypatch):
     from src.bot import job_search
 
     monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
@@ -2548,19 +2544,19 @@ def test_application_status_trigger_accepts_offer_with_space(fake_db, monkeypatc
     )
     store = ConversationStateStore()
 
-    reply = router.handle_message(fake_db, store, ROBIN_ID, f"ID={job_id} 職缺已拿到 Offer")
+    reply, _ = router.handle_callback_query(fake_db, store, ROBIN_ID, f"job_search:status:set:{job_id}:offer")
 
     assert "已拿到 Offer" in reply
     rows = fake_db.select("job_applications", where=None)
     assert rows[0]["status"] == "offer"
 
 
-def test_application_status_trigger_reports_not_found(fake_db, monkeypatch):
+def test_application_status_callback_reports_not_found(fake_db, monkeypatch):
     monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
     fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
     store = ConversationStateStore()
 
-    reply = router.handle_message(fake_db, store, ROBIN_ID, "ID=not-exist 職缺已應徵")
+    reply, _ = router.handle_callback_query(fake_db, store, ROBIN_ID, "job_search:status:set:not-exist:applied")
 
     assert "找不到" in reply
     assert store.get(FAMILY_ID) is None

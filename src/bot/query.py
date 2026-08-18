@@ -26,12 +26,16 @@ UI，這裡是新寫的純文字遮罩實作決策——`privacy_mask_enabled=Tr
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
-from zoneinfo import ZoneInfo
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from src.bot import menu
 from src.bot.state import ConversationStateStore
-from src.services.app_analytics import AppAnalyticsService, FeatureDisabledError, ForbiddenModuleError
+from src.services.app_analytics import (
+    AppAnalyticsService,
+    FeatureDisabledError,
+    ForbiddenModuleError,
+)
 from src.services.app_auth import AuthenticatedUser
 
 _TAIWAN_TZ = ZoneInfo("Asia/Taipei")

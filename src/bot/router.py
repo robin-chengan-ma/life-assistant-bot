@@ -10,6 +10,7 @@ from src.bot import (
     image,
     important_days,
     job_search,
+    job_settings,
     menu,
     query,
     system_errors,
@@ -103,16 +104,10 @@ _MY_QUIZ_STATS_TRIGGERS = {"/my_quiz_stats", "查詢我的成效"}
 # 入口改為主選單「💡 Youtube 技術分享設定」，見 menu.py／commands.py 對應區塊說明。
 # 2026-08-09（Step 4.1，見 robinson SPEC.md FR-33、FR-36、ADR-24 決策 2）：求職模組設定流程，
 # `job_search` 開關同步改為 owner_only=True，觸發詞只放在 is_owner 分支，家人完全看不到這個功能。
-_JOB_SEARCH_SETUP_TRIGGERS = {"/set_job_search", "我要找工作", "我最近想要找工作了"}
 # 2026-08-09（Step 4.3，見 robinson SPEC.md FR-40、ADR-27）：外部管道職缺新增流程與應徵紀錄
 # 查詢指令，觸發詞位置比照求職模組設定流程，只放在 is_owner 分支。
-_ADD_EXTERNAL_JOB_TRIGGERS = {"/add_external_job", "新增外部職缺"}
-_MY_APPLICATIONS_TRIGGERS = {"/my_applications", "我的應徵紀錄"}
 # 2026-08-09（Step 4.3，見 robinson SPEC.md FR-39b、ADR-27）：應徵狀態更新語句，比照
 # `_UPLOADED_FILE_PATTERN` 直接在這裡用 regex 一次解析，不走多輪對話狀態機。
-_APPLICATION_STATUS_PATTERN = re.compile(
-    r"^ID=(?P<job_id>[\w-]+)\s*職缺(?P<status_text>已應徵|已獲得面試|已拿到\s*Offer|已婉拒|未錄取)$"
-)
 # 2026-08-09（見 robinson SPEC.md FR-19j）：系統錯誤解法記錄，Owner 專屬單行指令，比照
 # `_APPLICATION_STATUS_PATTERN` 直接 regex 解析、不走多輪對話狀態機。刻意用「錯誤ID=」
 # 而非單純「ID=」開頭，避免跟 `_APPLICATION_STATUS_PATTERN` 的 `ID=<job_id>` 撞在一起。
@@ -264,25 +259,6 @@ def handle_message(
         if text in _MY_QUIZ_STATS_TRIGGERS:
             # 2026-08-08（FR-29）：開始成效彈性文字問答流程。
             return commands.start_quiz_stats_query(db, state_store, telegram_user_id, user_id)
-        if text in _JOB_SEARCH_SETUP_TRIGGERS:
-            # 2026-08-09（Step 4.1，FR-33、FR-36）：開始求職模組設定流程，先問搜尋條件。
-            return commands.start_job_search_setup(state_store, telegram_user_id, user_id)
-        if text in _ADD_EXTERNAL_JOB_TRIGGERS:
-            # 2026-08-09（Step 4.3，FR-40）：開始記錄 LinkedIn／Cake 等外部管道職缺，先問管道。
-            return commands.start_add_external_job(state_store, telegram_user_id, user_id)
-        if text in _MY_APPLICATIONS_TRIGGERS:
-            # 2026-08-09（Step 4.3，FR-39 追加）：查詢目前各職缺的最新應徵狀態（單次列表）。
-            return commands.handle_my_applications(db)
-        application_status_match = _APPLICATION_STATUS_PATTERN.match(text)
-        if application_status_match:
-            # 2026-08-09（Step 4.3，FR-39b）：應徵狀態更新語句，不走多輪對話，直接解析並寫入。
-            job_id = application_status_match.group("job_id")
-            status_text = application_status_match.group("status_text").replace(" ", "")
-            status = job_search.APPLICATION_STATUS_TEXT_TO_STATUS[status_text]
-            if job_search.record_application_status(db, job_id, status):
-                label = job_search.application_status_label(status)
-                return f"已經幫你把「{job_id}」的應徵狀態更新為「{label}」了！"
-            return f"找不到 ID={job_id} 對應的職缺，麻煩確認一下 ID 有沒有打對！"
         error_resolution_match = _ERROR_RESOLUTION_PATTERN.match(text)
         if error_resolution_match:
             # 2026-08-09（見 robinson SPEC.md FR-19j）：系統錯誤解法記錄語句，不走多輪對話，
@@ -465,6 +441,9 @@ def handle_callback_query(
             if user is None:
                 return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
             return commands.start_youtube_settings_menu(db, user["id"])
+        if key == "job_search":
+            state_store.clear(telegram_user_id)
+            return job_settings.start_menu()
         return menu.not_yet_implemented_reply()
 
     if data.startswith("daily_log:"):
@@ -750,6 +729,62 @@ def handle_callback_query(
             topic_id = int(action[len("confirm_remove:") :])
             return commands.handle_youtube_topic_remove_confirmed(db, state_store, telegram_user_id, user["id"], topic_id)
         return commands.start_youtube_settings_menu(db, user["id"])
+
+    if data.startswith("job_search:"):
+        if not is_owner:
+            return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
+        user = _get_identified_user(db, telegram_user_id)
+        if user is None:
+            return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
+        action = data[len("job_search:") :]
+        if action == "menu":
+            state_store.clear(telegram_user_id)
+            return job_settings.start_menu()
+        if action.startswith("profile:"):
+            parts = action.split(":")
+            if len(parts) == 2 and parts[1] in ("resume", "expectation"):
+                return job_settings.start_profile_menu(db, user["id"], parts[1])
+            if len(parts) == 3 and parts[1] == "edit" and parts[2] in ("resume", "expectation"):
+                return job_settings.start_profile_edit(state_store, telegram_user_id, user["id"], parts[2]), None
+            if len(parts) == 3 and parts[1] == "clear" and parts[2] in ("resume", "expectation"):
+                field = {"resume": "job_resume", "expectation": "job_expectation"}[parts[2]]
+                return job_settings.start_profile_clear_confirm(db, state_store, telegram_user_id, user["id"], field)
+            if len(parts) == 3 and parts[1] == "confirm_clear" and parts[2] in ("resume", "expectation"):
+                field = {"resume": "job_resume", "expectation": "job_expectation"}[parts[2]]
+                return job_settings.handle_profile_clear_confirm(db, state_store, telegram_user_id, user["id"], field), menu.back_to_main_menu_keyboard()
+        if action == "requirements":
+            return job_settings.start_requirements(db, state_store, telegram_user_id, user["id"])
+        if action == "requirements:edit":
+            return job_settings.start_requirements_edit(state_store, telegram_user_id, user["id"]), None
+        if action == "criteria":
+            return job_settings.start_criteria_menu(db, user["id"])
+        if action == "criteria:add":
+            return job_settings.start_criteria_add(state_store, telegram_user_id, user["id"]), None
+        if action.startswith("criteria:delete:"):
+            return job_settings.start_criteria_delete_confirm(state_store, telegram_user_id, user["id"], int(action.rsplit(":", 1)[1]))
+        if action.startswith("criteria:confirm_delete:"):
+            return job_settings.handle_criteria_delete_confirm(db, state_store, telegram_user_id, user["id"], int(action.rsplit(":", 1)[1])), menu.back_to_main_menu_keyboard()
+        if action == "jobs":
+            return job_settings.start_jobs_list(db)
+        if action.startswith("status:"):
+            parts = action.split(":")
+            if len(parts) == 2 and parts[1] in {"applied", "interview", "offer"}:
+                return job_settings.start_status_list(db, parts[1])
+            if len(parts) == 3 and parts[1] == "select":
+                return job_settings.start_status_update(parts[2])
+            if len(parts) == 4 and parts[1] == "set" and parts[3] in {"applied", "interview", "offer", "rejected"}:
+                if job_search.record_application_status(db, parts[2], parts[3]):
+                    return f"已更新為「{job_search.application_status_label(parts[3])}」。", menu.back_to_main_menu_keyboard()
+                return "找不到對應職缺。", menu.back_to_main_menu_keyboard()
+        if action == "closed":
+            return job_settings.start_closed_list(db)
+        if action.startswith("closed:"):
+            _, mode, job_id = action.split(":", 2)
+            if mode in {"open", "close"} and job_search.set_job_closed_manually(db, job_id, mode == "close"):
+                return ("已標記職缺關閉。" if mode == "close" else "已重新開啟職缺。"), menu.back_to_main_menu_keyboard()
+        if action == "external:add":
+            return commands.start_add_external_job(state_store, telegram_user_id, user["id"]), None
+        return job_settings.start_menu()
 
     if data.startswith("mood:"):
         # 2026-08-16（Phase 6 第二批 2c，FR-6e）：心情選單與清單操作。
@@ -1477,6 +1512,12 @@ def _dispatch_active_flow(
         return commands.handle_job_search_salary_min_step(state_store, telegram_user_id, text)
     if flow == "pending_job_search_salary_max":
         return commands.handle_job_search_salary_max_step(db, state_store, telegram_user_id, text)
+    if flow == "pending_job_settings_profile":
+        return job_settings.handle_profile_edit(db, state_store, telegram_user_id, text)
+    if flow == "pending_job_settings_requirements":
+        return job_settings.handle_requirements_edit(db, state_store, telegram_user_id, text)
+    if flow == "pending_job_settings_criteria":
+        return job_settings.handle_criteria_add(db, llm_client, state_store, telegram_user_id, text)
     # 2026-08-09（Step 4.3，見 robinson SPEC.md FR-40、ADR-27）：外部管道職缺新增流程，六輪
     # 依序收集管道／職稱／公司名／連結／內容／公司背景，結構比照求職模組設定流程但不經 LLM
     # 解析（純自由文字直接記錄），只有內容/背景這兩輪需要 privacy_llm_client 做個資遮蔽。

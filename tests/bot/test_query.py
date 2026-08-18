@@ -154,13 +154,13 @@ def test_handle_module_toggle_adds_then_removes():
     store = ConversationStateStore()
     _quick_select(store)
 
-    text, keyboard = query.handle_module_toggle(store, USER_ID, is_owner=False, module_key="finance")
+    _text, keyboard = query.handle_module_toggle(store, USER_ID, is_owner=False, module_key="finance")
     assert store.get(USER_ID)["selected"] == ["finance"]
     assert "✅ 記帳" in [
         button["text"] for row in keyboard["inline_keyboard"] for button in row
     ]
 
-    text, keyboard = query.handle_module_toggle(store, USER_ID, is_owner=False, module_key="finance")
+    _text, keyboard = query.handle_module_toggle(store, USER_ID, is_owner=False, module_key="finance")
     assert store.get(USER_ID)["selected"] == []
 
 
@@ -268,16 +268,16 @@ def test_router_end_to_end_menu_to_run(fake_db, monkeypatch):
     fake_db.insert("users", {"telegram_user_id": telegram_user_id, "role": "媽媽", "is_owner": False})
     store = ConversationStateStore()
 
-    text, keyboard = router.handle_callback_query(fake_db, store, telegram_user_id, "menu:query")
+    text, _keyboard = router.handle_callback_query(fake_db, store, telegram_user_id, "menu:query")
     assert "資料查詢" in text
     assert store.get(telegram_user_id)["flow"] == "pending_query_date"
 
-    text, keyboard = router.handle_callback_query(fake_db, store, telegram_user_id, "query:date:today")
+    text, _keyboard = router.handle_callback_query(fake_db, store, telegram_user_id, "query:date:today")
     assert store.get(telegram_user_id)["flow"] == "pending_query_modules"
 
-    text, keyboard = router.handle_callback_query(fake_db, store, telegram_user_id, "query:module:finance")
+    text, _keyboard = router.handle_callback_query(fake_db, store, telegram_user_id, "query:module:finance")
     assert store.get(telegram_user_id)["selected"] == ["finance"]
 
-    text, keyboard = router.handle_callback_query(fake_db, store, telegram_user_id, "query:run")
+    text, _keyboard = router.handle_callback_query(fake_db, store, telegram_user_id, "query:run")
     assert "記帳" in text
     assert store.get(telegram_user_id) is None

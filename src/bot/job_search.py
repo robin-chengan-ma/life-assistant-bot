@@ -190,10 +190,15 @@ def upsert_job_posting(db: CloudSQLClient, job: dict, detail: dict, now: datetim
         "last_crawled_at": now,
     }
     if existing is not None:
+        if existing.get("is_closed_manual_override"):
+            fields.pop("is_closed")
         db.update("job_postings", fields, where="job_id_104 = %s", params=(job["job_id"],))
         return False
 
-    db.insert("job_postings", {**fields, "job_id_104": job["job_id"], "first_seen_at": now})
+    db.insert(
+        "job_postings",
+        {**fields, "job_id_104": job["job_id"], "first_seen_at": now, "is_closed_manual_override": False},
+    )
     return True
 
 
@@ -970,3 +975,54 @@ def format_application_statuses(statuses: list[dict]) -> str:
         label = _APPLICATION_STATUS_LABELS.get(item["status"], item["status"])
         lines.append(f"・{item['title']}（ID={item['job_id_104']}）：{label}")
     return "\n".join(lines)
+
+
+def get_profile(db: CloudSQLClient, user_id: int) -> dict:
+    """取得求職設定所需的使用者欄位。"""
+    return db.select("users", where="id = %s", params=(user_id,), fetch_one=True) or {}
+
+
+def update_profile_field(db: CloudSQLClient, user_id: int, field: str, value) -> None:
+    """只更新 FR-41 選單目前操作的單一履歷或必要條件欄位。"""
+    allowed_fields = {
+        "job_resume",
+        "job_expectation",
+        "years_of_experience",
+        "expected_salary_min",
+        "expected_salary_max",
+    }
+    if field not in allowed_fields:
+        raise ValueError(f"不支援的求職設定欄位：{field}")
+    db.update("users", {field: value}, where="id = %s", params=(user_id,))
+
+
+def delete_search_criteria(db: CloudSQLClient, user_id: int, criteria_id: int) -> bool:
+    """刪除指定使用者的一筆搜尋條件，避免跨帳號刪除。"""
+    return bool(db.delete("job_search_criteria", "id = %s AND user_id = %s", (criteria_id, user_id)))
+
+
+def list_jobs_by_score(db: CloudSQLClient) -> list[dict]:
+    """職缺清單依契合度分數由高至低，未評分職缺排在最後。"""
+    return sorted(
+        db.select("job_postings"),
+        key=lambda job: (job.get("score") is not None, job.get("score") or 0),
+        reverse=True,
+    )
+
+
+def list_jobs_by_latest_application_status(db: CloudSQLClient, status: str) -> list[dict]:
+    """依 append-only 應徵歷程找出目前處於指定狀態的職缺。"""
+    latest = {item["job_id_104"]: item for item in list_latest_application_statuses(db)}
+    return [item for item in latest.values() if item["status"] == status]
+
+
+def set_job_closed_manually(db: CloudSQLClient, job_id_104: str, is_closed: bool) -> bool:
+    """寫入人工職缺開關並保護它不被下一輪 104 爬蟲覆寫。"""
+    return bool(
+        db.update(
+            "job_postings",
+            {"is_closed": is_closed, "is_closed_manual_override": True},
+            where="job_id_104 = %s",
+            params=(job_id_104,),
+        )
+    )

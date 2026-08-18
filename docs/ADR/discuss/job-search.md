@@ -41,3 +41,25 @@
 **理由**：真實求職情境中公司不一定照預期順序發通知，嚴格線性狀態機會逼 Robin 補打不存在的中間狀態；獨立歷程表一次到位，不用等以後真的要做統計時回頭補資料結構；用 `source` 欄位統一是更常見、更具擴充性的正規化做法，這個改動還有 Claude 原提案沒想到的附帶好處——既有評分/排名邏輯不區分來源，外部職缺只要符合同樣的資料形狀就會自動被納入既有流程，不需要為外部職缺另外開發一套獨立批次評分機制。
 
 **後果**：`job_postings`／`job_companies` 各自新增 `source` 欄位（`TEXT NOT NULL DEFAULT '104'`），並新增應徵歷程表；`is_closed` 對外部職缺沒有自動判斷依據，預設 `FALSE`。
+
+## 2026-08-18 [標籤：使用者] ADR-28：「求職分析」改名「求職設定」全面選單化，開工前設計決策
+
+**狀態**：accepted
+
+**背景**：求職模組自 Step 4.1～4.3 完工後一直是純文字觸發詞（`/set_job_search`、`ID=XXX 職缺已應徵`等），跟其餘模組已陸續完成的選單化（`collections.py`／`achievements.py`／`youtube_settings:*`）不一致。Robin 提出把主選單「💼 求職分析」改成「💼 求職設定」，子選單列出 10 個項目，其中「我的履歷」「期望工作內容」原本是 FR-36 `save_profile()` 同一輪對話收集的五個欄位之一，「已應徵／獲得面試／拿到 offer」三個狀態各自要獨立清單、「職缺已關閉設定」要新增人工覆寫。
+
+**決策**：①主選單項目 label 改「💼 求職設定」，維持 `key="job_search"` 不變（避免動到既有 `owner_only`／功能開關判斷邏輯）②子選單 10 項，比照 `collections.py`／`achievements.py` 的單層選單＋按鈕操作模式：我的履歷、期望工作內容、必要條件設定（新增項目，見決策 ③）、職缺關鍵字設定、職缺清單（唯讀）、已應徵職缺設定、獲得面試職缺設定、拿到 offer 職缺設定、職缺已關閉設定、其他平台職缺 ③新增「必要條件設定」，把原本併在 `save_profile()` 裡的 `years_of_experience`／`expected_salary_min`／`expected_salary_max` 三個結構化欄位獨立出來，跟「期望工作內容」（純自由文字 `job_expectation`）分開管理 ④履歷／期望工作內容／職缺關鍵字設定三者的「移除」語意為「清空該欄位（或刪除該筆搜尋條件）」，彼此獨立、互不牽動，取代原本 FR-36「整輪對話覆蓋」的設計 ⑤已應徵／獲得面試／拿到 offer 三個選單項目皆為「該狀態的職缺清單，可從清單直接改狀態」，沿用既有 `record_application_status()` append-only 寫入，不新增第 4 種以外的狀態（`offer` 狀態原本就存在，不需要新建）⑥`job_postings` 新增 `is_closed_manual_override` 欄位，允許人工於「職缺已關閉設定」覆寫 104 自動判斷結果；旗標為 `TRUE` 時週爬蟲 `upsert_job_posting()` 的自動 `is_closed` 判斷跳過該筆，人工切回「開啟」時同步清回 `FALSE`。
+
+**理由**：`job_search` key 不變可以避免動到 `menu.py`／`toggles.py` 既有的 owner_only 判斷與功能開關邏輯，只是換皮；必要條件設定獨立成一項，是因為年資／期望薪資是結構化數字欄位，跟履歷／期望工作內容的自由文字欄位在編輯體驗上本來就不同，分開後個別編輯也更清楚；is_closed 若只是單純人工 UPDATE、沒有旗標保護，下一次週爬蟲就會把人工設定蓋掉，等於功能形同虛設。
+
+**替代方案**：把年資／期望薪資留在「期望工作內容」畫面一起編輯（已否決，Robin 明確要求獨立成「必要條件設定」）；`is_closed` 不加保護旗標、直接讓爬蟲每週覆蓋（已否決，人工設定會被下一輪爬蟲蓋掉，違背新增這個功能的目的）。
+
+**後果**：新增 Migration（`job_postings.is_closed_manual_override BOOLEAN NOT NULL DEFAULT FALSE`，先審核後執行）；`router.py` 移除 `_JOB_SEARCH_SETUP_TRIGGERS`／`_ADD_EXTERNAL_JOB_TRIGGERS`／`_MY_APPLICATIONS_TRIGGERS`／`_APPLICATION_STATUS_PATTERN` 文字觸發詞；`job_search.py` 新增選單相關函式；`commands.py` 既有 `start_job_search_setup`／`handle_job_search_*_step` 系列拆解成各子選單各自的狀態機。詳見 SPEC.md 求職模組 FR-41／FR-41a；本次僅完成規格與討論文件定案，實作尚未開始。
+
+### 2026-08-18 補充：清空確認、應徵狀態與職缺開關操作
+
+**狀態**：accepted
+
+**決策**：履歷、期望工作內容的清空，以及單筆職缺關鍵字的刪除，都必須使用按鈕二次確認。已應徵／獲得面試／拿到 Offer 三個清單選取職缺後，可改為「已應徵、已獲得面試、已拿到 Offer、未錄取／已婉拒」四種任一狀態。職缺已關閉設定顯示全部職缺（包括目前已關閉者），並提供「標記關閉／重新開啟」切換。
+
+**理由**：清空及刪除均可能失去使用者輸入資料，需避免誤觸；應徵流程不保證線性，維持 ADR-27 的任意狀態設定；顯示全部職缺才能讓使用者撤銷先前的人工關閉判斷。

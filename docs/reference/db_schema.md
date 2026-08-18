@@ -1,6 +1,6 @@
 ---
 title: DB Schema
-updated: 2026-08-17
+updated: 2026-08-18
 ---
 
 # DB Schema
@@ -843,13 +843,14 @@ CREATE TABLE job_postings (
     recommend_reason TEXT,                      -- 0058 追加
     skill_gap_note TEXT,                        -- 0058 追加
     is_unliked BOOLEAN NOT NULL DEFAULT FALSE,  -- 0058 追加
-    source TEXT NOT NULL DEFAULT '104'          -- 0059 追加
+    source TEXT NOT NULL DEFAULT '104',         -- 0059 追加
+    is_closed_manual_override BOOLEAN NOT NULL DEFAULT FALSE  -- 0090 追加
 );
 CREATE INDEX idx_job_postings_company_id_104 ON job_postings (company_id_104);
 ```
-`src/migrations/0056`（建表）、`0057`（`is_closed`）、`0058`（評分欄位）、`0059`（`source`）
+`src/migrations/0056`（建表）、`0057`（`is_closed`）、`0058`（評分欄位）、`0059`（`source`）、`0090`（人工關閉覆寫）
 
-- `job_id_104 UNIQUE` 作 ETL 去重鍵；`is_closed` 由 104 API `jobSwitch`/`switch` 欄位自動判斷；`score`/`recommend_reason`/`skill_gap_note` 由 FR-37 週批次評分寫入；刻意不建 `rank` 欄位（全庫/本週新職缺兩種排名並存，動態計算不持久化）；`source` 讓外部管道職缺共用同一表並沿用既有評分/排名邏輯
+- `job_id_104 UNIQUE` 作 ETL 去重鍵；`is_closed` 預設由 104 API `jobSwitch`/`switch` 欄位自動判斷；`is_closed_manual_override=TRUE` 代表使用者已人工切換開關，週爬蟲必須保留人工 `is_closed` 值；`score`/`recommend_reason`/`skill_gap_note` 由 FR-37 週批次評分寫入；刻意不建 `rank` 欄位（全庫/本週新職缺兩種排名並存，動態計算不持久化）；`source` 讓外部管道職缺共用同一表並沿用既有評分/排名邏輯
 - Mobile 求職分析 SQL 讀取正式欄位 `score`，並以 `score AS match_score` 對外維持既有 API 欄位名稱；資料庫本身沒有 `match_score` 欄位
 
 ```sql
