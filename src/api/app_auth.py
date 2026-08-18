@@ -8,6 +8,7 @@ from functools import wraps
 
 from flask import Blueprint, Response, g, jsonify, request
 
+from src.api.error_reporting import report_mobile_error
 from src.services.app_auth import (
     AppAuthService,
     AuthSession,
@@ -53,8 +54,9 @@ def _json_object() -> dict | None:
     return payload if isinstance(payload, dict) else None
 
 
-def _unexpected_error() -> tuple[Response, int]:
+def _unexpected_error(feature: str, db=None, affected_user_id: int | None = None) -> tuple[Response, int]:
     logger.exception("Mobile App 認證 API 發生未預期錯誤")
+    report_mobile_error(db, feature, affected_user_id)
     return jsonify({"message": _GENERIC_UNAVAILABLE}), 503
 
 
@@ -90,7 +92,7 @@ def require_access_token(handler):
         except InvalidAccessTokenError:
             return jsonify({"message": "登入已過期，請重新登入"}), 401
         except Exception:  # noqa: BLE001 - HTTP 邊界需隔離技術錯誤，避免洩漏 Stack Trace
-            return _unexpected_error()
+            return _unexpected_error("mobile_authenticate", db)
         finally:
             if db is not None:
                 db.close()
@@ -138,7 +140,7 @@ def login():
             401,
         )
     except Exception:  # noqa: BLE001 - HTTP 邊界統一轉成安全錯誤訊息
-        return _unexpected_error()
+        return _unexpected_error("mobile_login", db)
     finally:
         if db is not None:
             db.close()
@@ -159,7 +161,7 @@ def identify():
     except UnknownUserError:
         return jsonify({"code": "UNKNOWN_USER", "message": "很抱歉，我無法辨識您"}), 401
     except Exception:  # noqa: BLE001 - HTTP 邊界統一轉成安全錯誤訊息
-        return _unexpected_error()
+        return _unexpected_error("mobile_identify", db)
     finally:
         if db is not None:
             db.close()
@@ -202,7 +204,7 @@ def forgot_password():
             503,
         )
     except Exception:  # noqa: BLE001 - HTTP 邊界統一轉成安全錯誤訊息
-        return _unexpected_error()
+        return _unexpected_error("mobile_forgot_password", db)
     finally:
         if db is not None:
             db.close()
@@ -223,7 +225,7 @@ def refresh():
     except InvalidRefreshTokenError:
         return jsonify({"message": "登入已過期，請重新登入"}), 401
     except Exception:  # noqa: BLE001 - HTTP 邊界統一轉成安全錯誤訊息
-        return _unexpected_error()
+        return _unexpected_error("mobile_refresh", db)
     finally:
         if db is not None:
             db.close()
@@ -273,7 +275,7 @@ def change_password():
     except ReusedPasswordError:
         return jsonify({"code": "REUSED_PASSWORD", "message": "不能使用目前或曾經使用過的密碼"}), 409
     except Exception:  # noqa: BLE001 - HTTP 邊界統一轉成安全錯誤訊息
-        return _unexpected_error()
+        return _unexpected_error("mobile_change_password", db, g.app_user.database_id)
     finally:
         if db is not None:
             db.close()
@@ -288,7 +290,7 @@ def logout():
         _build_service(db).logout(g.app_user.database_id)
         return jsonify({"message": "已登出"}), 200
     except Exception:  # noqa: BLE001 - HTTP 邊界統一轉成安全錯誤訊息
-        return _unexpected_error()
+        return _unexpected_error("mobile_logout", db, g.app_user.database_id)
     finally:
         if db is not None:
             db.close()
@@ -315,7 +317,7 @@ def update_preferences():
     except InvalidPreferenceError:
         return jsonify({"message": "請確認 APP 設定選項"}), 400
     except Exception:  # noqa: BLE001 - HTTP 邊界統一轉成安全錯誤訊息
-        return _unexpected_error()
+        return _unexpected_error("mobile_preferences", db, g.app_user.database_id)
     finally:
         if db is not None:
             db.close()

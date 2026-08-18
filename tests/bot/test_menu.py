@@ -11,6 +11,7 @@ def test_build_main_menu_keyboard_for_non_owner_excludes_owner_only_items():
     assert "menu:tech_intel" not in keys
     assert "menu:job_search" not in keys
     assert "menu:certificate" not in keys
+    assert "menu:system_errors" not in keys
     assert "menu:recovered" not in keys
 
 

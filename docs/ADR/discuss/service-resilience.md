@@ -65,3 +65,17 @@
 **理由**：保存通知結果可以確認重要錯誤是否成功送達，又不需要增加第三種通知管道或產生「通知通知已寄出」的循環。
 
 **後果**：實作時需以向前 Migration 擴充 `system_error_reports` 的通知管道與時間欄位，更新錯誤通知 Service、Owner 系統錯誤管理選單、API／DB Reference 與成功、Email fallback、雙重失敗測試。現行 `_send_email_fallback()` 尚未回傳或寫入成功狀態，在完成上述項目前不得宣稱已具備送達追蹤。
+
+## 2026-08-18 [標籤：使用者] Mobile App 納入異常、康復與錯誤管理
+
+**狀態**：accepted
+
+**背景**：現行 `system_error_reports` 與 Telegram→Email 備援通知主要由 Telegram webhook 例外觸發；Mobile API 多數未預期例外只回傳安全文案並寫入 Render Log，未保證建立錯誤紀錄或通知 Owner。現行康復通知候選人又限於「曾成功收到該事故 Telegram 通知的家人」，因此 Mobile App 故障修復後無法直接通知受影響的 App 使用者。
+
+**討論內容**：Robin 確認異常發生時的主動通知、修復後的康復通知與 Owner 系統錯誤管理，都不能只考慮 Telegram Bot，必須納入 Mobile App 事故。Mobile App 不必建立 App Push Notification；事故與康復訊息仍可透過已綁定的 Telegram 發送。
+
+**已確認方向**：①Mobile API 的系統異常要進入共用錯誤紀錄與 Owner Telegram→Email 備援通知流程。②錯誤紀錄需能區分來源平台，並在可辨識時關聯受影響使用者。③Mobile App 問題修復後，Owner 可從 Telegram 康復通知選單選擇受影響使用者，預覽並二次確認後以 Telegram 發送。④系統錯誤管理要能同時查看 Telegram Bot 與 Mobile App 事故。
+
+**決策**：①Mobile API 只將未預期 5xx 視為系統事故；輸入驗證、權限不足、登入過期等預期 4xx 不建立事故。②事故發生當下，一般使用者只在 Mobile App 看到安全錯誤文案，不另外發送 Telegram 異常推播；只主動通知 Owner，Telegram 失敗時才以 Email 備援。③康復通知候選人優先列出該事故可辨識的受影響使用者；無法辨識時，列出所有已綁定 Telegram 的家人供 Owner 勾選。④登入階段尚未驗證身分時，受影響者紀錄為「未知使用者」，不保存使用者輸入的帳號或密碼。⑤同一來源平台、功能與安全錯誤摘要在 10 分鐘內重複發生時合併為同一事故、累計發生次數，不重複通知 Owner。⑥新 Migration 將既有錯誤來源回填為 `telegram`；已有處理說明的舊資料以 Owner 為處理人、原 `updated_at` 為處理時間，無法判定的受影響使用者保持 `NULL`。⑦Owner 系統錯誤管理只實作於 Telegram；Mobile App 只是事故來源，不新增錯誤清單或結案介面。
+
+**後果**：此範圍納入 FR-19j～FR-20 正式 Roadmap。實作需要向前 Migration、Mobile API 集中例外事件、共用通知服務、Telegram Owner 管理／康復選單、API／DB Reference 及跨平台測試；SQL 影響與回滾方案必須另行呈現並取得 Robin 核准。

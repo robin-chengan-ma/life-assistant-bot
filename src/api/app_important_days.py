@@ -5,6 +5,7 @@ import logging
 from flask import Blueprint, Response, g, jsonify, request
 
 from src.api.app_auth import require_access_token
+from src.api.error_reporting import report_mobile_error
 from src.services.app_important_days import (
     AppImportantDayService,
     ImportantDayNotFoundError,
@@ -40,6 +41,7 @@ def list_important_days():
         return jsonify({"items": service.list_for_user(g.app_user.database_id), "users": service.family_users()}), 200
     except Exception:
         _logger.exception("載入 Mobile App 重要日子失敗")
+        report_mobile_error(db, "mobile_important_days_list", g.app_user.database_id)
         return jsonify({"message": "重要日子目前無法載入，請稍後再試"}), 503
     finally:
         if db is not None:
@@ -73,6 +75,7 @@ def _write(important_day_id: int | None):
     except ImportantDayNotFoundError as exc:
         return jsonify({"message": str(exc)}), 404
     except Exception:  # noqa: BLE001
+        report_mobile_error(db, "mobile_important_days_write", g.app_user.database_id)
         return jsonify({"message": "重要日子目前無法儲存，請稍後再試"}), 503
     finally:
         if db is not None:
@@ -89,6 +92,7 @@ def delete_important_day(important_day_id: int):
     except ImportantDayNotFoundError as exc:
         return jsonify({"message": str(exc)}), 404
     except Exception:  # noqa: BLE001
+        report_mobile_error(db, "mobile_important_days_delete", g.app_user.database_id)
         return jsonify({"message": "重要日子目前無法刪除，請稍後再試"}), 503
     finally:
         if db is not None:

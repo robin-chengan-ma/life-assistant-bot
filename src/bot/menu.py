@@ -93,6 +93,7 @@ MAIN_MENU_ITEMS = [
     {"key": "tech_intel", "label": "💡 Youtube 技術分享設定", "owner_only": True},
     {"key": "job_search", "label": "💼 求職設定", "owner_only": True},
     {"key": "certificate", "label": "📖 考試設定", "owner_only": True},
+    {"key": "system_errors", "label": "🚨 系統錯誤管理", "owner_only": True},
     {"key": "recovered", "label": "📢 發送康復通知", "owner_only": True},
 ]
 

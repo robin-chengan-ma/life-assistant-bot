@@ -1849,55 +1849,30 @@ def test_application_status_callback_reports_not_found(fake_db, monkeypatch):
     assert store.get(FAMILY_ID) is None
 
 
-# --- 系統錯誤解法記錄（FR-19j，見 robinson SPEC.md、ADR-30 相鄰段落） ---
+# --- 系統錯誤管理（FR-19j～FR-19l） ---
 
 
-def test_error_resolution_trigger_updates_resolution_and_replies(fake_db, monkeypatch):
-    from src.bot import system_errors
-
+def test_system_error_menu_is_owner_only(fake_db, monkeypatch):
     monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
     fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
-    report_id = system_errors.record_error_report(
-        fake_db, severity="general", triggering_feature="text", error_summary="boom", drive_log_url=None,
+
+    text, keyboard = router.handle_callback_query(
+        fake_db, ConversationStateStore(), ROBIN_ID, "menu:system_errors"
     )
-    store = ConversationStateStore()
 
-    reply = router.handle_message(fake_db, store, ROBIN_ID, f"錯誤ID={report_id} 已處理：已重啟服務排除")
-
-    assert "記錄好了" in reply
-    row = fake_db.select("system_error_reports", where="id = %s", params=(report_id,), fetch_one=True)
-    assert row["resolution"] == "已重啟服務排除"
+    assert "系統錯誤管理" in text
+    assert keyboard["inline_keyboard"][0][0]["callback_data"] == "system_errors:list:pending:0"
 
 
-def test_error_resolution_trigger_reports_not_found(fake_db, monkeypatch):
-    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
-    fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
-    store = ConversationStateStore()
-
-    reply = router.handle_message(fake_db, store, ROBIN_ID, "錯誤ID=999 已處理：修好了")
-
-    assert "找不到" in reply
-
-
-def test_error_resolution_trigger_ignored_for_non_owner(fake_db, monkeypatch):
-    # 權限邊界測試：家人不是 Owner，不應被授予記錄系統錯誤解法的能力（改落入一般聊天核心）。
-    from src.bot import system_errors
-
+def test_system_error_callback_rejects_non_owner(fake_db, monkeypatch):
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
-    report_id = system_errors.record_error_report(
-        fake_db, severity="general", triggering_feature="text", error_summary="boom", drive_log_url=None,
-    )
-    store = ConversationStateStore()
-    llm_client = _FakeLLMClient(response_text="我不太懂這個指令耶！")
 
-    reply = router.handle_message(
-        fake_db, store, FAMILY_ID, f"錯誤ID={report_id} 已處理：不該生效", llm_client=llm_client,
+    text, _ = router.handle_callback_query(
+        fake_db, ConversationStateStore(), FAMILY_ID, "system_errors:list:pending:0"
     )
 
-    row = fake_db.select("system_error_reports", where="id = %s", params=(report_id,), fetch_one=True)
-    assert row["resolution"] is None
-    assert reply == "我不太懂這個指令耶！"
+    assert text == "無法使用這個功能。"
 
 
 # --- 重要日子（Phase 6 第二批 2b，見 docs/ADR/discuss/robinson.md，FR-6e／FR-6h）---

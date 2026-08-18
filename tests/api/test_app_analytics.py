@@ -23,6 +23,7 @@ def client(monkeypatch):
     monkeypatch.setattr(app_auth, "CloudSQLClient", FakeDatabase)
     monkeypatch.setattr(app_auth, "_build_service", lambda db: FakeAuthService())
     monkeypatch.setattr(app_analytics, "CloudSQLClient", FakeDatabase)
+    monkeypatch.setattr(app_analytics, "report_mobile_error", lambda db, feature, user_id: None)
 
     app = Flask(__name__)
     app.register_blueprint(app_auth.app_bp)
@@ -135,24 +136,14 @@ def test_analytics_maps_access_errors_to_safe_http_responses(client, monkeypatch
     assert response.get_json() == {"message": str(error)}
 
 
-def test_resolution_update_reuses_system_error_service(client, monkeypatch):
-    test_client, module = client
-    called = {}
-
-    monkeypatch.setattr(
-        module.system_errors,
-        "update_resolution",
-        lambda db, report_id, resolution: called.update(id=report_id, resolution=resolution) or True,
-    )
+def test_mobile_system_error_resolution_endpoint_is_removed(client):
+    test_client, _ = client
 
     response = test_client.patch(
-        "/api/app/system-errors/7/resolution",
-        headers=auth_headers(),
-        json={"resolution": "更新套件後恢復"},
+        "/api/app/system-errors/7/resolution", headers=auth_headers(), json={"resolution": "解法"}
     )
 
-    assert response.status_code == 200
-    assert called == {"id": 7, "resolution": "更新套件後恢復"}
+    assert response.status_code == 404
 
 
 def test_create_weight_log_reuses_body_service_and_rounds_to_one_decimal(client, monkeypatch):
@@ -362,25 +353,3 @@ def test_technical_sharing_uses_single_date_instead_of_range(client, monkeypatch
 
     assert response.status_code == 200
     assert response.get_json()["range"] == {"start": "2026-08-01", "end": "2026-08-01"}
-
-
-def test_resolution_validation_not_found_and_cors(client, monkeypatch):
-    test_client, module = client
-    monkeypatch.setattr(module.system_errors, "update_resolution", lambda db, report_id, resolution: False)
-
-    empty = test_client.patch(
-        "/api/app/system-errors/7/resolution", headers=auth_headers(), json={"resolution": ""}
-    )
-    too_long = test_client.patch(
-        "/api/app/system-errors/7/resolution", headers=auth_headers(), json={"resolution": "a" * 2001}
-    )
-    missing = test_client.patch(
-        "/api/app/system-errors/7/resolution",
-        headers={**auth_headers(), "Origin": "http://localhost:8081"},
-        json={"resolution": "解法"},
-    )
-
-    assert empty.status_code == 400
-    assert too_long.status_code == 400
-    assert missing.status_code == 404
-    assert missing.headers["Access-Control-Allow-Origin"] == "http://localhost:8081"

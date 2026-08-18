@@ -17,7 +17,7 @@ from src.bot import (
     query,
     recovery_notifications,
     schedule_settings,
-    system_errors,
+    system_error_management,
     templates,
     toggles,
     trips,
@@ -78,10 +78,6 @@ _FRIEND_CHAT_TRIGGERS = {"陪我聊聊"}
 # 查詢指令，觸發詞位置比照求職模組設定流程，只放在 is_owner 分支。
 # 2026-08-09（Step 4.3，見 robinson SPEC.md FR-39b、ADR-27）：應徵狀態更新語句，比照
 # `_UPLOADED_FILE_PATTERN` 直接在這裡用 regex 一次解析，不走多輪對話狀態機。
-# 2026-08-09（見 robinson SPEC.md FR-19j）：系統錯誤解法記錄，Owner 專屬單行指令，比照
-# `_APPLICATION_STATUS_PATTERN` 直接 regex 解析、不走多輪對話狀態機。刻意用「錯誤ID=」
-# 而非單純「ID=」開頭，避免跟 `_APPLICATION_STATUS_PATTERN` 的 `ID=<job_id>` 撞在一起。
-_ERROR_RESOLUTION_PATTERN = re.compile(r"^錯誤ID=(?P<report_id>\d+)\s*已處理[:：]\s*(?P<resolution>.+)$")
 # 2026-08-09（見 robinson SPEC.md FR-35e、FR-38e、ADR-24 後果、ADR-26）：帶動態檔名的觸發詞，
 # 依副檔名/檔名關鍵字分流成兩條各自
 # 獨立的回填流程——公司背景 CSV（檔名以「104職缺公司.csv」結尾）與職缺推薦 Excel（檔名以
@@ -212,15 +208,6 @@ def handle_message(
         owner_row = auth.get_or_create_owner(db, telegram_user_id)
         user_id = owner_row["id"]
 
-        error_resolution_match = _ERROR_RESOLUTION_PATTERN.match(text)
-        if error_resolution_match:
-            # 2026-08-09（見 robinson SPEC.md FR-19j）：系統錯誤解法記錄語句，不走多輪對話，
-            # 直接解析並寫入 system_error_reports.resolution。
-            report_id = int(error_resolution_match.group("report_id"))
-            resolution = error_resolution_match.group("resolution").strip()
-            if system_errors.update_resolution(db, report_id, resolution):
-                return f"已經幫你把「錯誤ID={report_id}」的解法記錄好了！"
-            return f"找不到 錯誤ID={report_id} 對應的紀錄，麻煩確認一下 ID 有沒有打對！"
         uploaded_match = _UPLOADED_FILE_PATTERN.match(text)
         if uploaded_match:
             filename = uploaded_match.group("filename").strip()
@@ -473,6 +460,9 @@ def handle_callback_query(
         if key == "recovered":
             state_store.clear(telegram_user_id)
             return recovery_notifications.start_menu(db)
+        if key == "system_errors":
+            state_store.clear(telegram_user_id)
+            return system_error_management.start_menu(db)
         return menu.not_yet_implemented_reply()
 
     if data.startswith("schedule:"):
@@ -515,6 +505,33 @@ def handle_callback_query(
         if action == "cancel":
             return recovery_notifications.cancel(state_store, telegram_user_id)
         return recovery_notifications.start_menu(db)
+
+    if data.startswith("system_errors:"):
+        if not is_owner:
+            return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
+        user = _get_identified_user(db, telegram_user_id)
+        if user is None:
+            return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
+        action = data[len("system_errors:") :]
+        if action == "menu":
+            state_store.clear(telegram_user_id)
+            return system_error_management.start_menu(db)
+        if action.startswith("list:"):
+            _, status, page = action.split(":")
+            return system_error_management.list_reports(db, status, int(page))
+        if action.startswith("detail:"):
+            return system_error_management.detail(db, int(action.rsplit(":", 1)[1]))
+        if action.startswith("resolve:"):
+            return system_error_management.start_resolution(
+                db, state_store, telegram_user_id, int(action.rsplit(":", 1)[1])
+            )
+        if action == "confirm":
+            return system_error_management.confirm(db, state_store, telegram_user_id, user["id"])
+        if action == "edit":
+            return system_error_management.edit(state_store, telegram_user_id)
+        if action == "cancel":
+            return system_error_management.cancel(state_store, telegram_user_id)
+        return system_error_management.start_menu(db)
 
     if data.startswith("daily_log:"):
         # 2026-08-16（Phase 6 第二批 2c，FR-6e）：日常紀錄第二層子選單分派。
@@ -1350,6 +1367,8 @@ def _dispatch_active_flow(
     if flow in ("permission_create", "permission_disable", "permission_enable", "permission_resend"):
         # 2026-08-15（Phase 6 第二批 2a，FR-4）：Owner 權限管理選單引導式流程。
         return commands.handle_permission_step(db, state_store, telegram_user_id, text)
+    if flow in {"system_error_resolution", "system_error_resolution_confirm"}:
+        return system_error_management.handle_resolution_text(state_store, telegram_user_id, text)
     if flow == "important_days":
         # 2026-08-15（Phase 6 第二批 2b，FR-6e／FR-6h）：重要日子新增／編輯多步驟流程。
         user = _get_identified_user(db, telegram_user_id)

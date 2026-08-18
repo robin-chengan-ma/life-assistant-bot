@@ -114,3 +114,23 @@ def test_router_rejects_forged_recovery_callback_from_non_owner(fake_db, monkeyp
     text, _ = router.handle_callback_query(fake_db, ConversationStateStore(), 2, "recovery:confirm")
 
     assert text == "無法使用這個功能。"
+
+
+def test_mobile_incident_uses_affected_user_and_mobile_recovery_text(fake_db):
+    affected_id = fake_db.insert(
+        "users", {"telegram_user_id": 222, "role": "爸爸", "is_owner": False}
+    )
+    report_id = fake_db.insert("system_error_reports", {
+        "occurred_at": "2026-08-18T01:00:00+00:00", "triggering_feature": "mobile_dashboard",
+        "error_summary": "boom", "source_platform": "mobile", "recovery_status": "pending",
+    })
+    fake_db.insert("system_error_affected_users", {
+        "system_error_report_id": report_id, "user_id": affected_id,
+    })
+    store = ConversationStateStore()
+
+    recovery_notifications.select_incident(fake_db, store, 1, report_id)
+    preview, _ = recovery_notifications.preview(fake_db, store, 1)
+
+    assert "爸爸" in preview
+    assert "Mobile App 的問題已經修復" in preview

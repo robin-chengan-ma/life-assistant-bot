@@ -39,10 +39,11 @@ updated: 2026-08-18
 | 項目 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
 | `GET /healthz` | 已實作，已部署上線 | FR-3（平台）／FR-21（Neon 容量監控）／FR-31a、FR-32（待辦推播） | cron-job.org 每 10 分鐘呼叫的 keep-alive 端點；順便借用同一頻率觸發 `NeonCapacityMonitor`（容量達 80% 私訊 Robin）與待辦到期標記／30 分鐘前提醒／每日 08:00 摘要，皆包 try/except 不影響本端點回應 |
-| `menu:recovered` → `recovery:*` | 已實作（`src/bot/recovery_notifications.py`） | FR-20 | Owner 先選尚未完成康復通知的事故，再勾選該次實際成功收到事故通知的家人；預覽文案與收件人後二次確認。部分失敗保留事故供重試；舊 `/recovered` 入口已移除 |
+| `menu:recovered` → `recovery:*` | 已實作（`src/bot/recovery_notifications.py`） | FR-20 | Telegram 事故候選人為曾成功收到事故通知的家人；Mobile 事故優先列受影響使用者，無法辨識時列全部已綁定 Telegram 的家人。Owner 勾選、預覽對應平台文案並二次確認；部分失敗保留事故供重試 |
+| `menu:system_errors` → `system_errors:*` | 已實作（`src/bot/system_error_management.py`） | FR-19j～FR-19l | Owner 專屬 Telegram 錯誤管理；可查看待處理／最近已處理、來源平台、累計次數、受影響者與 Telegram／Email／未送達狀態；輸入處理說明後預覽並二次確認結案 |
 | `menu:schedule` → `schedule:*` | 已實作（`src/bot/schedule_settings.py`） | FR-1～FR-4a／FR-6f～FR-6g | 一般使用者管理自己的通知接收；Owner 額外管理技術分享／求職設定／考試設定功能開關並唯讀查看系統工作。關閉通知不停止背景工作，關閉功能則停止對應收集、生成與推播 |
 | 統一重要日子提醒（借用 `/healthz`） | 已實作（`src/bot/scheduled_notifications.py`） | FR-20a／FR-72a／FR-74b | 每日 08:00 依 `important_days.reminder_days_before` 與通知對象推播；涵蓋自訂重要日子、所有已同步目標及旅遊行程，逐收件人去重並尊重通知開關 |
-| `錯誤ID=N 已處理：{解法}` | 已實作（`src/bot/router.py::_ERROR_RESOLUTION_PATTERN` → `src/bot/system_errors.py::update_resolution`） | FR-19j | Telegram 單行指令，直接 regex 解析（刻意用「錯誤ID=」而非「ID=」開頭，避免跟求職模組的應徵狀態更新語句撞在一起）寫入 `system_error_reports.resolution`，不走多輪對話狀態機；跟 Mobile App `PATCH /api/app/system-errors/<id>/resolution` 共用同一支 `update_resolution()` |
+| `錯誤ID=N 已處理：{解法}` | 已移除 | FR-19j | 改由 `menu:system_errors` 選單引導、草稿保護與二次確認結案 |
 
 <details>
 <summary>`GET /healthz` Response 範例</summary>
@@ -195,6 +196,10 @@ updated: 2026-08-18
 
 對應 `src/api/` 底下的 Flask Blueprint，是本文件唯一一組真正對外的 HTTP REST 端點（其餘功能皆為 Telegram 內部路由）。所有端點皆需 `Authorization: Bearer <access_token>`（除登入/忘記密碼/刷新 token 本身），由 `require_access_token` 裝飾器驗證。
 
+Mobile API 的輸入驗證、權限與認證過期等預期 4xx 只回傳安全業務訊息；未預期
+5xx 另透過 `src/api/error_reporting.py` 建立 Mobile 事故並通知 Owner，不保存 Request
+payload、帳號、密碼或 Token。
+
 ### 帳密登入（`src/api/app_auth.py`，url_prefix `/api/app`）
 
 | 項目 | 狀態 | 對應 FR | 說明 |
@@ -214,7 +219,7 @@ updated: 2026-08-18
 | --- | --- | --- | --- |
 | `GET /api/app/dashboard` | 已實作（`dashboard()`） | FR-64 | 首頁摘要卡片資料，複用 `AppAnalyticsService.dashboard()` |
 | `GET /api/app/analytics/<module_key>` | 已實作（`analytics()`） | FR-64 | 唯讀分析頁面資料，`module_key` 對應 todos/body/finance/mood/jobs/exams/skills；依模組解析查詢日期區間（todos 額外支援月曆區間）；功能開關關閉回 409、越權存取回 403 |
-| `PATCH /api/app/system-errors/<id>/resolution` | 已實作（`update_error_resolution()`） | FR-19j | 僅 Owner；App 端補記系統錯誤解法，與 Telegram「錯誤ID=N 已處理：{解法}」共用同一支 `src/bot/system_errors.py::update_resolution()` |
+| `PATCH /api/app/system-errors/<id>/resolution` | 已移除 | FR-19j | Mobile App 只作為事故來源；Owner 統一從 Telegram 系統錯誤管理結案 |
 | `POST /api/app/body/weight-logs` | 已實作（`create_weight_log()`） | FR-64a | App 端手動輸入體重（取代已移除的藍牙體重計整合方案），40～150 公斤範圍檢查，複用 `src/bot/body.py::create_weight_log()` |
 | `POST /api/app/diet/recognize-photo` | 已實作（`recognize_diet_image()`） | FR-64 | 飲食照片辨識（LLM Vision），App 端專屬能力，Telegram 端沒有對應路由 |
 | `POST /api/app/diet/calculate-nutrition` | 已實作（`calculate_diet_image_nutrition()`） | FR-64 | 依確認後的飲食描述計算三大營養素，App 端專屬能力 |

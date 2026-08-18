@@ -23,7 +23,7 @@ updated: 2026-08-18
 > Render 自動部署套用（實際套用時間以資料庫 `schema_migrations` 追蹤表為準）。
 >
 > 本文件多數章節涵蓋到 migration `0061`（`system_error_reports`）；後續異動依功能逐步補登，
-> 考試設定、求職設定與通知接收設定已涵蓋至 `0093`；FR-77 取消功能資料表清理為 `0094`。其他 `0062` 之後的異動見 `src/migrations/` 與 `docs/specs/SPEC.md`
+> 考試設定、求職設定與通知接收設定已涵蓋至 `0093`；FR-77 清理為 `0094`，跨平台事故追蹤為 `0095`。其他 `0062` 之後的異動見 `src/migrations/` 與 `docs/specs/SPEC.md`
 > 對應功能區塊掌握最新範圍。CREATE TABLE 語法只保留欄位定義本身，`COMMENT ON` 逐欄註解請直接看
 > 對應 migration 檔案，不在此重複。
 
@@ -860,8 +860,9 @@ CREATE INDEX idx_job_applications_job_id_104 ON job_applications (job_id_104);
 
 | 資料表 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `system_error_reports` | 已建立 | FR-19j／FR-19k／FR-20 | 系統例外、Robin Telegram／Email 送達狀態與康復通知狀態；`error_summary` 寫入前先去除 URL 查詢字串 |
+| `system_error_reports` | 已建立；`0095` 擴充待部署套用 | FR-19j～FR-20 | Telegram／Mobile 事故、10 分鐘合併次數、Owner Telegram／Email 送達、結案與康復狀態；`error_summary` 寫入前先去除 URL 查詢字串 |
 | `system_error_notification_recipients` | 已建立 | FR-19g／FR-20 | 每次事故／康復通知的家人收件人、Telegram 送達結果與時間 |
+| `system_error_affected_users` | Migration `0095` 已建立／待部署套用 | FR-19l／FR-20 | Mobile App 事故可辨識的受影響使用者；未知使用者不建立關聯資料 |
 
 <details>
 <summary>SQL 與設計理由</summary>
@@ -887,6 +888,14 @@ Migration `0092_add_system_error_notification_tracking.sql` 新增 `owner_notifi
 `incident`／`recovery`，`delivery_status` 限定 `sent`／`failed`；索引為
 `(system_error_report_id, notification_type, delivery_status)`。事故刪除時收件紀錄
 `ON DELETE CASCADE`，使用者則 `ON DELETE RESTRICT` 保留通知歷史。
+
+Migration `0095_expand_system_error_incidents.sql` 新增 `source_platform`、`occurrence_count`、
+`last_occurred_at`、`resolved_by_user_id`與 `resolved_at`；平台限定 `telegram`／`mobile`、
+次數必須大於 0，處理說明／處理人／處理時間必須同時為空或同時有值。
+待處理合併查詢索引為 `(source_platform, triggering_feature, error_summary, last_occurred_at DESC)`
+且僅含 `resolution IS NULL`。`system_error_affected_users` 以
+`(system_error_report_id, user_id)` 唯一約束防止同一事故重複關聯使用者；事故
+`ON DELETE CASCADE`，使用者 `ON DELETE RESTRICT`。
 
 - 讓既有「私訊 Robin＋Drive log 連結」機制額外落地一份可查詢紀錄；`resolution` NULL 代表尚未處理
 </details>

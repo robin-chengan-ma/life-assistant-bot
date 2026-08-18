@@ -10,6 +10,7 @@ from submodules.cloudsql.client import CloudSQLClient
 _logger = logging.getLogger(__name__)
 
 RECOVERY_TEXT = "🎉 主任，我已經完全康復了！剛剛的問題已經修好，現在可以正常為大家服務囉！"
+MOBILE_RECOVERY_TEXT = "🎉 Mobile App 的問題已經修復，現在可以重新操作囉！"
 
 
 def _rows(db: CloudSQLClient, report_id: int, notification_type: str) -> list[dict]:
@@ -21,11 +22,28 @@ def _rows(db: CloudSQLClient, report_id: int, notification_type: str) -> list[di
 
 
 def _eligible_users(db: CloudSQLClient, report_id: int) -> list[dict]:
+    report = db.select("system_error_reports", where="id = %s", params=(report_id,), fetch_one=True)
     incident_sent = {row["user_id"] for row in _rows(db, report_id, "incident") if row["delivery_status"] == "sent"}
     recovery_sent = {row["user_id"] for row in _rows(db, report_id, "recovery") if row["delivery_status"] == "sent"}
-    candidates = incident_sent - recovery_sent
     users = db.select("users")
+    if report and report.get("source_platform") == "mobile":
+        affected = {
+            row["user_id"] for row in db.select("system_error_affected_users")
+            if row.get("system_error_report_id") == report_id
+        }
+        candidates = affected or {
+            row["id"] for row in users
+            if row.get("telegram_user_id") is not None and not row.get("is_owner", False)
+        }
+        candidates -= recovery_sent
+    else:
+        candidates = incident_sent - recovery_sent
     return [row for row in users if row.get("id") in candidates and row.get("telegram_user_id") is not None]
+
+
+def _recovery_text(db: CloudSQLClient, report_id: int) -> str:
+    report = db.select("system_error_reports", where="id = %s", params=(report_id,), fetch_one=True)
+    return MOBILE_RECOVERY_TEXT if report and report.get("source_platform") == "mobile" else RECOVERY_TEXT
 
 
 def start_menu(db: CloudSQLClient) -> tuple[str, dict]:
@@ -96,7 +114,7 @@ def preview(db: CloudSQLClient, state_store: ConversationStateStore, telegram_us
     names = [users[user_id].get("role") or f"使用者 {user_id}" for user_id in state["selected_user_ids"] if user_id in users]
     state["flow"] = "recovery_confirm"
     state_store.set(telegram_user_id, state)
-    text = f"將發送給：{'、'.join(names)}\n\n通知內容：\n{RECOVERY_TEXT}\n\n確定發送嗎？"
+    text = f"將發送給：{'、'.join(names)}\n\n通知內容：\n{_recovery_text(db, state['report_id'])}\n\n確定發送嗎？"
     keyboard = {"inline_keyboard": [
         [{"text": "✅ 確認發送", "callback_data": "recovery:confirm"}],
         [{"text": "❌ 取消", "callback_data": "recovery:cancel"}],
@@ -113,12 +131,13 @@ def confirm(db: CloudSQLClient, state_store: ConversationStateStore, telegram_us
     selected = [user_id for user_id in state["selected_user_ids"] if user_id in eligible]
     success = 0
     failed = 0
+    recovery_text = _recovery_text(db, report_id)
     for user_id in selected:
         user = eligible[user_id]
         status = "sent"
         notified_at = datetime.now(timezone.utc)
         try:
-            telegram_client.send_text(chat_id=user["telegram_user_id"], text=RECOVERY_TEXT)
+            telegram_client.send_text(chat_id=user["telegram_user_id"], text=recovery_text)
             success += 1
         except Exception:
             status = "failed"
@@ -142,4 +161,3 @@ def confirm(db: CloudSQLClient, state_store: ConversationStateStore, telegram_us
 def cancel(state_store: ConversationStateStore, telegram_user_id: int):
     state_store.clear(telegram_user_id)
     return "已取消發送康復通知。", menu.back_to_main_menu_keyboard()
-

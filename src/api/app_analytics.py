@@ -9,7 +9,8 @@ from zoneinfo import ZoneInfo
 from flask import Blueprint, Response, g, jsonify, request
 
 from src.api.app_auth import require_access_token
-from src.bot import body, system_errors
+from src.api.error_reporting import report_mobile_error
+from src.bot import body
 from src.services.app_analytics import (
     AppAnalyticsService,
     DateRangeError,
@@ -69,7 +70,8 @@ def _build_analytics(db: CloudSQLClient) -> AppAnalyticsService:
     return AppAnalyticsService(db, sync_calendar=True)
 
 
-def _unexpected_error() -> tuple[Response, int]:
+def _unexpected_error(feature: str, db=None) -> tuple[Response, int]:
+    report_mobile_error(db, feature, getattr(getattr(g, "app_user", None), "database_id", None))
     return jsonify({"message": "資料目前無法載入，請稍後再試"}), 503
 
 
@@ -94,7 +96,7 @@ def dashboard():
         return jsonify(_build_analytics(db).dashboard(g.app_user)), 200
     except Exception:
         _logger.exception("載入 Mobile App 首頁資料失敗")
-        return _unexpected_error()
+        return _unexpected_error("mobile_dashboard", db)
     finally:
         if db is not None:
             db.close()
@@ -149,34 +151,7 @@ def analytics(module_key: str):
         return jsonify({"message": str(exc)}), 403
     except Exception:
         _logger.exception("載入 Mobile App %s 分析失敗", module_key)
-        return _unexpected_error()
-    finally:
-        if db is not None:
-            db.close()
-
-
-@app_analytics_bp.patch("/system-errors/<int:report_id>/resolution")
-@require_access_token
-def update_error_resolution(report_id: int):
-    if not g.app_user.is_owner:
-        return jsonify({"message": "您沒有權限執行此操作"}), 403
-
-    payload = request.get_json(silent=True)
-    resolution = payload.get("resolution", "").strip() if isinstance(payload, dict) else ""
-    if not resolution:
-        return jsonify({"message": "請輸入解法"}), 400
-    if len(resolution) > 2000:
-        return jsonify({"message": "解法不可超過 2000 個字元"}), 400
-
-    db = None
-    try:
-        db = CloudSQLClient()
-        updated = system_errors.update_resolution(db, report_id, resolution)
-        if not updated:
-            return jsonify({"message": "找不到指定錯誤紀錄"}), 404
-        return jsonify({"message": "解法已更新"}), 200
-    except Exception:  # noqa: BLE001 - HTTP 邊界不得洩漏資料庫或程式細節
-        return _unexpected_error()
+        return _unexpected_error(f"mobile_analytics_{module_key}", db)
     finally:
         if db is not None:
             db.close()
@@ -210,7 +185,7 @@ def create_weight_log():
         )
         return jsonify({"id": log_id, "message": f"已記錄 {weight_kg:.1f} 公斤", "weight_kg": weight_kg}), 201
     except Exception:  # noqa: BLE001 - HTTP 邊界不得洩漏資料庫或程式細節
-        return _unexpected_error()
+        return _unexpected_error("mobile_weight_log", db)
     finally:
         if db is not None:
             db.close()
@@ -227,7 +202,7 @@ def list_exercise_categories():
         return jsonify({"categories": [{"id": item["id"], "name": item["name"]} for item in categories]}), 200
     except Exception:
         _logger.exception("載入運動類別清單失敗")
-        return _unexpected_error()
+        return _unexpected_error("mobile_exercise_categories", db)
     finally:
         if db is not None:
             db.close()
@@ -243,6 +218,8 @@ def recognize_diet_image():
         return jsonify(recognize_diet_photo(_build_llm(), payload.get("image_base64"), payload.get("mime_type"))), 200
     except DietPhotoError as exc:
         return jsonify({"message": str(exc)}), 400
+    except Exception:  # noqa: BLE001
+        return _unexpected_error("mobile_diet_photo")
 
 
 @app_analytics_bp.post("/diet/calculate-nutrition")
@@ -260,6 +237,8 @@ def calculate_diet_image_nutrition():
         )), 200
     except DietPhotoError as exc:
         return jsonify({"message": str(exc)}), 400
+    except Exception:  # noqa: BLE001
+        return _unexpected_error("mobile_diet_nutrition")
 
 
 @app_analytics_bp.post("/records/<kind>")
@@ -283,7 +262,7 @@ def create_record(kind: str):
     except RecordValidationError as exc:
         return jsonify({"message": str(exc)}), 400
     except Exception:  # noqa: BLE001
-        return _unexpected_error()
+        return _unexpected_error(f"mobile_create_{kind}", db)
     finally:
         if db is not None:
             db.close()
@@ -330,7 +309,7 @@ def _mutate_record(kind: str, record_id: int, payload: dict | None):
     except RecordNotFoundError as exc:
         return jsonify({"message": str(exc)}), 404
     except Exception:  # noqa: BLE001
-        return _unexpected_error()
+        return _unexpected_error(f"mobile_mutate_{kind}", db)
     finally:
         if db is not None:
             db.close()

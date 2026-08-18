@@ -6,6 +6,7 @@ from typing import Any
 from flask import Blueprint, Response, g, jsonify, request
 
 from src.api.app_auth import _allowed_origins, require_access_token
+from src.api.error_reporting import report_mobile_error
 from src.services.app_life_exploration import (
     AppLifeExplorationService,
     LifeNotFoundError,
@@ -60,6 +61,7 @@ def _run(action: Callable[[AppLifeExplorationService], dict[str, Any]], *, creat
     except GeocodingUnavailableError as exc:
         return jsonify({"message": str(exc)}), 503
     except Exception:  # noqa: BLE001
+        report_mobile_error(db, "mobile_life_exploration", g.app_user.database_id)
         return jsonify({"message": "生活探索資料目前無法處理，請稍後再試"}), 503
     finally:
         if db is not None:

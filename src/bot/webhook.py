@@ -165,7 +165,14 @@ def _send_email_fallback(subject: str, body: str) -> bool:
 
 
 def _notify_robin_of_error(
-    feature: str, telegram_user_id: int, input_summary: str, *, severity: str = "general", db=None
+    feature: str,
+    telegram_user_id: int | None,
+    input_summary: str,
+    *,
+    severity: str = "general",
+    db=None,
+    source_platform: str = "telegram",
+    affected_user_id: int | None = None,
 ) -> int | None:
     """FR-19a／FR-19b：例外發生時，除了 log（見呼叫端的 `_logger.exception`），額外私訊 Robin
     完整原始 Traceback，並把完整錯誤 log 上傳 Google Drive、附上專屬連結（見 ADR-15，
@@ -188,16 +195,11 @@ def _notify_robin_of_error(
     不同的失敗情境。整段任何失敗都絕對不能反過來讓這個「錯誤通知」本身變成另一個未被捕捉的
     例外，那樣就本末倒置了；沒設定必要環境變數時直接跳過，不視為錯誤。
 
-    `db`（2026-08-09，見 FR-19j）：選配，提供時額外把這次錯誤寫入 `system_error_reports`
-    （見 `src/bot/system_errors.py`），並在私訊內容前面附上「錯誤ID=N」，讓 Robin 之後可以用
-    Telegram 指令「錯誤ID=N 已處理：{解法內容}」記錄解法；`db` 為 `None` 或寫入本身失敗時，
-    優雅降級成不附這行、其餘通知流程完全不受影響（比照 FR-19b 既有的 Drive 上傳優雅降級精神）。
+    `db` 提供時會先把這次錯誤寫入 `system_error_reports`，再嘗試 Owner
+    Telegram→Email 通知；即使通知環境變數缺少，事故仍必須落地並標記未送達。
     """
     owner_chat_id = os.environ.get("ROBIN_TELEGRAM_TOKEN")
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    if not owner_chat_id or not bot_token:
-        return None
-
     report_id = None
     try:
         now = datetime.now(timezone.utc)
@@ -219,14 +221,19 @@ def _notify_robin_of_error(
         if db is not None:
             try:
                 error_summary = traceback_text.strip().splitlines()[-1] if traceback_text.strip() else feature
-                report_id = system_errors.record_error_report(
+                incident = system_errors.record_or_merge_error_report(
                     db,
                     severity=severity,
                     triggering_feature=feature,
                     error_summary=error_summary,
                     drive_log_url=log_link,
+                    source_platform=source_platform,
+                    affected_user_id=affected_user_id,
                 )
-                error_id_line = f"🔖 錯誤ID={report_id}（可用「錯誤ID={report_id} 已處理：...」記錄解法）\n"
+                report_id = incident.report_id
+                if not incident.is_new:
+                    return report_id
+                error_id_line = f"🔖 錯誤ID={report_id}（請從「系統錯誤管理」處理）\n"
             except Exception:
                 _logger.exception("寫入 system_error_reports 失敗，私訊 Robin 的訊息將略過錯誤 ID")
 
@@ -245,6 +252,14 @@ def _notify_robin_of_error(
             message = _CRITICAL_SEVERITY_BANNER + message
     except Exception:
         _logger.exception("組裝 Robin 錯誤通知內容失敗，無法送出任何通知（含 email 備援）")
+        return report_id
+
+    if not owner_chat_id or not bot_token:
+        if db is not None and report_id is not None:
+            try:
+                system_errors.update_owner_notification(db, report_id, None, False)
+            except Exception:
+                _logger.exception("更新 Robin 通知未送達狀態失敗")
         return report_id
 
     try:

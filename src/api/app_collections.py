@@ -3,6 +3,7 @@
 from flask import Blueprint, Response, g, jsonify, request
 
 from src.api.app_auth import _allowed_origins, require_access_token
+from src.api.error_reporting import report_mobile_error
 from src.services.app_collections import (
     AppCollectionService,
     CollectionNotFoundError,
@@ -17,6 +18,10 @@ from src.services.geocoding import (
 from submodules.cloudsql.client import CloudSQLClient
 
 app_collections_bp = Blueprint("app_collections", __name__, url_prefix="/api/app/collections")
+
+
+def _report(db, feature: str) -> None:
+    report_mobile_error(db, feature, g.app_user.database_id)
 
 
 def _service(db: CloudSQLClient) -> AppCollectionService:
@@ -49,6 +54,7 @@ def list_collection_items():
         )
         return jsonify(result), 200
     except Exception:  # noqa: BLE001
+        _report(db, "mobile_collections_list")
         return jsonify({"message": "收藏清單目前無法載入，請稍後再試"}), 503
     finally:
         if db is not None:
@@ -78,6 +84,7 @@ def geocode_collection_address():
     except GeocodingUnavailableError as exc:
         return jsonify({"message": str(exc)}), 503
     except Exception:  # noqa: BLE001
+        _report(db, "mobile_collections_geocode")
         return jsonify({"message": "地址定位服務目前無法使用，請稍後再試"}), 503
     finally:
         if db is not None:
@@ -109,6 +116,7 @@ def _write(item_id: int | None):
     except CollectionNotFoundError as exc:
         return jsonify({"message": str(exc)}), 404
     except Exception:  # noqa: BLE001
+        _report(db, "mobile_collections_write")
         return jsonify({"message": "收藏項目目前無法儲存，請稍後再試"}), 503
     finally:
         if db is not None:
@@ -125,6 +133,7 @@ def delete_collection_item(item_id: int):
     except CollectionNotFoundError as exc:
         return jsonify({"message": str(exc)}), 404
     except Exception:  # noqa: BLE001
+        _report(db, "mobile_collections_delete")
         return jsonify({"message": "收藏項目目前無法刪除，請稍後再試"}), 503
     finally:
         if db is not None:
@@ -141,6 +150,7 @@ def restore_collection_item(item_id: int):
     except CollectionNotFoundError as exc:
         return jsonify({"message": str(exc)}), 404
     except Exception:  # noqa: BLE001
+        _report(db, "mobile_collections_restore")
         return jsonify({"message": "收藏項目目前無法復原，請稍後再試"}), 503
     finally:
         if db is not None:
