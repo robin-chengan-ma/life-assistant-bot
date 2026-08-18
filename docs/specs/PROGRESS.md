@@ -18,7 +18,7 @@ updated: 2026-08-18
 | --- | --- | --- |
 | Telegram Phase 6 選單化、功能開關、排程、一般對話、FR-6c 草稿保護、FR-77 取消功能清理 | 完成（已 push／部署／實機驗收） | 既有功能 commit `1601f34`；migration 修復 commit `07e986a`。Render 於 2026-08-18 12:25 依序成功套用 0084～0094，0094 已完成四張取消功能資料表清理。 |
 | FR-72b 帳號層隱私數字遮罩 | 完成 | Mobile 與 Telegram 共用 `users.privacy_mask_enabled`；Telegram 資料查詢已套用遮罩。 |
-| FR-19j～FR-20 跨平台系統錯誤治理 | 程式完成／待 commit、部署與實機驗收 | Owner Telegram 錯誤管理、Mobile API 未預期 5xx 事故通報、10 分鐘合併、受影響者追蹤、處理說明二次確認與 Mobile App 康復通知候選流程均已實作；migration `0095` 待部署套用。 |
+| FR-19j～FR-20 跨平台系統錯誤治理 | 已 commit／待 push、部署與實機驗收 | commit `005752b`。Owner Telegram 錯誤管理、Mobile API 未預期 5xx 事故通報、10 分鐘合併、受影響者追蹤、處理說明二次確認與 Mobile App 康復通知候選流程均已實作；migration `0095` 待部署套用。 |
 | FR-6a／FR-6b 舊 Slash Command 入口清理 | 完成 | Slash Command 只保留 `/start`；`/rule`、`/my_toggles`、`/set_toggle`、`/set_family_birthday`、`/friend_chat` 及舊文字狀態機、死程式與過時測試均已移除。功能改由使用規則選單、功能開關與排程設定、重要日子設定及自然語言「陪我聊聊」提供。 |
 | 求職分析欄位、圖表、API 調整 | 待討論／未排入 Roadmap | 尚缺欄位、流程、圖表、API 與驗收條件；見 `DRAFT.md`。 |
 | 考試成績模組進一步調整 | 待討論／未排入 Roadmap | 考試設定選單化已完成；其他調整範圍尚未定案，見 `DRAFT.md`。 |
@@ -36,7 +36,7 @@ updated: 2026-08-18
 
 | 日期 | 對應 FR | 任務內容 | 開發者 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- | --- |
-| 2026-08-18 | FR-19j～FR-20 | 異常通知、康復通知與 Owner 系統錯誤管理擴充至 Mobile App 事故；新增 Telegram 管理選單、Mobile 5xx 通報、10 分鐘去重、受影響者關聯、處理追蹤與跨平台康復通知 | Codex | 程式完成／測試通過／待 commit、部署與實機驗收 | Robin 已核准 migration `0095`。移除舊「錯誤ID=N 已處理：…」與 Mobile 結案 API；Mobile 當下只回安全文案且僅通知 Owner，Owner 選單再隱藏秘密值、SQL 與內部路徑。Codex 聚焦測試 332 passed；全專案 `pytest -q`：1791 passed、1 項第三方 `pydub` warning；`ruff check .`、`git diff --check` 通過。Robin 已回報本機測試通過。 |
+| 2026-08-18 | FR-19j～FR-20 | 異常通知、康復通知與 Owner 系統錯誤管理擴充至 Mobile App 事故；新增 Telegram 管理選單、Mobile 5xx 通報、10 分鐘去重、受影響者關聯、處理追蹤與跨平台康復通知 | Codex | 已 commit／待 push、部署與實機驗收 | commit `005752b`。Robin 已核准 migration `0095`。移除舊「錯誤ID=N 已處理：…」與 Mobile 結案 API；Mobile 當下只回安全文案且僅通知 Owner，Owner 選單再隱藏秘密值、SQL 與內部路徑。Codex 聚焦測試 332 passed；全專案 `pytest -q`：1791 passed、1 項第三方 `pydub` warning；`ruff check .`、`git diff --check` 通過。Robin 已回報本機測試通過。 |
 | 2026-08-18 | FR-6a／FR-6b／FR-51～FR-53 | 移除最後五個 Slash Command：`/rule`、`/my_toggles`、`/set_toggle`、`/set_family_birthday`、`/friend_chat`；同步刪除舊版本人／代管功能開關與家人生日文字狀態機，保留對應選單與「陪我聊聊」自然語言入口 | Codex | 完成（已 push／部署／實機驗收） | commit `759fbf5`、文件 commit `6ceed9d`。聚焦 Router／Commands 測試 206 passed；全專案 `pytest -q`：1785 passed、1 項第三方 `pydub` warning；`ruff check .` 與 `git diff --check` 通過。Robin 已回報 push 並完成全部實機測試。 |
 | 2026-08-18 | FR-6c／FR-77 | 功能模式 10 分鐘逾時、草稿 30 分鐘保護、跨功能三選一、草稿恢復二選一與固定別名選單導引；移除客訴、持久化知識庫、逐則對話與長摘要的執行程式、Mobile 分析入口及相關測試 | Codex | 完成（已 push／部署／實機驗收） | commit `1601f34`。Codex 全專案 `pytest -q`：1822 passed、1 項第三方 `pydub` warning；`ruff check .`、`git diff --check` 通過，Robin 本機亦回報測試通過。正式盤點：`complaints` 0 筆、`knowledge_base` 5 筆、`conversation_logs` 180 筆、`conversation_summaries` 1 筆，均僅外鍵指向 `users.id`。Robin 已二次核准 `0094_drop_cancelled_chat_tables.sql`，並明確決定不留備份、直接刪除；舊 migration 保留，`0094` 不使用 `CASCADE`。 |
 | 2026-08-18 | 一般對話 FR-1～FR-17 | 一般對話縮限與媒體防呆：改為不落地的 10 分鐘短期上下文；停止正式路由的知識庫、逐則對話與長摘要讀寫；圖片依說明處理或預設整理；語音／音檔先確認轉錄；長按語音超時鎖定改為 5 分鐘並取消 15 分鐘修正限制；音檔不限時；影片及其他檔案統一拒絕 | Codex | 完成（已 push／實機驗收；部署狀態未單獨回報） | commit `5c0c093`、文件 commit `e78b01c`（2026-08-18）。Codex 全專案 `pytest -q`：1849 passed、19 skipped、1 項第三方 `pydub` warning；Robin 已完成 push 與 Telegram 實機驗收，結果正常。19 項 skip 為已取消的舊知識／清除對話流程測試。三張舊資料表的 DROP 尚未建立，須完成正式資料量盤點並取得 Robin 二次核准；固定拒絕文案為「我只能處理對話框文字、語音、圖片和音檔喔！」 |
@@ -258,6 +258,7 @@ updated: 2026-08-18
 
 | 日期 | 版本 / commit | 異動摘要 | 開發者 |
 | --- | --- | --- | --- |
+| 2026-08-18 | `005752b` | 跨平台系統錯誤管理選單化，納入 Mobile 5xx 事故、去重、受影響者與康復通知 | Codex |
 | 2026-08-18 | `759fbf5` | 移除最後五個舊版 Slash Command、過時狀態機與相關測試，保留選單及陪聊自然語言入口 | Codex |
 | 2026-08-18 | `b67cce0` | 補記 0084 Migration 修復 commit、測試與待部署狀態 | Codex |
 | 2026-08-18 | `07e986a` | 修正 0084 重複新增 `exercise_logs.note`，補回歸測試並同步 migration 實際狀態 | Codex |
