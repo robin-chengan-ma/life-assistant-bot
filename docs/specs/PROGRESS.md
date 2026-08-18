@@ -13,7 +13,7 @@ updated: 2026-08-18
 
 | 日期 | 對應 FR | 任務內容 | 開發者 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- | --- |
-| 2026-08-18 | FR-19k／FR-20 | 系統事故收件與康復通知選單化：事故及 Robin Telegram→Email 備援送達狀態落地，Owner 先選事故、再勾選實際收過事故通知的家人，預覽後二次確認發送 | Codex | 開發完成／待 push、部署與實機驗收 | 新增 `recovery_notifications.py`、migration `0092` 與事故收件紀錄；移除 `/recovered` 直接廣播。部分失敗可重試，Email 備援只用於 Robin 錯誤通知。新增 9 項直接功能／邊界測試；Codex 與 Robin 均已回報本機測試通過，Codex 完整結果為 `pytest -q`：1927 passed（1 項第三方 `pydub` deprecation warning），`ruff check .` 與 `git diff --check` 通過。Migration 尚未在 Neon 套用，尚未實機驗收。 |
+| 2026-08-18 | FR-19k／FR-20 | 系統事故收件與康復通知選單化：事故及 Robin Telegram→Email 備援送達狀態落地，Owner 先選事故、再勾選實際收過事故通知的家人，預覽後二次確認發送 | Codex | 完成（已 commit／待 push、部署與實機驗收） | commit `e761deb`（2026-08-18）。新增 `recovery_notifications.py`、migration `0092` 與事故收件紀錄；移除 `/recovered` 直接廣播。部分失敗可重試，Email 備援只用於 Robin 錯誤通知。新增 9 項直接功能／邊界測試；Codex 與 Robin 均已回報本機測試通過，Codex 完整結果為 `pytest -q`：1927 passed（1 項第三方 `pydub` deprecation warning），`ruff check .` 與 `git diff --check` 通過。Migration 尚未在 Neon 套用，尚未實機驗收。 |
 | 2026-08-18 | FR-24／FR-26／FR-30a～FR-30b／FR-6e | 考試設定選單化：主選單改名、證照名冊、目標／每日題數／正式考試紀錄四個子選單；TOEIC 固定三軌題數、非 TOEIC 尚無題庫提示、區間覆蓋不可重疊、正式成績補充內容 | Codex | 完成（已 push／實機驗收；部署狀態未單獨回報） | commit `20fd6c7`（2026-08-18）；文件 commit `bde3731`。Robin 已回報 push 並完成 Telegram 實機測試，結果正常。見 `docs/ADR/discuss/skill-growth.md` 2026-08-18 ADR-31。全專案 `pytest -q`：1921 passed（1 項第三方 `pydub` deprecation warning）；`ruff check .` 與 `git diff --check` 全數通過。 |
 | 2026-08-18 | 求職 FR-41／FR-41a | 「💼 求職分析」改為「💼 求職設定」並接上 `job_search:*` 選單：履歷／期望工作內容獨立編輯與二次確認清空、必要條件三欄位分段設定、職缺關鍵字新增與二次確認刪除、依分數排序的唯讀職缺清單、已應徵／面試／Offer 清單與四種狀態切換、全部職缺的人工關閉／重新開啟，以及既有其他平台職缺流程改由按鈕進入；移除舊 Slash Command、文字觸發詞與 `ID=...職缺...` 文字狀態更新。新增 migration `0090_add_job_posting_manual_closed_override.sql`，人工關閉覆寫旗標為 TRUE 時，週爬蟲不覆寫 `is_closed` | Codex | 完成（已推版／實機驗收） | commit `2c5da38`（2026-08-18）；Robin 已完成 push，Render 已隨 push 部署，並完成 Telegram 實機驗收且結果正常。Robin 於 2026-08-18 本機執行 `pytest -q`：1922 passed（僅 1 項第三方 `pydub` deprecation warning）；`ruff check .`：全數通過。求職相關測試：250 passed。DB Schema Reference 已同步；完整互動決策見 `docs/ADR/discuss/job-search.md` 2026-08-18 補充段落。 |
 | 2026-08-18 | FR-5／FR-6e／FR-57a | 兩項 Robin 直接核准的變更：①「使用規則」文字改為 Robin 逐字核准的最終版本（`src/bot/templates.py` `APPENDIX_A_TEXT`，隱私承諾「聊天記錄」改「日常紀錄」）②主選單「💡 Youtube 技術分享設定」（原「💡 技術分享」）從 `_NOT_YET_IMPLEMENTED_KEYS` 移除，接上新的 `youtube_settings:*` 子選單（`src/bot/commands.py`／`src/bot/router.py`），比照 `collections.py`／`achievements.py` 單層選單＋按鈕式二次確認刪除模式；主題數量上限 `youtube.MAX_TOPICS`＝5（達上限隱藏「➕ 新增主題」按鈕＋`add_topic()` 內同步擋下雙重保護），移除改「選主題→✅ 確認移除／❌ 取消」二次確認才真正刪除；舊文字觸發詞（`/my_youtube_topics`／`/add_youtube_topic`／`/remove_youtube_topic` 及中文別名）與對應舊處理函式全數移除 | Claude | 完成（已 commit，尚未推版） | commit `aa240e9`；push／部署狀態待 Robin 執行；完整設計內容見 `docs/ADR/discuss/youtube-intel.md` 2026-08-18「`tech_intel` 主選單按鈕接上 YouTube 主題設定子選單」條目、`docs/ADR/discuss/robinson.md` 2026-08-18「「使用規則」文字模板由 Robin 逐字稿核准＋「技術分享」選單更名接上 YouTube 主題訂閱設定」條目；改寫／新增 `tests/bot/test_templates.py`（逐字比對新版 `APPENDIX_A_TEXT`）、`tests/bot/test_youtube.py`（`add_topic()` 新增 `limit_reached` 欄位斷言、新增 `test_add_topic_limit_reached`）、`tests/bot/test_youtube_topic_commands.py`（整份改寫測新函式）、`tests/bot/test_router.py`（移除 3 項測舊文字觸發詞的過時測試，新增 3 項測 `menu:tech_intel`／`youtube_settings:*` callback 流程的整合測試）；Robin 本機執行 `ruff check .`（本次異動檔案）全過、`pytest -q` 首輪 18 failed（3 項為測試舊文字觸發詞的過時測試，因該行為本批已刻意移除而觸發下游 fallback 邏輯噴錯、非既有回歸；其餘 15 項為 `test_templates.py`／`test_youtube.py`／`test_youtube_topic_commands.py` 未同步本次文字與函式異動），改寫測試後第二輪 2 failed（`test_router.py` 2 項新增測試自身斷言誤把 tuple 回傳值當字串比對、誤判移除清單文字在訊息本文而非按鈕文字），修正後**全數通過**；`docs/reference/` 未異動（本批未變更 DB Schema／API，`youtube_topics` 資料表結構不變）|
@@ -225,11 +225,16 @@ updated: 2026-08-18
 
 ## Commit 紀錄
 
-> 本表只代表本地 Git commit，不等同於已 push 或已部署。資料來源為 `git log --format="%h|%ad|%s" --date=short`（截至 2026-08-16，本次 PROGRESS 同步 commit 完成後共 146 筆）。git author 全部是 Robin 本人，因此「開發者」欄依 commit 內容與工作階段判斷。
+> 本表只代表本地 Git commit，不等同於已 push 或已部署。資料來源為 `git log --format="%h|%ad|%s" --date=short`；最近紀錄已於 2026-08-18 比對。git author 全部是 Robin 本人，因此「開發者」欄依 commit 內容與工作階段判斷。
 
 | 日期 | 版本 / commit | 異動摘要 | 開發者 |
 | --- | --- | --- | --- |
+| 2026-08-18 | `e761deb` | 康復通知改為可選事故與收件人，並落地 Telegram／Email 送達狀態 | Codex |
+| 2026-08-18 | `bde3731` | 補記考試設定選單化 commit 與驗收狀態 | Codex |
 | 2026-08-18 | `20fd6c7` | 考試設定選單化：證照名冊、目標、每日／區間題數與正式考試紀錄 | Codex |
+| 2026-08-18 | `6284e1c` | 補記求職設定選單化 commit 與推版狀態 | Codex |
+| 2026-08-18 | `2c5da38` | 求職設定選單化與人工關閉覆寫 | Codex |
+| 2026-08-18 | `1bba185` | 補記 Youtube 技術分享設定 commit 紀錄 | Claude |
 | 2026-08-18 | `21f5131` | 批次4：新增「🔍 資料查詢」選單，複用 AppAnalyticsService 唯讀查詢（FR-9c／FR-9d） | Claude |
 | 2026-08-17 | `27c8476` | 批次3＋批次3補做：六模組目標泛化＋🎯目標追蹤新選單，含記帳/收藏清單 Calendar 同步、飲食目標自動達成判斷、考試成績自動達成判斷 | Claude |
 | 2026-08-17 | `a6fd474` | Phase 6 第二批 2h：運動紀錄改版（批次2，FR-47／FR-47a），新增全域運動類別表與兩段式同義詞合併，Telegram Bot／Mobile App 同步改版 | Claude |
