@@ -94,7 +94,7 @@ def test_list_topics_only_this_user(fake_db):
 def test_add_topic_inserts_new(fake_db):
     result = youtube.add_topic(fake_db, 1, "後端架構")
 
-    assert result == {"already_exists": False, "topic": "後端架構"}
+    assert result == {"already_exists": False, "limit_reached": False, "topic": "後端架構"}
     rows = fake_db.select("youtube_topics")
     assert rows[0]["topic"] == "後端架構"
     assert rows[0]["last_recommended_on"] is None
@@ -105,8 +105,20 @@ def test_add_topic_already_exists_does_not_duplicate(fake_db):
 
     result = youtube.add_topic(fake_db, 1, "後端架構")
 
-    assert result == {"already_exists": True, "topic": "後端架構"}
+    assert result == {"already_exists": True, "limit_reached": False, "topic": "後端架構"}
     assert len(fake_db.select("youtube_topics")) == 1
+
+
+def test_add_topic_limit_reached(fake_db):
+    for index in range(youtube.MAX_TOPICS):
+        _seed_topic(fake_db, topic=f"主題{index}")
+
+    result = youtube.add_topic(fake_db, 1, "新主題")
+
+    assert result == {"already_exists": False, "limit_reached": True, "topic": "新主題"}
+    rows = fake_db.select("youtube_topics", where="user_id = %s", params=(1,))
+    assert len(rows) == youtube.MAX_TOPICS
+    assert "新主題" not in youtube.format_topics_list(rows)
 
 
 def test_remove_topic_deletes_and_returns_true(fake_db):

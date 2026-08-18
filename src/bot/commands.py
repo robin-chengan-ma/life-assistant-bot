@@ -4438,75 +4438,114 @@ def handle_quiz_stats_query_step(
 
 # --- Step 3.4（見 robinson SPEC.md FR-57a、ADR-21）：YouTube 技術情報主題管理 ---
 #
-# 三個 Owner 專屬指令：「我的YouTube主題」單次查詢（不經狀態機，設計比照
-# handle_my_certificate_goals）；「新增YouTube主題」是單輪值輸入（設計比照 start_set_height／
-# handle_height_value_step）；「移除YouTube主題」是「列清單→輸入編號→直接刪除」單輪，設計比照
-# start_todo_list／handle_todo_list_action_step，但刪除主題屬於低風險、可隨時重新新增的操作，
-# 不需要待辦事項刪除那種「先選完成/取消再進二次確認」的額外關卡，選到編號後直接刪除即可。
+# 2026-08-18（Youtube 技術分享設定選單化，見 docs/ADR/discuss/robinson.md 與
+# docs/ADR/discuss/youtube-intel.md 對應日期條目）：主選單「💡 Youtube 技術分享設定」子選單，
+# 設計比照 collections.py／achievements.py 的單層子選單＋二次確認刪除模式，取代舊版三個獨立
+# 文字觸發詞（`/my_youtube_topics`、`/add_youtube_topic`、`/remove_youtube_topic`）。新增維持
+# 單輪自由文字輸入（沿用舊版邏輯，改用 `youtube_settings:add` 進入、達 `youtube.MAX_TOPICS` 上限
+# 時擋下），移除比照 collections.py 刪除流程改成「選主題→按鈕二次確認」，不再是打編號直接刪除。
 
 
-def handle_my_youtube_topics(db: CloudSQLClient, user_id: int) -> str:
-    """「我的YouTube主題」／`/my_youtube_topics`：列出目前設定的所有 YouTube 技術情報主題（FR-57a）。"""
-    return youtube.format_topics_list(youtube.list_topics(db, user_id))
+def start_youtube_settings_menu(db: CloudSQLClient, user_id: int) -> tuple[str, dict]:
+    """主選單按下「💡 Youtube 技術分享設定」後的子選單首頁（FR-57a）。"""
+    topics = youtube.list_topics(db, user_id)
+    text = youtube.format_topics_list(topics)
+
+    buttons: list[list[dict]] = []
+    if len(topics) < youtube.MAX_TOPICS:
+        buttons.append([{"text": "➕ 新增主題", "callback_data": "youtube_settings:add"}])
+    if topics:
+        buttons.append([{"text": "➖ 移除主題", "callback_data": "youtube_settings:remove"}])
+    buttons.append([{"text": "🔙 返回主選單", "callback_data": "menu:main"}])
+    return text, {"inline_keyboard": buttons}
 
 
-def start_add_youtube_topic(state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
-    """「新增YouTube主題」／`/add_youtube_topic`：開始新增一組主題（FR-57a）。"""
-    state_store.set(telegram_user_id, {"flow": "pending_youtube_topic_add", "target_user_id": user_id})
-    return "好的，請告訴我想訂閱的技術情報主題/關鍵字（例如：後端架構、AI Agent、DevOps）："
+def start_youtube_topic_add(
+    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int
+) -> tuple[str, dict | None]:
+    """「➕ 新增主題」：已達 `youtube.MAX_TOPICS` 上限時直接擋下、不進入輸入狀態。"""
+    topics = youtube.list_topics(db, user_id)
+    if len(topics) >= youtube.MAX_TOPICS:
+        return f"已達上限 {youtube.MAX_TOPICS} 個主題，請先移除一組主題再新增！", menu.back_to_main_menu_keyboard()
+
+    state_store.set(telegram_user_id, {"flow": "youtube_topic_add", "target_user_id": user_id})
+    return "好的，請告訴我想訂閱的技術情報主題/關鍵字（例如：後端架構、AI Agent、DevOps）：", None
 
 
 def handle_youtube_topic_add_step(
     db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, text: str
-) -> str:
-    """處理 `pending_youtube_topic_add` 狀態下使用者提供的主題文字；空白原地反問，不清除狀態。"""
+) -> tuple[str, dict | None]:
+    """處理 `youtube_topic_add` 狀態下使用者提供的主題文字；空白原地反問，不清除狀態。"""
     state = state_store.get(telegram_user_id)
     topic = text.strip()
     if not topic:
-        return "不好意思，我沒看懂，麻煩告訴我一個主題/關鍵字喔！"
+        return "不好意思，我沒看懂，麻煩告訴我一個主題/關鍵字喔！", None
 
     target_user_id = state["target_user_id"]
     state_store.clear(telegram_user_id)
     result = youtube.add_topic(db, target_user_id, topic)
-    if result["already_exists"]:
-        return f"「{topic}」已經在你的主題清單裡囉，不用重複新增！"
-    return f"好的，已經幫你新增主題「{topic}」，下週四開始會納入推播考量！"
+    if result["limit_reached"]:
+        reply = f"已達上限 {youtube.MAX_TOPICS} 個主題，請先移除一組主題再新增！"
+    elif result["already_exists"]:
+        reply = f"「{topic}」已經在你的主題清單裡囉，不用重複新增！"
+    else:
+        reply = f"好的，已經幫你新增主題「{topic}」，下週四開始會納入推播考量！"
+    text_, keyboard = start_youtube_settings_menu(db, target_user_id)
+    return f"{reply}\n\n{text_}", keyboard
 
 
-def start_remove_youtube_topic(
-    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int
-) -> str:
-    """「移除YouTube主題」／`/remove_youtube_topic`：列出目前主題並進入可輸入編號刪除的模式（FR-57a）。"""
+def start_youtube_topic_remove_menu(db: CloudSQLClient, user_id: int) -> tuple[str, dict]:
+    """「➖ 移除主題」：列出目前主題，每個主題一顆按鈕，供選定後進入二次確認畫面。"""
     topics = youtube.list_topics(db, user_id)
-    listing = youtube.format_topics_list(topics)
     if not topics:
-        return listing
+        return "目前沒有可以移除的主題喔！", menu.back_to_main_menu_keyboard()
 
-    state_store.set(
-        telegram_user_id,
-        {"flow": "pending_youtube_topic_remove", "target_user_id": user_id, "topic_ids": [t["id"] for t in topics]},
-    )
-    return f"{listing}\n\n請輸入要移除的主題編號，或輸入「結束」離開喔！"
+    buttons = [
+        [{"text": f"➖ {topic['topic']}", "callback_data": f"youtube_settings:remove_select:{topic['id']}"}]
+        for topic in topics
+    ]
+    buttons.append([{"text": "🔙 返回", "callback_data": "youtube_settings:menu"}])
+    return "請選擇要移除的主題：", {"inline_keyboard": buttons}
 
 
-def handle_youtube_topic_remove_step(
-    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, text: str
-) -> str:
-    """處理 `pending_youtube_topic_remove` 狀態下使用者輸入的編號，選定後直接刪除該主題。"""
-    state = state_store.get(telegram_user_id)
-    if text in _EXIT_PHRASES:
-        state_store.clear(telegram_user_id)
-        return "好的，已結束 YouTube 主題查詢模式！"
+def start_youtube_topic_remove_confirm(
+    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int, topic_id: int
+) -> tuple[str, dict]:
+    """按下某個主題後的二次確認畫面（比照 collections.start_delete_confirm）。"""
+    topics = youtube.list_topics(db, user_id)
+    topic_row = next((t for t in topics if t["id"] == topic_id), None)
+    if topic_row is None:
+        return "找不到這組主題，可能已經被移除了。", menu.back_to_main_menu_keyboard()
 
-    topic_ids = state["topic_ids"]
-    if not text.isdigit() or not (1 <= int(text) <= len(topic_ids)):
-        return f"請輸入 1～{len(topic_ids)} 之間的編號，或輸入「結束」離開喔！"
+    state_store.set(telegram_user_id, {"flow": "youtube_topic_remove_confirm", "target_id": topic_id})
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "✅ 確認移除", "callback_data": f"youtube_settings:confirm_remove:{topic_id}"}],
+            [{"text": "❌ 取消", "callback_data": "youtube_settings:menu"}],
+        ]
+    }
+    return f"確定要移除「{topic_row['topic']}」嗎？", keyboard
 
-    topic_id = topic_ids[int(text) - 1]
-    target_user_id = state["target_user_id"]
+
+def handle_youtube_topic_remove_confirm_text(state_store: ConversationStateStore, telegram_user_id: int) -> tuple[str, dict]:
+    """`youtube_topic_remove_confirm` 只接受按鈕操作；打字一律視為取消，比照 collections.py 保守做法。"""
     state_store.clear(telegram_user_id)
-    youtube.remove_topic(db, target_user_id, topic_id)
-    return "好的，已經幫你移除這組主題囉！"
+    return "移除確認請用上面的按鈕操作喔，這次先幫你取消了。", menu.back_to_main_menu_keyboard()
+
+
+def handle_youtube_topic_remove_confirmed(
+    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int, topic_id: int
+) -> tuple[str, dict]:
+    """「✅ 確認移除」：實際呼叫 `youtube.remove_topic()` 並回到子選單首頁。"""
+    state_store.clear(telegram_user_id)
+    topics = youtube.list_topics(db, user_id)
+    topic_row = next((t for t in topics if t["id"] == topic_id), None)
+    topic_name = topic_row["topic"] if topic_row else None
+
+    youtube.remove_topic(db, user_id, topic_id)
+    reply = f"🗑 已移除主題：「{topic_name}」" if topic_name else "已移除該組主題。"
+    text_, keyboard = start_youtube_settings_menu(db, user_id)
+    return f"{reply}\n\n{text_}", keyboard
 
 
 # --- FR-51、FR-52：好友模式（ADR-22）---

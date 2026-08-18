@@ -90,7 +90,7 @@ MAIN_MENU_ITEMS = [
     {"key": "schedule", "label": "⏰ 排程設定", "owner_only": False},
     {"key": "rule", "label": "📋 使用規則", "owner_only": False},
     {"key": "permission", "label": "🔑 權限管理", "owner_only": True},
-    {"key": "tech_intel", "label": "💡 技術分享", "owner_only": True},
+    {"key": "tech_intel", "label": "💡 Youtube 技術分享設定", "owner_only": True},
     {"key": "job_search", "label": "💼 求職分析", "owner_only": True},
     {"key": "certificate", "label": "📖 考試成績", "owner_only": True},
     {"key": "recovered", "label": "📢 發送康復通知", "owner_only": True},
@@ -98,7 +98,7 @@ MAIN_MENU_ITEMS = [
 
 # 尚未接上真正邏輯的項目，按下後只回覆固定的「開發中」訊息；2b 起逐批把 key 移出這裡。
 _NOT_YET_IMPLEMENTED_KEYS = {
-    "schedule", "tech_intel", "job_search", "certificate", "recovered",
+    "schedule", "job_search", "certificate", "recovered",
 }
 
 # 2026-08-18（批次4，FR-9c）：資料查詢可勾選的 7 個模組，`analytics_method` 對應
@@ -135,6 +135,11 @@ DAILY_LOG_MENU_ITEMS = [
 
 # 2026-08-16（Phase 6 第二批 2g）：`diet`（飲食）接上真正邏輯，移出開發中名單。
 # 2026-08-17（Phase 6 第二批 2h）：`body`（體態）接上真正邏輯，移出開發中名單。
+# 2026-08-18（Youtube 技術分享設定選單化，見 docs/ADR/discuss/robinson.md 與
+# docs/ADR/discuss/youtube-intel.md 對應日期條目）：`tech_intel` 按鈕文字改為「💡 Youtube 技術分享
+# 設定」，從 `_NOT_YET_IMPLEMENTED_KEYS` 移除，接上 `src/bot/commands.py` 新增的 YouTube 主題設定
+# 子選單（`youtube_settings:*`，見 `router.py`）；主題新增/移除全面改選單觸發，`/my_youtube_topics`
+# `/add_youtube_topic` `/remove_youtube_topic` 等舊文字觸發詞與對應處理函式已移除。
 # 2026-08-18（批次5）：`finance`（記帳）接上真正邏輯，移出開發中名單；日常紀錄五個子項目
 # 至此全數接上真正邏輯，這個集合暫時為空，保留供未來新增子項目沿用同一套機制。
 _DAILY_LOG_NOT_YET_IMPLEMENTED_KEYS: set[str] = set()

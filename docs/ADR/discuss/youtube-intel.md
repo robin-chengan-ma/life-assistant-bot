@@ -25,3 +25,17 @@
 **替代方案**：LLM 疊加在 Rule-based 之上（已否決，判斷邏輯更單純、不用維護兩套排序邏輯）；固定只推「候選分數最高的 3 組」，不考慮輪替（已否決，Robin 選擇能兼顧公平曝光的輪替設計）；沿用原本的時長門檻（已否決，不符合 Robin 實際想要的「品質優先」判斷標準）。
 
 **後果**：新增主題設定資料表 `youtube_topics`（`user_id`／`topic`／`last_recommended_on`）；FR-57 新增一次 `videos.list` 呼叫查統計數字，Pipeline 從單一 API 呼叫變成兩階段；原始三層規則式篩選設計正式作廢，不再需要維護 Rule-based Weight 的評分程式碼。
+
+## 2026-08-18 [標籤：使用者] `tech_intel` 主選單按鈕接上 YouTube 主題設定子選單，主題數量加上限並改按鈕式二次確認刪除
+
+**狀態**：accepted
+
+**背景**：主選單「💡 技術分享」按鈕原本仍在 `_NOT_YET_IMPLEMENTED_KEYS`（回覆「功能開發中」），主題新增/移除/查詢實際上只能靠三個獨立文字觸發詞（`/my_youtube_topics`／`/add_youtube_topic`／`/remove_youtube_topic`）操作，跟 Phase 6 第二批已經全面選單化的其他模組（`collections.py`／`achievements.py`）體驗不一致，也沒有主題數量上限保護。
+
+**決策**：①主選單按鈕文字改為「💡 Youtube 技術分享設定」，`tech_intel` 從 `_NOT_YET_IMPLEMENTED_KEYS` 移除 ②新增 `src/bot/commands.py` 內的 `youtube_settings:*` 子選單，設計比照 `collections.py`／`achievements.py` 的單層選單＋狀態機模式：總覽列出目前主題＋「➕ 新增主題」／「➖ 移除主題」按鈕 ③主題數量上限 `youtube.MAX_TOPICS`＝5，達上限時「➕ 新增主題」按鈕隱藏，`youtube.add_topic()` 內同步擋下（雙重保護），回覆「已達上限 5 個主題」④移除流程改成「選主題按鈕→確定要移除「{topic}」嗎？✅ 確認移除／❌ 取消」二次確認畫面，才會真正呼叫 `youtube.remove_topic()`，不再是舊版「打編號直接刪除」⑤舊文字觸發詞（`/my_youtube_topics`、`/add_youtube_topic`、`/remove_youtube_topic` 及對應中文別名）與 `router.py`／`commands.py` 內對應的舊處理函式／狀態全數移除，不提供相容期。
+
+**理由**：跟其餘 Phase 6 模組維持一致的選單 UX（單層選單＋按鈕式二次確認刪除），降低使用者記憶文字指令的負擔；5 組上限避免主題無限膨脹拖慢 FR-58c 每週分配演算法與影響推播精準度；刪除改二次確認降低誤觸風險（跟 `collections.py` 收藏刪除的保守設計一致，比 `achievements.py` 的直接刪除更保守，因為主題設定屬於長期訂閱設定而非單筆紀錄）。
+
+**替代方案**：沿用舊版文字觸發詞不做選單化（已否決，不符合 Phase 6 主選單全面選單化的既定方向）；移除比照 `achievements.py` 直接刪除不加二次確認（已否決，主題設定改動頻率低、誤刪代價相對「重新輸入一次主題名稱」不算太高，但比照收藏清單刪除的保守做法仍加上二次確認）。
+
+**後果**：`src/bot/youtube.py` 新增 `MAX_TOPICS` 常數，`add_topic()` 回傳值新增 `limit_reached` 欄位；`src/bot/commands.py` 新增 `start_youtube_settings_menu()`／`start_youtube_topic_add()`／`handle_youtube_topic_add_step()`（改寫）／`start_youtube_topic_remove_menu()`／`start_youtube_topic_remove_confirm()`／`handle_youtube_topic_remove_confirm_text()`／`handle_youtube_topic_remove_confirmed()`；`src/bot/router.py` 新增 `menu:tech_intel`／`youtube_settings:*` 分派與 `youtube_topic_add`／`youtube_topic_remove_confirm` 兩個 flow 分支，移除舊版三個觸發詞常數與 `pending_youtube_topic_add`／`pending_youtube_topic_remove` flow 分支；程式碼已完成，**測試尚未執行**，未 commit／push／部署，見 PROGRESS.md 2026-08-18 條目。

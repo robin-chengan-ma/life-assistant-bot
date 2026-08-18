@@ -1048,3 +1048,33 @@ callback 觸發，淨增 1 項新選單快照測試）；`ruff check .` 對本�
 `src/bot/router.py`、`tests/bot/test_commands.py`、`tests/bot/test_router.py`、
 `tests/bot/test_menu.py`、`tests/bot/test_goal_tracking_router.py`、
 `docs/specs/SPEC.md`、`docs/specs/PROGRESS.md`、`docs/ADR/discuss/robinson.md`。
+
+## 2026-08-18 「使用規則」文字模板由 Robin 逐字稿核准＋「技術分享」選單更名接上 YouTube 主題訂閱設定
+
+**狀態**：accepted
+
+**背景**：兩項決策分別處理不同性質的變更：①「使用規則」固定模板先前只在本文件記錄「刪除清單」
+式決策（刪除第 2、4 點與貼心小撇步段落），這次 Robin 直接在對話中提供逐字稿，核准最終文字版本，
+不是先修 SPEC 再改 code 的標準流程；②主選單「技術分享」按鈕需正式更名並接上 YouTube 主題訂閱
+設定子選單，跟 `skill_growth` 每日新聞摘要（維持全自動排程、無設定介面）明確區分開。
+
+**決策**：
+① 「使用規則」模板（`templates.py` 的 `APPENDIX_A_TEXT`，同時是首次綁定成功的歡迎訊息）改用
+Robin 提供的逐字稿為最終版本：標題改為「以下是 Telegram 羅賓森的使用須知」；「服務使用須知」
+更名為「功能說明」，內容全部替換為新的三點——功能選單＋一般對話說明、`/start` 指令說明、打字
+語音支援；「使用限制與規範」第 5 點簡化，拿掉舉例與「固定知識」段落；「隱私承諾」用詞由
+「聊天記錄」改為「日常紀錄」；「貼心小撇步」整段移除。
+② 主選單「技術分享」按鈕（key: `tech_intel`）正式更名為「Youtube 技術分享設定」，接上 YouTube
+主題訂閱設定子選單，子選單提供：列出目前主題清單、新增主題（上限 5 個）、移除主題（需二次
+確認）。舊的文字指令觸發方式（`/my_youtube_topics` 等）全數移除，改為選單唯一入口。
+`skill_growth` 每日新聞摘要維持全自動排程，不建立對應設定介面。
+
+**理由**：①使用規則屬於已核准的固定文字內容，Robin 直接提供逐字稿核准比先修 SPEC 條文再回頭
+改 code 更直接，避免中間轉譯失真；②「技術分享」原名稱與 `skill_growth`（技能成長／每日新聞
+摘要）容易混淆，更名為「Youtube 技術分享設定」明確指向 YouTube 主題訂閱管理，且比照批次5等
+既有模組的「選單為唯一入口、移除文字觸發詞」慣例。
+
+**後果**：實作時需更新 `templates.py` 的 `APPENDIX_A_TEXT`；`menu.py` 主選單項目更名並新增
+YouTube 主題訂閱設定子選單結構；`router.py` 移除 `/my_youtube_topics` 等舊文字觸發詞、新增
+對應 callback 分派；`commands.py` 新增主題清單／新增（上限 5 個）／移除（二次確認）三段流程；
+`docs/specs/SPEC.md` 與 `docs/specs/PROGRESS.md` 同步更新反映新選單名稱與模板內容。

@@ -41,6 +41,9 @@ _DEFAULT_TOTAL_RECOMMENDATIONS = 3
 _DEFAULT_SEARCH_RESULTS_PER_TOPIC = 10
 _HISTORY_DEDUPE_WINDOW_DAYS = 30
 _DESCRIPTION_SNIPPET_LENGTH = 200
+# 2026-08-18（Youtube 技術分享設定選單化，見 docs/ADR/discuss/youtube-intel.md）：主題數量上限，
+# 避免單一使用者主題數量無限膨脹、拖慢每週 FR-58c 分配演算法與推播內容的精準度。
+MAX_TOPICS = 5
 
 _RANKING_PROMPT_TEMPLATE = (
     "以下是使用者訂閱的技術情報主題「{topic}」，請針對每一支候選影片，依據標題、說明欄是否"
@@ -73,13 +76,18 @@ def _get_topic(db: CloudSQLClient, user_id: int, topic: str) -> dict | None:
 
 def add_topic(db: CloudSQLClient, user_id: int, topic: str) -> dict:
     """新增一組主題；已存在同樣文字的主題時不重複新增，回傳 `{"already_exists": bool, "topic"}`
-    供呼叫端組回覆文字。"""
+    供呼叫端組回覆文字。2026-08-18 追加 `MAX_TOPICS` 上限檢查：已達上限時不新增，回傳
+    `{"limit_reached": True, "topic"}`，由呼叫端（`src/bot/commands.py`）組出對應的提示文字。"""
     existing = _get_topic(db, user_id, topic)
     if existing is not None:
-        return {"already_exists": True, "topic": topic}
+        return {"already_exists": True, "limit_reached": False, "topic": topic}
+
+    existing_topics = list_topics(db, user_id)
+    if len(existing_topics) >= MAX_TOPICS:
+        return {"already_exists": False, "limit_reached": True, "topic": topic}
 
     db.insert("youtube_topics", {"user_id": user_id, "topic": topic, "last_recommended_on": None})
-    return {"already_exists": False, "topic": topic}
+    return {"already_exists": False, "limit_reached": False, "topic": topic}
 
 
 def remove_topic(db: CloudSQLClient, user_id: int, topic_id: int) -> bool:

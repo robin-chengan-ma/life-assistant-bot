@@ -2268,50 +2268,76 @@ def test_my_quiz_stats_trigger_and_flow_dispatches_through_router(fake_db, monke
     assert store.get(ROBIN_ID) is None
 
 
-# --- Step 3.4（見 robinson SPEC.md FR-57a、ADR-21）：YouTube 技術情報主題管理觸發詞與流程分派 ---
+# --- 2026-08-18（Youtube 技術分享設定選單化，見 docs/ADR/discuss/robinson.md、
+# docs/ADR/discuss/youtube-intel.md 對應日期條目）：YouTube 主題設定改選單觸發，
+# 舊文字觸發詞流程（`test_my_youtube_topics_trigger_empty`、
+# `test_add_youtube_topic_trigger_and_flow_dispatches_through_router`、
+# `test_remove_youtube_topic_trigger_and_flow_dispatches_through_router`）已隨設計變更移除，
+# 改用 `menu:tech_intel`／`youtube_settings:*` callback 走選單＋二次確認模式，見下方測試。
 
 
-def test_my_youtube_topics_trigger_empty(fake_db, monkeypatch):
+def test_menu_tech_intel_shows_youtube_settings_overview(fake_db, monkeypatch):
     monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
     fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
     store = ConversationStateStore()
 
-    reply = router.handle_message(fake_db, store, ROBIN_ID, "我的YouTube主題")
+    reply, keyboard = router.handle_callback_query(fake_db, store, ROBIN_ID, "menu:tech_intel")
 
     assert "還沒有設定" in reply
-    assert store.get(ROBIN_ID) is None
+    callback_datas = [button["callback_data"] for row in keyboard["inline_keyboard"] for button in row]
+    assert "youtube_settings:add" in callback_datas
+    assert "youtube_settings:remove" not in callback_datas
 
 
-def test_add_youtube_topic_trigger_and_flow_dispatches_through_router(fake_db, monkeypatch):
+def test_youtube_settings_add_flow_round_trips_through_router(fake_db, monkeypatch):
     monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
     owner_row = fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
     store = ConversationStateStore()
 
-    ask_topic = router.handle_message(fake_db, store, ROBIN_ID, "新增YouTube主題")
-    assert store.get(ROBIN_ID)["flow"] == "pending_youtube_topic_add"
+    ask_topic, _keyboard = router.handle_callback_query(fake_db, store, ROBIN_ID, "youtube_settings:add")
+    assert store.get(ROBIN_ID)["flow"] == "youtube_topic_add"
     assert "主題" in ask_topic
 
     confirm_reply = router.handle_message(fake_db, store, ROBIN_ID, "AI Agent")
+    if isinstance(confirm_reply, tuple):
+        confirm_reply = confirm_reply[0]
     assert "AI Agent" in confirm_reply
     assert store.get(ROBIN_ID) is None
     rows = fake_db.select("youtube_topics", where="user_id = %s", params=(owner_row,))
     assert [r["topic"] for r in rows] == ["AI Agent"]
 
-    list_reply = router.handle_message(fake_db, store, ROBIN_ID, "我的YouTube主題")
-    assert "AI Agent" in list_reply
+    overview_reply, _keyboard = router.handle_callback_query(fake_db, store, ROBIN_ID, "youtube_settings:menu")
+    assert "AI Agent" in overview_reply
 
 
-def test_remove_youtube_topic_trigger_and_flow_dispatches_through_router(fake_db, monkeypatch):
+def test_youtube_settings_remove_flow_requires_confirm_button(fake_db, monkeypatch):
     monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
     owner_row = fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
-    fake_db.insert("youtube_topics", {"user_id": owner_row, "topic": "AI Agent", "last_recommended_on": None})
+    topic_id = fake_db.insert(
+        "youtube_topics", {"user_id": owner_row, "topic": "AI Agent", "last_recommended_on": None}
+    )
     store = ConversationStateStore()
 
-    ask_number = router.handle_message(fake_db, store, ROBIN_ID, "移除YouTube主題")
-    assert store.get(ROBIN_ID)["flow"] == "pending_youtube_topic_remove"
-    assert "1. AI Agent" in ask_number
+    list_reply, list_keyboard = router.handle_callback_query(fake_db, store, ROBIN_ID, "youtube_settings:remove")
+    list_button_texts = [button["text"] for row in list_keyboard["inline_keyboard"] for button in row]
+    assert any("AI Agent" in text for text in list_button_texts)
 
-    confirm_reply = router.handle_message(fake_db, store, ROBIN_ID, "1")
+    confirm_ask, _keyboard = router.handle_callback_query(
+        fake_db, store, ROBIN_ID, f"youtube_settings:remove_select:{topic_id}"
+    )
+    assert "確定要移除" in confirm_ask
+    assert store.get(ROBIN_ID)["flow"] == "youtube_topic_remove_confirm"
+
+    # 取消（按鈕回主選單前，還沒真的刪除）
+    cancel_reply, _keyboard = router.handle_callback_query(fake_db, store, ROBIN_ID, "youtube_settings:menu")
+    assert store.get(ROBIN_ID) is None
+    assert len(fake_db.select("youtube_topics", where="user_id = %s", params=(owner_row,))) == 1
+
+    # 重新選擇並實際按下確認才會刪除
+    router.handle_callback_query(fake_db, store, ROBIN_ID, f"youtube_settings:remove_select:{topic_id}")
+    confirm_reply, _keyboard = router.handle_callback_query(
+        fake_db, store, ROBIN_ID, f"youtube_settings:confirm_remove:{topic_id}"
+    )
     assert "移除" in confirm_reply
     assert store.get(ROBIN_ID) is None
     assert fake_db.select("youtube_topics", where="user_id = %s", params=(owner_row,)) == []

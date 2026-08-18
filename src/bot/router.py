@@ -97,11 +97,10 @@ _SET_CERTIFICATE_GOAL_TRIGGERS = {"/set_certificate_goal", "設定證照目標"}
 _MY_CERTIFICATE_GOALS_TRIGGERS = {"/my_certificate_goals", "我的證照目標"}
 _CERTIFICATE_ADVICE_TRIGGERS = {"/certificate_advice", "給我讀書建議"}
 _MY_QUIZ_STATS_TRIGGERS = {"/my_quiz_stats", "查詢我的成效"}
-# 2026-08-08 追加（Step 3.4，見 robinson SPEC.md FR-57a、ADR-21）：YouTube 技術情報主題管理，
-# `tech_intel` 功能開關本身是 owner_only，這三個觸發詞同樣只放在 is_owner 分支。
-_MY_YOUTUBE_TOPICS_TRIGGERS = {"/my_youtube_topics", "我的YouTube主題"}
-_ADD_YOUTUBE_TOPIC_TRIGGERS = {"/add_youtube_topic", "新增YouTube主題"}
-_REMOVE_YOUTUBE_TOPIC_TRIGGERS = {"/remove_youtube_topic", "移除YouTube主題"}
+# 2026-08-18（Youtube 技術分享設定選單化，見 docs/ADR/discuss/robinson.md、
+# docs/ADR/discuss/youtube-intel.md 對應日期條目）：YouTube 技術情報主題管理全面改選單觸發，
+# 舊文字觸發詞（`/my_youtube_topics`、`/add_youtube_topic`、`/remove_youtube_topic` 等）已移除，
+# 入口改為主選單「💡 Youtube 技術分享設定」，見 menu.py／commands.py 對應區塊說明。
 # 2026-08-09（Step 4.1，見 robinson SPEC.md FR-33、FR-36、ADR-24 決策 2）：求職模組設定流程，
 # `job_search` 開關同步改為 owner_only=True，觸發詞只放在 is_owner 分支，家人完全看不到這個功能。
 _JOB_SEARCH_SETUP_TRIGGERS = {"/set_job_search", "我要找工作", "我最近想要找工作了"}
@@ -265,15 +264,6 @@ def handle_message(
         if text in _MY_QUIZ_STATS_TRIGGERS:
             # 2026-08-08（FR-29）：開始成效彈性文字問答流程。
             return commands.start_quiz_stats_query(db, state_store, telegram_user_id, user_id)
-        if text in _MY_YOUTUBE_TOPICS_TRIGGERS:
-            # 2026-08-08（Step 3.4，FR-57a）：查詢目前設定的 YouTube 技術情報主題（單次列表）。
-            return commands.handle_my_youtube_topics(db, user_id)
-        if text in _ADD_YOUTUBE_TOPIC_TRIGGERS:
-            # 2026-08-08（Step 3.4，FR-57a）：開始新增一組 YouTube 技術情報主題流程。
-            return commands.start_add_youtube_topic(state_store, telegram_user_id, user_id)
-        if text in _REMOVE_YOUTUBE_TOPIC_TRIGGERS:
-            # 2026-08-08（Step 3.4，FR-57a）：列出目前主題並進入可輸入編號刪除的模式。
-            return commands.start_remove_youtube_topic(db, state_store, telegram_user_id, user_id)
         if text in _JOB_SEARCH_SETUP_TRIGGERS:
             # 2026-08-09（Step 4.1，FR-33、FR-36）：開始求職模組設定流程，先問搜尋條件。
             return commands.start_job_search_setup(state_store, telegram_user_id, user_id)
@@ -467,6 +457,14 @@ def handle_callback_query(
         if key == "query":
             # 2026-08-18（批次4，FR-9c／FR-9d）：🔍 資料查詢子選單首頁，直接進入日期選擇。
             return query.start_query_menu(state_store, telegram_user_id)
+        if key == "tech_intel":
+            # 2026-08-18（Youtube 技術分享設定選單化，見 docs/ADR/discuss/robinson.md、
+            # docs/ADR/discuss/youtube-intel.md 對應日期條目）：YouTube 主題設定子選單首頁。
+            state_store.clear(telegram_user_id)
+            user = _get_identified_user(db, telegram_user_id)
+            if user is None:
+                return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
+            return commands.start_youtube_settings_menu(db, user["id"])
         return menu.not_yet_implemented_reply()
 
     if data.startswith("daily_log:"):
@@ -726,6 +724,32 @@ def handle_callback_query(
         if action == "confirm_save":
             return achievements.handle_confirm_save(db, state_store, telegram_user_id, user["id"])
         return achievements.start_achievements_menu()
+
+    if data.startswith("youtube_settings:"):
+        # 2026-08-18（Youtube 技術分享設定選單化，見 docs/ADR/discuss/robinson.md、
+        # docs/ADR/discuss/youtube-intel.md 對應日期條目）：YouTube 主題設定選單與新增／移除操作，
+        # 設計比照 collections.py／achievements.py 的單層子選單＋二次確認刪除模式。僅 Owner 可用
+        # （`tech_intel` 主選單項目本身是 owner_only，這裡再檢查一次身分保守起見）。
+        if not is_owner:
+            return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
+        user = _get_identified_user(db, telegram_user_id)
+        if user is None:
+            return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
+        action = data[len("youtube_settings:") :]
+        if action == "menu":
+            state_store.clear(telegram_user_id)
+            return commands.start_youtube_settings_menu(db, user["id"])
+        if action == "add":
+            return commands.start_youtube_topic_add(db, state_store, telegram_user_id, user["id"])
+        if action == "remove":
+            return commands.start_youtube_topic_remove_menu(db, user["id"])
+        if action.startswith("remove_select:"):
+            topic_id = int(action[len("remove_select:") :])
+            return commands.start_youtube_topic_remove_confirm(db, state_store, telegram_user_id, user["id"], topic_id)
+        if action.startswith("confirm_remove:"):
+            topic_id = int(action[len("confirm_remove:") :])
+            return commands.handle_youtube_topic_remove_confirmed(db, state_store, telegram_user_id, user["id"], topic_id)
+        return commands.start_youtube_settings_menu(db, user["id"])
 
     if data.startswith("mood:"):
         # 2026-08-16（Phase 6 第二批 2c，FR-6e）：心情選單與清單操作。
@@ -1423,11 +1447,12 @@ def _dispatch_active_flow(
         return commands.handle_certificate_advice_exam_type_step(db, llm_client, state_store, telegram_user_id, text)
     if flow == "pending_quiz_stats_query":
         return commands.handle_quiz_stats_query_step(db, llm_client, state_store, telegram_user_id, text)
-    # 2026-08-08 追加（Step 3.4，見 robinson SPEC.md FR-57a、ADR-21）：YouTube 技術情報主題管理。
-    if flow == "pending_youtube_topic_add":
+    # 2026-08-18（Youtube 技術分享設定選單化，見 docs/ADR/discuss/robinson.md、
+    # docs/ADR/discuss/youtube-intel.md 對應日期條目）：YouTube 技術情報主題新增／移除確認。
+    if flow == "youtube_topic_add":
         return commands.handle_youtube_topic_add_step(db, state_store, telegram_user_id, text)
-    if flow == "pending_youtube_topic_remove":
-        return commands.handle_youtube_topic_remove_step(db, state_store, telegram_user_id, text)
+    if flow == "youtube_topic_remove_confirm":
+        return commands.handle_youtube_topic_remove_confirm_text(state_store, telegram_user_id)
     # 2026-08-09（Step 4.1，見 robinson SPEC.md FR-33、FR-36、ADR-24）：求職模組設定流程，
     # 結構比照記帳/證照目標等既有多輪對話流，見 commands.py「求職模組設定流程」區塊開頭說明。
     if flow == "pending_job_search_criteria":
