@@ -66,6 +66,16 @@ FR-9d）：`query`（🔍 資料查詢）接上真正邏輯，從 `_NOT_YET_IMPL
 目標追蹤維持只能從各自主選單查看，不併入資料查詢。子選單（選最終日期→模組複選→開始查詢）
 由 `src/bot/query.py` 的 `start_query_menu()` 等函式直接組出 Inline Keyboard，比照
 `important_days` 的做法；`router.py` 的 `query:*` 分派處理。
+
+2026-08-18（批次5，見 docs/ADR/discuss/robinson.md「批次5 開工前 SDD 計畫確認」）：`finance`
+（記帳）接上 `src/bot/commands.py` 改寫過的記帳邏輯，從 `_DAILY_LOG_NOT_YET_IMPLEMENTED_KEYS`
+移除，日常紀錄五個子項目至此全數接上真正邏輯。子選單由 `commands.start_finance_menu()` 直接
+組出 Inline Keyboard，比照 `body` 的單層子選單做法；新增／補記記帳流程補上摘要→二次確認關卡
+（`finance:confirm_save`），我的記帳紀錄改為按鈕式編輯／刪除（`finance:edit:<id>`／
+`finance:delete:<id>`），設定預算的月份覆蓋確認從自由文字 LLM 分類改成 ✅／❌ 按鈕
+（`finance:budget_confirm_save`／`finance:budget_override_confirm_save`），舊有文字觸發詞
+（「我要記帳」「設定記帳預算」等）全數移除，只留 `router.py` 既有的 `finance:goal:*` 目標子
+流程不動。
 """
 
 # key、label 依 FR-6e 定案順序；owner_only 決定這個項目是否只有 Owner 看得到。
@@ -124,9 +134,10 @@ DAILY_LOG_MENU_ITEMS = [
 ]
 
 # 2026-08-16（Phase 6 第二批 2g）：`diet`（飲食）接上真正邏輯，移出開發中名單。
-# 2026-08-17（Phase 6 第二批 2h）：`body`（體態）接上真正邏輯，移出開發中名單；`finance`
-# 維持「功能開發中」，留給後續子批次。
-_DAILY_LOG_NOT_YET_IMPLEMENTED_KEYS = {"finance"}
+# 2026-08-17（Phase 6 第二批 2h）：`body`（體態）接上真正邏輯，移出開發中名單。
+# 2026-08-18（批次5）：`finance`（記帳）接上真正邏輯，移出開發中名單；日常紀錄五個子項目
+# 至此全數接上真正邏輯，這個集合暫時為空，保留供未來新增子項目沿用同一套機制。
+_DAILY_LOG_NOT_YET_IMPLEMENTED_KEYS: set[str] = set()
 
 DAILY_LOG_MENU_TEXT = "日常紀錄，請選擇要記錄的項目："
 

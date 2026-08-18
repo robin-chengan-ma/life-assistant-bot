@@ -1606,32 +1606,38 @@ def handle_complaint_content_step(
 
 
 # ---------------------------------------------------------------------------
-# 記帳（2026-08-04，Step 2.1，見 robinson SPEC.md FR-41～FR-44）
+# 記帳（2026-08-04，Step 2.1，見 robinson SPEC.md FR-41～FR-44；2026-08-18 批次5全面改版，
+# 見 docs/ADR/discuss/robinson.md「批次5 開工前 SDD 計畫確認」）
 #
-# 跟心情小記（Step 1.8）的補記/更新/刪除擴充同一套設計語言，但記帳從一開始就內建完整 CRUD
-# （不像心情小記是事後才補上）：
+# 跟體態管理（2h）／飲食（2g）同一套設計語言，全面改選單觸發＋摘要→二次確認＋按鈕式編輯/刪除：
+# - 選單：「📝 日常紀錄」→「💰 記帳」子選單首頁（`start_finance_menu()`）。
 # - 新增（一般）：pending_transaction_type → pending_transaction_category →
-#   pending_transaction_amount → pending_transaction_note，`transaction_date` 固定是今天、
+#   pending_transaction_amount → pending_transaction_note → pending_transaction_confirm（摘要→
+#   二次確認，`finance:confirm_save` 才真正寫入），`transaction_date` 固定是今天、
 #   `transaction_id` 是 None（代表 INSERT）
 # - 補記：多一個前置的 pending_transaction_backfill_date（先問哪一天，只接受今天或過去日期，
-#   邏輯比照 `handle_mood_backfill_date_step`），講清楚後接進同一組 type/category/amount/note
-# - 更新：查詢清單 pending_transaction_list_action 選一筆 → pending_transaction_action_choice
-#   反問要更新還是刪除 → 選更新時沿用原本的 `transaction_date`、`transaction_id` 帶著代表這是
-#   編輯，重新走一次 type/category/amount/note 四步（比心情小記的分類/內容兩步驟多，因為記帳
-#   多了類型跟金額兩個欄位）
-# - 刪除：pending_transaction_delete_confirm，簡單一輪 LLM CONFIRM/CANCEL（理由同心情小記：
-#   中等風險、可事後補記修正，不套用 FR-16a 逐字打字最終確認）
+#   邏輯比照 `handle_mood_backfill_date_step`，仍為自由文字＋LLM 解析，理由同飲食/待辦的日期
+#   解析），講清楚後接進同一組 type/category/amount/note/confirm
+# - 更新：「📋 我的記帳紀錄」（`handle_finance_list()`）按鈕式清單，每筆附「✏️ 編輯」
+#   （`finance:edit:<id>`）／「🗑 刪除」（`finance:delete:<id>`）；編輯沿用原本的
+#   `transaction_date`、`transaction_id` 帶著代表這是編輯，重新走一次 type/category/amount/
+#   note/confirm 五步
+# - 刪除：`finance:delete:<id>` → 確認刪除按鈕（`finance:confirm_delete:<id>`），比照
+#   `start_body_weight_delete_confirm`／`handle_body_weight_delete`，重新驗證擁有者
 #
 # FR-41 設定預算、FR-43 門檻預警推播（`finance.check_and_push_budget_alerts()`，借用 `/healthz`
-# 頻率，見 `main.py`）、FR-44 文字摘要查詢，三者都不需要 LLM；FR-42 的補記日期解析、更新/刪除
-# 選擇、刪除確認才需要 LLM（跟待辦事項/心情小記一致，純固定選項的步驟不呼叫 LLM）。
+# 頻率，見 `main.py`）、FR-44 文字摘要查詢，三者都不需要 LLM；FR-42 的補記日期解析才需要 LLM
+# （跟飲食/待辦一致，純固定選項/按鈕的步驟不呼叫 LLM）。
 #
 # 2026-08-04 擴充（Robin 提出記帳模組使用回饋，見 robinson SPEC.md FR-41a/FR-42a）：
-# - 設定預算改成多輪：pending_finance_budget_scope（全部月份／某幾個月）
+# - 設定預算改成多輪：pending_finance_budget_scope（全部月份／某幾個月，仍為自由文字）
 #   → 選全部月份：若全局預設已有舊值 → pending_finance_budget_global_confirm 反問確認
 #   → 選某幾個月：pending_finance_budget_months 問月份 → 若選定月份有舊覆蓋值 →
 #     pending_finance_budget_override_confirm 反問確認 → pending_finance_budget_amount 問金額
-#   確認步驟一樣是簡單一輪 LLM CONFIRM/CANCEL（風險等級同記帳刪除確認）。
+#   2026-08-18（批次5）：兩個確認步驟從自由文字 LLM CONFIRM/CANCEL 改成 ✅ 確認覆蓋／❌ 取消
+#   按鈕（`finance:budget_confirm_save`／`finance:budget_override_confirm_save`），跟記帳其餘
+#   摘要確認關卡的設計語言一致；scope／months 本身仍是自由文字輸入（範圍/月份沒有固定選項，
+#   不適合做成按鈕）。
 # - FR-42a 每日 23:00 記帳提醒：`finance.check_and_push_finance_reminders()`，同樣借用 `/healthz`
 #   頻率，不需要對話狀態機，也不需要 LLM。
 # ---------------------------------------------------------------------------
@@ -1649,33 +1655,6 @@ _FINANCE_BACKFILL_DATE_PARSE_PROMPT = (
 
 _FINANCE_BACKFILL_DATE_UNCLEAR_REPLY = "不好意思，我還是不太確定是哪一天，可以再講清楚一點嗎？（例如：昨天、8/1）"
 
-_TRANSACTION_ACTION_CLASSIFY_PROMPT = (
-    "使用者剛被 Robinson 反問要把選定的這筆記帳紀錄「更新」還是「刪除」，這是使用者這一則的回覆："
-    "「{text}」。\n"
-    "請判斷使用者的意思，整則回覆只能輸出以下其中一個固定字，不要輸出其他任何文字：\n"
-    "(1) 要更新內容 → UPDATE\n"
-    "(2) 要刪除這筆 → DELETE\n"
-    "(3) 都不是、看不懂、或其實在問別的事 → OTHER"
-)
-
-_TRANSACTION_DELETE_CONFIRM_PROMPT = (
-    "使用者剛被 Robinson 反問「確定要刪除這筆記帳紀錄嗎？這個動作沒辦法復原喔！」，這是使用者這一則"
-    "的回覆：「{text}」。\n"
-    "請判斷使用者的意思，整則回覆只能輸出以下其中一個固定字，不要輸出其他任何文字：\n"
-    "(1) 確定要刪除 → CONFIRM\n"
-    "(2) 不要刪除、想取消、或其實在問別的事 → CANCEL"
-)
-
-# 2026-08-04 追加（記帳擴充，見 robinson SPEC.md FR-41a）：預算已有舊值時的覆蓋確認，簡單一輪
-# LLM CONFIRM/CANCEL（風險等級同記帳刪除確認，理由同上）。
-_FINANCE_BUDGET_CHANGE_CONFIRM_PROMPT = (
-    "使用者剛被 Robinson 反問是否要把已經設定過的記帳預算改成新的金額，這是使用者這一則的回覆："
-    "「{text}」。\n"
-    "請判斷使用者的意思，整則回覆只能輸出以下其中一個固定字，不要輸出其他任何文字：\n"
-    "(1) 確定要改 → CONFIRM\n"
-    "(2) 不要改、想取消、或其實在問別的事 → CANCEL"
-)
-
 
 def _parse_amount(text: str) -> float | None:
     """把使用者輸入的金額文字換算成正數 float；接受「120」「120元」「NT$120」「1,200」等常見寫法，
@@ -1691,8 +1670,24 @@ def _parse_amount(text: str) -> float | None:
     return amount if amount > 0 else None
 
 
+def start_finance_menu() -> tuple[str, dict]:
+    """主選單「📝 日常紀錄」→「💰 記帳」子選單首頁，取代原本五個舊指令。"""
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "💰 設定預算", "callback_data": "finance:budget"}],
+            [{"text": "➕ 新增記帳", "callback_data": "finance:add"}],
+            [{"text": "🕐 補記記帳", "callback_data": "finance:backfill"}],
+            [{"text": "📋 我的記帳紀錄", "callback_data": "finance:list"}],
+            [{"text": "📊 我的記帳摘要", "callback_data": "finance:summary"}],
+            [{"text": "🎯 目標", "callback_data": "finance:goal"}],
+            [{"text": "🔙 返回日常紀錄", "callback_data": "menu:daily_log"}],
+        ]
+    }
+    return "記帳，請選擇要進行的操作：", keyboard
+
+
 def start_finance_budget(state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
-    """「設定記帳預算」／`/set_budget`：開始設定支出預算（FR-41／FR-41a）。
+    """「💰 設定預算」：開始設定支出預算（FR-41／FR-41a）。
 
     2026-08-04 擴充（見 robinson SPEC.md FR-41a）：每次都先問套用範圍（全部月份 vs 只套用某幾個月），
     而不是直接問金額——理由是 Robin 提出某幾個月（報稅、包紅包）固定開銷較高，需要能單獨設定，
@@ -1707,7 +1702,7 @@ def handle_finance_budget_scope_step(
     state_store: ConversationStateStore,
     telegram_user_id: int,
     text: str,
-) -> str:
+) -> str | tuple[str, dict]:
     """處理 `pending_finance_budget_scope` 狀態下使用者選擇的套用範圍（FR-41a）。
 
     選「全部月份」：若全局預設已有舊值，先反問確認才能改；沒有舊值就直接問金額。
@@ -1730,7 +1725,13 @@ def handle_finance_budget_scope_step(
             telegram_user_id,
             {"flow": "pending_finance_budget_global_confirm", "target_user_id": target_user_id},
         )
-        return finance.format_budget_global_confirm_prompt(current)
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": "✅ 確認覆蓋", "callback_data": "finance:budget_confirm_save"}],
+                [{"text": "❌ 取消", "callback_data": "finance:menu"}],
+            ]
+        }
+        return finance.format_budget_global_confirm_prompt(current), keyboard
 
     state_store.set(
         telegram_user_id,
@@ -1744,7 +1745,7 @@ def handle_finance_budget_months_step(
     state_store: ConversationStateStore,
     telegram_user_id: int,
     text: str,
-) -> str:
+) -> str | tuple[str, dict]:
     """處理 `pending_finance_budget_months` 狀態下使用者輸入的月份清單（FR-41a）。
 
     一律套用「今年」（今天所在的年份），這是本次的簡化假設，尚不支援跨年設定。若選定的月份中
@@ -1774,7 +1775,13 @@ def handle_finance_budget_months_step(
                 "year": year,
             },
         )
-        return finance.format_budget_override_confirm_prompt(conflicts)
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": "✅ 確認覆蓋", "callback_data": "finance:budget_override_confirm_save"}],
+                [{"text": "❌ 取消", "callback_data": "finance:menu"}],
+            ]
+        }
+        return finance.format_budget_override_confirm_prompt(conflicts), keyboard
 
     state_store.set(
         telegram_user_id,
@@ -1789,22 +1796,14 @@ def handle_finance_budget_months_step(
     return "好的，請問要設定多少金額呢？（例如：15000）"
 
 
-def handle_finance_budget_global_confirm_step(
-    llm_client,
-    state_store: ConversationStateStore,
-    telegram_user_id: int,
-    text: str,
-) -> str:
-    """處理 `pending_finance_budget_global_confirm` 狀態下使用者對「要不要改全局預設預算」的回覆
-    （簡單一輪 CONFIRM/CANCEL，理由見 `_FINANCE_BUDGET_CHANGE_CONFIRM_PROMPT`）。"""
+def handle_finance_budget_global_confirm_save(state_store: ConversationStateStore, telegram_user_id: int) -> str:
+    """`finance:budget_confirm_save`：`pending_finance_budget_global_confirm` 狀態下按下「✅ 確認
+    覆蓋」，改成問新的金額（2026-08-18 批次5，取代原本自由文字 LLM CONFIRM/CANCEL）。"""
     state = state_store.get(telegram_user_id)
+    if not state or state.get("flow") != "pending_finance_budget_global_confirm":
+        return "目前沒有進行中的預算設定。"
+
     target_user_id = state["target_user_id"]
-
-    decision = llm_client.generate_text(_FINANCE_BUDGET_CHANGE_CONFIRM_PROMPT.format(text=text)).strip()
-    if decision != "CONFIRM":
-        state_store.clear(telegram_user_id)
-        return "好的，維持原本的預算不變！"
-
     state_store.set(
         telegram_user_id,
         {"flow": "pending_finance_budget_amount", "target_user_id": target_user_id, "scope": "global"},
@@ -1812,24 +1811,16 @@ def handle_finance_budget_global_confirm_step(
     return "好的，請問每月支出預算上限要改成多少呢？（例如：15000）"
 
 
-def handle_finance_budget_override_confirm_step(
-    llm_client,
-    state_store: ConversationStateStore,
-    telegram_user_id: int,
-    text: str,
-) -> str:
-    """處理 `pending_finance_budget_override_confirm` 狀態下使用者對「要不要改某幾個月的覆蓋預算」
-    的回覆（簡單一輪 CONFIRM/CANCEL）。"""
+def handle_finance_budget_override_confirm_save(state_store: ConversationStateStore, telegram_user_id: int) -> str:
+    """`finance:budget_override_confirm_save`：`pending_finance_budget_override_confirm` 狀態下按下
+    「✅ 確認覆蓋」，改成問新的金額（2026-08-18 批次5，取代原本自由文字 LLM CONFIRM/CANCEL）。"""
     state = state_store.get(telegram_user_id)
+    if not state or state.get("flow") != "pending_finance_budget_override_confirm":
+        return "目前沒有進行中的預算設定。"
+
     target_user_id = state["target_user_id"]
     months = state["months"]
     year = state["year"]
-
-    decision = llm_client.generate_text(_FINANCE_BUDGET_CHANGE_CONFIRM_PROMPT.format(text=text)).strip()
-    if decision != "CONFIRM":
-        state_store.clear(telegram_user_id)
-        return "好的，維持原本的預算不變！"
-
     state_store.set(
         telegram_user_id,
         {
@@ -1874,7 +1865,7 @@ def handle_finance_budget_amount_step(
 
 
 def start_finance_add(state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
-    """「我要記帳」／`/add_transaction`：開始記帳流程，先問交易類型（FR-42）。
+    """「➕ 新增記帳」：開始記帳流程，先問交易類型（FR-42）。
 
     一般（非補記）新增：`transaction_date` 固定是今天，`transaction_id` 是 None（代表 INSERT）。
     """
@@ -1891,7 +1882,7 @@ def start_finance_add(state_store: ConversationStateStore, telegram_user_id: int
 
 
 def start_finance_backfill(state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
-    """「我要補記帳」／`/backfill_transaction`：開始補記流程，先問要補記哪一天（FR-42）。"""
+    """「🕐 補記記帳」：開始補記流程，先問要補記哪一天（FR-42）。"""
     state_store.set(telegram_user_id, {"flow": "pending_transaction_backfill_date", "target_user_id": user_id})
     return "好的，要補記哪一天的帳呢？（例如：昨天、8/1）"
 
@@ -1996,34 +1987,72 @@ def handle_transaction_amount_step(
 
 
 def handle_transaction_note_step(
-    db: CloudSQLClient,
     state_store: ConversationStateStore,
     telegram_user_id: int,
     text: str,
     privacy_llm_client=None,
-) -> str:
-    """處理 `pending_transaction_note` 狀態下使用者提供的備註（可選擇跳過），寫入後結束流程。
+) -> tuple[str, dict]:
+    """處理 `pending_transaction_note` 狀態下使用者提供的備註（可選擇跳過），先組摘要文字＋確認
+    送出按鈕，確認了才真正寫入（批次5新增的摘要→二次確認關卡，理由同體態/待辦）。
 
-    `transaction_id` 是 None 時新增一筆；非 None 時代表這是編輯既有紀錄
-    （見 `handle_transaction_action_choice_step`），改為 UPDATE、沿用原本的 `transaction_date`。
+    `transaction_id` 是 None 時代表新增；非 None 時代表這是編輯既有紀錄（見
+    `start_transaction_edit`），確認送出時改為 UPDATE、沿用原本的 `transaction_date`。
 
-    `privacy_llm_client`（見 docs/specs/privacy-masking/SPEC.md FR-4）：備註可能含個資，寫入
-    `transactions` 前一律先過 `privacy.mask_text()`；`None` 時優雅降級成只跑免費的 Regex 層。
+    `privacy_llm_client`（見 docs/specs/privacy-masking/SPEC.md FR-4）：備註可能含個資，先過
+    `privacy.mask_text()` 存進待確認狀態；`None` 時優雅降級成只跑免費的 Regex 層。
     """
     state = state_store.get(telegram_user_id)
-    target_user_id = state["target_user_id"]
-    transaction_date = state["transaction_date"]
-    transaction_id = state.get("transaction_id")
-    transaction_type = state["transaction_type"]
-    category = state["category"]
-    amount = state["amount"]
-    state_store.clear(telegram_user_id)
 
     pii_detected = False
     if text in _EXIT_PHRASES or text in ("沒有", "不用"):
         note = None
     else:
         note, pii_detected = privacy.mask_text(text, privacy_llm_client)
+
+    state_store.set(
+        telegram_user_id,
+        {**state, "flow": "pending_transaction_confirm", "note": note, "pii_detected": pii_detected},
+    )
+
+    transaction_date = state["transaction_date"]
+    transaction_type = state["transaction_type"]
+    category = state["category"]
+    amount = state["amount"]
+    type_label = "支出" if transaction_type == "expense" else "收入"
+    summary = (
+        "請確認以下內容：\n\n"
+        f"類型：{type_label}\n"
+        f"分類：{category}\n"
+        f"金額：{amount:.0f} 元\n"
+        f"備註：{note or '（無）'}\n"
+        f"日期：{transaction_date:%Y/%m/%d}"
+    )
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "✅ 確認送出", "callback_data": "finance:confirm_save"}],
+            [{"text": "❌ 取消", "callback_data": "finance:menu"}],
+        ]
+    }
+    return summary, keyboard
+
+
+def handle_transaction_confirm_save(
+    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int
+) -> tuple[str, dict]:
+    """`finance:confirm_save`：實際寫入記帳紀錄（新增或編輯）。"""
+    state = state_store.get(telegram_user_id)
+    if not state or state.get("flow") != "pending_transaction_confirm":
+        return "目前沒有進行中的記帳。", {"inline_keyboard": [[{"text": "🔙 返回記帳選單", "callback_data": "finance:menu"}]]}
+
+    target_user_id = state["target_user_id"]
+    transaction_date = state["transaction_date"]
+    transaction_id = state.get("transaction_id")
+    transaction_type = state["transaction_type"]
+    category = state["category"]
+    amount = state["amount"]
+    note = state["note"]
+    pii_detected = state["pii_detected"]
+    state_store.clear(telegram_user_id)
 
     if transaction_id is None:
         finance.create_transaction(db, target_user_id, transaction_type, category, amount, note, transaction_date)
@@ -2037,123 +2066,97 @@ def handle_transaction_note_step(
     goal_message = goals.check_finance_goal_achievement(db, target_user_id)
     if goal_message:
         reply += "\n\n" + goal_message
-    return reply
+
+    keyboard = {"inline_keyboard": [[{"text": "🔙 返回記帳選單", "callback_data": "finance:menu"}]]}
+    return reply, keyboard
 
 
-def start_finance_list(
-    db: CloudSQLClient,
-    state_store: ConversationStateStore,
-    telegram_user_id: int,
-    user_id: int,
-) -> str:
-    """「我的記帳紀錄」／`/my_transactions`：列出最近的記帳紀錄，並進入可更新/刪除的模式。"""
+def handle_finance_list(db: CloudSQLClient, user_id: int) -> tuple[str, dict]:
+    """「📋 我的記帳紀錄」：列出最近的記帳紀錄，每一筆附「✏️ 編輯」「🗑 刪除」按鈕（批次5改按鈕式，
+    取代原本文字輸入編號的做法，比照 `handle_body_weight_list`）。"""
     transactions = finance.list_transactions(db, user_id)
     listing = finance.format_transaction_list(transactions)
     if not transactions:
-        return listing
+        return listing, {"inline_keyboard": [[{"text": "🔙 返回記帳選單", "callback_data": "finance:menu"}]]}
 
-    state_store.set(
-        telegram_user_id,
-        {
-            "flow": "pending_transaction_list_action",
-            "target_user_id": user_id,
-            "transaction_ids": [item["id"] for item in transactions],
-        },
-    )
-    return f"{listing}\n\n如果要更新或刪除某一筆，請輸入編號；不需要的話輸入「結束」。"
+    buttons = [
+        [
+            {"text": f"✏️ 編輯 {index}", "callback_data": f"finance:edit:{item['id']}"},
+            {"text": f"🗑 刪除 {index}", "callback_data": f"finance:delete:{item['id']}"},
+        ]
+        for index, item in enumerate(transactions, start=1)
+    ]
+    buttons.append([{"text": "🔙 返回記帳選單", "callback_data": "finance:menu"}])
+    return listing, {"inline_keyboard": buttons}
 
 
-def handle_transaction_list_action_step(
-    state_store: ConversationStateStore,
-    telegram_user_id: int,
-    text: str,
+def start_transaction_edit(
+    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int, transaction_id: int
 ) -> str:
-    """處理 `pending_transaction_list_action` 狀態下使用者輸入的編號，選定要更新/刪除的那一筆。"""
-    state = state_store.get(telegram_user_id)
-    if text in _EXIT_PHRASES:
-        state_store.clear(telegram_user_id)
-        return "好的，已結束記帳紀錄查詢模式！"
+    """「✏️ 編輯」：沿用原本記錄的 `transaction_date`，重新走一次類型/分類/金額/備註四輪反問，
+    `transaction_id` 帶著代表這是編輯而非新增（比照 `start_body_weight_edit`）。"""
+    row = db.select("transactions", where="id = %s", params=(transaction_id,), fetch_one=True)
+    if row is None or row.get("user_id") != user_id:
+        return "找不到這筆記帳紀錄，可能已經被刪除了。"
 
-    transaction_ids = state["transaction_ids"]
-    if not text.isdigit() or not (1 <= int(text) <= len(transaction_ids)):
-        return f"請輸入 1～{len(transaction_ids)} 之間的編號，或輸入「結束」離開喔！"
-
-    transaction_id = transaction_ids[int(text) - 1]
     state_store.set(
         telegram_user_id,
         {
-            "flow": "pending_transaction_action_choice",
-            "target_user_id": state["target_user_id"],
+            "flow": "pending_transaction_type",
+            "target_user_id": user_id,
+            "transaction_date": row["transaction_date"],
             "transaction_id": transaction_id,
         },
     )
-    return "要更新這筆還是刪除呢？"
+    return "好的，那我們重新選一次交易類型：\n\n" + finance.format_type_prompt()
 
 
-def handle_transaction_action_choice_step(
-    db: CloudSQLClient,
-    llm_client,
-    state_store: ConversationStateStore,
-    telegram_user_id: int,
-    text: str,
+def start_transaction_delete_confirm(
+    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int, transaction_id: int
+) -> tuple[str, dict]:
+    """「🗑 刪除」：比照 `start_body_weight_delete_confirm`，先反問確認再真正刪除。"""
+    row = db.select("transactions", where="id = %s", params=(transaction_id,), fetch_one=True)
+    if row is None or row.get("user_id") != user_id:
+        return "找不到這筆記帳紀錄，可能已經被刪除了。", {
+            "inline_keyboard": [[{"text": "🔙 返回記帳選單", "callback_data": "finance:menu"}]]
+        }
+
+    state_store.set(telegram_user_id, {"flow": "finance_transaction_delete_confirm", "transaction_id": transaction_id})
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "✅ 確認刪除", "callback_data": f"finance:confirm_delete:{transaction_id}"}],
+            [{"text": "❌ 取消", "callback_data": "finance:list"}],
+        ]
+    }
+    return "確定要刪除這筆記帳紀錄嗎？這個動作沒辦法復原喔！", keyboard
+
+
+def handle_transaction_delete(
+    db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, user_id: int, transaction_id: int
 ) -> str:
-    """處理 `pending_transaction_action_choice` 狀態下使用者對「要更新這筆還是刪除呢？」的回覆。
-
-    選更新時沿用原本記錄的 `transaction_date`，重新走一次類型/分類/金額/備註四輪反問，
-    `transaction_id` 帶著代表這是編輯而非新增。
-    """
-    state = state_store.get(telegram_user_id)
-    transaction_id = state["transaction_id"]
-    target_user_id = state["target_user_id"]
-
-    decision = llm_client.generate_text(_TRANSACTION_ACTION_CLASSIFY_PROMPT.format(text=text)).strip()
-    if decision == "UPDATE":
-        row = db.select("transactions", where="id = %s", params=(transaction_id,), fetch_one=True)
-        state_store.set(
-            telegram_user_id,
-            {
-                "flow": "pending_transaction_type",
-                "target_user_id": target_user_id,
-                "transaction_date": row["transaction_date"],
-                "transaction_id": transaction_id,
-            },
-        )
-        return "好的，那我們重新選一次交易類型：\n\n" + finance.format_type_prompt()
-    if decision == "DELETE":
-        state_store.set(
-            telegram_user_id,
-            {"flow": "pending_transaction_delete_confirm", "target_user_id": target_user_id, "transaction_id": transaction_id},
-        )
-        return "確定要刪除這筆記帳紀錄嗎？這個動作沒辦法復原喔！"
-
+    """`finance:confirm_delete:<id>` 觸發時重新驗證擁有者（理由同 `handle_body_weight_delete`）。"""
     state_store.clear(telegram_user_id)
-    return "不好意思，我不太確定你的意思，這筆記帳紀錄維持原狀，你可以再查詢一次記帳紀錄清單重新選擇喔！"
-
-
-def handle_transaction_delete_confirm_step(
-    db: CloudSQLClient,
-    llm_client,
-    state_store: ConversationStateStore,
-    telegram_user_id: int,
-    text: str,
-) -> str:
-    """處理 `pending_transaction_delete_confirm` 狀態下使用者對刪除確認的回覆（簡單一輪
-    CONFIRM/CANCEL，設計理由見本模組「記帳」區塊開頭說明）。"""
-    state = state_store.get(telegram_user_id)
-    transaction_id = state["transaction_id"]
-    state_store.clear(telegram_user_id)
-
-    decision = llm_client.generate_text(_TRANSACTION_DELETE_CONFIRM_PROMPT.format(text=text)).strip()
-    if decision != "CONFIRM":
-        return "好的，這筆記帳紀錄保留，沒有刪除！"
-
+    row = db.select("transactions", where="id = %s", params=(transaction_id,), fetch_one=True)
+    if row is None or row.get("user_id") != user_id:
+        return "找不到這筆記帳紀錄，可能已經被刪除了。"
     finance.delete_transaction(db, transaction_id)
     return "好的，已經刪除這筆記帳紀錄了！"
 
 
-def handle_finance_summary(db: CloudSQLClient, user_id: int) -> str:
-    """「我的記帳摘要」／`/my_finance_summary`：查詢當月記帳文字摘要（FR-44），不經過對話狀態機。"""
-    return finance.format_monthly_summary(db, user_id, _now().date())
+def handle_finance_confirm_text(state_store: ConversationStateStore, telegram_user_id: int) -> tuple[str, dict]:
+    """`pending_transaction_confirm`／`finance_transaction_delete_confirm`／
+    `pending_finance_budget_global_confirm`／`pending_finance_budget_override_confirm` 只接受按鈕
+    操作，理由同 `handle_body_confirm_text`。"""
+    state_store.clear(telegram_user_id)
+    keyboard = {"inline_keyboard": [[{"text": "🔙 返回記帳選單", "callback_data": "finance:menu"}]]}
+    return "這個步驟請用上面的按鈕操作喔，這次先幫你取消了。", keyboard
+
+
+def handle_finance_summary(db: CloudSQLClient, user_id: int) -> tuple[str, dict]:
+    """「📊 我的記帳摘要」：查詢當月記帳文字摘要（FR-44），不經過對話狀態機。"""
+    summary = finance.format_monthly_summary(db, user_id, _now().date())
+    keyboard = {"inline_keyboard": [[{"text": "🔙 返回記帳選單", "callback_data": "finance:menu"}]]}
+    return summary, keyboard
 
 
 # ---------------------------------------------------------------------------

@@ -860,18 +860,17 @@ def test_daily_log_submenu_shows_mood_and_exercise_buttons(fake_db, monkeypatch)
     assert "daily_log:diet" in callback_datas
 
 
-def test_daily_log_finance_still_not_yet_implemented(fake_db, monkeypatch):
-    """finance 這批不接邏輯，維持「開發中」提示（body 已於 2026-08-17 Phase 6 第二批 2h
-    接上真正邏輯，見 test_daily_log_body_starts_body_menu；diet 已於 2026-08-16 Phase 6
-    第二批 2g 接上真正邏輯，改由 test_log_diet_food_full_flow／test_log_diet_water_full_flow
-    涵蓋）。"""
+def test_daily_log_finance_starts_finance_menu(fake_db, monkeypatch):
+    """2026-08-18（批次5）：finance 已接上真正邏輯，`daily_log:finance` 進入記帳子選單，日常紀錄
+    五個子項目至此全數接上真正邏輯，跟 body（2h）／diet（2g）一致。"""
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     store = ConversationStateStore()
 
     reply, keyboard = router.handle_callback_query(fake_db, store, FAMILY_ID, "daily_log:finance")
 
-    assert "開發中" in reply
-    assert keyboard["inline_keyboard"][0][0]["callback_data"] == "menu:daily_log"
+    assert "記帳" in reply
+    callbacks = [button["callback_data"] for row in keyboard["inline_keyboard"] for button in row]
+    assert "finance:budget" in callbacks
 
 
 def test_daily_log_body_starts_body_menu(fake_db, monkeypatch):
@@ -1221,13 +1220,28 @@ def test_exercise_delete_only_owner_can_target_own_log(fake_db, monkeypatch):
 # --- 記帳（robinson SPEC.md FR-41～FR-44，Step 2.1）---
 
 
+def test_finance_menu_shows_buttons(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+
+    reply, keyboard = router.handle_callback_query(fake_db, store, FAMILY_ID, "finance:menu")
+
+    assert "記帳" in reply
+    callbacks = [button["callback_data"] for row in keyboard["inline_keyboard"] for button in row]
+    assert callbacks == [
+        "finance:budget", "finance:add", "finance:backfill", "finance:list", "finance:summary",
+        "finance:goal", "menu:daily_log",
+    ]
+
+
 def test_finance_set_budget_full_flow_global_scope(fake_db, monkeypatch):
     """FR-41a：選「全部月份」，第一次設定沒有舊值，直接問金額。"""
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     store = ConversationStateStore()
 
-    reply1 = router.handle_message(fake_db, store, FAMILY_ID, "設定記帳預算")
+    reply1, _keyboard1 = router.handle_callback_query(fake_db, store, FAMILY_ID, "finance:budget")
     assert "全部月份" in reply1
     assert store.get(FAMILY_ID)["flow"] == "pending_finance_budget_scope"
 
@@ -1241,23 +1255,24 @@ def test_finance_set_budget_full_flow_global_scope(fake_db, monkeypatch):
 
 
 def test_finance_set_budget_full_flow_months_scope_with_override_confirm(fake_db, monkeypatch):
-    """FR-41a：選「只套用某幾個月」，指定的月份已有舊覆蓋值時要先反問確認才能改。"""
+    """FR-41a：選「只套用某幾個月」，指定的月份已有舊覆蓋值時要先反問確認才能改（2026-08-18
+    批次5改成按鈕確認，不再是自由文字 LLM CONFIRM/CANCEL）。"""
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     commands.finance.set_budget_override(fake_db, user_id, 2026, 8, 43000)
     store = ConversationStateStore()
 
-    router.handle_message(fake_db, store, FAMILY_ID, "設定記帳預算")
+    router.handle_callback_query(fake_db, store, FAMILY_ID, "finance:budget")
     reply1 = router.handle_message(fake_db, store, FAMILY_ID, "2")
     assert "幾月" in reply1
     assert store.get(FAMILY_ID)["flow"] == "pending_finance_budget_months"
 
-    reply2 = router.handle_message(fake_db, store, FAMILY_ID, "8,9")
+    reply2, keyboard2 = router.handle_message(fake_db, store, FAMILY_ID, "8,9")
     assert "8月：43000 元" in reply2
+    assert keyboard2["inline_keyboard"][0][0]["callback_data"] == "finance:budget_override_confirm_save"
     assert store.get(FAMILY_ID)["flow"] == "pending_finance_budget_override_confirm"
 
-    confirm_llm_client = _FakeLLMClient(response_text="CONFIRM")
-    reply3 = router.handle_message(fake_db, store, FAMILY_ID, "對", llm_client=confirm_llm_client)
+    reply3, _keyboard3 = router.handle_callback_query(fake_db, store, FAMILY_ID, "finance:budget_override_confirm_save")
     assert "多少金額" in reply3
     assert store.get(FAMILY_ID)["flow"] == "pending_finance_budget_amount"
 
@@ -1269,19 +1284,19 @@ def test_finance_set_budget_full_flow_months_scope_with_override_confirm(fake_db
 
 
 def test_finance_set_budget_global_scope_with_existing_value_asks_confirm(fake_db, monkeypatch):
-    """FR-41a：選「全部月份」，全局預設已有舊值時先反問確認。"""
+    """FR-41a：選「全部月份」，全局預設已有舊值時先反問確認（2026-08-18 批次5改成按鈕確認）。"""
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     commands.finance.set_monthly_budget(fake_db, user_id, 15000)
     store = ConversationStateStore()
 
-    router.handle_message(fake_db, store, FAMILY_ID, "設定記帳預算")
-    reply1 = router.handle_message(fake_db, store, FAMILY_ID, "1")
+    router.handle_callback_query(fake_db, store, FAMILY_ID, "finance:budget")
+    reply1, keyboard1 = router.handle_message(fake_db, store, FAMILY_ID, "1")
     assert "15000 元" in reply1
+    assert keyboard1["inline_keyboard"][0][0]["callback_data"] == "finance:budget_confirm_save"
     assert store.get(FAMILY_ID)["flow"] == "pending_finance_budget_global_confirm"
 
-    confirm_llm_client = _FakeLLMClient(response_text="CONFIRM")
-    reply2 = router.handle_message(fake_db, store, FAMILY_ID, "對", llm_client=confirm_llm_client)
+    reply2, _keyboard2 = router.handle_callback_query(fake_db, store, FAMILY_ID, "finance:budget_confirm_save")
     assert "多少" in reply2
     assert store.get(FAMILY_ID)["flow"] == "pending_finance_budget_amount"
 
@@ -1290,12 +1305,12 @@ def test_finance_set_budget_global_scope_with_existing_value_asks_confirm(fake_d
     assert commands.finance.get_monthly_budget(fake_db, user_id) == 20000.0
 
 
-def test_finance_add_transaction_full_flow_records_entry(fake_db, monkeypatch):
+def test_finance_add_transaction_full_flow_records_entry_only_after_confirm(fake_db, monkeypatch):
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     store = ConversationStateStore()
 
-    reply1 = router.handle_message(fake_db, store, FAMILY_ID, "我要記帳")
+    reply1, _keyboard1 = router.handle_callback_query(fake_db, store, FAMILY_ID, "finance:add")
     assert "1. 支出" in reply1
     assert store.get(FAMILY_ID)["flow"] == "pending_transaction_type"
 
@@ -1311,8 +1326,14 @@ def test_finance_add_transaction_full_flow_records_entry(fake_db, monkeypatch):
     assert "備註" in reply4
     assert store.get(FAMILY_ID)["flow"] == "pending_transaction_note"
 
-    reply5 = router.handle_message(fake_db, store, FAMILY_ID, "午餐")
-    assert reply5 == "已經幫你記錄好了！"
+    reply5, keyboard5 = router.handle_message(fake_db, store, FAMILY_ID, "午餐")
+    assert "請確認以下內容" in reply5
+    assert keyboard5["inline_keyboard"][0][0]["callback_data"] == "finance:confirm_save"
+    assert store.get(FAMILY_ID)["flow"] == "pending_transaction_confirm"
+    assert fake_db.select("transactions", where="user_id = %s", params=(user_id,)) == []  # 確認前不寫入
+
+    reply6, _keyboard6 = router.handle_callback_query(fake_db, store, FAMILY_ID, "finance:confirm_save")
+    assert reply6.startswith("已經幫你記錄好了！")
     assert store.get(FAMILY_ID) is None
 
     rows = fake_db.select("transactions", where="user_id = %s", params=(user_id,))
@@ -1327,7 +1348,7 @@ def test_finance_backfill_full_flow_records_entry_with_given_date(fake_db, monke
     fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     store = ConversationStateStore()
 
-    reply1 = router.handle_message(fake_db, store, FAMILY_ID, "我要補記帳")
+    reply1, _keyboard1 = router.handle_callback_query(fake_db, store, FAMILY_ID, "finance:backfill")
     assert "哪一天" in reply1
     assert store.get(FAMILY_ID)["flow"] == "pending_transaction_backfill_date"
 
@@ -1340,6 +1361,7 @@ def test_finance_backfill_full_flow_records_entry_with_given_date(fake_db, monke
     router.handle_message(fake_db, store, FAMILY_ID, "薪資")
     router.handle_message(fake_db, store, FAMILY_ID, "50000")
     router.handle_message(fake_db, store, FAMILY_ID, "沒有")
+    router.handle_callback_query(fake_db, store, FAMILY_ID, "finance:confirm_save")
 
     rows = fake_db.select("transactions")
     assert rows[0]["transaction_date"].isoformat() == "2026-08-01"
@@ -1347,10 +1369,10 @@ def test_finance_backfill_full_flow_records_entry_with_given_date(fake_db, monke
     assert rows[0]["category"] == "薪資"
 
 
-def test_finance_list_update_and_delete_full_flow(fake_db, monkeypatch):
+def test_finance_list_edit_and_delete_full_flow(fake_db, monkeypatch):
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
-    fake_db.insert(
+    transaction_id = fake_db.insert(
         "transactions",
         {
             "user_id": user_id,
@@ -1363,39 +1385,34 @@ def test_finance_list_update_and_delete_full_flow(fake_db, monkeypatch):
     )
     store = ConversationStateStore()
 
-    reply1 = router.handle_message(fake_db, store, FAMILY_ID, "我的記帳紀錄")
-    assert "更新或刪除" in reply1
-    assert store.get(FAMILY_ID)["flow"] == "pending_transaction_list_action"
+    reply1, keyboard1 = router.handle_callback_query(fake_db, store, FAMILY_ID, "finance:list")
+    assert "2026/08/01" in reply1
+    buttons = keyboard1["inline_keyboard"][0]
+    assert buttons[0]["callback_data"] == f"finance:edit:{transaction_id}"
+    assert buttons[1]["callback_data"] == f"finance:delete:{transaction_id}"
 
-    reply2 = router.handle_message(fake_db, store, FAMILY_ID, "1")
-    assert "更新" in reply2 and "刪除" in reply2
-    assert store.get(FAMILY_ID)["flow"] == "pending_transaction_action_choice"
-
-    update_llm_client = _FakeLLMClient(response_text="UPDATE")
-    reply3 = router.handle_message(fake_db, store, FAMILY_ID, "我要改內容", llm_client=update_llm_client)
-    assert "重新選一次交易類型" in reply3
+    reply2, _keyboard2 = router.handle_callback_query(fake_db, store, FAMILY_ID, f"finance:edit:{transaction_id}")
+    assert "重新選一次交易類型" in reply2
     assert store.get(FAMILY_ID)["flow"] == "pending_transaction_type"
 
     router.handle_message(fake_db, store, FAMILY_ID, "支出")
     router.handle_message(fake_db, store, FAMILY_ID, "交通")
     router.handle_message(fake_db, store, FAMILY_ID, "50")
-    router.handle_message(fake_db, store, FAMILY_ID, "結束")
+    router.handle_message(fake_db, store, FAMILY_ID, "沒有")
+    router.handle_callback_query(fake_db, store, FAMILY_ID, "finance:confirm_save")
 
     rows = fake_db.select("transactions")
     assert len(rows) == 1
     assert rows[0]["category"] == "交通"
     assert rows[0]["amount"] == 50.0
 
-    router.handle_message(fake_db, store, FAMILY_ID, "我的記帳紀錄")
-    router.handle_message(fake_db, store, FAMILY_ID, "1")
-    delete_llm_client = _FakeLLMClient(response_text="DELETE")
-    reply_delete_ask = router.handle_message(fake_db, store, FAMILY_ID, "刪掉", llm_client=delete_llm_client)
-    assert "沒辦法復原" in reply_delete_ask
-    assert store.get(FAMILY_ID)["flow"] == "pending_transaction_delete_confirm"
+    reply3, keyboard3 = router.handle_callback_query(fake_db, store, FAMILY_ID, f"finance:delete:{transaction_id}")
+    assert "沒辦法復原" in reply3
+    assert keyboard3["inline_keyboard"][0][0]["callback_data"] == f"finance:confirm_delete:{transaction_id}"
+    assert store.get(FAMILY_ID)["flow"] == "finance_transaction_delete_confirm"
 
-    confirm_llm_client = _FakeLLMClient(response_text="CONFIRM")
-    reply_deleted = router.handle_message(fake_db, store, FAMILY_ID, "對", llm_client=confirm_llm_client)
-    assert "已經刪除" in reply_deleted
+    reply4, _keyboard4 = router.handle_callback_query(fake_db, store, FAMILY_ID, f"finance:confirm_delete:{transaction_id}")
+    assert "已經刪除" in reply4
     assert fake_db.select("transactions") == []
 
 
@@ -1415,7 +1432,7 @@ def test_finance_summary_returns_text_without_flow(fake_db, monkeypatch):
     )
     store = ConversationStateStore()
 
-    reply = router.handle_message(fake_db, store, FAMILY_ID, "我的記帳摘要")
+    reply, _keyboard = router.handle_callback_query(fake_db, store, FAMILY_ID, "finance:summary")
 
     assert "記帳摘要" in reply
     assert store.get(FAMILY_ID) is None

@@ -17,12 +17,12 @@ class _FakeLLMClient:
         return self.response_text
 
 
-def test_finance_goal_new_via_text_trigger_full_flow(fake_db, monkeypatch):
+def test_finance_goal_new_via_button_full_flow(fake_db, monkeypatch):
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
     user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     store = ConversationStateStore()
 
-    reply = router.handle_message(fake_db, store, FAMILY_ID, "設定記帳目標")
+    reply, _keyboard = router.handle_callback_query(fake_db, store, FAMILY_ID, "finance:goal:new")
     assert "記帳目標" in reply
     assert store.get(FAMILY_ID)["flow"] == "pending_module_goal_description"
 
@@ -54,7 +54,7 @@ def test_finance_goal_with_deadline_asks_calendar_sync_and_creates_event(fake_db
     user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     store = ConversationStateStore()
 
-    router.handle_message(fake_db, store, FAMILY_ID, "設定記帳目標")
+    router.handle_callback_query(fake_db, store, FAMILY_ID, "finance:goal:new")
     parse_llm = _FakeLLMClient(response_text="5000|TWD")
     router.handle_message(fake_db, store, FAMILY_ID, "這個月想存5000", llm_client=parse_llm)
 
@@ -89,7 +89,7 @@ def test_finance_goal_description_llm_none_response_degrades_to_free_text(fake_d
     fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
     store = ConversationStateStore()
 
-    router.handle_message(fake_db, store, FAMILY_ID, "設定記帳目標")
+    router.handle_callback_query(fake_db, store, FAMILY_ID, "finance:goal:new")
     parse_llm = _FakeLLMClient(response_text="NONE")
     router.handle_message(fake_db, store, FAMILY_ID, "我想變得更有錢", llm_client=parse_llm)
 

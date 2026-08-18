@@ -69,15 +69,11 @@ _SET_FAMILY_BIRTHDAY_TRIGGERS = {"/set_family_birthday", "設定家人生日"}
 # 2026-08-08（Step 3.5，見 robinson SPEC.md FR-51、FR-52、ADR-22）：好友模式陪伴聊天，`friend_mode`
 # 開關 owner_only=False，所有使用者皆可用，放在共用觸發詞區塊；單輪生成完整回覆，不需要對話狀態機。
 _FRIEND_CHAT_TRIGGERS = {"/friend_chat", "陪我聊聊"}
-# 2026-08-04（Step 2.1，見 robinson SPEC.md FR-41～FR-44）：記帳模組觸發詞，設計比照心情小記。
-_FINANCE_SET_BUDGET_TRIGGERS = {"/set_budget", "設定記帳預算"}
-_FINANCE_ADD_TRIGGERS = {"/add_transaction", "我要記帳"}
-_FINANCE_BACKFILL_TRIGGERS = {"/backfill_transaction", "我要補記帳"}
-_MY_TRANSACTIONS_TRIGGERS = {"/my_transactions", "我的記帳紀錄"}
-_FINANCE_SUMMARY_TRIGGERS = {"/my_finance_summary", "我的記帳摘要"}
-# 2026-08-17（批次3，FR-45a）：記帳目前沒有按鈕子選單，目標入口沿用指令觸發詞的既有慣例。
-_FINANCE_GOAL_TRIGGERS = {"/finance_goal", "設定記帳目標"}
-_MY_FINANCE_GOALS_TRIGGERS = {"/my_finance_goals", "我的記帳目標"}
+# 2026-08-18（批次5）：記帳全面改選單觸發，舊文字觸發詞（/set_budget、/add_transaction、
+# /backfill_transaction、/my_transactions、/my_finance_summary、/finance_goal、
+# /my_finance_goals 等）已移除，不提供舊指令相容期，入口改為「📝 日常紀錄」→「💰 記帳」子選單，
+# 見 menu.py／commands.py 記帳子選單首頁區塊說明；目標入口併入子選單的「🎯 目標」按鈕，跟
+# body/collections 的做法一致。
 # 2026-08-16（Phase 6 第二批 2c）：運動全面改選單觸發，舊文字觸發詞
 # （/log_exercise、/backfill_exercise、/my_exercise_logs 等）已移除，入口改為
 # 「📝 日常紀錄」→「🏃 運動」子選單。
@@ -153,6 +149,11 @@ _FINAL_CONFIRM_FLOWS = {
     # 2026-08-17（批次3，FR-45a）：記帳／收藏清單目標摘要→二次確認關卡，理由同上。
     "pending_module_goal_confirm",
     "module_goal_delete_confirm",
+    # 2026-08-18（批次5）：記帳摘要→二次確認關卡與預算月份覆蓋確認關卡，理由同上。
+    "pending_transaction_confirm",
+    "finance_transaction_delete_confirm",
+    "pending_finance_budget_global_confirm",
+    "pending_finance_budget_override_confirm",
 }
 
 
@@ -351,26 +352,6 @@ def handle_message(
         # 2026-08-08（Step 3.5，見 robinson SPEC.md FR-51、FR-52、ADR-22）：好友模式陪伴聊天，
         # 單次生成完整回覆，不需要對話狀態機。
         return commands.start_friend_chat(db, llm_client, user_id)
-    if text in _FINANCE_SET_BUDGET_TRIGGERS:
-        # 2026-08-04（Step 2.1，見 robinson SPEC.md FR-41）：設定每月支出預算上限。
-        return commands.start_finance_budget(state_store, telegram_user_id, user_id)
-    if text in _FINANCE_ADD_TRIGGERS:
-        # 2026-08-04（FR-42）：開始記帳流程，先問交易類型。
-        return commands.start_finance_add(state_store, telegram_user_id, user_id)
-    if text in _FINANCE_BACKFILL_TRIGGERS:
-        # 2026-08-04（FR-42）：補記過去日期的記帳，先問是哪一天。
-        return commands.start_finance_backfill(state_store, telegram_user_id, user_id)
-    if text in _MY_TRANSACTIONS_TRIGGERS:
-        # 2026-08-04（FR-42）：查詢記帳清單並進入可更新/刪除的模式。
-        return commands.start_finance_list(db, state_store, telegram_user_id, user_id)
-    if text in _FINANCE_SUMMARY_TRIGGERS:
-        # 2026-08-04（FR-44）：單次查詢當月記帳文字摘要，不需要對話狀態機。
-        return commands.handle_finance_summary(db, user_id)
-    if text in _FINANCE_GOAL_TRIGGERS:
-        # 2026-08-17（批次3，FR-45a）：開始設定記帳目標，走通用 module_goals 流程。
-        return commands.start_module_goal_new(state_store, telegram_user_id, user_id, "finance")
-    if text in _MY_FINANCE_GOALS_TRIGGERS:
-        return commands.start_module_goal_list(db, user_id, "finance")
     if text in _COMPLAINT_TRIGGERS:
         # 2026-08-02（Step 1.9，見 robinson SPEC.md FR-60）：固定提問，不經過 LLM。
         return commands.start_complaint(state_store, telegram_user_id, user_id)
@@ -504,6 +485,9 @@ def handle_callback_query(
         if key == "body":
             # 2026-08-17（Phase 6 第二批 2h）。
             return commands.start_body_menu()
+        if key == "finance":
+            # 2026-08-18（批次5）。
+            return commands.start_finance_menu()
         return menu.daily_log_not_yet_implemented_reply()
 
     if data.startswith("permission:"):
@@ -590,17 +574,52 @@ def handle_callback_query(
         return commands.start_goal_tracking_menu()
 
     if data.startswith("finance:"):
-        # 2026-08-17（批次3，FR-45a）：記帳目前沒有按鈕子選單，這裡只接目標子流程
-        # （`finance:goal:*`），沿用 body/collections 目標子流程共用的 `_dispatch_module_goal_callback()`。
+        # 2026-08-18（批次5，見 docs/ADR/discuss/robinson.md「批次5 開工前 SDD 計畫確認」）：
+        # 記帳子選單（設定預算/新增/補記/我的記帳紀錄/我的記帳摘要）＋新增/補記流程的摘要→二次
+        # 確認、按鈕式編輯/刪除、預算月份覆蓋確認按鈕；`finance:goal:*` 目標子流程沿用批次3既有的
+        # `_dispatch_module_goal_callback()`，這批不動。
         user = _get_identified_user(db, telegram_user_id)
         if user is None:
             return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
         action = data[len("finance:") :]
+
         if action.startswith("goal"):
             return _dispatch_module_goal_callback(
                 db, state_store, telegram_user_id, user["id"], "finance", action, calendar_client=calendar_client
             )
-        return menu.not_yet_implemented_reply()
+
+        if action == "menu":
+            state_store.clear(telegram_user_id)
+            return commands.start_finance_menu()
+        if action == "budget":
+            return commands.start_finance_budget(state_store, telegram_user_id, user["id"]), None
+        if action == "budget_confirm_save":
+            return commands.handle_finance_budget_global_confirm_save(state_store, telegram_user_id), None
+        if action == "budget_override_confirm_save":
+            return commands.handle_finance_budget_override_confirm_save(state_store, telegram_user_id), None
+        if action == "add":
+            return commands.start_finance_add(state_store, telegram_user_id, user["id"]), None
+        if action == "backfill":
+            return commands.start_finance_backfill(state_store, telegram_user_id, user["id"]), None
+        if action == "confirm_save":
+            return commands.handle_transaction_confirm_save(db, state_store, telegram_user_id)
+        if action == "list":
+            return commands.handle_finance_list(db, user["id"])
+        if action.startswith("edit:"):
+            transaction_id = int(action[len("edit:") :])
+            return commands.start_transaction_edit(db, state_store, telegram_user_id, user["id"], transaction_id), None
+        if action.startswith("delete:"):
+            transaction_id = int(action[len("delete:") :])
+            return commands.start_transaction_delete_confirm(db, state_store, telegram_user_id, user["id"], transaction_id)
+        if action.startswith("confirm_delete:"):
+            transaction_id = int(action[len("confirm_delete:") :])
+            return (
+                commands.handle_transaction_delete(db, state_store, telegram_user_id, user["id"], transaction_id),
+                menu.back_to_main_menu_keyboard(),
+            )
+        if action == "summary":
+            return commands.handle_finance_summary(db, user["id"])
+        return commands.start_finance_menu()
 
     if data.startswith("collections:"):
         # 2026-08-16（Phase 6 第二批 2d，FR-6e／FR-6h／FR-75）：收藏清單選單與 CRUD 操作。
@@ -1264,10 +1283,11 @@ def _dispatch_active_flow(
         return commands.handle_finance_budget_scope_step(db, state_store, telegram_user_id, text)
     if flow == "pending_finance_budget_months":
         return commands.handle_finance_budget_months_step(db, state_store, telegram_user_id, text)
-    if flow == "pending_finance_budget_global_confirm":
-        return commands.handle_finance_budget_global_confirm_step(llm_client, state_store, telegram_user_id, text)
-    if flow == "pending_finance_budget_override_confirm":
-        return commands.handle_finance_budget_override_confirm_step(llm_client, state_store, telegram_user_id, text)
+    # 2026-08-18（批次5）：兩個預算覆蓋確認關卡改成按鈕（`finance:budget_confirm_save`／
+    # `finance:budget_override_confirm_save`），使用者這裡若打字一律當作不接受，理由同
+    # `handle_finance_confirm_text`。
+    if flow in ("pending_finance_budget_global_confirm", "pending_finance_budget_override_confirm"):
+        return commands.handle_finance_confirm_text(state_store, telegram_user_id)
     if flow == "pending_finance_budget_amount":
         return commands.handle_finance_budget_amount_step(db, state_store, telegram_user_id, text)
     if flow == "pending_transaction_backfill_date":
@@ -1279,15 +1299,9 @@ def _dispatch_active_flow(
     if flow == "pending_transaction_amount":
         return commands.handle_transaction_amount_step(state_store, telegram_user_id, text)
     if flow == "pending_transaction_note":
-        return commands.handle_transaction_note_step(
-            db, state_store, telegram_user_id, text, privacy_llm_client=privacy_llm_client
-        )
-    if flow == "pending_transaction_list_action":
-        return commands.handle_transaction_list_action_step(state_store, telegram_user_id, text)
-    if flow == "pending_transaction_action_choice":
-        return commands.handle_transaction_action_choice_step(db, llm_client, state_store, telegram_user_id, text)
-    if flow == "pending_transaction_delete_confirm":
-        return commands.handle_transaction_delete_confirm_step(db, llm_client, state_store, telegram_user_id, text)
+        return commands.handle_transaction_note_step(state_store, telegram_user_id, text, privacy_llm_client=privacy_llm_client)
+    if flow in ("pending_transaction_confirm", "finance_transaction_delete_confirm"):
+        return commands.handle_finance_confirm_text(state_store, telegram_user_id)
     # 2026-08-17（Phase 6 第二批 2h，見 robinson SPEC.md FR-45／FR-46）：體態管理全面改選單
     # 觸發＋摘要→二次確認，結構比照運動（2c）／飲食（2g）。
     if flow == "pending_body_height_value":

@@ -370,16 +370,18 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 負責�
 **概要**：每月支出預算上限（非儲蓄目標）＋每日記帳（含補登/修正/刪除完整 CRUD）＋門檻預警＋月報推播。
 
 **功能性需求**
-- FR-41／FR-41a：`/set_budget` 設定全局預設；`budget_overrides` 支援特殊月份覆蓋，改動已有值時先反問確認
-- FR-42：`/add_transaction`／`/backfill_transaction`／`/my_transactions` 完整 CRUD；備註套用個資遮蔽
+- FR-41／FR-41a：「💰 設定預算」（`finance:budget`）設定全局預設；`budget_overrides` 支援特殊月份覆蓋，改動已有值時先反問確認。2026-08-18（批次5）決定：覆蓋確認改成 ✅ 確認覆蓋／❌ 取消按鈕（`finance:budget_confirm_save`／`finance:budget_override_confirm_save`），不再是自由文字 LLM CONFIRM/CANCEL；套用範圍（全部月份／某幾個月）與月份清單本身仍是自由文字輸入
+- FR-42：「➕ 新增記帳」／「🕐 補記記帳」／「📋 我的記帳紀錄」（`finance:add`／`finance:backfill`／`finance:list`）完整 CRUD；備註套用個資遮蔽。2026-08-18（批次5）決定：新增/補記流程改為摘要（類型／分類／金額／備註／日期）→ 二次確認按鈕（`finance:confirm_save`）才真正寫入，取代原本反問完備註直接寫入；查詢清單改為按鈕式編輯（`finance:edit:<id>`）／刪除（`finance:delete:<id>`，附二次確認），取代原本「輸入編號→LLM 分類更新或刪除→LLM CONFIRM/CANCEL」三段式文字流程
 - FR-43：50% 門檻只在每月 15 日前檢查、80% 門檻整月都檢查，各自每月最多推播一次
-- FR-44：`/my_finance_summary` 文字摘要（本月支出/收入、預算使用率、分類佔比、跟上月比較）
+- FR-44：「📊 我的記帳摘要」（`finance:summary`）文字摘要（本月支出/收入、預算使用率、分類佔比、跟上月比較）
 - FR-44a：月底 21:00 自動推播月報（僅推給有生效預算或當月有交易的使用者）
 - FR-42a：每日 23:00 記帳提醒（有預算且今天未記錄支出才推播）
-- FR-41b（2026-08-17 新增，批次3；2026-08-17 補充 Calendar 同步）：記帳目標——「儲蓄／淨結餘目標」，入口為指令觸發詞 `/finance_goal`（設定記帳目標）／`/my_finance_goals`（我的記帳目標），因記帳模組目前仍是純指令入口、沒有按鈕子選單，目標流程沿用既有指令觸發慣例（不比照體態/運動/飲食走按鈕子選單）；目標值透過方案A（`goal_parser.parse_goal_input()`）解析淨結餘金額（新台幣），解析成功時 `target_value` 為目標淨結餘變化金額、`baseline_value` 固定為 0；達成判斷：每次記帳寫入後，檢查「目標建立日期之後的收入總額－支出總額」是否 ≥ `target_value`，達成時比照 FR-45 回覆恭喜文字；抽不出結構化數值時退化為純文字目標，只能刪除結束。新增流程且有期限時，比照 FR-45（體態目標）多問一輪「要不要同步到 Google 家庭行事曆」，確認後建立 Calendar 事件並存回 `google_calendar_event_id`；編輯不重問。資料表為新表 `module_goals`（`module_key='finance'`，migration 0085；`sync_to_calendar`／`google_calendar_event_id` 欄位見 migration 0088），支援多筆並存、按鈕式編輯/刪除（`finance:goal:*`）
+- FR-41b（2026-08-17 新增，批次3；2026-08-17 補充 Calendar 同步；2026-08-18 批次5更新入口）：記帳目標——「儲蓄／淨結餘目標」，入口為子選單「🎯 目標」按鈕（`finance:goal`），沿用批次3既有的 `_dispatch_module_goal_callback()` 通用目標子流程，不重寫；目標值透過方案A（`goal_parser.parse_goal_input()`）解析淨結餘金額（新台幣），解析成功時 `target_value` 為目標淨結餘變化金額、`baseline_value` 固定為 0；達成判斷：每次記帳確認送出後，檢查「目標建立日期之後的收入總額－支出總額」是否 ≥ `target_value`，達成時比照 FR-45 回覆恭喜文字；抽不出結構化數值時退化為純文字目標，只能刪除結束。新增流程且有期限時，比照 FR-45（體態目標）多問一輪「要不要同步到 Google 家庭行事曆」，確認後建立 Calendar 事件並存回 `google_calendar_event_id`；編輯不重問。資料表為新表 `module_goals`（`module_key='finance'`，migration 0085；`sync_to_calendar`／`google_calendar_event_id` 欄位見 migration 0088），支援多筆並存、按鈕式編輯/刪除（`finance:goal:*`）
+- FR-6e 決策更新（2026-08-18，批次5）：日常紀錄第二層五個子項目（心情／運動／飲食／體態／記帳）至此全數接上按鈕入口與真正邏輯，不再有純文字觸發詞才能使用的子模組
 
 **實作階段**
 - Phase 2 Step 2.1：全數完成，539 個測試全過、覆蓋率 100%
+- 批次5（記帳按鈕化＋摘要確認，FR-41～FR-44，2026-08-18）：`start_finance_menu()` 子選單、新增/補記摘要→二次確認、按鈕式清單編輯/刪除、預算覆蓋確認按鈕化，移除全部舊文字觸發詞；詳見 `docs/ADR/discuss/robinson.md` 2026-08-18「批次5『💰 記帳』按鈕化＋摘要確認開工前 SDD 計畫確認」
 - 批次3（記帳目標，FR-41b，2026-08-17）：新增 `src/bot/goals.py`（`module_goals` 通用 CRUD＋達成判斷）；`commands.py` 新增 `start_module_goal_*`／`handle_module_goal_*` 系列函式；`router.py` 新增 `finance:goal:*` 分派與 `_dispatch_module_goal_callback()` 共用邏輯；`finance.handle_transaction_note_step()` 寫入交易後呼叫 `goals.check_finance_goal_achievement()`，詳見 `docs/ADR/discuss/robinson.md` 2026-08-17「批次3：六模組目標泛化＋🎯 目標追蹤新選單 實作完成」
 - 批次3 補做（記帳／收藏清單目標 Calendar 同步、飲食目標自動達成、考試成績自動達成，2026-08-17）：`module_goals` 新增 `sync_to_calendar`／`google_calendar_event_id` 欄位（migration 0088），`goals.py`／`commands.py`／`router.py` 補上 `pending_module_goal_calendar_sync` 問句與 Calendar 事件建立（比照 `body.py` 既有做法）；`body_goals` 新增 `target_direction` 欄位（migration 0089），飲食目標新增 `check_and_push_diet_goal_achievements()`（依 LLM 解析出的 MIN／MAX 方向自動判斷達成）；`certificate_goals.py` 新增 `check_score_achievement()`，記錄正式應考成績後自動跟目標分數比對。1897 個測試全過（新增 19 個），`ruff check .` 通過，詳見 `docs/ADR/discuss/robinson.md` 2026-08-17「批次3補做：不得漏做的三項功能」
 

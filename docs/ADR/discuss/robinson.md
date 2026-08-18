@@ -970,3 +970,81 @@ test_router.py` 既有兩項「query 應該還在開發中名單」斷言改寫�
 異動檔案：`src/bot/query.py`（新）、`src/bot/menu.py`、`src/bot/router.py`、
 `tests/bot/test_query.py`（新）、`tests/bot/test_menu.py`、`tests/bot/test_router.py`、
 `docs/specs/PROGRESS.md`、`docs/ADR/discuss/robinson.md`。
+
+## 2026-08-18 批次5「💰 記帳」按鈕化＋摘要確認開工前 SDD 計畫確認
+
+**狀態**：accepted
+
+**背景**：日常紀錄五個子項目（心情／運動／飲食／體態／記帳）裡，記帳是最後一個還沒改版的——
+仍是 Phase 6 之前的舊設計：純文字觸發詞進入、更新/刪除靠打字輸入編號＋LLM 分類、寫入前沒有
+摘要→二次確認關卡、預算覆蓋確認是自由文字 LLM CONFIRM/CANCEL。跟已經全面改版的心情（2c）／
+運動（2c）／飲食（2g）／體態（2h）不一致，這批要把記帳補齊同一套設計語言，取代
+`_DAILY_LOG_NOT_YET_IMPLEMENTED_KEYS` 裡最後一個項目。
+
+**討論內容**：
+1. 預算月份覆蓋確認（`pending_finance_budget_global_confirm`／`pending_finance_budget_
+   override_confirm`）：候選「維持自由文字 LLM CONFIRM/CANCEL」與「改成 ✅ 確認覆蓋／❌ 取消
+   按鈕」，後者跟記帳其餘關卡（新增/補記摘要確認、刪除確認）、以及體態/待辦等其他模組的既有
+   按鈕確認慣例一致。
+2. Telegram 端記帳的分類／類型／幣別欄位是否要跟著這次改版調整：確認 Mobile App 既有的記帳
+   分類、交易類型（支出／收入）、幣別設計已經跟 Telegram 端完全一致，這批不涉及資料模型或
+   `finance.py` 純邏輯層的異動，只動選單觸發與對話狀態機的外層。
+
+**決策**：
+- 預算覆蓋確認全面改成按鈕（`finance:budget_confirm_save`／`finance:budget_override_
+  confirm_save`），取代 `_FINANCE_BUDGET_CHANGE_CONFIRM_PROMPT` 這個 LLM CONFIRM/CANCEL
+  提示詞；套用範圍（全部月份／某幾個月）與月份清單本身仍是自由文字輸入，不做成按鈕（沒有
+  固定選項可列舉）。
+- 記帳分類／類型／幣別維持現狀，不調整 `finance.py`。
+- 新增／補記記帳全面比照體態改版：type→category→amount→note 四輪反問後，先組摘要文字（類型
+  ／分類／金額／備註／日期）＋「✅ 確認送出」／「❌ 取消」按鈕，`finance:confirm_save`
+  callback 才真正寫入，取代原本 note 步驟直接寫入的做法。
+- 「我的記帳紀錄」全面改按鈕式清單（每筆附「✏️ 編輯」`finance:edit:<id>`／「🗑 刪除」
+  `finance:delete:<id>`），取代原本「輸入編號→LLM 分類更新或刪除→LLM CONFIRM/CANCEL」三段式
+  文字流程；刪除比照 `start_body_weight_delete_confirm`／`handle_body_weight_delete`，按鈕
+  觸發時重新驗證擁有者。
+- 舊文字觸發詞（`/set_budget`「設定記帳預算」、`/add_transaction`「我要記帳」、
+  `/backfill_transaction`「我要補記帳」、`/my_transactions`「我的記帳紀錄」、
+  `/my_finance_summary`「我的記帳摘要」、`/finance_goal`「設定記帳目標」、
+  `/my_finance_goals`「我的記帳目標」）全數移除，比照體態（2h）全面改選單觸發、不提供舊指令
+  相容期的既有決策；目標入口併入子選單「🎯 目標」按鈕，沿用批次3既有的
+  `_dispatch_module_goal_callback()`，不重寫。
+
+**理由**：跟其餘四個日常紀錄子模組維持一致的設計語言，降低使用者認知負擔（同一套「摘要→
+二次確認」「按鈕式編輯/刪除」心智模型套用到所有子模組）；按鈕確認比自由文字 LLM 分類更省
+Token、更不容易誤判，風險等級（中等、可事後修正）沒有變，只是把「怎麼確認」從語意判斷換成
+明確點擊；日常紀錄五個子項目至此全數接上真正邏輯，`_DAILY_LOG_NOT_YET_IMPLEMENTED_KEYS`
+清空。
+
+**後果**：`menu.py` 把 `finance` 移出 `_DAILY_LOG_NOT_YET_IMPLEMENTED_KEYS`（該集合清空）；
+`commands.py` 新增 `start_finance_menu()`／`handle_transaction_confirm_save()`／
+`handle_finance_list()`／`start_transaction_edit()`／`start_transaction_delete_confirm()`／
+`handle_transaction_delete()`／`handle_finance_confirm_text()`／`handle_finance_budget_
+global_confirm_save()`／`handle_finance_budget_override_confirm_save()`，移除
+`start_finance_list()`（改名 `handle_finance_list()` 並改按鈕式）／
+`handle_transaction_list_action_step()`／`handle_transaction_action_choice_step()`／
+`handle_transaction_delete_confirm_step()`／`handle_finance_budget_global_confirm_step()`／
+`handle_finance_budget_override_confirm_step()`（後兩個改名為 `*_confirm_save()`，簽章從
+`(llm_client, ...)` 改成 `(state_store, telegram_user_id)`，不再需要 LLM）；`router.py` 新增
+`daily_log:finance`／`finance:menu`／`finance:budget_confirm_save`／`finance:budget_
+override_confirm_save`／`finance:add`／`finance:backfill`／`finance:confirm_save`／
+`finance:list`／`finance:edit:<id>`／`finance:delete:<id>`／`finance:confirm_delete:<id>`／
+`finance:summary` 分派，移除 `_FINANCE_SET_BUDGET_TRIGGERS`／`_FINANCE_ADD_TRIGGERS`／
+`_FINANCE_BACKFILL_TRIGGERS`／`_MY_TRANSACTIONS_TRIGGERS`／`_FINANCE_SUMMARY_TRIGGERS`／
+`_FINANCE_GOAL_TRIGGERS`／`_MY_FINANCE_GOALS_TRIGGERS` 七組文字觸發詞常數與對應 if 區塊，
+`_FINAL_CONFIRM_FLOWS` 新增 `pending_transaction_confirm`／`finance_transaction_delete_
+confirm`／`pending_finance_budget_global_confirm`／`pending_finance_budget_override_
+confirm` 四個 flow。
+
+**執行結果（2026-08-18，程式碼完成＋測試綠燈，尚未 commit）**：沿用批次4同一套「打包整個
+repo 進雲端沙箱、安裝完整依賴、跑滿整套測試」流程（本機 `device_bash` 仍無網路，見
+`docs/ADR/debug/robinson.md`「Sandbox network limits」）。完整 `python3 -m pytest -q`：
+**1913 個測試全過**（原 1912 個 baseline，`tests/bot/test_commands.py`／`tests/bot/
+test_router.py`／`tests/bot/test_menu.py` 既有記帳相關測試改寫成按鈕/確認流程斷言，
+`tests/bot/test_goal_tracking_router.py` 三項記帳目標文字觸發詞測試改成 `finance:goal:new`
+callback 觸發，淨增 1 項新選單快照測試）；`ruff check .` 對本次異動的檔案全過（既有
+`tests/services/test_app_life_exploration.py` 的 14 項 E701/E702 格式錯誤是既有技術債，
+不在本次異動範圍內，未一併修正）。異動檔案：`src/bot/menu.py`、`src/bot/commands.py`、
+`src/bot/router.py`、`tests/bot/test_commands.py`、`tests/bot/test_router.py`、
+`tests/bot/test_menu.py`、`tests/bot/test_goal_tracking_router.py`、
+`docs/specs/SPEC.md`、`docs/specs/PROGRESS.md`、`docs/ADR/discuss/robinson.md`。

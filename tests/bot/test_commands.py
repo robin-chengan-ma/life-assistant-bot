@@ -1755,21 +1755,21 @@ def test_handle_finance_budget_scope_step_global_with_existing_asks_confirm(fake
     store = ConversationStateStore()
     store.set(1, {"flow": "pending_finance_budget_scope", "target_user_id": user_id})
 
-    reply = commands.handle_finance_budget_scope_step(fake_db, store, telegram_user_id=1, text="全部月份")
+    reply, keyboard = commands.handle_finance_budget_scope_step(fake_db, store, telegram_user_id=1, text="全部月份")
 
     assert "43000 元" in reply
+    assert keyboard["inline_keyboard"][0][0]["callback_data"] == "finance:budget_confirm_save"
     assert store.get(1) == {
         "flow": "pending_finance_budget_global_confirm", "target_user_id": user_id,
     }
 
 
-def test_handle_finance_budget_global_confirm_step_confirm_asks_amount(fake_db):
+def test_handle_finance_budget_global_confirm_save_asks_amount(fake_db):
     user_id = 42
     store = ConversationStateStore()
     store.set(1, {"flow": "pending_finance_budget_global_confirm", "target_user_id": user_id})
-    llm_client = _FakeLLMClient(response_text="CONFIRM")
 
-    reply = commands.handle_finance_budget_global_confirm_step(llm_client, store, telegram_user_id=1, text="好")
+    reply = commands.handle_finance_budget_global_confirm_save(store, telegram_user_id=1)
 
     assert "多少" in reply
     assert store.get(1) == {
@@ -1777,14 +1777,14 @@ def test_handle_finance_budget_global_confirm_step_confirm_asks_amount(fake_db):
     }
 
 
-def test_handle_finance_budget_global_confirm_step_cancel_clears_state(fake_db):
+def test_handle_finance_confirm_text_rejects_budget_global_confirm():
     store = ConversationStateStore()
     store.set(1, {"flow": "pending_finance_budget_global_confirm", "target_user_id": 42})
-    llm_client = _FakeLLMClient(response_text="CANCEL")
 
-    reply = commands.handle_finance_budget_global_confirm_step(llm_client, store, telegram_user_id=1, text="不用了")
+    reply, keyboard = commands.handle_finance_confirm_text(store, telegram_user_id=1)
 
-    assert "維持原本" in reply
+    assert "按鈕" in reply
+    assert keyboard["inline_keyboard"][0][0]["callback_data"] == "finance:menu"
     assert store.get(1) is None
 
 
@@ -1833,24 +1833,24 @@ def test_handle_finance_budget_months_step_with_conflict_asks_confirm(fake_db, m
     store = ConversationStateStore()
     store.set(1, {"flow": "pending_finance_budget_months", "target_user_id": 42})
 
-    reply = commands.handle_finance_budget_months_step(fake_db, store, telegram_user_id=1, text="8,9")
+    reply, keyboard = commands.handle_finance_budget_months_step(fake_db, store, telegram_user_id=1, text="8,9")
 
     assert "8月：43000 元" in reply
+    assert keyboard["inline_keyboard"][0][0]["callback_data"] == "finance:budget_override_confirm_save"
     assert store.get(1) == {
         "flow": "pending_finance_budget_override_confirm", "target_user_id": 42,
         "months": [8, 9], "year": 2026,
     }
 
 
-def test_handle_finance_budget_override_confirm_step_confirm_asks_amount(fake_db):
+def test_handle_finance_budget_override_confirm_save_asks_amount(fake_db):
     store = ConversationStateStore()
     store.set(1, {
         "flow": "pending_finance_budget_override_confirm", "target_user_id": 42,
         "months": [8, 9], "year": 2026,
     })
-    llm_client = _FakeLLMClient(response_text="CONFIRM")
 
-    reply = commands.handle_finance_budget_override_confirm_step(llm_client, store, telegram_user_id=1, text="好")
+    reply = commands.handle_finance_budget_override_confirm_save(store, telegram_user_id=1)
 
     assert "多少金額" in reply
     assert store.get(1) == {
@@ -1859,17 +1859,17 @@ def test_handle_finance_budget_override_confirm_step_confirm_asks_amount(fake_db
     }
 
 
-def test_handle_finance_budget_override_confirm_step_cancel_clears_state(fake_db):
+def test_handle_finance_confirm_text_rejects_budget_override_confirm():
     store = ConversationStateStore()
     store.set(1, {
         "flow": "pending_finance_budget_override_confirm", "target_user_id": 42,
         "months": [8, 9], "year": 2026,
     })
-    llm_client = _FakeLLMClient(response_text="CANCEL")
 
-    reply = commands.handle_finance_budget_override_confirm_step(llm_client, store, telegram_user_id=1, text="算了")
+    reply, keyboard = commands.handle_finance_confirm_text(store, telegram_user_id=1)
 
-    assert "維持原本" in reply
+    assert "按鈕" in reply
+    assert keyboard["inline_keyboard"][0][0]["callback_data"] == "finance:menu"
     assert store.get(1) is None
 
 
@@ -2052,7 +2052,7 @@ def test_handle_transaction_amount_step_invalid_reprompts(fake_db):
     assert store.get(1) == original_state
 
 
-def test_handle_transaction_note_step_creates_transaction(fake_db):
+def test_handle_transaction_note_step_asks_confirm_without_writing(fake_db):
     store = ConversationStateStore()
     store.set(
         1,
@@ -2067,15 +2067,14 @@ def test_handle_transaction_note_step_creates_transaction(fake_db):
         },
     )
 
-    reply = commands.handle_transaction_note_step(fake_db, store, telegram_user_id=1, text="午餐")
+    reply, keyboard = commands.handle_transaction_note_step(store, telegram_user_id=1, text="午餐")
 
-    assert reply == "已經幫你記錄好了！"
-    assert store.get(1) is None
-    rows = fake_db.select("transactions")
-    assert len(rows) == 1
-    assert rows[0]["note"] == "午餐"
-    assert rows[0]["transaction_date"] == date(2026, 8, 4)
-    assert rows[0]["amount"] == 120.0
+    assert "請確認以下內容" in reply
+    assert "午餐" in reply
+    assert keyboard["inline_keyboard"][0][0]["callback_data"] == "finance:confirm_save"
+    assert store.get(1)["flow"] == "pending_transaction_confirm"
+    assert store.get(1)["note"] == "午餐"
+    assert fake_db.select("transactions") == []  # 確認前不寫入
 
 
 def test_handle_transaction_note_step_skips_note_on_exit_phrase(fake_db):
@@ -2093,13 +2092,12 @@ def test_handle_transaction_note_step_skips_note_on_exit_phrase(fake_db):
         },
     )
 
-    commands.handle_transaction_note_step(fake_db, store, telegram_user_id=1, text="沒有")
+    commands.handle_transaction_note_step(store, telegram_user_id=1, text="沒有")
 
-    rows = fake_db.select("transactions")
-    assert rows[0]["note"] is None
+    assert store.get(1)["note"] is None
 
 
-def test_handle_transaction_note_step_masks_pii_and_adds_reminder(fake_db):
+def test_handle_transaction_note_step_masks_pii_and_confirm_save_adds_reminder(fake_db):
     store = ConversationStateStore()
     store.set(
         1,
@@ -2114,14 +2112,44 @@ def test_handle_transaction_note_step_masks_pii_and_adds_reminder(fake_db):
         },
     )
 
-    reply = commands.handle_transaction_note_step(fake_db, store, telegram_user_id=1, text="我的手機是 0912345678")
+    commands.handle_transaction_note_step(store, telegram_user_id=1, text="我的手機是 0912345678")
+    reply, _ = commands.handle_transaction_confirm_save(fake_db, store, telegram_user_id=1)
 
     assert "提醒" in reply
     rows = fake_db.select("transactions")
     assert rows[0]["note"] == "我的手機是 [已遮蔽個資]"
 
 
-def test_handle_transaction_note_step_edit_mode_updates_existing_row(fake_db):
+def test_handle_transaction_confirm_save_creates_transaction(fake_db):
+    store = ConversationStateStore()
+    store.set(
+        1,
+        {
+            "flow": "pending_transaction_confirm",
+            "target_user_id": 42,
+            "transaction_date": date(2026, 8, 4),
+            "transaction_id": None,
+            "transaction_type": "expense",
+            "category": "餐飲",
+            "amount": 120.0,
+            "note": "午餐",
+            "pii_detected": False,
+        },
+    )
+
+    reply, keyboard = commands.handle_transaction_confirm_save(fake_db, store, telegram_user_id=1)
+
+    assert reply.startswith("已經幫你記錄好了！")
+    assert keyboard["inline_keyboard"][0][0]["callback_data"] == "finance:menu"
+    assert store.get(1) is None
+    rows = fake_db.select("transactions")
+    assert len(rows) == 1
+    assert rows[0]["note"] == "午餐"
+    assert rows[0]["transaction_date"] == date(2026, 8, 4)
+    assert rows[0]["amount"] == 120.0
+
+
+def test_handle_transaction_confirm_save_edit_mode_updates_existing_row(fake_db):
     transaction_id = commands.finance.create_transaction(
         fake_db, 42, "expense", "餐飲", 100.0, "原本備註", date(2026, 8, 1)
     )
@@ -2129,17 +2157,19 @@ def test_handle_transaction_note_step_edit_mode_updates_existing_row(fake_db):
     store.set(
         1,
         {
-            "flow": "pending_transaction_note",
+            "flow": "pending_transaction_confirm",
             "target_user_id": 42,
             "transaction_date": date(2026, 8, 1),
             "transaction_id": transaction_id,
             "transaction_type": "expense",
             "category": "交通",
             "amount": 50.0,
+            "note": "改過的備註",
+            "pii_detected": False,
         },
     )
 
-    commands.handle_transaction_note_step(fake_db, store, telegram_user_id=1, text="改過的備註")
+    commands.handle_transaction_confirm_save(fake_db, store, telegram_user_id=1)
 
     rows = fake_db.select("transactions")
     assert len(rows) == 1  # 沒有多新增一筆
@@ -2148,6 +2178,17 @@ def test_handle_transaction_note_step_edit_mode_updates_existing_row(fake_db):
     assert rows[0]["amount"] == 50.0
     assert rows[0]["note"] == "改過的備註"
     assert rows[0]["transaction_date"] == date(2026, 8, 1)  # 沿用原本的日期
+
+
+def test_handle_finance_confirm_text_rejects_transaction_confirm():
+    store = ConversationStateStore()
+    store.set(1, {"flow": "pending_transaction_confirm", "target_user_id": 42})
+
+    reply, keyboard = commands.handle_finance_confirm_text(store, telegram_user_id=1)
+
+    assert "按鈕" in reply
+    assert keyboard["inline_keyboard"][0][0]["callback_data"] == "finance:menu"
+    assert store.get(1) is None
 
 
 def test_start_finance_backfill_asks_which_day():
@@ -2225,63 +2266,30 @@ def test_handle_transaction_backfill_date_step_rejects_future_date(fake_db, monk
     assert store.get(1) == original_state
 
 
-def test_start_finance_list_shows_entries_and_sets_state(fake_db):
+def test_handle_finance_list_shows_entries_with_edit_delete_buttons(fake_db):
     transaction_id = commands.finance.create_transaction(fake_db, 42, "expense", "餐飲", 120, None, date(2026, 8, 4))
-    store = ConversationStateStore()
 
-    reply = commands.start_finance_list(fake_db, store, telegram_user_id=1, user_id=42)
+    reply, keyboard = commands.handle_finance_list(fake_db, user_id=42)
 
     assert "2026/08/04" in reply
-    assert "更新或刪除" in reply
-    assert store.get(1) == {"flow": "pending_transaction_list_action", "target_user_id": 42, "transaction_ids": [transaction_id]}
+    buttons = keyboard["inline_keyboard"][0]
+    assert buttons[0]["callback_data"] == f"finance:edit:{transaction_id}"
+    assert buttons[1]["callback_data"] == f"finance:delete:{transaction_id}"
+    assert keyboard["inline_keyboard"][-1][0]["callback_data"] == "finance:menu"
 
 
-def test_start_finance_list_empty_does_not_set_state(fake_db):
-    store = ConversationStateStore()
-
-    reply = commands.start_finance_list(fake_db, store, telegram_user_id=1, user_id=42)
+def test_handle_finance_list_empty_shows_back_button(fake_db):
+    reply, keyboard = commands.handle_finance_list(fake_db, user_id=42)
 
     assert reply == "目前還沒有記帳紀錄喔！"
-    assert store.get(1) is None
+    assert keyboard["inline_keyboard"][0][0]["callback_data"] == "finance:menu"
 
 
-def test_handle_transaction_list_action_step_exit_phrase_clears_state(fake_db):
-    store = ConversationStateStore()
-    store.set(1, {"flow": "pending_transaction_list_action", "target_user_id": 42, "transaction_ids": [1]})
-
-    reply = commands.handle_transaction_list_action_step(store, telegram_user_id=1, text="結束")
-
-    assert "結束" in reply
-    assert store.get(1) is None
-
-
-def test_handle_transaction_list_action_step_invalid_number_reprompts(fake_db):
-    store = ConversationStateStore()
-    store.set(1, {"flow": "pending_transaction_list_action", "target_user_id": 42, "transaction_ids": [1, 2]})
-
-    reply = commands.handle_transaction_list_action_step(store, telegram_user_id=1, text="9")
-
-    assert "1～2" in reply
-    assert store.get(1)["flow"] == "pending_transaction_list_action"
-
-
-def test_handle_transaction_list_action_step_valid_number_asks_update_or_delete(fake_db):
-    store = ConversationStateStore()
-    store.set(1, {"flow": "pending_transaction_list_action", "target_user_id": 42, "transaction_ids": [11, 22]})
-
-    reply = commands.handle_transaction_list_action_step(store, telegram_user_id=1, text="2")
-
-    assert "更新" in reply and "刪除" in reply
-    assert store.get(1) == {"flow": "pending_transaction_action_choice", "target_user_id": 42, "transaction_id": 22}
-
-
-def test_handle_transaction_action_choice_step_update_reuses_transaction_date(fake_db):
+def test_start_transaction_edit_reuses_transaction_date(fake_db):
     transaction_id = commands.finance.create_transaction(fake_db, 42, "expense", "餐飲", 100, None, date(2026, 7, 20))
     store = ConversationStateStore()
-    store.set(1, {"flow": "pending_transaction_action_choice", "target_user_id": 42, "transaction_id": transaction_id})
-    llm_client = _FakeLLMClient(response_text="UPDATE")
 
-    reply = commands.handle_transaction_action_choice_step(fake_db, llm_client, store, telegram_user_id=1, text="我要改內容")
+    reply = commands.start_transaction_edit(fake_db, store, telegram_user_id=1, user_id=42, transaction_id=transaction_id)
 
     assert "重新選一次交易類型" in reply
     assert store.get(1) == {
@@ -2292,65 +2300,70 @@ def test_handle_transaction_action_choice_step_update_reuses_transaction_date(fa
     }
 
 
-def test_handle_transaction_action_choice_step_delete_asks_confirm(fake_db):
-    transaction_id = commands.finance.create_transaction(fake_db, 42, "expense", "餐飲", 100, None, date(2026, 8, 1))
+def test_start_transaction_edit_rejects_other_users_row(fake_db):
+    transaction_id = commands.finance.create_transaction(fake_db, 42, "expense", "餐飲", 100, None, date(2026, 7, 20))
     store = ConversationStateStore()
-    store.set(1, {"flow": "pending_transaction_action_choice", "target_user_id": 42, "transaction_id": transaction_id})
-    llm_client = _FakeLLMClient(response_text="DELETE")
 
-    reply = commands.handle_transaction_action_choice_step(fake_db, llm_client, store, telegram_user_id=1, text="刪掉")
+    reply = commands.start_transaction_edit(fake_db, store, telegram_user_id=1, user_id=999, transaction_id=transaction_id)
 
-    assert "沒辦法復原" in reply
-    assert store.get(1) == {"flow": "pending_transaction_delete_confirm", "target_user_id": 42, "transaction_id": transaction_id}
-
-
-def test_handle_transaction_action_choice_step_other_clears_state(fake_db):
-    transaction_id = commands.finance.create_transaction(fake_db, 42, "expense", "餐飲", 100, None, date(2026, 8, 1))
-    store = ConversationStateStore()
-    store.set(1, {"flow": "pending_transaction_action_choice", "target_user_id": 42, "transaction_id": transaction_id})
-    llm_client = _FakeLLMClient(response_text="OTHER")
-
-    reply = commands.handle_transaction_action_choice_step(fake_db, llm_client, store, telegram_user_id=1, text="呃我不確定")
-
-    assert "不太確定" in reply
+    assert "找不到" in reply
     assert store.get(1) is None
 
 
-def test_handle_transaction_delete_confirm_step_confirm_deletes_row(fake_db):
+def test_start_transaction_delete_confirm_asks_confirm(fake_db):
     transaction_id = commands.finance.create_transaction(fake_db, 42, "expense", "餐飲", 100, None, date(2026, 8, 1))
     store = ConversationStateStore()
-    store.set(1, {"flow": "pending_transaction_delete_confirm", "target_user_id": 42, "transaction_id": transaction_id})
-    llm_client = _FakeLLMClient(response_text="CONFIRM")
 
-    reply = commands.handle_transaction_delete_confirm_step(fake_db, llm_client, store, telegram_user_id=1, text="對，刪掉")
+    reply, keyboard = commands.start_transaction_delete_confirm(fake_db, store, telegram_user_id=1, user_id=42, transaction_id=transaction_id)
+
+    assert "沒辦法復原" in reply
+    assert keyboard["inline_keyboard"][0][0]["callback_data"] == f"finance:confirm_delete:{transaction_id}"
+    assert store.get(1) == {"flow": "finance_transaction_delete_confirm", "transaction_id": transaction_id}
+
+
+def test_handle_finance_confirm_text_rejects_transaction_delete_confirm():
+    store = ConversationStateStore()
+    store.set(1, {"flow": "finance_transaction_delete_confirm", "transaction_id": 1})
+
+    reply, keyboard = commands.handle_finance_confirm_text(store, telegram_user_id=1)
+
+    assert "按鈕" in reply
+    assert keyboard["inline_keyboard"][0][0]["callback_data"] == "finance:menu"
+    assert store.get(1) is None
+
+
+def test_handle_transaction_delete_removes_row(fake_db):
+    transaction_id = commands.finance.create_transaction(fake_db, 42, "expense", "餐飲", 100, None, date(2026, 8, 1))
+    store = ConversationStateStore()
+    store.set(1, {"flow": "finance_transaction_delete_confirm", "transaction_id": transaction_id})
+
+    reply = commands.handle_transaction_delete(fake_db, store, telegram_user_id=1, user_id=42, transaction_id=transaction_id)
 
     assert "已經刪除" in reply
     assert store.get(1) is None
     assert fake_db.select("transactions", where="id = %s", params=(transaction_id,), fetch_one=True) is None
 
 
-def test_handle_transaction_delete_confirm_step_cancel_keeps_row(fake_db):
+def test_handle_transaction_delete_rejects_other_users_row(fake_db):
     transaction_id = commands.finance.create_transaction(fake_db, 42, "expense", "餐飲", 100, None, date(2026, 8, 1))
     store = ConversationStateStore()
-    store.set(1, {"flow": "pending_transaction_delete_confirm", "target_user_id": 42, "transaction_id": transaction_id})
-    llm_client = _FakeLLMClient(response_text="CANCEL")
 
-    reply = commands.handle_transaction_delete_confirm_step(fake_db, llm_client, store, telegram_user_id=1, text="不要好了")
+    reply = commands.handle_transaction_delete(fake_db, store, telegram_user_id=1, user_id=999, transaction_id=transaction_id)
 
-    assert "保留" in reply
-    assert store.get(1) is None
+    assert "找不到" in reply
     assert fake_db.select("transactions", where="id = %s", params=(transaction_id,), fetch_one=True) is not None
 
 
-def test_handle_finance_summary_returns_text(fake_db, monkeypatch):
+def test_handle_finance_summary_returns_text_with_back_button(fake_db, monkeypatch):
     monkeypatch.setattr(commands, "_now", lambda: commands.datetime(2026, 8, 4, 9, 0, tzinfo=commands._TAIWAN_TZ))
     user_id = fake_db.insert("users", {"telegram_user_id": 1, "role": "爸爸", "is_owner": False})
     commands.finance.create_transaction(fake_db, user_id, "expense", "餐飲", 100, None, date(2026, 8, 4))
 
-    reply = commands.handle_finance_summary(fake_db, user_id)
+    reply, keyboard = commands.handle_finance_summary(fake_db, user_id)
 
     assert "2026/8 記帳摘要" in reply
     assert "支出總計：100 元" in reply
+    assert keyboard["inline_keyboard"][0][0]["callback_data"] == "finance:menu"
 
 
 # --- 設定家人生日（FR-53，Step 2.3）---
