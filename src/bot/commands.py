@@ -1,6 +1,6 @@
 """內建指令與對話式設定流程（對應 docs/specs/platform-auth/SPEC.md FR-4～FR-6、
 docs/specs/feature-toggles/SPEC.md FR-1～FR-2、docs/specs/chat-core/SPEC.md ADR-4、FR-10～FR-12、
-docs/specs/robinson/SPEC.md FR-20、FR-31、FR-31a、FR-32、FR-41～FR-44、FR-41a、FR-42a、FR-45～FR-48、
+docs/specs/robinson/SPEC.md FR-20、FR-31、FR-31a、FR-32、FR-41～FR-44、FR-41a、FR-45～FR-48、
 FR-49、FR-50、FR-60～FR-63）。"""
 import logging
 from datetime import date, datetime, timedelta, timezone
@@ -1602,7 +1602,7 @@ def handle_complaint_content_step(
 # 頻率，見 `main.py`）、FR-44 文字摘要查詢，三者都不需要 LLM；FR-42 的補記日期解析才需要 LLM
 # （跟飲食/待辦一致，純固定選項/按鈕的步驟不呼叫 LLM）。
 #
-# 2026-08-04 擴充（Robin 提出記帳模組使用回饋，見 robinson SPEC.md FR-41a/FR-42a）：
+# 2026-08-04 擴充（Robin 提出記帳模組使用回饋，見 robinson SPEC.md FR-41a）：
 # - 設定預算改成多輪：pending_finance_budget_scope（全部月份／某幾個月，仍為自由文字）
 #   → 選全部月份：若全局預設已有舊值 → pending_finance_budget_global_confirm 反問確認
 #   → 選某幾個月：pending_finance_budget_months 問月份 → 若選定月份有舊覆蓋值 →
@@ -1611,8 +1611,6 @@ def handle_complaint_content_step(
 #   按鈕（`finance:budget_confirm_save`／`finance:budget_override_confirm_save`），跟記帳其餘
 #   摘要確認關卡的設計語言一致；scope／months 本身仍是自由文字輸入（範圍/月份沒有固定選項，
 #   不適合做成按鈕）。
-# - FR-42a 每日 23:00 記帳提醒：`finance.check_and_push_finance_reminders()`，同樣借用 `/healthz`
-#   頻率，不需要對話狀態機，也不需要 LLM。
 # ---------------------------------------------------------------------------
 
 _FINANCE_BACKFILL_DATE_PARSE_PROMPT = (

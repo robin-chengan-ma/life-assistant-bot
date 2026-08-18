@@ -16,7 +16,7 @@
   UI 精緻化留待之後視需要再談，屬於刻意簡化）。
 """
 import logging
-from datetime import date, datetime
+from datetime import date
 from zoneinfo import ZoneInfo
 
 from src.services.goal_important_day_sync import sync_module_goal
@@ -24,7 +24,6 @@ from submodules.cloudsql.client import CloudSQLClient
 
 _logger = logging.getLogger(__name__)
 _TAIWAN_TZ = ZoneInfo("Asia/Taipei")
-_DEADLINE_REMINDER_DAYS_BEFORE = 7
 
 MODULE_LABELS: dict[str, str] = {"finance": "記帳", "collections": "收藏清單"}
 
@@ -214,35 +213,3 @@ def compute_collections_baseline(db: CloudSQLClient, user_id: int) -> int:
     return db.execute_query(
         "SELECT COUNT(*) AS total FROM collection_items WHERE user_id = %s AND status = 'visited'", (user_id,)
     )[0]["total"]
-
-
-# ---------------------------------------------------------------------------
-# 期限將近提醒（借用 /healthz 頻率，比照 body.check_and_push_goal_deadline_reminders）
-# ---------------------------------------------------------------------------
-
-
-def check_and_push_goal_deadline_reminders(db: CloudSQLClient, telegram_client, now: datetime | None = None) -> None:
-    """`module_goals` 版本的期限將近提醒（每個目標最多推播一次，去重欄位
-    `deadline_reminder_sent`），邏輯完全比照 `body.check_and_push_goal_deadline_reminders()`。"""
-    now = now or datetime.now(_TAIWAN_TZ)
-    today = now.astimezone(_TAIWAN_TZ).date()
-    goals = db.select("module_goals", where="status = %s AND target_date IS NOT NULL", params=("active",))
-    for goal in goals:
-        if goal.get("deadline_reminder_sent"):
-            continue
-        target_date = goal["target_date"]
-        days_left = (target_date - today).days
-        if days_left != _DEADLINE_REMINDER_DAYS_BEFORE:
-            continue
-        user = db.select("users", where="id = %s", params=(goal["user_id"],), fetch_one=True)
-        if user is None:
-            continue
-        try:
-            telegram_client.send_message(
-                user["telegram_id"],
-                f"⏰ 提醒你，{module_label(goal['module_key'])}目標「{goal['target_description']}」還有"
-                f" {_DEADLINE_REMINDER_DAYS_BEFORE} 天就到期限囉！",
-            )
-        except Exception:
-            _logger.exception("模組目標（id=%s）期限提醒推播失敗", goal["id"])
-        db.update("module_goals", {"deadline_reminder_sent": True}, where="id = %s", params=(goal["id"],))

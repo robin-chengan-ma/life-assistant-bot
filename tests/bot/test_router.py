@@ -691,10 +691,10 @@ def test_pending_save_knowledge_confirm_flow_moves_to_final_confirm_via_router(f
 
 
 def test_todo_menu_key_not_in_not_yet_implemented_set():
-    """2f 應該把 todo 從 2a 留下的「開發中」名單移除；query 在批次4也移除，schedule 維持不變。"""
+    """已完成的待辦、查詢與排程設定都不得留在「開發中」名單。"""
     assert not menu.is_not_yet_implemented("todo")
     assert not menu.is_not_yet_implemented("query")
-    assert menu.is_not_yet_implemented("schedule")
+    assert not menu.is_not_yet_implemented("schedule")
 
 
 def test_todo_submenu_shows_list_and_add_buttons(fake_db, monkeypatch):
@@ -2438,14 +2438,30 @@ def test_error_resolution_trigger_ignored_for_non_owner(fake_db, monkeypatch):
 def test_important_days_menu_key_not_in_not_yet_implemented_set():
     """2b 應該把 important_days 從 2a 留下的「開發中」名單移除；daily_log 之後在 2c 也移除，
     collections 在 2d 也移除，achievements 在 2e 也移除，todo 在 2f 也移除，query 在批次4也移除，
-    schedule 維持不變。"""
+    schedule 本批也接上真正邏輯。"""
     assert not menu.is_not_yet_implemented("important_days")
     assert not menu.is_not_yet_implemented("daily_log")
     assert not menu.is_not_yet_implemented("collections")
     assert not menu.is_not_yet_implemented("achievements")
     assert not menu.is_not_yet_implemented("todo")
     assert not menu.is_not_yet_implemented("query")
-    assert menu.is_not_yet_implemented("schedule")
+    assert not menu.is_not_yet_implemented("schedule")
+
+
+def test_schedule_menu_is_implemented():
+    assert not menu.is_not_yet_implemented("schedule")
+
+
+def test_disabled_owner_feature_keeps_menu_entry_but_blocks_opening(fake_db, monkeypatch):
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
+    fake_db.insert("users", {"id": 1, "telegram_user_id": ROBIN_ID, "is_owner": True})
+    fake_db.insert("feature_toggles", {"user_id": 1, "feature_key": "job_search", "is_enabled": False})
+    store = ConversationStateStore()
+
+    reply, keyboard = router.handle_callback_query(fake_db, store, ROBIN_ID, "menu:job_search")
+
+    assert reply == "若要使用求職設定功能，請至功能開關與排程設定打開！"
+    assert keyboard["inline_keyboard"][0][0]["callback_data"] == "menu:schedule"
 
 
 def test_important_days_submenu_shows_list_and_add_buttons(fake_db, monkeypatch):

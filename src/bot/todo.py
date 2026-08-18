@@ -140,6 +140,9 @@ def check_and_push_reminders(db: CloudSQLClient, telegram_client, now: datetime 
         user = db.select("users", where="id = %s", params=(item["user_id"],), fetch_one=True)
         if user is None or user.get("telegram_user_id") is None:
             continue
+        from src.bot.schedule_settings import is_notification_enabled
+        if not is_notification_enabled(db, user["id"], "todo"):
+            continue
         start_at = item.get("start_at")
         due_local = item["due_at"].astimezone(_TAIWAN_TZ)
         if start_at is None:
@@ -194,6 +197,9 @@ def check_and_push_daily_digest(db: CloudSQLClient, telegram_client, now: dateti
     for user_id, items in by_user_id.items():
         user = db.select("users", where="id = %s", params=(user_id,), fetch_one=True)
         if user is None or user.get("telegram_user_id") is None:
+            continue
+        from src.bot.schedule_settings import is_notification_enabled
+        if not is_notification_enabled(db, user_id, "todo"):
             continue
         lines = ["📋 早安，這是你今天的待辦事項：", ""]
         for item in sorted(items, key=lambda row: row["due_at"]):

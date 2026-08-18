@@ -23,7 +23,7 @@ updated: 2026-08-18
 > Render 自動部署套用（實際套用時間以資料庫 `schema_migrations` 追蹤表為準）。
 >
 > 本文件多數章節涵蓋到 migration `0061`（`system_error_reports`）；後續異動依功能逐步補登，
-> 考試設定與求職設定已涵蓋至 `0091`。其他 `0062` 之後的異動見 `src/migrations/` 與 `docs/specs/SPEC.md`
+> 考試設定、求職設定與通知接收設定已涵蓋至 `0093`。其他 `0062` 之後的異動見 `src/migrations/` 與 `docs/specs/SPEC.md`
 > 對應功能區塊掌握最新範圍。CREATE TABLE 語法只保留欄位定義本身，`COMMENT ON` 逐欄註解請直接看
 > 對應 migration 檔案，不在此重複。
 
@@ -95,7 +95,7 @@ CREATE TABLE users (
 
 - `telegram_user_id` 允許 NULL：家人設定通關密碼當下就先建立記錄，綁定成功才補上；Postgres `UNIQUE` 允許多筆 NULL 並存
 - `is_owner` 由程式依 `telegram_user_id` 是否等於 `ROBIN_TELEGRAM_TOKEN` 判斷寫入
-- 後續各模組陸續在此表新增個人化設定欄位，皆以「新增可選欄位、不動既有結構」為原則；記帳（monthly_budget／三個去重欄位）對應 FR-41～FR-44a，體態（height_cm／waist_cm）對應 FR-46，生日對應 FR-53，TOEIC（toeic_weekly_question_count／toeic_pipeline_last_run_on）對應 Step 3.2，證照作答提醒／YouTube 週推播去重對應 FR-28／FR-59a，求職五個履歷欄位對應 FR-36；逐欄 `COMMENT ON` 與核准脈絡見對應 migration 檔案
+- 後續各模組陸續在此表新增個人化設定欄位，皆以「新增可選欄位、不動既有結構」為原則；記帳（monthly_budget／三個去重欄位）對應 FR-41～FR-44a，體態（height_cm／waist_cm）對應 FR-46，生日對應 FR-53，TOEIC（toeic_weekly_question_count／toeic_pipeline_last_run_on）對應 Step 3.2，YouTube 週推播去重對應 FR-59a，求職五個履歷欄位對應 FR-36；舊版證照作答提醒去重欄位為向前相容保留、現行流程已不使用；逐欄 `COMMENT ON` 與核准脈絡見對應 migration 檔案
 - **2026-08-15（0083，Phase 6 第一批，FR-4a／FR-4d）**：`role` 欄位過去混用「Robin 標記」與「家人稱謂」兩種語意，新增 `nickname`／`family_title` 分開保存，`role` 保留不刪除（向前相容，尚未有 DROP 排程）；新增 `is_active` 供 Owner 停用／恢復使用者，預設 `TRUE`，停用時程式一併清空 `refresh_token_hash`／`refresh_token_expires_at`（沿用 0062 既有欄位）撤銷 Mobile 存取
 
 ```sql
@@ -195,6 +195,31 @@ CREATE TABLE feature_toggles (
 );
 ```
 `src/migrations/0005_create_feature_toggles_table.sql`（建表）、`0034_split_skill_growth_toggle.sql`（2026-08-07 拆分）
+
+## 通知接收設定
+
+| 資料表 | 狀態 | 對應 FR | 說明 |
+| --- | --- | --- | --- |
+| `notification_preferences` | 已建立／待部署套用 | FR-6f～FR-6g／FR-20a | 每位使用者、每種通知的接收開關與可選推播小時；關閉通知不停止來源功能或背景工作 |
+
+```sql
+CREATE TABLE notification_preferences (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    notification_key TEXT NOT NULL CHECK (notification_key IN (
+        'todo', 'important_day', 'budget_alert', 'monthly_report',
+        'tech_digest', 'youtube', 'job_search', 'exam_quiz'
+    )),
+    is_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    notification_hour SMALLINT CHECK (notification_hour BETWEEN 0 AND 23),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (user_id, notification_key)
+);
+CREATE INDEX idx_notification_preferences_user_id ON notification_preferences (user_id);
+```
+
+Migration：`0093_create_notification_preferences.sql`。`updated_at` 由資料庫 Trigger 維護；查無資料時應用層預設為接收，避免升級後意外停止既有通知。
 
 - `feature_key` 用 CHECK 鎖定模組英文代號；`UNIQUE (user_id, feature_key)` 確保每人每功能一筆
 - 新使用者綁定成功時由程式邏輯一次補齊全部預設值（`is_enabled=TRUE`），非 schema 責任
@@ -555,7 +580,7 @@ CREATE TABLE important_notifications_log (
 | `exam_official_scores` | 已建立／待擴充 | FR-30／FR-30b | 正式應考成績，僅新增與查詢；`0091` 新增選填補充內容 |
 | `certificate_daily_settings` | 已建立／待擴充 | FR-26／FR-30a | 每日出題數量與新題／複習比例；`0091` 新增 TOEIC 三軌固定題數 |
 | `certificate_daily_schedule_overrides` | 已建立／待擴充 | FR-26／FR-30a | 日期區間覆蓋；`0091` 新增 TOEIC 固定題數與不可重疊約束 |
-| `certificate_daily_assignments` | 已建立 | FR-27、FR-28 | 每天實際推播的題目記錄 |
+| `certificate_daily_assignments` | 已建立 | FR-27、FR-28 | 每天實際指派的題目記錄；關閉通知時仍指派、但不推播 |
 
 <details>
 <summary>SQL 與設計理由</summary>

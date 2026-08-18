@@ -1,8 +1,8 @@
 """證照題庫作答與批改（對應 docs/specs/robinson/SPEC.md FR-27、FR-28，Step 3.3）。
 
 負責：找出「目前還可以作答的題目」、組出題目呈現內容（依 `certificate_question_id`／
-`vocab_question_id` 決定從軌道一/軌道二哪張題庫表讀）、批改 A/B/C/D 並寫入 `answer_logs`、
-台灣時間 20:00 的作答提醒推播。不處理 Telegram 對話狀態機（單題循環的多輪反問），那是
+`vocab_question_id` 決定從軌道一/軌道二哪張題庫表讀）、批改 A/B/C/D 並寫入 `answer_logs`。
+不處理 Telegram 對話狀態機（單題循環的多輪反問），那是
 `src/bot/commands.py` 的責任，這裡保持純粹的資料操作與計算，方便獨立測試。
 
 **跨日晚補答（見 SPEC.md FR-28、ADR-20 決策 4）**：23:00 不主動通知（靜默視為跳過），但這不是
@@ -21,21 +21,16 @@ log，不讓整個作答流程卡死在一筆有問題的資料上。軌道二�
 """
 import logging
 import re
-from datetime import date, datetime, timezone
+from datetime import date
 from zoneinfo import ZoneInfo
 
-from src.bot import toggles
 from submodules.cloudsql.client import CloudSQLClient
 
 _logger = logging.getLogger(__name__)
 
 _TAIWAN_TZ = ZoneInfo("Asia/Taipei")
-_REMINDER_HOUR = 20
-_FEATURE_KEY = "certificate"
-
 _ANSWER_LETTER_PATTERN = re.compile(r"^\(?\s*([A-Da-d])\s*[\.\)、]?")
 
-_REMINDER_MESSAGE_TEMPLATE = "🔔 主任，今天還有 {count} 題還沒作答喔，要不要現在完成？回覆「開始作答」即可。"
 ALL_DONE_MESSAGE = "🎉 今天的題目都作答完了，辛苦啦！"
 
 
@@ -190,40 +185,3 @@ def record_answer(
         "assignment_id": assignment["id"],
     }
     return db.insert("answer_logs", data)
-
-
-# --- 20:00 作答提醒 ---
-
-
-def check_and_push_answer_reminders(db: CloudSQLClient, telegram_client, now: datetime | None = None) -> None:
-    """FR-28：固定台灣時間 20:00，若還有題目沒作答，提醒一次；只在 20 點這個小時內執行，同一天
-    最多推播一次（`users.certificate_answer_reminder_sent_on` 去重，比照
-    `toeic_pipeline_last_run_on` 既有慣例）。這裡只是單純提醒，不直接發題目，使用者要回覆
-    「開始作答」才真正進入作答流程（見 `src/bot/commands.py`）。
-    """
-    now = now or datetime.now(timezone.utc)
-    now_local = now.astimezone(_TAIWAN_TZ)
-    if now_local.hour != _REMINDER_HOUR:
-        return
-
-    owner = _get_owner(db)
-    if owner is None:
-        return
-
-    if not toggles.is_feature_enabled(db, owner["id"], _FEATURE_KEY):
-        return
-
-    today = now_local.date()
-    if owner.get("certificate_answer_reminder_sent_on") == today:
-        return
-
-    pending = get_pending_assignments(db, owner["id"])
-    if not pending:
-        return
-
-    telegram_client.send_text(
-        chat_id=owner["telegram_user_id"], text=_REMINDER_MESSAGE_TEMPLATE.format(count=len(pending))
-    )
-    db.update(
-        "users", {"certificate_answer_reminder_sent_on": today}, where="id = %s", params=(owner["id"],)
-    )

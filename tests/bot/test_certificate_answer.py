@@ -1,6 +1,5 @@
 """src/bot/certificate_answer.py 的單元測試（對應 robinson SPEC.md FR-27、FR-28，Step 3.3）。"""
 from datetime import date, datetime, timezone
-from unittest.mock import MagicMock
 
 from src.bot import certificate_answer
 
@@ -249,76 +248,3 @@ def test_record_answer_writes_expected_row(fake_db):
     assert row["is_correct"] is True
     assert row["answered_on"] == date(2026, 8, 8)
     assert row["assignment_id"] == assignment_id
-
-
-# --- check_and_push_answer_reminders ---
-
-
-def test_reminder_skips_outside_of_8pm_window(fake_db):
-    _seed_owner(fake_db)
-    qid = _seed_certificate_question(fake_db)
-    _seed_assignment(fake_db, certificate_question_id=qid)
-    telegram_client = MagicMock()
-
-    certificate_answer.check_and_push_answer_reminders(fake_db, telegram_client, now=_utc(2026, 8, 8, 3, 0))
-
-    telegram_client.send_text.assert_not_called()
-
-
-def test_reminder_skips_when_no_owner_bound(fake_db):
-    qid = _seed_certificate_question(fake_db)
-    _seed_assignment(fake_db, certificate_question_id=qid)
-    telegram_client = MagicMock()
-
-    certificate_answer.check_and_push_answer_reminders(fake_db, telegram_client, now=_utc(2026, 8, 8, 12, 0))
-
-    telegram_client.send_text.assert_not_called()
-
-
-def test_reminder_skips_when_feature_toggle_disabled(fake_db):
-    owner_id = _seed_owner(fake_db)
-    fake_db.insert("feature_toggles", {"user_id": owner_id, "feature_key": "certificate", "is_enabled": False})
-    qid = _seed_certificate_question(fake_db)
-    _seed_assignment(fake_db, certificate_question_id=qid)
-    telegram_client = MagicMock()
-
-    certificate_answer.check_and_push_answer_reminders(fake_db, telegram_client, now=_utc(2026, 8, 8, 12, 0))
-
-    telegram_client.send_text.assert_not_called()
-
-
-def test_reminder_skips_when_nothing_pending(fake_db):
-    _seed_owner(fake_db)
-    telegram_client = MagicMock()
-
-    certificate_answer.check_and_push_answer_reminders(fake_db, telegram_client, now=_utc(2026, 8, 8, 12, 0))
-
-    telegram_client.send_text.assert_not_called()
-
-
-def test_reminder_sends_message_with_pending_count(fake_db):
-    _seed_owner(fake_db)
-    qid1 = _seed_certificate_question(fake_db, question_number=1)
-    qid2 = _seed_certificate_question(fake_db, question_number=2)
-    _seed_assignment(fake_db, certificate_question_id=qid1)
-    _seed_assignment(fake_db, certificate_question_id=qid2)
-    telegram_client = MagicMock()
-
-    certificate_answer.check_and_push_answer_reminders(fake_db, telegram_client, now=_utc(2026, 8, 8, 12, 0))
-
-    telegram_client.send_text.assert_called_once()
-    call_kwargs = telegram_client.send_text.call_args.kwargs
-    assert call_kwargs["chat_id"] == 999
-    assert "2 題" in call_kwargs["text"]
-
-
-def test_reminder_does_not_repeat_within_same_day(fake_db):
-    _seed_owner(fake_db)
-    qid = _seed_certificate_question(fake_db)
-    _seed_assignment(fake_db, certificate_question_id=qid)
-    telegram_client = MagicMock()
-
-    certificate_answer.check_and_push_answer_reminders(fake_db, telegram_client, now=_utc(2026, 8, 8, 12, 0))
-    certificate_answer.check_and_push_answer_reminders(fake_db, telegram_client, now=_utc(2026, 8, 8, 12, 15))
-
-    telegram_client.send_text.assert_called_once()

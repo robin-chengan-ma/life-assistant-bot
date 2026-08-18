@@ -365,6 +365,10 @@ def check_and_push_daily_quiz(db: CloudSQLClient, telegram_client, now: datetime
         if not assignments or already_assigned_today:
             continue
 
+        from src.bot.schedule_settings import is_notification_enabled
+        if not is_notification_enabled(db, owner["id"], "exam_quiz"):
+            continue
+
         telegram_client.send_text(
             chat_id=owner["telegram_user_id"], text=_format_push_message(exam_type, assignments)
         )

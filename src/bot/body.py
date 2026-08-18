@@ -22,9 +22,8 @@
 ② 飲食三大營養素拆算同樣沿用 `GEMINI_API_BOT_KEY`（`estimate_diet_macros()`），理由同上：
    沒有食物資料庫，本來就只能靠 LLM 語意判斷，跟一般聊天共用額度可接受。
 ③ FR-45 預警情境：目標達成通知（體重目標在每次記體重時即時檢查；運動目標因為是「累積分鐘數」
-   需要跨多筆紀錄加總，改成借用 `/healthz` 頻率的排程檢查）、目標期限將近提醒（期限前 7 天
-   排程提醒一次，`body_goals.deadline_reminder_sent` 去重）、BMI 異常提醒（記錄體重當下就地
-   算出 BMI 附上健康提醒文字，不用排程）。
+   需要跨多筆紀錄加總，改成借用 `/healthz` 頻率的排程檢查）、BMI 異常提醒（記錄體重當下就地
+   算出 BMI 附上健康提醒文字，不用排程）。原固定「期限前 7 天」提醒已由統一重要日排程取代。
 ④ 體態目標（`body_goals`）三種子功能共用一張表，用 `goal_type` 區分；體重目標額外存
    `baseline_value`（設定當下的體重）用來判斷「要瘦」還是「要增」的方向；飲食目標因為太主觀
    （例如「飲食完美控制」），這版不做自動達成判斷，只能由使用者手動標記完成/取消，這是已知的
@@ -77,7 +76,6 @@ _GOAL_TYPE_LABEL_BY_CODE = dict(GOAL_TYPES)
 _GOAL_TYPE_CODE_BY_LABEL = {label: code for code, label in GOAL_TYPES}
 
 # FR-45 目標期限提醒：期限前幾天提醒一次（決策③）。
-_DEADLINE_REMINDER_DAYS_BEFORE = 7
 
 
 # ---------------------------------------------------------------------------
@@ -841,33 +839,3 @@ def check_and_push_diet_goal_achievements(db: CloudSQLClient, telegram_client, n
             chat_id=user["telegram_user_id"],
             text=f"🎉 恭喜你達成飲食目標「{goal['target_description']}」了！",
         )
-
-
-def check_and_push_goal_deadline_reminders(db: CloudSQLClient, telegram_client, now: datetime | None = None) -> None:
-    """FR-45 目標期限將近提醒（決策③）：適用所有有設定 `target_date` 的進行中目標，期限前
-    `_DEADLINE_REMINDER_DAYS_BEFORE`（7）天固定提醒一次，`deadline_reminder_sent` 去重。
-
-    比照 `finance.check_and_push_budget_alerts()` 的做法，借用 `/healthz` 既有的 10 分鐘 cron 頻率。
-    """
-    now = now or datetime.now(timezone.utc)
-    today_local = now.astimezone(_TAIWAN_TZ).date()
-
-    goals = db.select("body_goals", where="status = %s AND target_date IS NOT NULL", params=("active",))
-    for goal in goals:
-        if goal.get("deadline_reminder_sent"):
-            continue
-        target_date = goal["target_date"]
-        if (target_date - today_local).days != _DEADLINE_REMINDER_DAYS_BEFORE:
-            continue
-        user = db.select("users", where="id = %s", params=(goal["user_id"],), fetch_one=True)
-        if user is None or user.get("telegram_user_id") is None:
-            continue
-
-        telegram_client.send_text(
-            chat_id=user["telegram_user_id"],
-            text=(
-                f"⏰ 提醒你，體態目標「{goal['target_description']}」還有 {_DEADLINE_REMINDER_DAYS_BEFORE} "
-                f"天就到期限（{target_date:%Y/%m/%d}）囉，加油！"
-            ),
-        )
-        db.update("body_goals", {"deadline_reminder_sent": True}, where="id = %s", params=(goal["id"],))

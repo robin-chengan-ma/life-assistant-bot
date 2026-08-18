@@ -110,36 +110,12 @@ def _check_finance_alerts() -> None:
         db.close()
 
 
-def _check_finance_reminders() -> None:
-    """在 /healthz 被呼叫時順便檢查每日記帳提醒（記帳模組擴充，見 robinson SPEC.md FR-42a）：
-    台灣時間 23:00，對「這個月有生效預算、今天還沒記過支出、今天還沒推播過」的使用者各推播一次，
-    詳見 src/bot/finance.py 模組 docstring 決策⑥。
-
-    跟 `_check_finance_alerts()` 一樣包一層 try/except 且不需要 `ROBIN_TELEGRAM_TOKEN`。
-    """
-    if not (os.environ.get("DATABASE_URL") and os.environ.get("TELEGRAM_BOT_TOKEN")):
-        return
-
-    from src.bot import finance
-    from submodules.cloudsql.client import CloudSQLClient
-    from submodules.telegram.client import TelegramClient
-
-    db = CloudSQLClient()
-    try:
-        telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
-        finance.check_and_push_finance_reminders(db, telegram_client)
-    except Exception:
-        logger.exception("每日記帳提醒檢查失敗，不影響健康檢查端點本身")
-    finally:
-        db.close()
-
-
 def _check_finance_monthly_report() -> None:
     """在 /healthz 被呼叫時順便檢查月底自動月報推播（記帳模組擴充，見 robinson SPEC.md FR-44a）：
     每月最後一天台灣時間 21:00，對「這個月有生效預算或有記帳」的使用者各推播一次月報，
     詳見 src/bot/finance.py 模組 docstring 決策⑦。
 
-    跟 `_check_finance_reminders()` 一樣包一層 try/except 且不需要 `ROBIN_TELEGRAM_TOKEN`。
+    跟 `_check_finance_alerts()` 一樣包一層 try/except 且不需要 `ROBIN_TELEGRAM_TOKEN`。
     """
     if not (os.environ.get("DATABASE_URL") and os.environ.get("TELEGRAM_BOT_TOKEN")):
         return
@@ -182,30 +158,8 @@ def _check_body_goal_alerts() -> None:
             db, telegram_client, calendar_client=_build_calendar_client()
         )
         body.check_and_push_diet_goal_achievements(db, telegram_client)
-        body.check_and_push_goal_deadline_reminders(db, telegram_client)
     except Exception:
         logger.exception("體態目標預警檢查失敗，不影響健康檢查端點本身")
-    finally:
-        db.close()
-
-
-def _check_module_goal_deadline_reminders() -> None:
-    """在 /healthz 被呼叫時順便檢查記帳／收藏清單目標的期限將近提醒（批次3，見 robinson
-    SPEC.md FR-45a）：邏輯完全比照 `_check_body_goal_alerts()` 的期限提醒那段，只是改查
-    `module_goals` 表，見 `src/bot/goals.py`。"""
-    if not (os.environ.get("DATABASE_URL") and os.environ.get("TELEGRAM_BOT_TOKEN")):
-        return
-
-    from src.bot import goals
-    from submodules.cloudsql.client import CloudSQLClient
-    from submodules.telegram.client import TelegramClient
-
-    db = CloudSQLClient()
-    try:
-        telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
-        goals.check_and_push_goal_deadline_reminders(db, telegram_client)
-    except Exception:
-        logger.exception("記帳／收藏清單目標期限提醒檢查失敗，不影響健康檢查端點本身")
     finally:
         db.close()
 
@@ -285,6 +239,25 @@ def _check_important_notifications() -> None:
         )
     except Exception:
         logger.exception("重要通知檢查失敗，不影響健康檢查端點本身")
+    finally:
+        db.close()
+
+
+def _check_scheduled_important_days() -> None:
+    """統一推播自訂重要日子，以及由目標與旅遊行程同步建立的日期提醒。"""
+    if not (os.environ.get("DATABASE_URL") and os.environ.get("TELEGRAM_BOT_TOKEN")):
+        return
+
+    from src.bot import scheduled_notifications
+    from submodules.cloudsql.client import CloudSQLClient
+    from submodules.telegram.client import TelegramClient
+
+    db = CloudSQLClient()
+    try:
+        telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
+        scheduled_notifications.check_and_push_important_days(db, telegram_client)
+    except Exception:
+        logger.exception("重要日子／目標／旅遊日期提醒檢查失敗，不影響健康檢查端點本身")
     finally:
         db.close()
 
@@ -431,32 +404,6 @@ def _check_certificate_daily_quiz_push() -> None:
         db.close()
 
 
-def _check_certificate_answer_reminder() -> None:
-    """在 /healthz 被呼叫時順便檢查證照題庫 20:00 作答提醒（Step 3.3，見 robinson SPEC.md
-    FR-28、ADR-20 決策 4）：固定台灣時間 20:00，若還有題目沒作答，提醒一次（單純提醒，不直接
-    發題目），詳見 src/bot/certificate_answer.py 模組 docstring。
-
-    跟 `_check_certificate_daily_quiz_push()` 一樣只需要 `TELEGRAM_BOT_TOKEN`，不需要任何
-    Gemini/Drive 相關金鑰；收件人是查 `users.is_owner = TRUE` 動態決定，不需要
-    `ROBIN_TELEGRAM_TOKEN`。
-    """
-    if not (os.environ.get("DATABASE_URL") and os.environ.get("TELEGRAM_BOT_TOKEN")):
-        return
-
-    from src.bot import certificate_answer
-    from submodules.cloudsql.client import CloudSQLClient
-    from submodules.telegram.client import TelegramClient
-
-    db = CloudSQLClient()
-    try:
-        telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
-        certificate_answer.check_and_push_answer_reminders(db, telegram_client)
-    except Exception:
-        logger.exception("證照題庫 20:00 作答提醒檢查失敗，不影響健康檢查端點本身")
-    finally:
-        db.close()
-
-
 def _check_youtube_weekly_push() -> None:
     """在 /healthz 被呼叫時順便檢查 YouTube 技術情報週推播（Step 3.4，見 robinson SPEC.md
     FR-57～FR-59、ADR-21）：固定台灣時間週四 08:00，依 Robin 設定的各組主題呼叫 YouTube Data API
@@ -578,7 +525,7 @@ def root():
 
 
 def _run_background_checks() -> None:
-    """實際執行 `/healthz` 附掛的 16 個排程檢查（批次3新增🎯目標追蹤兩項），在背景執行緒跑，
+    """實際執行 `/healthz` 附掛的排程檢查，在背景執行緒跑，
     見 `health_check()`。
 
     **2026-08-08 追加（production 事故修復）**：這些檢查原本是在 `/healthz` 的 HTTP
@@ -596,17 +543,15 @@ def _run_background_checks() -> None:
     _check_neon_capacity()
     _check_todo_pushes()
     _check_finance_alerts()
-    _check_finance_reminders()
     _check_finance_monthly_report()
     _check_body_goal_alerts()
-    _check_module_goal_deadline_reminders()
     _check_goal_summaries()
     _check_important_notifications()
+    _check_scheduled_important_days()
     _check_skill_growth_collection()
     _check_toeic_pipeline()
     _check_skill_growth_push()
     _check_certificate_daily_quiz_push()
-    _check_certificate_answer_reminder()
     _check_youtube_weekly_push()
     _check_job_search_weekly_crawl()
 
@@ -618,8 +563,8 @@ def health_check():
     對應 FR-3 / docs/specs/robinson/SPEC.md，路由定義見 src/schema/api_schema.md。
 
     2026-08-02（Step 1.6，見 FR-21）起，陸續借用這個每 10 分鐘一次的呼叫頻率，順便觸發多項
-    排程檢查（Neon 容量、待辦推播、記帳預警/提醒/月報、體態目標預警、重要通知、技術摘要收集/
-    推播、TOEIC pipeline、證照題庫每日推播出題／20:00 作答提醒、YouTube 技術情報週推播、求職模組
+    排程檢查（Neon 容量、待辦推播、記帳預警/月報、體態目標達成、重要日通知、技術摘要收集/
+    推播、TOEIC pipeline、證照題庫每日出題、YouTube 技術情報週推播、求職模組
     週排程），實際清單見 `_run_background_checks()`。
 
     **2026-08-08 追加（production 事故修復）**：這些檢查改成丟進背景執行緒（daemon thread）

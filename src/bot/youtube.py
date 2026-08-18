@@ -366,4 +366,7 @@ def check_and_push_weekly_youtube(db: CloudSQLClient, youtube_client, llm_client
     message = format_push_message(picks)
     if message is None:
         return
+    from src.bot.schedule_settings import is_notification_enabled
+    if not is_notification_enabled(db, owner["id"], "youtube"):
+        return
     telegram_client.send_text(chat_id=owner["telegram_user_id"], text=message)

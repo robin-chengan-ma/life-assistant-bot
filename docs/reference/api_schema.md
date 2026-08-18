@@ -36,6 +36,8 @@ updated: 2026-08-18
 | --- | --- | --- | --- |
 | `GET /healthz` | 已實作，已部署上線 | FR-3（平台）／FR-21（Neon 容量監控）／FR-31a、FR-32（待辦推播） | cron-job.org 每 10 分鐘呼叫的 keep-alive 端點；順便借用同一頻率觸發 `NeonCapacityMonitor`（容量達 80% 私訊 Robin）與待辦到期標記／30 分鐘前提醒／每日 08:00 摘要，皆包 try/except 不影響本端點回應 |
 | `menu:recovered` → `recovery:*` | 已實作（`src/bot/recovery_notifications.py`） | FR-20 | Owner 先選尚未完成康復通知的事故，再勾選該次實際成功收到事故通知的家人；預覽文案與收件人後二次確認。部分失敗保留事故供重試；舊 `/recovered` 入口已移除 |
+| `menu:schedule` → `schedule:*` | 已實作（`src/bot/schedule_settings.py`） | FR-1～FR-4a／FR-6f～FR-6g | 一般使用者管理自己的通知接收；Owner 額外管理技術分享／求職設定／考試設定功能開關並唯讀查看系統工作。關閉通知不停止背景工作，關閉功能則停止對應收集、生成與推播 |
+| 統一重要日子提醒（借用 `/healthz`） | 已實作（`src/bot/scheduled_notifications.py`） | FR-20a／FR-72a／FR-74b | 每日 08:00 依 `important_days.reminder_days_before` 與通知對象推播；涵蓋自訂重要日子、所有已同步目標及旅遊行程，逐收件人去重並尊重通知開關 |
 | `錯誤ID=N 已處理：{解法}` | 已實作（`src/bot/router.py::_ERROR_RESOLUTION_PATTERN` → `src/bot/system_errors.py::update_resolution`） | FR-19j | Telegram 單行指令，直接 regex 解析（刻意用「錯誤ID=」而非「ID=」開頭，避免跟求職模組的應徵狀態更新語句撞在一起）寫入 `system_error_reports.resolution`，不走多輪對話狀態機；跟 Mobile App `PATCH /api/app/system-errors/<id>/resolution` 共用同一支 `update_resolution()` |
 
 <details>
@@ -116,7 +118,6 @@ updated: 2026-08-18
 | `/my_transactions` | 已實作（`src/bot/commands.py::start_finance_list`） | FR-42 | 列出最近 10 筆，輸入編號可更新或刪除 |
 | `/my_finance_summary` | 已實作（`src/bot/commands.py::handle_finance_summary`） | FR-44 | 單次查詢：當月支出/收入、預算使用率、分類佔比、與上月比較 |
 | FR-43 記帳預算門檻預警（借用 `/healthz` 頻率，非獨立路由） | 已實作（`src/bot/finance.py::check_and_push_budget_alerts`） | FR-43 | 50% 門檻僅每月 15 日前檢查、80% 門檻整月檢查，各自每月最多推播一次 |
-| FR-42a 每日記帳提醒（借用 `/healthz` 頻率，非獨立路由） | 已實作（`src/bot/finance.py::check_and_push_finance_reminders`） | FR-42a | 台灣時間 23:00，對「有生效預算且今天無支出紀錄」的使用者各推播一次提醒 |
 | FR-44a 月底自動月報推播（借用 `/healthz` 頻率，非獨立路由） | 已實作（`src/bot/finance.py::check_and_push_monthly_report`） | FR-44a | 每月最後一天 21:00，對「有生效預算或當月有交易」的使用者推播月度摘要 |
 
 ## 體態管理
@@ -137,7 +138,6 @@ updated: 2026-08-18
 | `/set_body_goal` | 已實作（`src/bot/commands.py::start_body_goal`） | FR-45～FR-48／FR-72a | 設定體態管理目標，先問類型；體重/運動/飲食三種目標共用 `body_goals` 表；有明確期限時預設同步至重要日子 |
 | `/my_body_goals` | 已實作（`src/bot/commands.py::start_body_goal_list`） | FR-45～FR-48 | 列出進行中目標，輸入編號可取消 |
 | FR-45 目標達成通知（體重記錄當下即時檢查／運動借用 `/healthz` 頻率排程檢查，非獨立路由） | 已實作（`src/bot/body.py::check_weight_goal_achieved`／`check_and_push_exercise_goal_achievements`） | FR-45 | 體重目標於每次記錄體重時即時判斷方向（要瘦/要增）並達成即標記；運動目標是累積分鐘數，需跨多筆紀錄加總，改借用 `/healthz` 頻率排程檢查 |
-| FR-45 目標期限前 7 天提醒（借用 `/healthz` 頻率，非獨立路由） | 已實作（`src/bot/body.py::check_and_push_goal_deadline_reminders`） | FR-45 | 適用所有有設定 `target_date` 的進行中目標，`deadline_reminder_sent` 去重，每個目標僅提醒一次 |
 | FR-45 BMI 異常提醒（記錄體重當下就地計算，非獨立路由/排程） | 已實作（`src/bot/body.py::format_bmi_note`） | FR-45 | 記錄體重時就地算出 BMI 並附衛福部國健署標準的健康提醒文字，不經排程 |
 
 ## 重要通知
@@ -166,7 +166,6 @@ updated: 2026-08-18
 | 每日技術分享收集（固定 23:00，借用 `/healthz` 頻率，非獨立路由） | 已實作（`src/bot/skill_growth.py::collect_and_store_daily_digest`） | FR-22、FR-23 | 收集 TLDR 電子報＋IThome／TechCrunch 當天新聞，各來源各自經 Gemini 產出摘要，寫入 `skill_growth_digests`（一天最多三筆，一筆一來源） |
 | 每日技術分享推播（隔天固定 08:00，借用 `/healthz` 頻率，非獨立路由） | 已實作（`src/bot/skill_growth.py::check_and_push_daily_digest`） | FR-22、FR-23 | 讀取前一晚 23:00 收集結果，拆成最多三則獨立訊息推播；任一來源失敗只記 log，三個來源皆無內容才推播固定訊息 |
 | TOEIC 每日出題推播（固定 08:00，借用 `/healthz` 頻率，非獨立路由） | 已實作（`src/bot/certificate_quiz.py::check_and_push_daily_quiz`） | FR-26 | 依當日生效的固定聽力／讀寫／單字題數（全局或日期區間覆蓋）寫入當日題目指派並推播；舊比例欄位僅作相容 fallback |
-| TOEIC 作答提醒（固定 20:00，借用 `/healthz` 頻率，非獨立路由） | 已實作（`src/bot/certificate_answer.py::check_and_push_answer_reminders`） | FR-28 | 若還有題目沒作答，提醒一次；23:00 靜默視為跳過（不主動通知，但仍可跨日晚補答） |
 
 ## YouTube 技術情報模組
 

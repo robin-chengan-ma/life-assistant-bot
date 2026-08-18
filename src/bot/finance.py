@@ -25,8 +25,8 @@ FR-44 文字摘要組裝。不處理任何 Telegram 對話流程或 LLM 呼叫�
    `budget_overrides` 表只存「跟預設值不同」的特殊月份；查詢某年某月「實際生效」的預算時
    （`get_effective_monthly_budget()`），優先用 `budget_overrides` 裡這個月的值，沒有才
    fallback 用全局預設。這個設計選擇（而非「每個月都各自存一筆」）是因為：改全局預設不會
-   動到已經設定過的特殊月份、資料量小、查詢邏輯只多一層 fallback。FR-43 門檻預警、FR-42a
-   每日提醒都改用 `_users_with_effective_budget()` 這個共用 helper 找出「這個月有生效預算」
+   動到已經設定過的特殊月份、資料量小、查詢邏輯只多一層 fallback。FR-43 門檻預警使用
+   `_users_with_effective_budget()` 這個共用 helper 找出「這個月有生效預算」
    的使用者清單（可能來自全局預設，也可能只有這個月的覆蓋值、從未設定過全局預設）。
    使用者每次呼叫「設定記帳預算」都會先被反問要套用全部月份還是只套用某幾個月
    （`resolve_budget_scope()`／`format_budget_scope_prompt()`）；若選某幾個月，
@@ -34,15 +34,9 @@ FR-44 文字摘要組裝。不處理任何 Telegram 對話流程或 LLM 呼叫�
    一律套用「今年」，這是本次的簡化假設，尚不支援跨年設定。若選定的月份中有已經設定過覆蓋值的，
    會先組合成一則確認訊息列出舊值（`format_budget_override_confirm_prompt()`），需使用者
    明確確認才會覆蓋；全局預設同理，已有舊值時也會先確認（`format_budget_global_confirm_prompt()`）。
-⑥ FR-42a「每日記帳提醒」：每天台灣時間 23:00（`check_and_push_finance_reminders()`，
-   一樣借用 `/healthz` 的 10 分鐘 cron 頻率）檢查「這個月有生效預算」且「今天完全沒有支出紀錄」
-   且「今天還沒推播過」的使用者，推播一次記帳提醒；去重欄位是 `users.finance_reminder_sent_date`
-   （比照 `todos.daily_pushed_on`）。收入不檢查——理財預算本來就只針對支出設門檻，收入沒有
-   「每天都要記」的急迫性，跟 FR-42 交易本身仍支援「支出／收入」兩種類型記帳不衝突。
-
 2026-08-04 再追加（見 FR-44a，Robin 要求「記帳摘要請在每月底自動推一次月報」）：
 ⑦ FR-44a「月底自動月報推播」：`check_and_push_monthly_report()` 一樣借用 `/healthz` 頻率，
-   只在台灣時間 21:00（跟 FR-42a 的 23:00 錯開，不會同一小時堆兩則推播）且「今天是這個月最後
+   只在台灣時間 21:00 且「今天是這個月最後
    一天」（用「明天日期的 `day` 是不是 1」判斷，不寫死 28～31）才執行；推播對象是「這個月有生效
    預算（全局預設或當月覆蓋皆算）或這個月有任一筆記帳交易」的使用者，避免完全沒用記帳功能的
    家人收到一則全部是 0 元的空洞報告；內容直接沿用 `format_monthly_summary()` 加上月報開頭文案；
@@ -70,10 +64,7 @@ _MID_MONTH_ALERT_THRESHOLD = 0.5
 _MID_MONTH_ALERT_DAY_CUTOFF = 15
 _SEVERE_ALERT_THRESHOLD = 0.8
 
-# FR-42a 每日記帳提醒的推播時刻（台灣時間），決策⑥。
-_DAILY_REMINDER_HOUR = 23
-
-# FR-44a 月底月報推播的推播時刻（台灣時間），決策⑦；刻意跟 _DAILY_REMINDER_HOUR 錯開。
+# FR-44a 月底月報推播的推播時刻（台灣時間）。
 _MONTHLY_REPORT_HOUR = 21
 
 # FR-41a 預算套用範圍選項：全局預設 vs 只套用某幾個月，決策⑤。
@@ -317,8 +308,8 @@ def get_effective_monthly_budget(db: CloudSQLClient, user_id: int, year: int, mo
 
 
 def _users_with_effective_budget(db: CloudSQLClient, year: int, month: int) -> list[tuple[dict, float]]:
-    """回傳「這個月有生效預算」的所有使用者列與各自的生效預算金額（決策⑤），供 FR-42a 每日提醒、
-    FR-43 門檻預警共用：候選使用者可能來自全局預設（`users.monthly_budget`），也可能只有這個月的
+    """回傳「這個月有生效預算」的所有使用者列與各自的生效預算金額（決策⑤），供 FR-43
+    門檻預警使用：候選使用者可能來自全局預設（`users.monthly_budget`），也可能只有這個月的
     覆蓋值、從未設定過全局預設。"""
     users_with_default = db.select("users", where="monthly_budget IS NOT NULL")
     overrides_this_month = db.select("budget_overrides", where="year = %s AND month = %s", params=(year, month))
@@ -429,6 +420,9 @@ def check_and_push_budget_alerts(db: CloudSQLClient, telegram_client, now: datet
     for user, budget in _users_with_effective_budget(db, today_local.year, today_local.month):
         if user.get("telegram_user_id") is None:
             continue
+        from src.bot.schedule_settings import is_notification_enabled
+        if not is_notification_enabled(db, user["id"], "budget_alert"):
+            continue
         if budget <= 0:
             continue
 
@@ -464,42 +458,6 @@ def check_and_push_budget_alerts(db: CloudSQLClient, telegram_client, now: datet
             )
 
 
-def check_and_push_finance_reminders(db: CloudSQLClient, telegram_client, now: datetime | None = None) -> None:
-    """FR-42a：每日 23:00 記帳提醒（決策⑥）。「這個月有生效預算」（全局預設或當月覆蓋皆算）
-    且「今天完全沒有支出紀錄」且「今天還沒推播過」的使用者，推播一次提醒；收入不檢查。
-
-    比照 `todo.check_and_push_daily_digest()` 的做法，借用 `/healthz` 既有的 10 分鐘 cron 頻率，
-    只在台灣時間 23 點這個小時內執行，靠 `users.finance_reminder_sent_date` 避免同一天內重複推播。
-    """
-    now = now or datetime.now(timezone.utc)
-    now_local = now.astimezone(_TAIWAN_TZ)
-    if now_local.hour != _DAILY_REMINDER_HOUR:
-        return
-    today_local = now_local.date()
-
-    for user, _budget in _users_with_effective_budget(db, today_local.year, today_local.month):
-        if user.get("telegram_user_id") is None:
-            continue
-        if user.get("finance_reminder_sent_date") == today_local:
-            continue
-
-        today_expenses = db.select(
-            "transactions",
-            where="user_id = %s AND type = %s AND transaction_date = %s",
-            params=(user["id"], "expense", today_local),
-        )
-        if today_expenses:
-            continue
-
-        telegram_client.send_text(
-            chat_id=user["telegram_user_id"],
-            text="🌙 提醒你，今天好像還沒記帳喔，要不要花個一分鐘記一下今天的花費？",
-        )
-        db.update(
-            "users", {"finance_reminder_sent_date": today_local}, where="id = %s", params=(user["id"],)
-        )
-
-
 def _users_with_finance_activity(db: CloudSQLClient, year: int, month: int) -> list[dict]:
     """回傳「這個月有生效預算，或這個月有任一筆記帳交易」的使用者列（決策⑦），供 FR-44a 月報
     推播篩選對象，避免完全沒用記帳功能的家人收到一則全部是 0 元的空洞月報。"""
@@ -523,7 +481,7 @@ def check_and_push_monthly_report(db: CloudSQLClient, telegram_client, now: date
     """FR-44a：每月最後一天台灣時間 21:00 自動推播一次月報（決策⑦），內容沿用 FR-44 的
     `format_monthly_summary()`。只推給「這個月有生效預算，或這個月有任一筆記帳交易」的使用者。
 
-    比照 `check_and_push_finance_reminders()` 的做法，借用 `/healthz` 既有的 10 分鐘 cron 頻率；
+    借用 `/healthz` 既有的 10 分鐘 cron 頻率；
     「是不是月底最後一天」用「明天的日期是不是 1 號」判斷，不寫死 28～31 這種月份長度；去重欄位
     `users.finance_monthly_report_sent_month` 避免同一天內（21 點這個小時會被 cron 命中好幾次）
     重複推播。
@@ -539,6 +497,9 @@ def check_and_push_monthly_report(db: CloudSQLClient, telegram_client, now: date
 
     for user in _users_with_finance_activity(db, today_local.year, today_local.month):
         if user.get("telegram_user_id") is None:
+            continue
+        from src.bot.schedule_settings import is_notification_enabled
+        if not is_notification_enabled(db, user["id"], "monthly_report"):
             continue
         if user.get("finance_monthly_report_sent_month") == month_start:
             continue

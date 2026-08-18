@@ -87,7 +87,7 @@ MAIN_MENU_ITEMS = [
     {"key": "collections", "label": "🧭 收藏與旅遊", "owner_only": False},
     {"key": "achievements", "label": "🏆 成果展示", "owner_only": False},
     {"key": "goal_tracking", "label": "🎯 目標追蹤", "owner_only": False},
-    {"key": "schedule", "label": "⏰ 排程設定", "owner_only": False},
+    {"key": "schedule", "label": "⏰ 功能開關與排程設定", "owner_only": False},
     {"key": "rule", "label": "📋 使用規則", "owner_only": False},
     {"key": "permission", "label": "🔑 權限管理", "owner_only": True},
     {"key": "tech_intel", "label": "💡 Youtube 技術分享設定", "owner_only": True},
@@ -97,9 +97,7 @@ MAIN_MENU_ITEMS = [
 ]
 
 # 尚未接上真正邏輯的項目，按下後只回覆固定的「開發中」訊息；2b 起逐批把 key 移出這裡。
-_NOT_YET_IMPLEMENTED_KEYS = {
-    "schedule",
-}
+_NOT_YET_IMPLEMENTED_KEYS: set[str] = set()
 
 # 2026-08-18（批次4，FR-9c）：資料查詢可勾選的 7 個模組，`analytics_method` 對應
 # `AppAnalyticsService` 上同名的唯讀查詢方法（`src/services/app_analytics.py`），直接複用、

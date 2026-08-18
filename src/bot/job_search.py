@@ -724,7 +724,8 @@ def apply_job_preferences(db: CloudSQLClient, entries: list[dict]) -> dict:
 
 
 def _run_weekly_scoring_and_recommendation(
-    db: CloudSQLClient, llm_client, email_client, gmail_user: str, telegram_client, owner: dict, today: date
+    db: CloudSQLClient, llm_client, email_client, gmail_user: str, telegram_client, owner: dict, today: date,
+    *, notify_enabled: bool = True,
 ) -> None:
     """FR-37d：緊接在該週爬蟲與公司背景協作流程之後執行——不因為「這週沒有新公司背景可用」而
     跳過整次評分，只要資料庫裡已有背景資料的職缺，都會被重新納入這次評分範圍。
@@ -755,10 +756,11 @@ def _run_weekly_scoring_and_recommendation(
         return
 
     xlsx_bytes = build_job_recommendation_excel(all_ranked, new_ranked)
-    send_job_recommendation_email(email_client, gmail_user, today, xlsx_bytes)
-    telegram_client.send_text(
-        chat_id=owner["telegram_user_id"], text=RECOMMENDATION_EMAIL_SENT_NOTIFICATION_TEXT
-    )
+    if notify_enabled:
+        send_job_recommendation_email(email_client, gmail_user, today, xlsx_bytes)
+        telegram_client.send_text(
+            chat_id=owner["telegram_user_id"], text=RECOMMENDATION_EMAIL_SENT_NOTIFICATION_TEXT
+        )
 
 
 def check_and_run_weekly_job_search(
@@ -804,14 +806,20 @@ def check_and_run_weekly_job_search(
 
     result = crawl_and_upsert_jobs(db, job104_client, owner["id"], now=now_local)
 
-    if result["new_company_ids"]:
+    from src.bot.schedule_settings import is_notification_enabled
+    notify_enabled = is_notification_enabled(db, owner["id"], "job_search")
+
+    if result["new_company_ids"] and notify_enabled:
         companies = get_companies_by_ids(db, result["new_company_ids"])
         csv_text = build_new_companies_csv(companies)
         send_new_companies_email(email_client, gmail_user, today, csv_text)
         telegram_client.send_text(chat_id=owner["telegram_user_id"], text=EMAIL_SENT_NOTIFICATION_TEXT)
 
     if llm_client is not None:
-        _run_weekly_scoring_and_recommendation(db, llm_client, email_client, gmail_user, telegram_client, owner, today)
+        _run_weekly_scoring_and_recommendation(
+            db, llm_client, email_client, gmail_user, telegram_client, owner, today,
+            notify_enabled=notify_enabled,
+        )
 
     db.update("users", {"job_search_last_run_on": today}, where="id = %s", params=(owner["id"],))
 

@@ -532,17 +532,6 @@ def test_check_and_push_exercise_goal_achievements_skips_unbound_user(fake_db):
     telegram_client.send_text.assert_not_called()
 
 
-def test_check_and_push_goal_deadline_reminders_skips_unbound_user(fake_db):
-    user_id = fake_db.insert("users", {"telegram_user_id": None, "role": "待綁定", "is_owner": False})
-    now = datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc)
-    body.create_goal(
-        fake_db, user_id, "weight", "瘦到 60kg", target_value=60, baseline_value=70, target_date=date(2026, 8, 11)
-    )
-    telegram_client = Mock()
-    body.check_and_push_goal_deadline_reminders(fake_db, telegram_client, now=now)
-    telegram_client.send_text.assert_not_called()
-
-
 def test_check_and_push_exercise_goal_achievements(fake_db):
     user_id = fake_db.insert("users", {"telegram_user_id": 111, "role": "測試家人", "is_owner": False})
     now = datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc)
@@ -647,31 +636,4 @@ def test_check_and_push_diet_goal_achievements_skips_goal_without_direction(fake
     body.create_goal(fake_db, user_id, "diet", "想吃得更健康")
     telegram_client = Mock()
     body.check_and_push_diet_goal_achievements(fake_db, telegram_client)
-    telegram_client.send_text.assert_not_called()
-
-
-def test_check_and_push_goal_deadline_reminders(fake_db):
-    user_id = fake_db.insert("users", {"telegram_user_id": 222, "role": "測試家人", "is_owner": False})
-    now = datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc)
-    body.create_goal(fake_db, user_id, "weight", "瘦到 60kg", target_value=60, baseline_value=70, target_date=date(2026, 8, 11))
-
-    telegram_client = Mock()
-    body.check_and_push_goal_deadline_reminders(fake_db, telegram_client, now=now)
-    telegram_client.send_text.assert_called_once()
-
-    goal = fake_db.select("body_goals", where="user_id = %s", params=(user_id,))[0]
-    assert goal["deadline_reminder_sent"] is True
-
-    telegram_client.reset_mock()
-    body.check_and_push_goal_deadline_reminders(fake_db, telegram_client, now=now)
-    telegram_client.send_text.assert_not_called()
-
-
-def test_check_and_push_goal_deadline_reminders_skips_when_not_seven_days_before(fake_db):
-    user_id = fake_db.insert("users", {"telegram_user_id": 222, "role": "測試家人", "is_owner": False})
-    now = datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc)
-    body.create_goal(fake_db, user_id, "weight", "瘦到 60kg", target_value=60, baseline_value=70, target_date=date(2026, 8, 20))
-
-    telegram_client = Mock()
-    body.check_and_push_goal_deadline_reminders(fake_db, telegram_client, now=now)
     telegram_client.send_text.assert_not_called()

@@ -1,5 +1,5 @@
 """批次3（FR-45a）記帳／收藏清單通用目標模組（`module_goals`）測試。"""
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -175,7 +175,6 @@ def test_check_collections_goal_achievement_marks_achieved(db):
     assert message is not None
     assert goals.get_goal(db, goal_id)["status"] == "achieved"
 
-
 def test_check_collections_goal_achievement_respects_baseline(db):
     db.insert("collection_items", {"user_id": 1, "status": "visited"})
     baseline = goals.compute_collections_baseline(db, 1)
@@ -189,32 +188,3 @@ def test_check_collections_goal_achievement_respects_baseline(db):
     message = goals.check_collections_goal_achievement(db, 1)
     assert message is not None
     assert goals.get_goal(db, goal_id)["status"] == "achieved"
-
-
-def test_check_and_push_goal_deadline_reminders_sends_once(db):
-    class _FakeTelegramClient:
-        def __init__(self):
-            self.sent = []
-
-        def send_message(self, telegram_id, text):
-            self.sent.append((telegram_id, text))
-
-    db.insert("users", {"id": 1, "telegram_id": 42})
-    now = datetime.now(_TAIWAN_TZ)
-    target_date = now.date() + timedelta(days=7)
-    goal_id = db.insert(
-        "module_goals",
-        {
-            "user_id": 1, "module_key": "finance", "target_description": "存錢", "status": "active",
-            "target_date": target_date, "deadline_reminder_sent": False, "created_at": now,
-        },
-    )
-
-    telegram_client = _FakeTelegramClient()
-    goals.check_and_push_goal_deadline_reminders(db, telegram_client, now=now)
-    assert len(telegram_client.sent) == 1
-    assert goals.get_goal(db, goal_id)["deadline_reminder_sent"] is True
-
-    telegram_client.sent.clear()
-    goals.check_and_push_goal_deadline_reminders(db, telegram_client, now=now)
-    assert len(telegram_client.sent) == 0

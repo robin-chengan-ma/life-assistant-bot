@@ -15,6 +15,7 @@ from src.bot import (
     menu,
     query,
     recovery_notifications,
+    schedule_settings,
     system_errors,
     templates,
     toggles,
@@ -394,6 +395,9 @@ def handle_callback_query(
         if key == "query":
             # 2026-08-18（批次4，FR-9c／FR-9d）：🔍 資料查詢子選單首頁，直接進入日期選擇。
             return query.start_query_menu(state_store, telegram_user_id)
+        if key == "schedule":
+            state_store.clear(telegram_user_id)
+            return schedule_settings.start_menu(is_owner=is_owner)
         if key == "tech_intel":
             # 2026-08-18（Youtube 技術分享設定選單化，見 docs/ADR/discuss/robinson.md、
             # docs/ADR/discuss/youtube-intel.md 對應日期條目）：YouTube 主題設定子選單首頁。
@@ -401,17 +405,50 @@ def handle_callback_query(
             user = _get_identified_user(db, telegram_user_id)
             if user is None:
                 return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
+            if not toggles.is_feature_enabled(db, user["id"], key):
+                return schedule_settings.feature_disabled_reply(key)
             return commands.start_youtube_settings_menu(db, user["id"])
         if key == "job_search":
             state_store.clear(telegram_user_id)
+            user = _get_identified_user(db, telegram_user_id)
+            if user is None:
+                return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
+            if not toggles.is_feature_enabled(db, user["id"], key):
+                return schedule_settings.feature_disabled_reply(key)
             return job_settings.start_menu()
         if key == "certificate":
             state_store.clear(telegram_user_id)
+            user = _get_identified_user(db, telegram_user_id)
+            if user is None:
+                return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
+            if not toggles.is_feature_enabled(db, user["id"], key):
+                return schedule_settings.feature_disabled_reply(key)
             return certificate_settings.start_menu()
         if key == "recovered":
             state_store.clear(telegram_user_id)
             return recovery_notifications.start_menu(db)
         return menu.not_yet_implemented_reply()
+
+    if data.startswith("schedule:"):
+        user = _get_identified_user(db, telegram_user_id)
+        if user is None:
+            return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
+        action = data[len("schedule:") :]
+        if action == "notifications":
+            return schedule_settings.notification_menu(db, user["id"], is_owner=is_owner)
+        if action.startswith("notification:"):
+            return schedule_settings.toggle_notification(
+                db, user["id"], action[len("notification:") :], is_owner=is_owner
+            )
+        if not is_owner:
+            return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
+        if action == "features":
+            return schedule_settings.feature_menu(db, user["id"])
+        if action.startswith("feature:"):
+            return schedule_settings.toggle_feature(db, user["id"], action[len("feature:") :])
+        if action == "system":
+            return schedule_settings.system_jobs_menu()
+        return schedule_settings.start_menu(is_owner=is_owner)
 
     if data.startswith("recovery:"):
         if not is_owner:

@@ -273,6 +273,18 @@ def check_and_push_daily_digest(db: CloudSQLClient, telegram_client, now: dateti
     yesterday = today - timedelta(days=1)
     rows = _get_digests_for_date(db, yesterday)
 
+    from src.bot.schedule_settings import is_notification_enabled
+    if not is_notification_enabled(db, owner["id"], "tech_digest"):
+        if rows:
+            for row in rows:
+                db.update("skill_growth_digests", {"pushed_on": today}, where="id = %s", params=(row["id"],))
+        else:
+            db.insert(
+                "skill_growth_digests",
+                {"digest_date": yesterday, "source": None, "summary_text": None, "pushed_on": today},
+            )
+        return
+
     if not rows:
         telegram_client.send_text(chat_id=owner["telegram_user_id"], text=_NO_CONTENT_MESSAGE)
         db.insert(

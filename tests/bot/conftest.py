@@ -15,6 +15,7 @@ class FakeCloudSQLClient:
             "user_password_history": [],
             "invite_codes": [],
             "feature_toggles": [],
+            "notification_preferences": [],
             "knowledge_base": [],
             "conversation_logs": [],
             "conversation_summaries": [],
@@ -150,6 +151,8 @@ class FakeCloudSQLClient:
             return row.get("user_id") == params[0] and row.get("deleted_at") is None
         if where == "user_id = %s AND feature_key = %s":
             return row.get("user_id") == params[0] and row.get("feature_key") == params[1]
+        if where == "user_id = %s AND notification_key = %s":
+            return row.get("user_id") == params[0] and row.get("notification_key") == params[1]
         if where == "category = %s":
             return row.get("category") == params[0]
         if where == "category = %s AND user_id = %s":
@@ -245,6 +248,12 @@ class FakeCloudSQLClient:
             return row.get("birthday") is not None
         if where == "notification_key = %s AND year = %s":
             return row.get("notification_key") == params[0] and row.get("year") == params[1]
+        if where == "is_active = %s":
+            return row.get("is_active") == params[0]
+        if where == "important_day_id = %s":
+            return row.get("important_day_id") == params[0]
+        if where == "important_day_id = %s AND occurrence_year = %s":
+            return row.get("important_day_id") == params[0] and row.get("occurrence_year") == params[1]
         # 2026-08-07（Step 3.1，見 robinson SPEC.md FR-22）：每日技術摘要查 Robin 的 users 記錄。
         if where == "is_owner = %s AND telegram_user_id IS NOT NULL":
             return row.get("is_owner") == params[0] and row.get("telegram_user_id") is not None

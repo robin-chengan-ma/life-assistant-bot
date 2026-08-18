@@ -239,8 +239,7 @@ def check_and_push_important_notifications(
     這個小時內執行，靠 `important_notifications_log` 的 `UNIQUE(notification_key, year)` 避免
     同一天內（cron 每 10 分鐘觸發）重複推播）。
 
-    比照 `finance.check_and_push_finance_reminders()`／`body.check_and_push_goal_deadline_reminders()`
-    的做法，借用 `/healthz` 既有的 10 分鐘 cron 頻率，不需要獨立的排程系統。
+    借用 `/healthz` 既有的 10 分鐘 cron 頻率，不需要獨立的排程系統。
 
     `calendar_client`（2026-08-05，見 FR-66b、ADR-17）：選配，`None` 時（環境變數未設定）只推播
     Telegram、不建立 Calendar 事件。固定節日/生日本質上是要讓全家人知道的資訊，不像待辦事項／
