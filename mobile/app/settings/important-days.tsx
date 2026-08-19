@@ -84,6 +84,7 @@ export default function ImportantDaysScreen() {
   }), [filter, items]);
 
   if (status === "guest") return <Redirect href="/login" />;
+  if (loading && !items.length && !message) return <AppShell title="重要日子設定"><View style={{ alignItems: "center", gap: 12, justifyContent: "center", minHeight: 360 }}><ActivityIndicator color={colors.primary} size="large" /><Text style={{ color: colors.textMuted, fontWeight: "700" }}>資料載入中…</Text></View></AppShell>;
   return <AppShell title="重要日子設定">
     <View style={styles.intro}><MaterialCommunityIcons color={colors.primary} name="calendar-star" size={28} /><View style={styles.flex}><Text style={styles.introTitle}>管理重要日子</Text><Text style={styles.description}>待辦事項是唯一整合行事曆；此頁只負責事件、提醒與通知對象設定。</Text></View></View>
     <Pressable onPress={() => setEditing(null)} style={styles.addButton}><MaterialCommunityIcons color={theme === "dark" ? colors.background : colors.white} name="plus" size={20} /><Text style={styles.addText}>新增重要日子</Text></Pressable>

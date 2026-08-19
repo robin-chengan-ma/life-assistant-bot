@@ -2,7 +2,7 @@ import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import { Redirect, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Calendar, type DateData } from "react-native-calendars";
-import { ActivityIndicator, Modal, ScrollView, StyleSheet, useWindowDimensions } from "react-native";
+import { ActivityIndicator, Linking, Modal, ScrollView, StyleSheet, useWindowDimensions } from "react-native";
 
 import { AppPressable as Pressable } from "@/components/AppPressable";
 import { AppText as Text } from "@/components/AppText";
@@ -40,6 +40,7 @@ import { ApiError } from "@/services/authApi";
 const MODULES: AnalyticsModule[] = ["todos", "body", "finance", "mood", "jobs", "exams", "skills"];
 const MOOD_LABEL: Record<string, string> = { angry_anxious: "😡 生氣／焦慮", sad_down: "😢 難過／低落", tired_burned_out: "🫠 疲憊／厭世", neutral: "🙂 普通／平淡", calm_relaxed: "😌 平靜／放鬆", happy_excited: "🥳 高興／興奮" };
 type BodyTab = "weight" | "diet" | "exercise";
+type JobTab = "overview" | "recommendations" | "applications";
 const TODO_STATUS: Record<string, { backgroundColor: string; label: string }> = {
   expired: { backgroundColor: "#E1E4E3", label: "已過期" },
   pending: { backgroundColor: "#FAD7D5", label: "待處理" },
@@ -64,6 +65,7 @@ export default function AnalyticsScreen() {
   const [deleting, setDeleting] = useState<{ kind: RecordKind; item: RecordItem } | null>(null);
   const [pendingDeletion, setPendingDeletion] = useState<{ kind: RecordKind; item: RecordItem } | null>(null);
   const [bodyTab, setBodyTab] = useState<BodyTab>("weight");
+  const [examCertificate, setExamCertificate] = useState<string>("");
   const deleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollViewRef = useRef<ScrollView>(null);
 
@@ -117,10 +119,15 @@ export default function AnalyticsScreen() {
   const hasAnyData = payload?.has_any_data ?? false;
   const hasRangeData = payload ? rangeHasData(module, payload) : false;
   const initialLoading = loading && !payload;
+  const examData = module === "exams" && payload ? payload as ExamsAnalytics : null;
+  const selectedExam = examData?.certificates.some((item) => item.key === examCertificate)
+    ? examCertificate
+    : examData?.certificates[0]?.key ?? "";
 
   return (
     <AppShell scrollViewRef={scrollViewRef} title={title}>
-      {!error && payload ? <TopGoalSummary bodyTab={bodyTab} module={module} payload={payload} /> : null}
+      {!error && examData ? <CertificateTabs certificates={examData.certificates} selected={selectedExam} onSelect={setExamCertificate} /> : null}
+      {!error && payload ? <TopGoalSummary bodyTab={bodyTab} examCertificate={selectedExam} module={module} payload={payload} /> : null}
       {!error && module === "body" && payload ? <BodyTabs selected={bodyTab} onSelect={setBodyTab} /> : null}
       {!initialLoading && payload && (module === "skills" ? (
         <SingleDateFilter calendarDays={filterCalendarDays} date={skillDate} onCalendarMonthChange={setCalendarMonth} onApply={setSkillDate} />
@@ -141,7 +148,7 @@ export default function AnalyticsScreen() {
       {initialLoading ? <View style={styles.initialLoading}><ActivityIndicator color={colors.primary} size="large" /><Text style={styles.emptyText}>資料載入中…</Text></View> : null}
       {error ? <View style={styles.errorCard}><Text style={styles.errorText}>{error}</Text><Pressable onPress={() => void load()}><Text style={styles.retry}>重新載入</Text></Pressable></View> : null}
       {!error && payload && !hasRangeData && module !== "todos" ? <EmptyState hasAnyData={hasAnyData} /> : null}
-      {!error && payload ? renderModule(module, payload, range, calendarMonth, setCalendarMonth, scrollViewRef, bodyTab) : null}
+      {!error && payload ? renderModule(module, payload, range, calendarMonth, setCalendarMonth, scrollViewRef, bodyTab, selectedExam) : null}
       {!error && payload ? <EditableRecords bodyTab={bodyTab} module={module} onDelete={setDeleting} onEdit={setEditing} payload={payload} /> : null}
       {!error && module === "todos" && payload ? <OverdueTodos authorizedRequest={authorizedRequest} data={payload as TodoAnalytics} onEdit={(item) => setEditing({ kind: "todo", item: item as unknown as RecordItem })} onSaved={load} /> : null}
       {savedMessage ? <View style={styles.savedToast}><Text style={styles.savedText}>{savedMessage}</Text>{pendingDeletion ? <Pressable onPress={undoDelete}><Text style={styles.undoText}>復原</Text></Pressable> : null}</View> : null}
@@ -221,6 +228,7 @@ function renderModule(
   setCalendarMonth: React.Dispatch<React.SetStateAction<string>>,
   scrollViewRef: React.RefObject<ScrollView | null>,
   bodyTab: BodyTab,
+  examCertificate: string,
 ) {
   switch (module) {
     case "todos": return <TodoView calendarMonth={calendarMonth} data={payload as TodoAnalytics} range={range} scrollViewRef={scrollViewRef} setCalendarMonth={setCalendarMonth} />;
@@ -228,7 +236,7 @@ function renderModule(
     case "finance": return <FinanceView data={payload as FinanceAnalytics} />;
     case "mood": return <MoodView data={payload as MoodAnalytics} />;
     case "jobs": return <JobsView data={payload as JobsAnalytics} />;
-    case "exams": return <ExamsView data={payload as ExamsAnalytics} />;
+    case "exams": return <ExamsView certificate={examCertificate} data={payload as ExamsAnalytics} />;
     case "skills": return <SkillsView data={payload as SkillsAnalytics} />;
   }
 }
@@ -245,7 +253,7 @@ function selectGoal(goals: BodyAnalytics["goals"], type: BodyTab) {
   })[0] ?? null;
 }
 
-function TopGoalSummary({ bodyTab, module, payload }: { bodyTab: BodyTab; module: AnalyticsModule; payload: AnalyticsResponseMap[AnalyticsModule] }) {
+function TopGoalSummary({ bodyTab, examCertificate, module, payload }: { bodyTab: BodyTab; examCertificate: string; module: AnalyticsModule; payload: AnalyticsResponseMap[AnalyticsModule] }) {
   if (module === "body") {
     const data = payload as BodyAnalytics;
     const goals = data.goals.filter((goal) => goal.goal_type === bodyTab);
@@ -254,6 +262,11 @@ function TopGoalSummary({ bodyTab, module, payload }: { bodyTab: BodyTab; module
   if (module === "finance") {
     const data = payload as FinanceAnalytics;
     return <GoalSummaryCard goal={data.goal_summary} goals={data.goals} />;
+  }
+  if (module === "exams") {
+    const data = payload as ExamsAnalytics;
+    const goals = data.goals.filter((goal) => String(goal.goal_type).toLowerCase() === examCertificate);
+    return <GoalSummaryCard goal={data.goal_summaries[examCertificate] ?? null} goals={goals} />;
   }
   return null;
 }
@@ -346,14 +359,37 @@ function FinanceView({ data }: { data: FinanceAnalytics }) {
 function MoodView({ data: _data }: { data: MoodAnalytics }) { return null; }
 
 function JobsView({ data }: { data: JobsAnalytics }) {
-  return <><ChartCard title="應徵漏斗"><FunnelChart data={[{ label: "已應徵", value: data.funnel.applied ?? 0 }, { label: "面試", value: data.funnel.interview ?? 0 }, { label: "Offer", value: data.funnel.offer ?? 0 }, { label: "未錄取／婉拒", value: data.funnel.rejected ?? 0 }]} /></ChartCard><ChartCard title="契合度分布"><BarChart color="#7656C9" data={[{ label: "80-100", value: data.score_distribution.high ?? 0 }, { label: "60-79", value: data.score_distribution.medium ?? 0 }, { label: "<60", value: data.score_distribution.low ?? 0 }]} xAxisLabel="契合度區間" yAxisLabel="職缺數量(筆)" /></ChartCard><Section title="本期 Top 推薦">{data.recommendations.map((item, index) => <View key={String(item.job_id_104 ?? index)} style={styles.listCard}><Text style={styles.itemTitle}>{String(item.title ?? "未命名職缺")} · {String(item.match_score ?? "—")} 分</Text><Text style={styles.bodyText}>{String(item.recommend_reason ?? "尚無推薦理由")}</Text><Text style={styles.meta}>{String(item.skill_gap_note ?? "尚無技能缺口資料")}</Text></View>)}</Section><Section title="應徵歷程">{data.timeline.map((item, index) => <View key={index} style={styles.timeline}><View style={styles.timelineDot} /><View style={styles.flex}><Text style={styles.itemTitle}>{String(item.title ?? "職缺")}</Text><Text style={styles.meta}>{String(item.created_at ?? "")} · {String(item.status ?? "")}</Text></View></View>)}</Section></>;
+  const [selected, setSelected] = useState<JobTab>("overview");
+  return <>
+    <View style={styles.tabs}>{([ ["overview", "總覽"], ["recommendations", "推薦職缺"], ["applications", "應徵紀錄"] ] as const).map(([key, label]) => <Pressable key={key} onPress={() => setSelected(key)} style={[styles.tab, selected === key && styles.tabSelected]}><Text style={[styles.tabText, selected === key && styles.tabTextSelected]}>{label}</Text></Pressable>)}</View>
+    {selected === "overview" ? <><View style={styles.metricRow}><Metric label="本期推薦" value={`${data.recommendations.length} 筆`} /><Metric label="面試中" value={`${data.funnel.interview ?? 0} 筆`} /><Metric label="Offer" value={`${data.funnel.offer ?? 0} 筆`} /></View><ChartCard title="應徵漏斗"><FunnelChart data={[{ label: "已應徵", value: data.funnel.applied ?? 0 }, { label: "面試", value: data.funnel.interview ?? 0 }, { label: "Offer", value: data.funnel.offer ?? 0 }, { label: "未錄取／婉拒", value: data.funnel.rejected ?? 0 }]} /></ChartCard><ChartCard title="契合度分布"><BarChart color="#7656C9" data={[{ label: "80-100", value: data.score_distribution.high ?? 0 }, { label: "60-79", value: data.score_distribution.medium ?? 0 }, { label: "<60", value: data.score_distribution.low ?? 0 }]} xAxisLabel="契合度區間" yAxisLabel="職缺數量(筆)" /></ChartCard></> : null}
+    {selected === "recommendations" ? <Section title="推薦職缺">{data.recommendations.length ? data.recommendations.map((item, index) => <View key={String(item.job_id_104 ?? index)} style={styles.listCard}><Text style={styles.itemTitle}>{String(item.title ?? "未命名職缺")} · {String(item.match_score ?? "—")} 分</Text><Text style={styles.meta}>{[item.company_name, item.region, item.source].filter(Boolean).map(String).join("｜")}</Text><Text style={styles.bodyText}>{String(item.recommend_reason ?? "尚無推薦理由")}</Text><Text style={styles.meta}>{String(item.skill_gap_note ?? "尚無技能缺口資料")}</Text>{item.url ? <Pressable onPress={() => void Linking.openURL(String(item.url))}><Text style={styles.retry}>查看職缺</Text></Pressable> : null}</View>) : <Text style={styles.todoEmptyText}>這段期間沒有推薦職缺</Text>}</Section> : null}
+    {selected === "applications" ? <Section title="應徵紀錄">{data.timeline.length ? data.timeline.map((item, index) => <View key={`${String(item.job_id_104)}-${String(item.created_at)}-${index}`} style={styles.timeline}><View style={styles.timelineDot} /><View style={styles.flex}><Text style={styles.itemTitle}>{String(item.title ?? "職缺")}</Text><Text style={styles.meta}>{String(item.created_at ?? "")} · {jobStatusLabel(String(item.status ?? ""))}</Text></View></View>) : <Text style={styles.todoEmptyText}>這段期間沒有應徵紀錄</Text>}</Section> : null}
+    <Text style={styles.telegramHint}>履歷、條件、關鍵字與職缺狀態請前往 Telegram「求職設定」管理。</Text>
+  </>;
 }
 
-function ExamsView({ data }: { data: ExamsAnalytics }) {
-  const accuracy = data.practice.map((row) => ({ label: String(row.date ?? ""), value: Number(row.total ?? 0) ? Math.round((Number(row.correct ?? 0) / Number(row.total)) * 100) : 0 }));
-  const weak = Object.values(data.practice.reduce<Record<string, { label: string; total: number; wrong: number }>>((result, row) => { const key = String(row.question_type ?? "其他"); const current = result[key] ?? { label: key, total: 0, wrong: 0 }; current.total += Number(row.total ?? 0); current.wrong += Number(row.total ?? 0) - Number(row.correct ?? 0); result[key] = current; return result; }, {}));
-  return <><Section title="證照目標">{data.goals.map((goal, index) => <View key={index} style={styles.listCard}><Text style={styles.itemTitle}>{String(goal.exam_type ?? "證照")}</Text><View style={styles.inlineSensitive}><Text style={styles.bodyText}>目標：</Text>{goal.target_score == null ? <Text style={styles.bodyText}>未設定</Text> : <SensitiveValue style={styles.bodyText}>{String(goal.target_score)}</SensitiveValue>}<Text style={styles.bodyText}>　日期：{String(goal.target_date ?? "未設定")}</Text></View></View>)}</Section><ChartCard title="每日練習正確率"><LineChart yAxisLabel="正確率(%)" zeroBased series={[{ label: "正確率 %", color: "#D89B20", points: accuracy }]} /></ChartCard><ChartCard title="弱點分析"><BarChart color="#D9544D" data={weak.map((item) => ({ label: item.label, value: item.wrong }))} xAxisLabel="題型" yAxisLabel="錯題數(題)" /></ChartCard><Section title="正式成績歷程">{data.official_scores.map((score, index) => <View key={index} style={styles.listCard}><View style={styles.inlineSensitive}><Text style={styles.itemTitle}>{String(score.exam_type ?? "證照")} · </Text><SensitiveValue style={styles.itemTitle}>{String(score.score ?? "—")}</SensitiveValue></View><Text style={styles.meta}>{String(score.exam_date ?? "")}</Text>{score.note ? <Text style={styles.bodyText}>{String(score.note)}</Text> : null}</View>)}</Section></>;
+function CertificateTabs({ certificates, onSelect, selected }: { certificates: ExamsAnalytics["certificates"]; onSelect: (key: string) => void; selected: string }) {
+  if (!certificates.length) return <View style={styles.listCard}><Text style={styles.itemTitle}>尚未建立證照</Text><Text style={styles.telegramHint}>請前往 Telegram「考試設定」新增證照。</Text></View>;
+  return <ScrollView contentContainerStyle={styles.certificateTabs} horizontal showsHorizontalScrollIndicator={false}>{certificates.map((item) => <Pressable key={item.key} onPress={() => onSelect(item.key)} style={[styles.certificateTab, selected === item.key && styles.certificateTabSelected]}><Text style={[styles.tabText, selected === item.key && styles.tabTextSelected]}>{item.display_name}</Text></Pressable>)}</ScrollView>;
 }
+
+function ExamsView({ certificate, data }: { certificate: string; data: ExamsAnalytics }) {
+  const profile = data.certificates.find((item) => item.key === certificate);
+  const practice = data.practice.filter((row) => String(row.exam_type ?? "").toLowerCase() === certificate);
+  const daily = Object.values(practice.reduce<Record<string, { label: string; total: number; correct: number }>>((result, row) => { const key = String(row.date ?? ""); const current = result[key] ?? { label: key, total: 0, correct: 0 }; current.total += Number(row.total ?? 0); current.correct += Number(row.correct ?? 0); result[key] = current; return result; }, {})).sort((left, right) => left.label.localeCompare(right.label));
+  const accuracy = daily.map((row) => ({ label: row.label, value: row.total ? Math.round((row.correct / row.total) * 100) : 0 }));
+  const weak = Object.values(practice.reduce<Record<string, { label: string; wrong: number }>>((result, row) => { const key = String(row.question_type ?? "其他"); const current = result[key] ?? { label: key, wrong: 0 }; current.wrong += Number(row.total ?? 0) - Number(row.correct ?? 0); result[key] = current; return result; }, {}));
+  const scores = data.official_scores.filter((row) => String(row.exam_type ?? "").toLowerCase() === certificate);
+  if (!profile) return <Text style={styles.todoEmptyText}>尚無可查看的證照資料</Text>;
+  return <>
+    {profile.has_question_bank ? <>{practice.length ? <><View style={styles.metricRow}><Metric label="作答題數" value={`${daily.reduce((sum, row) => sum + row.total, 0)} 題`} /><Metric label="平均正確率" value={`${daily.reduce((sum, row) => sum + row.total, 0) ? Math.round(daily.reduce((sum, row) => sum + row.correct, 0) / daily.reduce((sum, row) => sum + row.total, 0) * 100) : 0}%`} /></View><ChartCard title="每日練習正確率"><LineChart yAxisLabel="正確率(%)" zeroBased series={[{ label: "正確率 %", color: "#D89B20", points: accuracy }]} /></ChartCard><ChartCard title="弱點分析"><BarChart color="#D9544D" data={weak.map((item) => ({ label: item.label, value: item.wrong }))} xAxisLabel="題型" yAxisLabel="錯題數(題)" /></ChartCard></> : <Text style={styles.todoEmptyText}>這段期間沒有練習紀錄</Text>}</> : <View style={styles.listCard}><Text style={styles.itemTitle}>{profile.display_name} 尚未建立題庫</Text><Text style={styles.bodyText}>目前可查看目標與正式成績，題庫功能將於後續開發。</Text></View>}
+    <Section title="正式成績">{scores.length ? scores.map((score, index) => <View key={`${String(score.exam_date)}-${index}`} style={styles.listCard}><SensitiveValue style={styles.itemTitle}>{String(score.score ?? "—")}</SensitiveValue><Text style={styles.meta}>{String(score.exam_date ?? "")}</Text>{score.note ? <Text style={styles.bodyText}>{String(score.note)}</Text> : null}</View>) : <Text style={styles.todoEmptyText}>這段期間沒有正式成績</Text>}</Section>
+    <Text style={styles.telegramHint}>證照、目標、每日題數與正式成績請前往 Telegram「考試設定」管理。</Text>
+  </>;
+}
+
+function jobStatusLabel(status: string): string { return ({ applied: "已應徵", interview: "面試", offer: "Offer", rejected: "未錄取／婉拒" } as Record<string, string>)[status] ?? status; }
 
 function SkillsView({ data }: { data: SkillsAnalytics }) {
   return <><Section title="每日技術摘要">{data.digests.map((item, index) => <View key={index} style={styles.listCard}><Text style={styles.itemTitle}>{item.source?.toUpperCase() ?? "技術摘要"}</Text><Text style={styles.meta}>{item.digest_date}</Text><Text style={styles.bodyText}>{item.summary_text ?? "今日無內容"}</Text></View>)}</Section><Section title="YouTube 技術情報">{data.videos.map((item, index) => <View key={index} style={styles.listCard}><Text style={styles.itemTitle}>{item.title ?? "舊資料未保存影片標題"}</Text><Text style={styles.meta}>{item.pushed_on} · {item.topic ?? "未分類"}</Text><Text style={styles.bodyText}>{item.recommend_reason ?? "舊資料未保存推薦理由"}</Text></View>)}</Section></>;
@@ -377,6 +413,7 @@ const styles = StyleSheet.create({
   recordActions: { flexDirection: "row", gap: 8, justifyContent: "flex-end", marginTop: 6 }, recordButton: { borderRadius: 9, paddingHorizontal: 14, paddingVertical: 8 }, editButton: { backgroundColor: colors.primarySoft }, deleteButton: { backgroundColor: "#FAD7D5" }, recordButtonText: { color: colors.primaryDark, fontWeight: "800" }, deleteButtonText: { color: colors.danger, fontWeight: "800" }, telegramHint: { color: colors.textMuted, fontSize: 11, marginTop: 4 },
   bodyRecordValues: { gap: 6 }, bodyRecordValue: { color: colors.text, fontSize: 15, fontWeight: "700" }, inlineSensitive: { alignItems: "baseline", flexDirection: "row", flexWrap: "wrap" }, bodyGoalText: { borderTopColor: colors.border, borderTopWidth: 1, color: colors.primaryDark, fontSize: 13, fontWeight: "800", marginTop: 6, paddingTop: 10 },
   tabs: { backgroundColor: colors.border, borderRadius: 12, flexDirection: "row", overflow: "hidden" }, tab: { alignItems: "center", flex: 1, paddingVertical: 11 }, tabSelected: { backgroundColor: colors.primarySoft }, tabText: { color: colors.textMuted, fontSize: 15, fontWeight: "800" }, tabTextSelected: { color: colors.primaryDark },
+  certificateTabs: { gap: 8 }, certificateTab: { backgroundColor: colors.border, borderRadius: 18, paddingHorizontal: 18, paddingVertical: 10 }, certificateTabSelected: { backgroundColor: colors.primarySoft },
   rangeRecordContent: { gap: 10 }, recordGroup: { gap: 14 },
   deleteBackdrop: { alignItems: "center", backgroundColor: "rgba(16,38,34,.45)", flex: 1, justifyContent: "center", padding: 20 }, deleteCard: { backgroundColor: colors.surface, borderRadius: 20, gap: 16, maxWidth: 420, padding: 24, width: "100%" }, deleteTitle: { color: colors.text, fontSize: 21, fontWeight: "900" },
   overdueEntry: { alignItems: "center", backgroundColor: "#FFF0F0", borderColor: "#F0B9B5", borderRadius: 14, borderWidth: 1, flexDirection: "row", justifyContent: "space-between", padding: 15 }, overdueEntryText: { color: colors.danger, fontSize: 16, fontWeight: "900" }, overdueList: { gap: 10 }, overdueModal: { backgroundColor: colors.surface, borderRadius: 20, gap: 14, maxHeight: "80%", maxWidth: 520, padding: 20, width: "100%" },

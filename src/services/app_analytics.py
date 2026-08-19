@@ -786,16 +786,18 @@ class AppAnalyticsService:
     def jobs(self, user: AuthenticatedUser, start: date, end: date) -> dict[str, Any]:
         self._authorize(user, "jobs")
         postings = self._db.execute_query(
-            """/* app_analytics:jobs_postings */ SELECT job_id_104, title, score AS match_score,
-            recommend_reason, skill_gap_note, first_seen_at, is_closed FROM job_postings
-            WHERE DATE(first_seen_at AT TIME ZONE 'Asia/Taipei') BETWEEN %s AND %s
+            """/* app_analytics:jobs_postings */ SELECT p.job_id_104, p.title,
+            c.company_name, p.region, p.source, p.url, p.score AS match_score,
+            p.recommend_reason, p.skill_gap_note, p.first_seen_at, p.is_closed
+            FROM job_postings p JOIN job_companies c ON c.company_id_104 = p.company_id_104
+            WHERE DATE(p.first_seen_at AT TIME ZONE 'Asia/Taipei') BETWEEN %s AND %s
             ORDER BY match_score DESC NULLS LAST""",
             (start, end),
         )
         timeline = self._db.execute_query(
             """/* app_analytics:jobs_timeline */ SELECT a.job_id_104, p.title, a.status, a.created_at
             FROM job_applications a JOIN job_postings p ON p.job_id_104 = a.job_id_104
-            WHERE DATE(a.created_at AT TIME ZONE 'Asia/Taipei') BETWEEN %s AND %s ORDER BY a.created_at""",
+            WHERE DATE(a.created_at AT TIME ZONE 'Asia/Taipei') BETWEEN %s AND %s ORDER BY a.created_at DESC""",
             (start, end),
         )
         latest_status: dict[str, str] = {}
@@ -822,29 +824,87 @@ class AppAnalyticsService:
 
     def exams(self, user: AuthenticatedUser, start: date, end: date) -> dict[str, Any]:
         self._authorize(user, "exams")
+        profiles = self._db.execute_query(
+            """/* app_analytics:exam_profiles */ SELECT certificate_key, display_name, is_active
+            FROM certificate_profiles WHERE user_id = %s AND is_active = TRUE
+            ORDER BY is_builtin DESC, display_name""",
+            (user.database_id,),
+        )
+        question_types = self._db.execute_query(
+            """/* app_analytics:exam_question_types */ SELECT DISTINCT lower(exam_type) AS exam_type
+            FROM certificate_questions"""
+        )
         goals = self._db.execute_query(
-            """/* app_analytics:exam_goals */ SELECT exam_type, target_date, target_score
+            """/* app_analytics:exam_goals */ SELECT id, exam_type, target_date, target_score,
+            status, completed_at, updated_at
             FROM certificate_goals WHERE user_id = %s ORDER BY exam_type""",
+            (user.database_id,),
+        )
+        best_scores = self._db.execute_query(
+            """/* app_analytics:exam_best_scores */ SELECT exam_type, score
+            FROM exam_official_scores WHERE user_id = %s ORDER BY exam_date DESC, created_at DESC""",
             (user.database_id,),
         )
         scores = self._db.execute_query(
             """/* app_analytics:exam_scores */ SELECT exam_type, exam_date, score, note
-            FROM exam_official_scores WHERE user_id = %s AND exam_date BETWEEN %s AND %s ORDER BY exam_date""",
+            FROM exam_official_scores WHERE user_id = %s AND exam_date BETWEEN %s AND %s
+            ORDER BY exam_date DESC, created_at DESC""",
             (user.database_id, start, end),
         )
         practice = self._db.execute_query(
             """/* app_analytics:exam_practice */ SELECT answered_on AS date, exam_type, question_type,
             COUNT(*) AS total, SUM(CASE WHEN is_correct THEN 1 ELSE 0 END) AS correct
             FROM answer_logs WHERE user_id = %s AND answered_on BETWEEN %s AND %s
-            GROUP BY answered_on, exam_type, question_type ORDER BY answered_on""",
+            GROUP BY answered_on, exam_type, question_type ORDER BY answered_on DESC""",
             (user.database_id, start, end),
         )
+        question_bank_types = {str(row["exam_type"]).strip().lower() for row in question_types}
+        certificates = [
+            {
+                "key": str(row["certificate_key"]).strip().lower(),
+                "display_name": row["display_name"],
+                "has_question_bank": str(row["certificate_key"]).strip().lower() in question_bank_types,
+            }
+            for row in profiles
+        ]
+        current_scores: dict[str, float] = {}
+        for row in best_scores:
+            key = str(row["exam_type"]).strip().lower()
+            try:
+                score = float(str(row["score"]).strip())
+            except (TypeError, ValueError):
+                continue
+            current_scores[key] = max(current_scores.get(key, score), score)
+        normalized_goals = []
+        for row in goals:
+            key = str(row["exam_type"]).strip().lower()
+            try:
+                target = float(str(row["target_score"]).strip())
+            except (TypeError, ValueError):
+                target = None
+            normalized_goals.append(self._normalized_goal({
+                **row,
+                "goal_type": key,
+                "target_description": f"{row['exam_type']} 目標 {row.get('target_score') or '未設定'}",
+                "target_value": target,
+                "current_value": current_scores.get(key),
+                "target_unit": "分" if target is not None else None,
+                "progress_mode": "cumulative",
+            }))
+        goal_summaries = {
+            certificate["key"]: self._goal_summary([
+                goal for goal in normalized_goals if str(goal["goal_type"]).lower() == certificate["key"]
+            ])
+            for certificate in certificates
+        }
         return {
             "has_any_data": any(
                 self._has_user_data(table, user.database_id)
                 for table in ("certificate_goals", "exam_official_scores", "answer_logs")
             ),
-            "goals": [_json_row(row) for row in goals],
+            "certificates": certificates,
+            "goals": normalized_goals,
+            "goal_summaries": goal_summaries,
             "official_scores": [_json_row(row) for row in scores],
             "practice": [_json_row(row) for row in practice],
         }

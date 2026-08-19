@@ -206,9 +206,17 @@ export type JobsAnalytics = {
   timeline: Array<Record<string, string | number | null>>;
 };
 
+export type ExamCertificate = {
+  key: string;
+  display_name: string;
+  has_question_bank: boolean;
+};
+
 export type ExamsAnalytics = {
   has_any_data: boolean;
-  goals: Array<Record<string, string | number | null>>;
+  certificates: ExamCertificate[];
+  goals: GoalItem[];
+  goal_summaries: Record<string, GoalItem | null>;
   official_scores: Array<Record<string, string | number | null>>;
   practice: Array<Record<string, string | number | null>>;
 };

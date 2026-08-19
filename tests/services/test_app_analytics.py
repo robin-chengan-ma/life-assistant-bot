@@ -425,7 +425,7 @@ def test_remaining_analysis_modules_return_chart_ready_payloads():
             "app_analytics:todos */": [{"id": 1, "content": "待辦", "due_at": "2026-08-02", "start_at": None, "status": "pending"}],
             "app_analytics:mood": [{"id": 1, "date": date(2026, 8, 2), "mood_category": "happy_excited", "content": "很好", "achievement_note": None}],
             "app_analytics:jobs_postings": [
-                {"job_id_104": "a", "title": "工程師", "match_score": 85, "recommend_reason": "適合", "skill_gap_note": None, "first_seen_at": "2026-08-01"},
+                {"job_id_104": "a", "title": "工程師", "company_name": "範例公司", "region": "台北", "source": "104", "url": "https://example.com/a", "match_score": 85, "recommend_reason": "適合", "skill_gap_note": None, "first_seen_at": "2026-08-01"},
                 {"job_id_104": "b", "title": "後端", "match_score": 65, "recommend_reason": "可考慮", "skill_gap_note": None, "first_seen_at": "2026-08-01"},
                 {"job_id_104": "c", "title": "前端", "match_score": 50, "recommend_reason": "較低", "skill_gap_note": None, "first_seen_at": "2026-08-01"},
             ],
@@ -434,6 +434,9 @@ def test_remaining_analysis_modules_return_chart_ready_payloads():
                 {"job_id_104": "a", "title": "工程師", "status": "interview", "created_at": "2026-08-03"},
             ],
             "app_analytics:exam_goals": [{"exam_type": "TOEIC", "target_date": date(2026, 12, 1), "target_score": "850"}],
+            "app_analytics:exam_profiles": [{"certificate_key": "toeic", "display_name": "TOEIC", "is_active": True}],
+            "app_analytics:exam_question_types": [{"exam_type": "toeic"}],
+            "app_analytics:exam_best_scores": [{"exam_type": "TOEIC", "score": "700"}],
             "app_analytics:exam_scores": [{"exam_type": "TOEIC", "exam_date": date(2026, 8, 1), "score": "700", "note": "第一次正式應考"}],
             "app_analytics:exam_practice": [{"date": date(2026, 8, 2), "exam_type": "TOEIC", "question_type": "listen", "total": 2, "correct": 1}],
             "app_analytics:skill_digests": [{"digest_date": date(2026, 8, 1), "source": "ithome", "summary_text": "摘要"}],
@@ -453,11 +456,15 @@ def test_remaining_analysis_modules_return_chart_ready_payloads():
     assert "title, match_score" not in jobs_query
     assert jobs["funnel"]["interview"] == 1
     assert jobs["score_distribution"] == {"high": 1, "medium": 1, "low": 1}
+    assert jobs["recommendations"][0]["company_name"] == "範例公司"
     exams = service.exams(user(is_owner=True), start, end)
     exam_scores_query = next(query for query in db.executed_queries if "app_analytics:exam_scores" in query)
     assert "score, note" in exam_scores_query
     assert exams["practice"][0]["correct"] == 1
     assert exams["official_scores"][0]["note"] == "第一次正式應考"
+    assert exams["certificates"] == [{"key": "toeic", "display_name": "TOEIC", "has_question_bank": True}]
+    assert exams["goals"][0]["progress_percent"] == 82.4
+    assert exams["goal_summaries"]["toeic"]["description"] == "TOEIC 目標 850"
     assert service.skills(user(is_owner=True), start, end)["videos"][0]["title"] == "影片"
 
 

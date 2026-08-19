@@ -264,3 +264,11 @@
 **修復方式**：首次狀態改為 loading；尚無 payload 時只顯示完整載入畫面，資料完成後一次呈現頁面。後續切換日期則保留既有內容，避免再次清空整頁。此修正一次涵蓋 todos、body、finance、mood、jobs、exams、skills 七個共用分析頁。
 **驗證方式**：Mobile TypeScript typecheck、Expo Web export、全專案 1806 項 pytest 與 Ruff 均通過；實機驗收待完成。
 **未驗證範圍**：正式 Vercel／iOS PWA 的首次冷啟動與慢速網路體感。
+
+## 2026-08-19 四個獨立頁面缺少載入文案
+**現象**：收藏清單、探索地圖、成果展示與重要日子設定首次載入時只顯示轉圈，沒有「資料載入中…」。
+**排查過程**：比對共用 `analytics/[module].tsx` 與四個獨立 route，確認前批修正只套用於共用分析 route。
+**根因**：獨立 route 各自維護 loading UI，未複用共用分析頁的完整載入畫面。
+**修復方式**：四頁在首份 payload 尚未取得時，只呈現置中轉圈與「資料載入中…」；取得資料後再呈現功能內容。
+**驗證方式**：Mobile TypeScript typecheck 與 Web export 通過。
+**未驗證範圍**：iOS／Android 慢速網路實機畫面待 Robin 驗收。
