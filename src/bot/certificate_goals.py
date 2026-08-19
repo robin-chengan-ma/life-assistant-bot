@@ -9,7 +9,7 @@
 """
 import logging
 import re
-from datetime import date
+from datetime import date, datetime, timezone
 
 from src.services.goal_important_day_sync import sync_certificate_goal
 from submodules.cloudsql.client import CloudSQLClient
@@ -44,7 +44,7 @@ def set_goal(
     `{"previous": 舊值或 None, "target_date", "target_score"}` 供呼叫端組回覆文字（例如告知使用者
     先前設定過的舊值）。"""
     existing = get_goal(db, user_id, exam_type)
-    data = {"target_date": target_date, "target_score": target_score}
+    data = {"target_date": target_date, "target_score": target_score, "status": "active", "completed_at": None}
 
     if existing is not None:
         db.update("certificate_goals", data, where="id = %s", params=(existing["id"],))
@@ -65,6 +65,23 @@ def list_goals(db: CloudSQLClient, user_id: int) -> list[dict]:
     rows = db.select("certificate_goals", where="user_id = %s", params=(user_id,))
     rows.sort(key=lambda row: row["exam_type"])
     return rows
+
+
+def mark_goal_achieved(db: CloudSQLClient, goal_id: int, user_id: int) -> bool:
+    row = db.select("certificate_goals", where="id = %s", params=(goal_id,), fetch_one=True)
+    if row is None or row["user_id"] != user_id or row.get("status", "active") != "active":
+        return False
+    affected = db.update(
+        "certificate_goals", {"status": "achieved", "completed_at": datetime.now(timezone.utc)},
+        where="id = %s AND user_id = %s AND status = %s", params=(goal_id, user_id, "active"),
+    )
+    if not affected:
+        return False
+    try:
+        sync_certificate_goal(db, goal_id)
+    except Exception:
+        _logger.exception("證照目標（id=%s）完成後停用重要日子失敗", goal_id)
+    return True
 
 
 def format_goal_set_reply(exam_type: str, result: dict) -> str:
@@ -141,7 +158,7 @@ def check_score_achievement(db: CloudSQLClient, user_id: int, exam_type: str, sc
     文字）時直接跳過，不誤判、也不擋下記錄成績這個主流程。沒有設定目標、或目標沒填 `target_score`
     時同樣回傳 `None`。"""
     goal = get_goal(db, user_id, exam_type)
-    if goal is None or not goal.get("target_score"):
+    if goal is None or goal.get("status", "active") != "active" or not goal.get("target_score"):
         return None
 
     target_match = re.search(r"-?\d+(\.\d+)?", str(goal["target_score"]))
@@ -150,6 +167,7 @@ def check_score_achievement(db: CloudSQLClient, user_id: int, exam_type: str, sc
         return None
 
     if float(score_match.group()) >= float(target_match.group()):
+        mark_goal_achieved(db, goal["id"], user_id)
         return f"🎉 恭喜你達成「{exam_type}」的目標分數（{goal['target_score']}）了！"
     return None
 

@@ -580,6 +580,7 @@ def create_goal(
     sync_to_calendar: bool = False,
     target_unit: str | None = None,
     target_direction: str | None = None,
+    progress_type: str | None = None,
 ) -> int:
     """新增一筆體態目標（FR-46～FR-48），回傳新建列的 id。`baseline_value` 只有 `goal_type ==
     "weight"` 時才需要傳（設定當下的體重，用來判斷要瘦還是要增，決策④）。
@@ -590,6 +591,8 @@ def create_goal(
     這個布林選擇。沒有 `target_date` 的目標即使選了同步也沒有意義（沒有日期可以建事件），由
     呼叫端在反問流程裡自行決定要不要問這一題。
     """
+    if progress_type is None:
+        progress_type = "milestone" if goal_type == "exercise" and target_value is None else ("numeric" if target_value is not None else "unquantified")
     goal_id = db.insert(
         "body_goals",
         {
@@ -599,6 +602,7 @@ def create_goal(
             "target_value": target_value,
             "target_unit": target_unit,
             "target_direction": target_direction,
+            "progress_type": progress_type,
             "baseline_value": baseline_value,
             "target_date": target_date,
             "status": "active",
@@ -624,11 +628,16 @@ def update_goal(
     target_date: date | None = None,
     target_unit: str | None = None,
     target_direction: str | None = None,
+    progress_type: str | None = None,
 ) -> None:
     """FR-46（2026-08-17 新增）：目標「✏️ 編輯」重新走一次目標值/期限輸入後寫回，取代原本
     「要調整就取消重設」的限制。編輯後期限可能改變，`deadline_reminder_sent` 重置為 False
     讓 7 天前提醒重新計算一次；`achieved_notified` 不動（編輯中的目標理論上還是 active）。
     重要日子同步（`sync_body_goal`）比照 `create_goal()` 的失敗降級處理。"""
+    if progress_type is None:
+        existing = get_goal(db, goal_id)
+        goal_type = existing.get("goal_type") if existing else None
+        progress_type = "milestone" if goal_type == "exercise" and target_value is None else ("numeric" if target_value is not None else "unquantified")
     db.update(
         "body_goals",
         {
@@ -636,6 +645,7 @@ def update_goal(
             "target_value": target_value,
             "target_unit": target_unit,
             "target_direction": target_direction,
+            "progress_type": progress_type,
             "baseline_value": baseline_value,
             "target_date": target_date,
             "deadline_reminder_sent": False,
@@ -702,12 +712,23 @@ def _delete_calendar_event_if_synced(calendar_client, google_calendar_event_id, 
 
 
 def _mark_goal_achieved(db: CloudSQLClient, goal_id: int, calendar_client=None, google_calendar_event_id=None) -> None:
-    db.update("body_goals", {"status": "achieved", "achieved_notified": True}, where="id = %s", params=(goal_id,))
+    db.update("body_goals", {"status": "achieved", "achieved_notified": True, "completed_at": datetime.now(timezone.utc)}, where="id = %s", params=(goal_id,))
     try:
         sync_body_goal(db, goal_id)
     except Exception:
         _logger.exception("體態目標（id=%s）達成後停用重要日子失敗", goal_id)
     _delete_calendar_event_if_synced(calendar_client, google_calendar_event_id, goal_id)
+
+
+def mark_goal_achieved(db: CloudSQLClient, goal_id: int, user_id: int, calendar_client=None) -> bool:
+    row = get_goal(db, goal_id)
+    if row is None or row["user_id"] != user_id or row.get("status") != "active":
+        return False
+    _mark_goal_achieved(
+        db, goal_id, calendar_client=calendar_client,
+        google_calendar_event_id=row.get("google_calendar_event_id"),
+    )
+    return True
 
 
 def check_weight_goal_achieved(

@@ -59,7 +59,7 @@ def sync_certificate_goal(db: GoalSyncDatabase, goal_id: int) -> int | None:
         owner_user_id=goal["user_id"],
         title=f"{goal['exam_type']} 考試目標{score}",
         target_date=goal.get("target_date"),
-        active=goal.get("target_date") is not None,
+        active=goal.get("target_date") is not None and goal.get("status", "active") == "active",
         notes="由考試／證照目標自動同步",
     )
 

@@ -16,7 +16,7 @@
   UI 精緻化留待之後視需要再談，屬於刻意簡化）。
 """
 import logging
-from datetime import date
+from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 
 from src.services.goal_important_day_sync import sync_module_goal
@@ -146,8 +146,32 @@ def cancel_goal(db: CloudSQLClient, goal_id: int) -> None:
         _logger.exception("模組目標（id=%s）取消後停用重要日子失敗", goal_id)
 
 
+def mark_goal_achieved(db: CloudSQLClient, goal_id: int, user_id: int, calendar_client=None) -> bool:
+    row = get_goal(db, goal_id)
+    if row is None or row["user_id"] != user_id or row.get("status") != "active":
+        return False
+    affected = db.update(
+        "module_goals",
+        {"status": "achieved", "achieved_notified": True, "completed_at": datetime.now(timezone.utc)},
+        where="id = %s AND user_id = %s AND status = %s",
+        params=(goal_id, user_id, "active"),
+    )
+    if not affected:
+        return False
+    try:
+        sync_module_goal(db, goal_id)
+    except Exception:
+        _logger.exception("模組目標（id=%s）手動完成後停用重要日子失敗", goal_id)
+    if row.get("google_calendar_event_id") and calendar_client is not None:
+        try:
+            calendar_client.delete_event(event_id=row["google_calendar_event_id"])
+        except Exception:
+            _logger.exception("模組目標（id=%s）完成後刪除 Google Calendar 事件失敗", goal_id)
+    return True
+
+
 def _mark_goal_achieved(db: CloudSQLClient, goal_id: int) -> None:
-    db.update("module_goals", {"status": "achieved", "achieved_notified": True}, where="id = %s", params=(goal_id,))
+    db.update("module_goals", {"status": "achieved", "achieved_notified": True, "completed_at": datetime.now(timezone.utc)}, where="id = %s", params=(goal_id,))
     try:
         sync_module_goal(db, goal_id)
     except Exception:

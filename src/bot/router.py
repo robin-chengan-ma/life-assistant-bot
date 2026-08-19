@@ -634,7 +634,13 @@ def handle_callback_query(
             return commands.start_goal_tracking_module(db, user["id"], module_key)
         if action.startswith("goal:"):
             _, goal_source, goal_id_text = action.split(":", 2)
-            return commands.start_goal_tracking_detail(db, goal_source, int(goal_id_text))
+            return commands.start_goal_tracking_detail(db, user["id"], goal_source, int(goal_id_text))
+        if action.startswith("complete:"):
+            _, goal_source, goal_id_text = action.split(":", 2)
+            return commands.start_goal_complete_confirm(db, user["id"], goal_source, int(goal_id_text))
+        if action.startswith("confirm_complete:"):
+            _, goal_source, goal_id_text = action.split(":", 2)
+            return commands.handle_goal_complete(db, user["id"], goal_source, int(goal_id_text), calendar_client), menu.back_to_main_menu_keyboard()
         return commands.start_goal_tracking_menu()
 
     if data.startswith("finance:"):

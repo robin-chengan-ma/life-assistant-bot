@@ -179,7 +179,7 @@ def test_goal_tracking_menu_navigation(fake_db, monkeypatch):
         fake_db, store, FAMILY_ID, f"goal_tracking:goal:module_goals:{goal_id}"
     )
     assert "摘要生成中" in reply
-    assert keyboard["inline_keyboard"] == [[{"text": "🔙 返回主頁面", "callback_data": "menu:main"}]]
+    assert keyboard["inline_keyboard"][0][0]["callback_data"] == f"goal_tracking:complete:module_goals:{goal_id}"
 
     fake_db.insert(
         "goal_summaries",
@@ -192,6 +192,50 @@ def test_goal_tracking_menu_navigation(fake_db, monkeypatch):
         fake_db, store, FAMILY_ID, f"goal_tracking:goal:module_goals:{goal_id}"
     )
     assert reply == "加油，你這週存了不少錢！"
+
+
+def test_goal_tracking_manual_complete_requires_confirmation(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    user_id = fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    goal_id = goals.create_goal(fake_db, user_id, "finance", "存5000", 5000.0, "TWD", 0, None)
+    store = ConversationStateStore()
+
+    reply, keyboard = router.handle_callback_query(
+        fake_db, store, FAMILY_ID, f"goal_tracking:complete:module_goals:{goal_id}"
+    )
+    assert "確定" in reply
+    assert goals.get_goal(fake_db, goal_id)["status"] == "active"
+    callback = keyboard["inline_keyboard"][0][0]["callback_data"]
+    reply, _keyboard = router.handle_callback_query(fake_db, store, FAMILY_ID, callback)
+    assert "標記為完成" in reply
+    assert goals.get_goal(fake_db, goal_id)["status"] == "achieved"
+    assert goals.get_goal(fake_db, goal_id)["completed_at"] is not None
+
+
+def test_goal_tracking_cannot_complete_another_users_goal(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    other_id = fake_db.insert("users", {"telegram_user_id": 999, "role": "媽媽", "is_owner": False})
+    goal_id = goals.create_goal(fake_db, other_id, "finance", "別人的目標", None, None, 0, None)
+    store = ConversationStateStore()
+
+    reply, _keyboard = router.handle_callback_query(
+        fake_db, store, FAMILY_ID, f"goal_tracking:confirm_complete:module_goals:{goal_id}"
+    )
+    assert "沒有操作權限" in reply
+    assert goals.get_goal(fake_db, goal_id)["status"] == "active"
+
+
+def test_exercise_milestone_can_be_created_and_completed(fake_db, monkeypatch):
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    fake_db.insert("users", {"telegram_user_id": FAMILY_ID, "role": "爸爸", "is_owner": False})
+    store = ConversationStateStore()
+    router.handle_callback_query(fake_db, store, FAMILY_ID, "body:goal:new:exercise:exercise")
+    reply = router.handle_message(fake_db, store, FAMILY_ID, "完成三鐵")
+    assert "完成時間" in reply
+    state = store.get(FAMILY_ID)
+    assert state["progress_type"] == "milestone"
+    assert state["target_value"] is None
 
 
 def test_goal_tracking_module_hides_expired_goals(fake_db, monkeypatch):

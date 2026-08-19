@@ -1,6 +1,6 @@
 ---
 title: DB Schema
-updated: 2026-08-18
+updated: 2026-08-19
 ---
 
 # DB Schema
@@ -23,7 +23,7 @@ updated: 2026-08-18
 > Render 自動部署套用（實際套用時間以資料庫 `schema_migrations` 追蹤表為準）。
 >
 > 本文件多數章節涵蓋到 migration `0061`（`system_error_reports`）；後續異動依功能逐步補登，
-> 考試設定、求職設定與通知接收設定已涵蓋至 `0093`；FR-77 清理為 `0094`，跨平台事故追蹤為 `0095`。其他 `0062` 之後的異動見 `src/migrations/` 與 `docs/specs/SPEC.md`
+> 考試設定、求職設定與通知接收設定已涵蓋至 `0093`；FR-77 清理為 `0094`，跨平台事故追蹤為 `0095`，目標完成狀態為 `0096`。其他 `0062` 之後的異動見 `src/migrations/` 與 `docs/specs/SPEC.md`
 > 對應功能區塊掌握最新範圍。CREATE TABLE 語法只保留欄位定義本身，`COMMENT ON` 逐欄註解請直接看
 > 對應 migration 檔案，不在此重複。
 
@@ -319,8 +319,8 @@ CREATE TABLE budget_overrides (
 | `exercise_categories` | 已套用 | FR-47a | 全域共用運動類別表，新增自訂類別採正規化比對＋LLM 語意判斷兩段式同義詞合併 |
 | `exercise_logs` | 已套用 0084 新結構 | FR-47／FR-47a、FR-64 | 已移除 `input_mode`／`training_details` 並新增 `category_id`；使用新版單一表單結構 |
 | `diet_logs` | 已建立 | FR-48、FR-64 | 飲食與飲水共用一表，營養數值可由 AI 估算或人工輸入並保留來源 |
-| `body_goals` | 已建立 | FR-45～FR-48／FR-72a | 體重/運動/飲食三子功能共用一表（`goal_type` 區分）；`important_day_id` 連結期限事件；`target_unit`／`target_direction` 為批次3新增，供飲食目標存結構化單位與自動達成判斷方向 |
-| `module_goals` | 已套用 | FR-41b／FR-73a／FR-45a（批次3） | 記帳／收藏清單通用目標表（`module_key` 區分），設計精神比照 `body_goals`；`important_day_id` 連結期限事件；`sync_to_calendar`／`google_calendar_event_id` 為批次3補做新增，供 Google Calendar 同步 |
+| `body_goals` | 已建立；`0096` 待部署 | FR-45～FR-48／FR-64c／FR-72a | 體重/運動/飲食三子功能共用；`progress_type` 區分 numeric／milestone／unquantified，`completed_at` 保存達成時間；`important_day_id` 連結期限事件 |
+| `module_goals` | 已套用；`0096` 待部署 | FR-41b／FR-73a／FR-64c | 記帳／收藏清單通用目標表；`completed_at` 保存達成時間；完成後停用重要日子並清除既有 Calendar 事件 |
 | `goal_summaries` | 已套用 | FR-45a（批次3） | 🎯 目標追蹤每日排程（01:00）快取摘要，`goal_source` 區分來源表（`body_goals`／`module_goals`／`certificate_goals`），只保留最新一份快取 |
 
 <details>
@@ -511,7 +511,7 @@ CREATE TABLE important_notifications_log (
 | `toeic_vocab_questions` | 已建立 | FR-25d、FR-25e | TOEIC 題庫軌道二（Gemini 即時生成單字題），刻意維持 TOEIC 專用不隨軌道一泛用化 |
 | `answer_logs` | 已建立 | FR-27、FR-29 | 作答紀錄，跨軌道一/二共用一表；`assignment_id`（2026-08-08 追加）精準對應「今天這一批」 |
 | `certificate_profiles` | 已套用 | FR-30a | Owner 證照名冊；TOEIC 為內建項目，自訂證照以停用保留歷史資料 |
-| `certificate_goals` | 已建立 | FR-24／FR-72a | 證照準備目標（UPSERT，每人每 `exam_type` 一筆）；`important_day_id` 連結考試日期事件 |
+| `certificate_goals` | 已建立；`0096` 待部署 | FR-24／FR-64c／FR-72a | 證照準備目標；`status` 統一 active／achieved／cancelled，`completed_at` 保存達成時間；重新設定會恢復 active |
 | `exam_official_scores` | 已建立／待擴充 | FR-30／FR-30b | 正式應考成績，僅新增與查詢；`0091` 新增選填補充內容 |
 | `certificate_daily_settings` | 已建立／待擴充 | FR-26／FR-30a | 每日出題數量與新題／複習比例；`0091` 新增 TOEIC 三軌固定題數 |
 | `certificate_daily_schedule_overrides` | 已建立／待擴充 | FR-26／FR-30a | 日期區間覆蓋；`0091` 新增 TOEIC 固定題數與不可重疊約束 |

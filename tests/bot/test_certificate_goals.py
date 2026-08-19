@@ -162,6 +162,9 @@ def test_check_score_achievement_reaches_target(fake_db):
     assert result is not None
     assert "toeic" in result
     assert "850" in result
+    goal = certificate_goals.get_goal(fake_db, 1, "toeic")
+    assert goal["status"] == "achieved"
+    assert goal["completed_at"] is not None
 
 
 def test_check_score_achievement_exactly_meets_target(fake_db):

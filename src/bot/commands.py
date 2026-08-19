@@ -2817,7 +2817,7 @@ def _start_goal_value_question(
         return "好的，請告訴我目標體重是多少公斤？"
     if goal_type == "exercise":
         state_store.set(telegram_user_id, {**base_state, "flow": "pending_goal_exercise_minutes"})
-        return "好的，請告訴我這個目標要達成的累積運動分鐘數（例如：這個月運動滿 300 分鐘，就輸入 300）："
+        return "請輸入累積運動分鐘數（例如 300），或直接輸入一次性里程碑（例如：完成三鐵）："
 
     state_store.set(telegram_user_id, {**base_state, "flow": "pending_goal_diet_description"})
     return "好的，請用你自己的話告訴我飲食目標是什麼（例如：控制在每天 1800 大卡以內）："
@@ -2862,8 +2862,9 @@ def handle_goal_exercise_minutes_step(state_store: ConversationStateStore, teleg
     """處理 `pending_goal_exercise_minutes` 狀態下使用者提供的目標累積運動分鐘數。"""
     state = state_store.get(telegram_user_id)
     target_value = _parse_positive_int(text)
-    if target_value is None:
-        return "不好意思，我沒看懂，麻煩輸入一個正整數（分鐘），例如：300"
+    description = text.strip()
+    if target_value is None and not description:
+        return "請輸入正整數分鐘，或一次性里程碑名稱。"
 
     state_store.set(
         telegram_user_id,
@@ -2872,7 +2873,8 @@ def handle_goal_exercise_minutes_step(state_store: ConversationStateStore, teleg
             "flow": "pending_goal_deadline",
             "target_value": target_value,
             "baseline_value": None,
-            "target_description": f"累積運動 {target_value} 分鐘",
+            "target_description": f"累積運動 {target_value} 分鐘" if target_value is not None else description,
+            "progress_type": "numeric" if target_value is not None else "milestone",
         },
     )
     return "有預計完成時間嗎？（例如：三個月內完成，沒有的話輸入「沒有」）"
@@ -2983,6 +2985,7 @@ def handle_goal_confirm_save(
     target_value = state["target_value"]
     target_unit = state.get("target_unit")
     target_direction = state.get("target_direction")
+    progress_type = state.get("progress_type")
     baseline_value = state["baseline_value"]
     target_date = state.get("target_date")
     goal_id = state.get("goal_id")
@@ -2992,6 +2995,7 @@ def handle_goal_confirm_save(
         body.update_goal(
             db, goal_id, target_description, target_value, baseline_value, target_date,
             target_unit=target_unit, target_direction=target_direction,
+            progress_type=progress_type,
         )
         return f"好的，已經幫你更新目標「{target_description}」了，加油！"
 
@@ -2999,6 +3003,7 @@ def handle_goal_confirm_save(
     goal_id = body.create_goal(
         db, target_user_id, goal_type, target_description, target_value, baseline_value, target_date,
         sync_to_calendar=sync_to_calendar, target_unit=target_unit, target_direction=target_direction,
+        progress_type=progress_type,
     )
     if sync_to_calendar and target_date is not None and calendar_client is not None:
         try:
@@ -4578,7 +4583,7 @@ def start_goal_tracking_module(db: CloudSQLClient, user_id: int, module_key: str
     elif item["goal_source"] == "module_goals":
         active_goals = goals.list_active_goals(db, user_id, item["goal_type"])
     else:
-        active_goals = certificate_goals.list_goals(db, user_id)
+        active_goals = [g for g in certificate_goals.list_goals(db, user_id) if g.get("status", "active") == "active"]
 
     active_goals = [g for g in active_goals if not g.get("target_date") or g["target_date"] >= today]
     if not active_goals:
@@ -4595,9 +4600,22 @@ def start_goal_tracking_module(db: CloudSQLClient, user_id: int, module_key: str
     return f"{item['label']}的目標，請選一個查看摘要：", {"inline_keyboard": buttons}
 
 
-def start_goal_tracking_detail(db: CloudSQLClient, goal_source: str, goal_id: int) -> tuple[str, dict]:
-    """選一個目標後顯示 `goal_summaries` 最新快取，全程唯讀，只有「🔙 返回主頁面」按鈕。"""
-    keyboard = {"inline_keyboard": [[{"text": "🔙 返回主頁面", "callback_data": "menu:main"}]]}
+def _goal_row(db: CloudSQLClient, goal_source: str, goal_id: int) -> dict | None:
+    if goal_source not in {"body_goals", "module_goals", "certificate_goals"}:
+        return None
+    return db.select(goal_source, where="id = %s", params=(goal_id,), fetch_one=True)
+
+
+def start_goal_tracking_detail(db: CloudSQLClient, user_id: int, goal_source: str, goal_id: int) -> tuple[str, dict]:
+    """顯示目標摘要，並讓進行中的本人目標可進入手動完成二次確認。"""
+    goal = _goal_row(db, goal_source, goal_id)
+    if goal is None or goal["user_id"] != user_id:
+        return "找不到這筆目標。", {"inline_keyboard": [[{"text": "🔙 返回", "callback_data": "menu:goal_tracking"}]]}
+    buttons = []
+    if goal.get("status", "active") == "active":
+        buttons.append([{"text": "✅ 標記完成", "callback_data": f"goal_tracking:complete:{goal_source}:{goal_id}"}])
+    buttons.append([{"text": "🔙 返回主頁面", "callback_data": "menu:main"}])
+    keyboard = {"inline_keyboard": buttons}
     rows = db.select(
         "goal_summaries",
         where="goal_source = %s AND goal_id = %s",
@@ -4607,3 +4625,26 @@ def start_goal_tracking_detail(db: CloudSQLClient, goal_source: str, goal_id: in
         return "摘要生成中，明天再回來看看！（每日凌晨會固定更新一次）", keyboard
     latest = max(rows, key=lambda r: r["generated_on"])
     return latest["summary_text"], keyboard
+
+
+def start_goal_complete_confirm(db: CloudSQLClient, user_id: int, goal_source: str, goal_id: int) -> tuple[str, dict]:
+    goal = _goal_row(db, goal_source, goal_id)
+    if goal is None or goal["user_id"] != user_id or goal.get("status", "active") != "active":
+        return "這筆目標已不是進行中，無法標記完成。", menu.back_to_main_menu_keyboard()
+    label = goal.get("target_description") or goal.get("exam_type") or "這筆目標"
+    return f"確定要將「{label}」標記為已完成嗎？", {"inline_keyboard": [
+        [{"text": "✅ 確認完成", "callback_data": f"goal_tracking:confirm_complete:{goal_source}:{goal_id}"}],
+        [{"text": "❌ 取消", "callback_data": f"goal_tracking:goal:{goal_source}:{goal_id}"}],
+    ]}
+
+
+def handle_goal_complete(db: CloudSQLClient, user_id: int, goal_source: str, goal_id: int, calendar_client=None) -> str:
+    handlers = {
+        "body_goals": lambda: body.mark_goal_achieved(db, goal_id, user_id, calendar_client=calendar_client),
+        "module_goals": lambda: goals.mark_goal_achieved(db, goal_id, user_id, calendar_client=calendar_client),
+        "certificate_goals": lambda: certificate_goals.mark_goal_achieved(db, goal_id, user_id),
+    }
+    handler = handlers.get(goal_source)
+    if handler is None or not handler():
+        return "這筆目標已不是進行中，或你沒有操作權限。"
+    return "🎉 已將這筆目標標記為完成！"
