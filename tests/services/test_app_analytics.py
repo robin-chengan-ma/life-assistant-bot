@@ -65,9 +65,11 @@ def test_technical_sharing_rejects_invalid_or_future_date(value):
         parse_single_date(value, today=date(2026, 8, 11))
 
 
-def test_date_range_accepts_arbitrary_historical_seven_to_thirty_day_window():
+def test_date_range_accepts_arbitrary_historical_one_to_thirty_day_window():
+    single = parse_date_range("2026-06-11", "2026-06-11", today=date(2026, 8, 11))
     selected = parse_date_range("2026-06-11", "2026-06-17", today=date(2026, 8, 11))
 
+    assert single.days == 1
     assert selected.start == date(2026, 6, 11)
     assert selected.end == date(2026, 6, 17)
     assert selected.days == 7
@@ -118,7 +120,6 @@ def test_calendar_month_rejects_invalid_values(value):
 @pytest.mark.parametrize(
     ("start", "end"),
     [
-        ("2026-06-11", "2026-06-16"),
         ("2026-06-11", "2026-07-11"),
         ("invalid", "2026-06-17"),
         ("2026-06-17", "2026-06-11"),
@@ -182,6 +183,64 @@ def test_finance_returns_chart_ready_daily_category_and_income_data():
     assert result["daily"][0] == {"date": "2026-08-01", "expense": 120.0, "income": 500.0}
     assert result["expense_categories"] == [{"label": "餐飲", "value": 120.0}]
     assert result["income_total"] == 500.0
+
+
+def test_finance_returns_latest_record_outside_selected_range_and_normalized_goal():
+    db = FakeDatabase(
+        users=[{"id": 1}],
+        select_rows={"transactions": [{"id": 3}], "module_goals": [{"id": 2}]},
+        query_rows={
+            "app_analytics:finance_daily": [],
+            "app_analytics:finance_categories": [],
+            "app_analytics:finance_records": [],
+            "app_analytics:finance_latest": [{
+                "id": 3, "type": "income", "category": "其他", "amount": 500,
+                "note": None, "date": date(2026, 8, 10), "created_at": "2026-08-10T08:00:00",
+            }],
+            "app_analytics:finance_goals": [{
+                "id": 2, "module_key": "finance", "target_description": "存下 1000 元",
+                "target_value": 1000, "target_unit": "TWD", "baseline_value": 0,
+                "target_date": date(2026, 12, 31), "status": "active",
+                "created_at": "2026-08-01T00:00:00", "updated_at": "2026-08-01T00:00:00",
+                "completed_at": None, "current_value": 500,
+            }],
+        },
+    )
+
+    result = AppAnalyticsService(db, today=date(2026, 8, 11)).finance(
+        user(), date(2026, 8, 1), date(2026, 8, 7)
+    )
+
+    assert result["latest_record"]["id"] == 3
+    assert result["latest_record"]["can_edit"] is False
+    assert result["goal_summary"]["id"] == 2
+    assert result["goal_summary"]["progress_percent"] == 50
+    assert result["goals"] == [result["goal_summary"]]
+
+
+def test_goal_normalization_handles_improvement_milestone_and_expired_status():
+    service = AppAnalyticsService(FakeDatabase(), today=date(2026, 8, 11))
+
+    improvement = service._normalized_goal({
+        "id": 1, "goal_type": "weight", "target_description": "降到 60 公斤",
+        "baseline_value": 70, "target_value": 60, "current_value": 65,
+        "progress_mode": "improvement", "status": "active", "target_date": date(2026, 12, 1),
+    })
+    milestone = service._normalized_goal({
+        "id": 2, "goal_type": "exercise", "target_description": "完成三鐵",
+        "target_value": None, "current_value": None, "progress_mode": "milestone",
+        "status": "active", "target_date": None,
+    })
+    expired = service._normalized_goal({
+        "id": 3, "module_key": "finance", "target_description": "存錢",
+        "target_value": 1000, "current_value": 200, "status": "active",
+        "target_date": date(2026, 8, 10),
+    })
+
+    assert improvement["progress_percent"] == 50
+    assert milestone["progress_percent"] == 0
+    assert expired["status"] == "expired"
+    assert service._goal_summary([expired, improvement]) == improvement
 
 
 def test_body_keeps_missing_days_absent_so_line_chart_breaks_the_line():
@@ -367,6 +426,33 @@ def test_remaining_analysis_modules_return_chart_ready_payloads():
     assert exams["practice"][0]["correct"] == 1
     assert exams["official_scores"][0]["note"] == "第一次正式應考"
     assert service.skills(user(is_owner=True), start, end)["videos"][0]["title"] == "影片"
+
+
+def test_todos_separates_pending_current_and_overdue_items():
+    db = FakeDatabase(
+        select_rows={"todos": [{"id": 1}]},
+        query_rows={
+            "app_analytics:todos */": [{
+                "id": 1, "content": "今天處理", "due_at": "2026-08-11T18:00:00+08:00",
+                "start_at": None, "status": "pending", "created_at": "2026-08-10T00:00:00",
+            }],
+            "app_analytics:todos_overdue": [{
+                "id": 2, "content": "已逾期", "due_at": "2026-08-10T18:00:00+08:00",
+                "start_at": None, "status": "pending", "created_at": "2026-08-09T00:00:00",
+            }],
+            "app_analytics:todo_calendar_counts": [],
+        },
+    )
+
+    result = AppAnalyticsService(db, today=date(2026, 8, 11)).todos(
+        user(), date(2026, 8, 11), date(2026, 8, 11),
+        calendar_start=date(2026, 8, 1), calendar_end=date(2026, 8, 31),
+    )
+
+    assert [item["id"] for item in result["items"]] == [1]
+    assert [item["id"] for item in result["overdue_items"]] == [2]
+    assert result["overdue_count"] == 1
+    assert result["overdue_items"][0]["can_edit"] is True
 
 
 def test_jobs_excludes_closed_postings_from_recommendations_but_keeps_distribution():

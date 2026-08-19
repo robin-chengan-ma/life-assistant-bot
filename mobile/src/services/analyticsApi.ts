@@ -82,6 +82,26 @@ export type FinanceAnalytics = {
   expense_total: number;
   income_total: number;
   records: Array<RecordItem>;
+  latest_record: RecordItem | null;
+  goals: GoalItem[];
+  goal_summary: GoalItem | null;
+};
+
+export type GoalItem = {
+  id: number | null;
+  goal_type: string;
+  description: string;
+  target_description: string;
+  status: "active" | "achieved" | "cancelled" | "expired";
+  target_date: string | null;
+  target_value: number | null;
+  current_value: number | null;
+  unit: string | null;
+  progress_percent: number | null;
+  progress_unavailable: boolean;
+  is_exceeded: boolean;
+  updated_at: string | null;
+  completed_at: string | null;
 };
 
 export type RecordKind = "todo" | "finance" | "diet" | "exercise" | "weight" | "mood";
@@ -123,15 +143,11 @@ export type BodyAnalytics = {
     total_calories: number;
     minutes: number;
   }>;
-  goals: Array<{
-    goal_type: string;
-    target_description: string;
-    target_value: number | null;
-    baseline_value: number | null;
-    target_date: string | null;
-  }>;
+  goals: GoalItem[];
+  goal_summary: GoalItem | null;
   body_defaults: { height_cm: number | null; weight_kg: number | null; waist_cm: number | null };
   latest_body_record: RecordItem | null;
+  latest_records: { weight: RecordItem | null; diet: RecordItem | null; exercise: RecordItem | null };
   weight_records: Array<RecordItem>;
   diet_records: Array<RecordItem>;
   exercise_records: Array<RecordItem>;
@@ -148,6 +164,16 @@ export type TodoAnalytics = {
     important_notifications?: string[];
   }>;
   items: Array<{
+    id: number;
+    content: string;
+    due_at: string;
+    start_at: string | null;
+    status: string;
+    created_at: string;
+    can_edit: boolean;
+  }>;
+  overdue_count: number;
+  overdue_items: Array<{
     id: number;
     content: string;
     due_at: string;

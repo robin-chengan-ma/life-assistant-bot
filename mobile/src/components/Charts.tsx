@@ -12,34 +12,61 @@ export type ChartSeries = { color: string; label: string; marker?: "solid" | "ho
 
 const WIDTH = 340;
 const HEIGHT = 190;
-const PADDING = 28;
+const LEFT = 48;
+const RIGHT = 18;
+const TOP = 16;
+const BOTTOM = 32;
 
-export function LineChart({ series }: { series: ChartSeries[] }) {
+function axisDomain(values: number[], zeroBased: boolean) {
+  const sourceMin = Math.min(...values);
+  const sourceMax = Math.max(...values);
+  let min = zeroBased ? Math.min(0, sourceMin) : sourceMin;
+  let max = sourceMax;
+  if (min === max) {
+    const padding = Math.max(Math.abs(min) * 0.05, 1);
+    min = zeroBased ? 0 : min - padding;
+    max += padding;
+  } else if (!zeroBased) {
+    const padding = (max - min) * 0.08;
+    min -= padding;
+    max += padding;
+  }
+  return { min, max, ticks: Array.from({ length: 5 }, (_, index) => min + ((max - min) * index) / 4) };
+}
+
+function visibleLabels(labels: string[]) {
+  const unique = [...new Set(labels)];
+  if (unique.length <= 5) return unique;
+  return [...new Set(Array.from({ length: 5 }, (_, index) => unique[Math.round(index * (unique.length - 1) / 4)]))];
+}
+
+function tickText(value: number) {
+  if (Math.abs(value) >= 1000) return `${Math.round(value / 100) / 10}k`;
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
+export function LineChart({ series, zeroBased = false }: { series: ChartSeries[]; zeroBased?: boolean }) {
   const [tooltip, setTooltip] = useState<string | null>(null);
   const values = series.flatMap((item) => item.points.map((point) => point.value)).filter((value): value is number => value !== null);
   if (!values.length) return <EmptyChart />;
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const range = Math.max(max - min, 1);
-  const pointCount = Math.max(...series.map((item) => item.points.length), 2);
-  const x = (index: number) => PADDING + (index * (WIDTH - PADDING * 2)) / (pointCount - 1);
-  const y = (value: number) => HEIGHT - PADDING - ((value - min) / range) * (HEIGHT - PADDING * 2);
+  const labels = [...new Set(series.flatMap((item) => item.points.map((point) => point.label)))];
+  const { min, max, ticks } = axisDomain(values, zeroBased);
+  const x = (label: string) => labels.length === 1 ? (LEFT + WIDTH - RIGHT) / 2 : LEFT + labels.indexOf(label) * (WIDTH - LEFT - RIGHT) / (labels.length - 1);
+  const y = (value: number) => HEIGHT - BOTTOM - ((value - min) / (max - min)) * (HEIGHT - TOP - BOTTOM);
 
   return (
     <View>
       <Svg accessibilityLabel="趨勢折線圖" height={HEIGHT} viewBox={`0 0 ${WIDTH} ${HEIGHT}`} width="100%">
-        {[0, 1, 2, 3].map((index) => (
-          <Line key={index} stroke="#DCE6E3" strokeWidth={1} x1={PADDING} x2={WIDTH - PADDING} y1={PADDING + index * 42} y2={PADDING + index * 42} />
-        ))}
+        {ticks.map((tick) => <G key={tick}><Line stroke="#DCE6E3" strokeWidth={1} x1={LEFT} x2={WIDTH - RIGHT} y1={y(tick)} y2={y(tick)} /><SvgText fill={colors.textMuted} fontSize={9} textAnchor="end" x={LEFT - 6} y={y(tick) + 3}>{tickText(tick)}</SvgText></G>)}
         {series.map((item) => {
           const segments: string[][] = [];
           let current: string[] = [];
-          item.points.forEach((point, index) => {
+          item.points.forEach((point) => {
             if (point.value === null) {
               if (current.length) segments.push(current);
               current = [];
             } else {
-              current.push(`${x(index)},${y(point.value)}`);
+              current.push(`${x(point.label)},${y(point.value)}`);
             }
           });
           if (current.length) segments.push(current);
@@ -48,12 +75,11 @@ export function LineChart({ series }: { series: ChartSeries[] }) {
               {segments.map((segment, index) => (
                 <Polyline key={index} fill="none" points={segment.join(" ")} stroke={item.color} strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} />
               ))}
-              {item.points.map((point, index) => point.value === null ? null : <Circle accessibilityLabel={`${item.label} ${point.label} ${point.value}`} key={index} cx={x(index)} cy={y(point.value)} fill={item.marker === "solid" ? item.color : colors.surface} onPress={() => setTooltip(point.tooltip ?? `${point.label}｜${item.label}：${point.value}`)} r={5} stroke={item.color} strokeWidth={2} />)}
+              {item.points.map((point, index) => point.value === null ? null : <Circle accessibilityLabel={`${item.label} ${point.label} ${point.value}`} key={index} cx={x(point.label)} cy={y(point.value)} fill={item.marker === "solid" ? item.color : colors.surface} onPress={() => setTooltip(point.tooltip ?? `${point.label}｜${item.label}：${point.value}`)} r={5} stroke={item.color} strokeWidth={2} />)}
             </G>
           );
         })}
-        <SvgText fill={colors.textMuted} fontSize={10} x={PADDING} y={HEIGHT - 6}>{series[0]?.points[0]?.label ?? ""}</SvgText>
-        <SvgText fill={colors.textMuted} fontSize={10} textAnchor="end" x={WIDTH - PADDING} y={HEIGHT - 6}>{series[0]?.points.at(-1)?.label ?? ""}</SvgText>
+        {visibleLabels(labels).map((label) => <SvgText fill={colors.textMuted} fontSize={9} key={label} textAnchor="middle" x={x(label)} y={HEIGHT - 8}>{label.slice(5)}</SvgText>)}
       </Svg>
       {tooltip ? <Text style={styles.tooltip}>{tooltip}</Text> : null}
       <View style={styles.legend}>{series.map((item) => <View key={item.label} style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: item.marker === "hollow" ? colors.surface : item.color, borderColor: item.color, borderWidth: item.marker === "hollow" ? 2 : 0 }]} /><Text style={styles.legendText}>{item.label}</Text></View>)}</View>
@@ -64,14 +90,17 @@ export function LineChart({ series }: { series: ChartSeries[] }) {
 export function BarChart({ data, color = colors.primary }: { data: ChartPoint[]; color?: string }) {
   const usable = data.filter((point): point is { label: string; value: number } => point.value !== null);
   if (!usable.length) return <EmptyChart />;
-  const max = Math.max(...usable.map((point) => point.value), 1);
-  const barWidth = Math.max(12, (WIDTH - PADDING * 2) / usable.length - 10);
+  const { max, ticks } = axisDomain(usable.map((point) => point.value), true);
+  const barWidth = Math.max(12, (WIDTH - LEFT - RIGHT) / usable.length - 10);
+  const y = (value: number) => HEIGHT - BOTTOM - (value / max) * (HEIGHT - TOP - BOTTOM);
   return (
     <Svg accessibilityLabel="長條圖" height={HEIGHT} viewBox={`0 0 ${WIDTH} ${HEIGHT}`} width="100%">
+      {ticks.map((tick) => <G key={tick}><Line stroke="#DCE6E3" strokeWidth={1} x1={LEFT} x2={WIDTH - RIGHT} y1={y(tick)} y2={y(tick)} /><SvgText fill={colors.textMuted} fontSize={9} textAnchor="end" x={LEFT - 6} y={y(tick) + 3}>{tickText(tick)}</SvgText></G>)}
       {usable.map((point, index) => {
-        const barHeight = (point.value / max) * (HEIGHT - 70);
-        const barX = PADDING + index * ((WIDTH - PADDING * 2) / usable.length) + 5;
-        return <G key={`${point.label}-${index}`}><Rect fill={color} height={barHeight} rx={4} width={barWidth} x={barX} y={HEIGHT - 35 - barHeight} /><SvgText fill={colors.textMuted} fontSize={9} textAnchor="middle" x={barX + barWidth / 2} y={HEIGHT - 18}>{point.label.slice(5)}</SvgText></G>;
+        const barY = y(point.value);
+        const barHeight = HEIGHT - BOTTOM - barY;
+        const barX = LEFT + index * ((WIDTH - LEFT - RIGHT) / usable.length) + 5;
+        return <G key={`${point.label}-${index}`}><Rect fill={color} height={barHeight} rx={4} width={barWidth} x={barX} y={barY} /><SvgText fill={colors.textMuted} fontSize={9} textAnchor="middle" x={barX + barWidth / 2} y={HEIGHT - 10}>{point.label.slice(5)}</SvgText></G>;
       })}
     </Svg>
   );

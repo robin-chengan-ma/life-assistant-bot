@@ -2,12 +2,13 @@ import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import { Redirect, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Calendar, type DateData } from "react-native-calendars";
-import { ActivityIndicator, Modal, ScrollView, StyleSheet } from "react-native";
+import { ActivityIndicator, Modal, ScrollView, StyleSheet, useWindowDimensions } from "react-native";
 
 import { AppPressable as Pressable } from "@/components/AppPressable";
 import { AppText as Text } from "@/components/AppText";
 import { AppView as View } from "@/components/AppView";
 import { AppShell } from "@/components/AppShell";
+import { GoalSummaryCard } from "@/components/AnalyticsShared";
 import { BarChart, ChartCard, FunnelChart, LineChart, PieChart } from "@/components/Charts";
 import { DateRangeFilter, defaultDateRange, SingleDateFilter, todayIsoDate } from "@/components/DateRangeFilter";
 import { RecordModal } from "@/components/RecordModal";
@@ -19,6 +20,7 @@ import { useDashboard } from "@/context/DashboardContext";
 import {
   getAnalytics,
   deleteRecord,
+  updateRecord,
   type AnalyticsModule,
   type AnalyticsResponseMap,
   type BodyAnalytics,
@@ -124,9 +126,9 @@ export default function AnalyticsScreen() {
           calendarCounts={module === "todos" ? (payload as TodoAnalytics | null)?.calendar_counts : undefined}
           calendarDays={module === "todos" ? (payload as TodoAnalytics | null)?.calendar_days : filterCalendarDays}
           holidayOnly={module !== "todos"}
-          hint={module === "todos" ? "可查任意日期，每次區間最少 1 天、最多 7 天" : undefined}
+          hint={module === "todos" ? "可查任意日期，每次區間最少 1 天、最多 7 天" : "可查任意歷史日期，每次區間最少 1 天、最多 30 天"}
           maxDays={module === "todos" ? 7 : undefined}
-          minDays={module === "todos" ? 1 : undefined}
+          minDays={1}
           onCalendarMonthChange={setCalendarMonth}
           onApply={setRange}
           range={range}
@@ -135,8 +137,9 @@ export default function AnalyticsScreen() {
       {loading ? <ActivityIndicator color={colors.primary} size="large" /> : null}
       {error ? <View style={styles.errorCard}><Text style={styles.errorText}>{error}</Text><Pressable onPress={() => void load()}><Text style={styles.retry}>重新載入</Text></Pressable></View> : null}
       {!loading && !error && payload && !hasRangeData && module !== "todos" ? <EmptyState hasAnyData={hasAnyData} /> : null}
-      {!loading && !error && payload && (hasRangeData || module === "todos") ? renderModule(module, payload, range, calendarMonth, setCalendarMonth, scrollViewRef) : null}
+      {!loading && !error && payload ? renderModule(module, payload, range, calendarMonth, setCalendarMonth, scrollViewRef) : null}
       {!loading && !error && payload ? <EditableRecords module={module} onDelete={setDeleting} onEdit={setEditing} payload={payload} /> : null}
+      {!loading && !error && module === "todos" && payload ? <OverdueTodos authorizedRequest={authorizedRequest} data={payload as TodoAnalytics} onEdit={(item) => setEditing({ kind: "todo", item: item as unknown as RecordItem })} onSaved={load} /> : null}
       {savedMessage ? <View style={styles.savedToast}><Text style={styles.savedText}>{savedMessage}</Text>{pendingDeletion ? <Pressable onPress={undoDelete}><Text style={styles.undoText}>復原</Text></Pressable> : null}</View> : null}
       {editing ? <RecordModal authorizedRequest={authorizedRequest} initial={editing.item} kind={editing.kind} onClose={() => setEditing(null)} onSaved={async () => { await load(); setSavedMessage("紀錄已更新"); setTimeout(() => setSavedMessage(null), 2400); }} visible /> : null}
       <Modal animationType="fade" onRequestClose={() => setDeleting(null)} transparent visible={Boolean(deleting)}><View style={styles.deleteBackdrop}><View style={styles.deleteCard}><Text style={styles.deleteTitle}>確認刪除？</Text><Text style={styles.bodyText}>確認後有 5 秒可復原，逾時才會正式刪除。</Text><View style={styles.recordActions}><Pressable onPress={() => setDeleting(null)} style={[styles.recordButton, styles.editButton]}><Text style={styles.recordButtonText}>取消</Text></Pressable><Pressable disabled={Boolean(pendingDeletion)} onPress={scheduleDelete} style={[styles.recordButton, styles.deleteButton]}><Text style={styles.deleteButtonText}>刪除</Text></Pressable></View></View></View></Modal>
@@ -145,13 +148,42 @@ export default function AnalyticsScreen() {
 }
 
 function EditableRecords({ module, onDelete, onEdit, payload }: { module: AnalyticsModule; onDelete: (value: { kind: RecordKind; item: RecordItem }) => void; onEdit: (value: { kind: RecordKind; item: RecordItem }) => void; payload: AnalyticsResponseMap[AnalyticsModule] }) {
-  let groups: Array<{ kind: RecordKind; label: string; records: RecordItem[]; goalText?: string }> = [];
+  const { height: windowHeight } = useWindowDimensions();
+  let groups: Array<{ kind: RecordKind; label: string; records: RecordItem[]; latest?: RecordItem | null }> = [];
   if (module === "todos") groups = [{ kind: "todo", label: "待辦紀錄管理", records: (payload as TodoAnalytics).items as unknown as RecordItem[] }];
-  if (module === "finance") groups = [{ kind: "finance", label: "收支紀錄管理", records: (payload as FinanceAnalytics).records }];
+  if (module === "finance") { const value = payload as FinanceAnalytics; groups = [{ kind: "finance", label: "日期區間收支紀錄", records: value.records, latest: value.latest_record }]; }
   if (module === "mood") groups = [{ kind: "mood", label: "心情紀錄管理", records: (payload as MoodAnalytics).items as unknown as RecordItem[] }];
-  if (module === "body") { const value = payload as BodyAnalytics; const goal = value.goals.find((item) => item.goal_type === "weight"); const goalText = goal ? `目標：${goal.target_date ? String(goal.target_date).slice(2) : "未設定日期"} ${goal.target_description}` : "未設定目標"; groups = [{ kind: "weight", label: "體態紀錄管理", records: value.latest_body_record ? [value.latest_body_record] : [], goalText }, { kind: "diet", label: "飲食紀錄管理", records: value.diet_records }, { kind: "exercise", label: "運動紀錄管理", records: value.exercise_records }]; }
+  if (module === "body") { const value = payload as BodyAnalytics; groups = [{ kind: "weight", label: "日期區間體態紀錄", records: value.weight_records, latest: value.latest_records.weight }, { kind: "diet", label: "日期區間飲食紀錄", records: value.diet_records, latest: value.latest_records.diet }, { kind: "exercise", label: "日期區間運動紀錄", records: value.exercise_records, latest: value.latest_records.exercise }]; }
   if (!groups.length) return null;
-  return <>{groups.map((group) => <Section key={group.kind} title={group.label}>{group.records.length ? group.records.map((item) => { const recordDate = String(item.date ?? item.entry_date ?? item.due_at ?? "").slice(0, 10); const isLegacyDailyRecord = (["diet", "weight", "mood"] as RecordKind[]).includes(group.kind) && recordDate === todayIsoDate(); return <View key={`${group.kind}-${item.id}`} style={styles.listCard}>{group.kind === "weight" ? <View style={styles.bodyRecordValues}><SensitiveRow label="身高" value={item.height_cm == null ? null : `${Number(item.height_cm).toFixed(1)} 公分`} /><SensitiveRow label="體重" value={item.weight_kg == null ? null : `${Number(item.weight_kg).toFixed(1)} 公斤`} /><SensitiveRow label="腰圍" value={item.waist_cm == null ? null : `${Number(item.waist_cm).toFixed(1)} 公分`} /><SensitiveRow label="BMI" unavailable="無法計算" value={item.bmi == null ? null : Number(item.bmi).toFixed(2)} /></View> : group.kind === "finance" ? <View style={styles.inlineSensitive}><Text style={styles.itemTitle}>{item.type === "income" ? "收入" : "支出"}｜{String(item.category)}｜</Text><SensitiveValue style={styles.itemTitle}>{`${Number(item.amount).toLocaleString()} 元`}</SensitiveValue></View> : <Text style={styles.itemTitle}>{recordSummary(group.kind, item)}</Text>}<Text style={styles.meta}>{String(item.date ?? item.entry_date ?? item.due_at ?? "")}</Text>{item.can_edit ? <View style={styles.recordActions}><Pressable onPress={() => onEdit({ kind: group.kind, item })} style={[styles.recordButton, styles.editButton]}><Text style={styles.recordButtonText}>編輯</Text></Pressable><Pressable onPress={() => onDelete({ kind: group.kind, item })} style={[styles.recordButton, styles.deleteButton]}><Text style={styles.deleteButtonText}>刪除</Text></Pressable></View> : <Text style={styles.telegramHint}>{isLegacyDailyRecord ? "今日僅能異動最新一筆紀錄。" : "若需異動其他日期的紀錄，請使用 Telegram。"}</Text>}{group.kind === "weight" ? <Text style={styles.bodyGoalText}>{group.goalText}</Text> : null}</View>; }) : <Text style={styles.todoEmptyText}>{group.kind === "weight" ? "尚無體態紀錄" : "這段期間沒有紀錄"}</Text>}</Section>)}</>;
+  const recordCard = (group: typeof groups[number], item: RecordItem, latest: boolean) => <View key={`${group.kind}-${item.id}-${latest ? "latest" : "range"}`} style={styles.listCard}>{group.kind === "weight" ? <View style={styles.bodyRecordValues}><SensitiveRow label="身高" value={item.height_cm == null ? null : `${Number(item.height_cm).toFixed(1)} 公分`} /><SensitiveRow label="體重" value={item.weight_kg == null ? null : `${Number(item.weight_kg).toFixed(1)} 公斤`} /><SensitiveRow label="腰圍" value={item.waist_cm == null ? null : `${Number(item.waist_cm).toFixed(1)} 公分`} /><SensitiveRow label="BMI" unavailable="無法計算" value={item.bmi == null ? null : Number(item.bmi).toFixed(2)} /></View> : group.kind === "finance" ? <View style={styles.inlineSensitive}><Text style={styles.itemTitle}>{item.type === "income" ? "收入" : "支出"}｜{String(item.category)}｜</Text><SensitiveValue style={styles.itemTitle}>{`${Number(item.amount).toLocaleString()} 元`}</SensitiveValue></View> : <Text style={styles.itemTitle}>{recordSummary(group.kind, item)}</Text>}<Text style={styles.meta}>{String(item.date ?? item.entry_date ?? item.due_at ?? "")}</Text>{latest && item.can_edit ? <View style={styles.recordActions}><Pressable onPress={() => onEdit({ kind: group.kind, item })} style={[styles.recordButton, styles.editButton]}><Text style={styles.recordButtonText}>編輯</Text></Pressable><Pressable onPress={() => onDelete({ kind: group.kind, item })} style={[styles.recordButton, styles.deleteButton]}><Text style={styles.deleteButtonText}>刪除</Text></Pressable></View> : latest ? <Text style={styles.telegramHint}>歷史紀錄請至 Telegram 管理。</Text> : null}</View>;
+  return <>{groups.map((group) => <View key={group.kind} style={styles.recordGroup}><Section title={group.label}><ScrollView contentContainerStyle={styles.rangeRecordContent} nestedScrollEnabled style={{ maxHeight: windowHeight * 0.6 }}>{group.records.length ? group.records.map((item) => recordCard(group, item, false)) : <Text style={styles.todoEmptyText}>這段期間沒有紀錄</Text>}</ScrollView></Section>{group.latest !== undefined ? <Section title="最近紀錄">{group.latest ? recordCard(group, group.latest, true) : <Text style={styles.todoEmptyText}>尚無紀錄</Text>}</Section> : null}</View>)}</>;
+}
+
+function OverdueTodos({ authorizedRequest, data, onEdit, onSaved }: { authorizedRequest: Parameters<typeof updateRecord>[0]; data: TodoAnalytics; onEdit: (item: TodoAnalytics["overdue_items"][number]) => void; onSaved: () => Promise<void> }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState<number | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const changeStatus = async (item: TodoAnalytics["overdue_items"][number], nextStatus: "completed" | "cancelled") => {
+    setBusy(item.id);
+    setActionError(null);
+    try {
+      await updateRecord(authorizedRequest, "todo", item.id, {
+        content: item.content,
+        start_at: item.start_at ?? item.due_at,
+        due_at: item.due_at,
+        status: nextStatus,
+      });
+      await onSaved();
+    } catch (requestError) {
+      setActionError(requestError instanceof ApiError ? requestError.message : "待辦更新失敗，請稍後再試");
+    } finally {
+      setBusy(null);
+    }
+  };
+  return <>
+    <Pressable onPress={() => setOpen(true)} style={styles.overdueEntry}><Text style={styles.overdueEntryText}>逾期待辦（{data.overdue_count}）</Text><MaterialCommunityIcons color={colors.danger} name="chevron-right" size={22} /></Pressable>
+    <Modal animationType="fade" onRequestClose={() => setOpen(false)} transparent visible={open}><View style={styles.deleteBackdrop}><View style={styles.overdueModal}><View style={styles.todoItemHeading}><Text style={styles.deleteTitle}>逾期待辦</Text><Pressable onPress={() => setOpen(false)}><Text style={styles.retry}>關閉</Text></Pressable></View>{actionError ? <Text style={styles.errorText}>{actionError}</Text> : null}<ScrollView contentContainerStyle={styles.overdueList}>{data.overdue_items.length ? data.overdue_items.map((item) => <View key={item.id} style={styles.listCard}><Text style={styles.itemTitle}>{item.content}</Text><Text style={styles.meta}>{item.due_at}</Text><View style={styles.recordActions}><Pressable disabled={busy === item.id} onPress={() => void changeStatus(item, "completed")} style={[styles.recordButton, styles.editButton]}><Text style={styles.recordButtonText}>標記完成</Text></Pressable><Pressable onPress={() => { setOpen(false); onEdit(item); }} style={[styles.recordButton, styles.editButton]}><Text style={styles.recordButtonText}>編輯期限</Text></Pressable><Pressable disabled={busy === item.id} onPress={() => void changeStatus(item, "cancelled")} style={[styles.recordButton, styles.deleteButton]}><Text style={styles.deleteButtonText}>取消待辦</Text></Pressable></View></View>) : <Text style={styles.todoEmptyText}>目前沒有逾期待辦</Text>}</ScrollView></View></View></Modal>
+  </>;
 }
 
 function SensitiveRow({ label, unavailable = "尚無紀錄", value }: { label: string; unavailable?: string; value: string | null }) { return <View style={styles.inlineSensitive}><Text style={styles.bodyRecordValue}>{label}：</Text>{value ? <SensitiveValue style={styles.bodyRecordValue}>{value}</SensitiveValue> : <Text style={styles.bodyRecordValue}>{unavailable}</Text>}</View>; }
@@ -249,6 +281,7 @@ function BodyView({ data }: { data: BodyAnalytics }) {
   const dietTooltip = (row: BodyAnalytics["diet"][number], nutrient: "fat_g" | "protein_g" | "carbs_g" | "calories", unit: string) => `${row.date}｜人工 ${row[`manual_${nutrient}`]} ${unit}｜AI ${row[`ai_${nutrient}`]} ${unit}｜合計 ${row[`total_${nutrient}`]} ${unit}`;
   const exerciseTooltip = (row: BodyAnalytics["exercise"][number]) => `${row.date}｜人工 ${row.manual_calories} 大卡｜AI ${row.ai_calories} 大卡｜合計 ${row.total_calories} 大卡`;
   return <>
+    <GoalSummaryCard goal={data.goal_summary} goals={data.goals} />
     <ChartCard title="體重趨勢"><LineChart series={[{ label: "體重", color: "#2E9D74", marker: "solid", points: data.weight.map((row) => ({ label: row.date, value: row.weight })) }, { label: "目標", color: "#9AA8A4", marker: "hollow", points: data.weight.map((row) => ({ label: row.date, value: weightGoal })) }]} /></ChartCard>
     <ChartCard title="腰圍趨勢"><LineChart series={[{ label: "腰圍", color: "#D9544D", marker: "solid", points: data.weight.map((row) => ({ label: row.date, value: row.waist })) }]} /></ChartCard>
     <ChartCard title="BMI 趨勢"><LineChart series={[{ label: "BMI", color: "#3B82F6", marker: "solid", points: data.weight.map((row) => ({ label: row.date, value: row.bmi })) }]} /></ChartCard>
@@ -258,18 +291,18 @@ function BodyView({ data }: { data: BodyAnalytics }) {
         { label: `${label}（人工）`, color, marker: "solid" as const, points: data.diet.map((row) => ({ label: row.date, tooltip: dietTooltip(row, key, unit), value: row.manual_count ? row[`manual_${key}`] : null })) },
         { label: `${label}（AI）`, color, marker: "hollow" as const, points: data.diet.map((row) => ({ label: row.date, tooltip: dietTooltip(row, key, unit), value: row.ai_count ? row[`ai_${key}`] : null })) },
       ]),
-    ]} /><Text style={styles.aiEstimateNotice}>提醒：實心圓為人工輸入，空心圓為 AI 估算；AI 結果未必是最準確的數值喔！</Text></ChartCard>
+    ]} zeroBased /><Text style={styles.aiEstimateNotice}>提醒：實心圓為人工輸入，空心圓為 AI 估算；AI 結果未必是最準確的數值喔！</Text></ChartCard>
     <ChartCard title="運動趨勢"><LineChart series={[
       { label: "消耗大卡（人工）", color: "#EB9741", marker: "solid", points: data.exercise.map((row) => ({ label: row.date, tooltip: exerciseTooltip(row), value: row.manual_count ? row.manual_calories : null })) },
       { label: "消耗大卡（AI）", color: "#EB9741", marker: "hollow", points: data.exercise.map((row) => ({ label: row.date, tooltip: exerciseTooltip(row), value: row.ai_count ? row.ai_calories : null })) },
       { label: "分鐘", color: "#2E9D74", marker: "solid", points: data.exercise.map((row) => ({ label: row.date, value: row.minutes })) },
       { label: "目標分鐘", color: "#9AA8A4", marker: "hollow", points: data.exercise.map((row) => ({ label: row.date, value: exerciseGoal })) },
-    ]} /><Text style={styles.aiEstimateNotice}>提醒：實心圓為人工輸入，空心圓為 AI 估算；AI 結果未必是最準確的數值喔！</Text></ChartCard>
+    ]} zeroBased /><Text style={styles.aiEstimateNotice}>提醒：實心圓為人工輸入，空心圓為 AI 估算；AI 結果未必是最準確的數值喔！</Text></ChartCard>
   </>;
 }
 
 function FinanceView({ data }: { data: FinanceAnalytics }) {
-  return <><View style={styles.metricRow}><Metric label="支出合計" sensitive value={`$${data.expense_total.toLocaleString()}`} /><Metric label="收入合計" sensitive value={`$${data.income_total.toLocaleString()}`} /></View><ChartCard title="支出趨勢"><LineChart series={[{ label: "每日支出", color: "#EB9741", points: data.daily.map((row) => ({ label: row.date, value: row.expense })) }]} /></ChartCard><ChartCard title="支出分類"><PieChart data={data.expense_categories} sensitive /></ChartCard><ChartCard title="收支比較"><LineChart series={[{ label: "收入", color: "#2E9D74", points: data.daily.map((row) => ({ label: row.date, value: row.income })) }, { label: "支出", color: "#EB9741", points: data.daily.map((row) => ({ label: row.date, value: row.expense })) }]} /></ChartCard></>;
+  return <><GoalSummaryCard goal={data.goal_summary} goals={data.goals} /><View style={styles.metricRow}><Metric label="支出合計" sensitive value={`$${data.expense_total.toLocaleString()}`} /><Metric label="收入合計" sensitive value={`$${data.income_total.toLocaleString()}`} /></View><ChartCard title="支出趨勢"><LineChart zeroBased series={[{ label: "每日支出", color: "#EB9741", points: data.daily.map((row) => ({ label: row.date, value: row.expense })) }]} /></ChartCard><ChartCard title="支出分類"><PieChart data={data.expense_categories} sensitive /></ChartCard><ChartCard title="收支比較"><LineChart zeroBased series={[{ label: "收入", color: "#2E9D74", points: data.daily.map((row) => ({ label: row.date, value: row.income })) }, { label: "支出", color: "#EB9741", points: data.daily.map((row) => ({ label: row.date, value: row.expense })) }]} /></ChartCard></>;
 }
 
 function MoodView({ data }: { data: MoodAnalytics }) {
@@ -283,7 +316,7 @@ function JobsView({ data }: { data: JobsAnalytics }) {
 function ExamsView({ data }: { data: ExamsAnalytics }) {
   const accuracy = data.practice.map((row) => ({ label: String(row.date ?? ""), value: Number(row.total ?? 0) ? Math.round((Number(row.correct ?? 0) / Number(row.total)) * 100) : 0 }));
   const weak = Object.values(data.practice.reduce<Record<string, { label: string; total: number; wrong: number }>>((result, row) => { const key = String(row.question_type ?? "其他"); const current = result[key] ?? { label: key, total: 0, wrong: 0 }; current.total += Number(row.total ?? 0); current.wrong += Number(row.total ?? 0) - Number(row.correct ?? 0); result[key] = current; return result; }, {}));
-  return <><Section title="證照目標">{data.goals.map((goal, index) => <View key={index} style={styles.listCard}><Text style={styles.itemTitle}>{String(goal.exam_type ?? "證照")}</Text><View style={styles.inlineSensitive}><Text style={styles.bodyText}>目標：</Text>{goal.target_score == null ? <Text style={styles.bodyText}>未設定</Text> : <SensitiveValue style={styles.bodyText}>{String(goal.target_score)}</SensitiveValue>}<Text style={styles.bodyText}>　日期：{String(goal.target_date ?? "未設定")}</Text></View></View>)}</Section><ChartCard title="每日練習正確率"><LineChart series={[{ label: "正確率 %", color: "#D89B20", points: accuracy }]} /></ChartCard><ChartCard title="弱點分析"><BarChart color="#D9544D" data={weak.map((item) => ({ label: item.label, value: item.wrong }))} /></ChartCard><Section title="正式成績歷程">{data.official_scores.map((score, index) => <View key={index} style={styles.listCard}><View style={styles.inlineSensitive}><Text style={styles.itemTitle}>{String(score.exam_type ?? "證照")} · </Text><SensitiveValue style={styles.itemTitle}>{String(score.score ?? "—")}</SensitiveValue></View><Text style={styles.meta}>{String(score.exam_date ?? "")}</Text>{score.note ? <Text style={styles.bodyText}>{String(score.note)}</Text> : null}</View>)}</Section></>;
+  return <><Section title="證照目標">{data.goals.map((goal, index) => <View key={index} style={styles.listCard}><Text style={styles.itemTitle}>{String(goal.exam_type ?? "證照")}</Text><View style={styles.inlineSensitive}><Text style={styles.bodyText}>目標：</Text>{goal.target_score == null ? <Text style={styles.bodyText}>未設定</Text> : <SensitiveValue style={styles.bodyText}>{String(goal.target_score)}</SensitiveValue>}<Text style={styles.bodyText}>　日期：{String(goal.target_date ?? "未設定")}</Text></View></View>)}</Section><ChartCard title="每日練習正確率"><LineChart zeroBased series={[{ label: "正確率 %", color: "#D89B20", points: accuracy }]} /></ChartCard><ChartCard title="弱點分析"><BarChart color="#D9544D" data={weak.map((item) => ({ label: item.label, value: item.wrong }))} /></ChartCard><Section title="正式成績歷程">{data.official_scores.map((score, index) => <View key={index} style={styles.listCard}><View style={styles.inlineSensitive}><Text style={styles.itemTitle}>{String(score.exam_type ?? "證照")} · </Text><SensitiveValue style={styles.itemTitle}>{String(score.score ?? "—")}</SensitiveValue></View><Text style={styles.meta}>{String(score.exam_date ?? "")}</Text>{score.note ? <Text style={styles.bodyText}>{String(score.note)}</Text> : null}</View>)}</Section></>;
 }
 
 function SkillsView({ data }: { data: SkillsAnalytics }) {
@@ -306,5 +339,7 @@ const styles = StyleSheet.create({
   savedToast: { alignItems: "center", alignSelf: "center", backgroundColor: colors.primaryDark, borderRadius: 20, bottom: 22, flexDirection: "row", gap: 14, paddingHorizontal: 18, paddingVertical: 10, position: "absolute", zIndex: 10 }, savedText: { color: colors.white, fontWeight: "700" }, undoText: { color: "#FFD18A", fontWeight: "900", textDecorationLine: "underline" },
   recordActions: { flexDirection: "row", gap: 8, justifyContent: "flex-end", marginTop: 6 }, recordButton: { borderRadius: 9, paddingHorizontal: 14, paddingVertical: 8 }, editButton: { backgroundColor: colors.primarySoft }, deleteButton: { backgroundColor: "#FAD7D5" }, recordButtonText: { color: colors.primaryDark, fontWeight: "800" }, deleteButtonText: { color: colors.danger, fontWeight: "800" }, telegramHint: { color: colors.textMuted, fontSize: 11, marginTop: 4 },
   bodyRecordValues: { gap: 6 }, bodyRecordValue: { color: colors.text, fontSize: 15, fontWeight: "700" }, inlineSensitive: { alignItems: "baseline", flexDirection: "row", flexWrap: "wrap" }, bodyGoalText: { borderTopColor: colors.border, borderTopWidth: 1, color: colors.primaryDark, fontSize: 13, fontWeight: "800", marginTop: 6, paddingTop: 10 },
+  rangeRecordContent: { gap: 10 }, recordGroup: { gap: 14 },
   deleteBackdrop: { alignItems: "center", backgroundColor: "rgba(16,38,34,.45)", flex: 1, justifyContent: "center", padding: 20 }, deleteCard: { backgroundColor: colors.surface, borderRadius: 20, gap: 16, maxWidth: 420, padding: 24, width: "100%" }, deleteTitle: { color: colors.text, fontSize: 21, fontWeight: "900" },
+  overdueEntry: { alignItems: "center", backgroundColor: "#FFF0F0", borderColor: "#F0B9B5", borderRadius: 14, borderWidth: 1, flexDirection: "row", justifyContent: "space-between", padding: 15 }, overdueEntryText: { color: colors.danger, fontSize: 16, fontWeight: "900" }, overdueList: { gap: 10 }, overdueModal: { backgroundColor: colors.surface, borderRadius: 20, gap: 14, maxHeight: "80%", maxWidth: 520, padding: 20, width: "100%" },
 });

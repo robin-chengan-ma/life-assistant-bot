@@ -59,7 +59,7 @@ class AnalyticsDateRange:
 
 
 def parse_date_range(start: str, end: str, *, today: date | None = None) -> AnalyticsDateRange:
-    """解析任意歷史區間；單次最少 7 天、最多 30 天（起訖日皆計入）。"""
+    """解析任意歷史區間；單次最少 1 天、最多 30 天（起訖日皆計入）。"""
     try:
         start_date = date.fromisoformat(start)
         end_date = date.fromisoformat(end)
@@ -72,8 +72,8 @@ def parse_date_range(start: str, end: str, *, today: date | None = None) -> Anal
         raise DateRangeError("開始日期不可晚於結束日期")
     if end_date > current_date:
         raise DateRangeError("不可查詢未來日期")
-    if selected.days < 7 or selected.days > 30:
-        raise DateRangeError("日期區間必須介於 7 到 30 天")
+    if selected.days < 1 or selected.days > 30:
+        raise DateRangeError("日期區間必須介於 1 到 30 天")
     return selected
 
 
@@ -153,9 +153,62 @@ def _matches_calendar_name(day: dict[str, Any], label: str) -> bool:
 
 
 class AppAnalyticsService:
-    def __init__(self, db: AnalyticsDatabase, *, sync_calendar: bool = False):
+    def __init__(self, db: AnalyticsDatabase, *, sync_calendar: bool = False, today: date | None = None):
         self._db = db
         self._calendar = TaiwanCalendarService(db, sync_missing=sync_calendar)
+        self._today = today or datetime.now(_TAIWAN_TZ).date()
+
+    def _normalized_goal(self, row: dict[str, Any]) -> dict[str, Any]:
+        target = float(row["target_value"]) if row.get("target_value") is not None else None
+        current = float(row["current_value"]) if row.get("current_value") is not None else None
+        baseline = float(row["baseline_value"]) if row.get("baseline_value") is not None else None
+        progress = None
+        exceeded = False
+        mode = row.get("progress_mode", "cumulative")
+        if row.get("status") == "achieved":
+            progress = 100.0
+        elif mode == "improvement" and target is not None and current is not None and baseline != target:
+            raw_progress = (current - baseline) / (target - baseline) * 100 if baseline is not None else 0
+            exceeded = raw_progress > 100
+            progress = round(max(0, min(raw_progress, 100)), 1)
+        elif mode == "milestone":
+            progress = 0.0
+        elif mode == "cumulative" and target is not None and target > 0 and current is not None:
+            raw_progress = current / target * 100
+            exceeded = raw_progress > 100
+            progress = round(max(0, min(raw_progress, 100)), 1)
+        description = row.get("target_description") or row.get("exam_type") or "未命名目標"
+        target_date = _json_value(row.get("target_date"))
+        status = row.get("status", "active")
+        if status == "active" and target_date and date.fromisoformat(str(target_date)[:10]) < self._today:
+            status = "expired"
+        return {
+            "id": row.get("id"),
+            "goal_type": row.get("goal_type") or row.get("module_key") or row.get("exam_type"),
+            "description": description,
+            "target_description": description,
+            "status": status,
+            "target_date": target_date,
+            "target_value": target,
+            "current_value": current,
+            "unit": row.get("target_unit"),
+            "progress_percent": progress,
+            "progress_unavailable": progress is None,
+            "is_exceeded": exceeded,
+            "updated_at": _json_value(row.get("updated_at")),
+            "completed_at": _json_value(row.get("completed_at")),
+        }
+
+    @staticmethod
+    def _goal_summary(goals: list[dict[str, Any]]) -> dict[str, Any] | None:
+        active = [goal for goal in goals if goal["status"] == "active"]
+        if not active:
+            return None
+        dated = [goal for goal in active if goal["target_date"]]
+        candidates = sorted(dated or active, key=lambda goal: str(goal.get("updated_at") or ""), reverse=True)
+        if dated:
+            candidates.sort(key=lambda goal: goal["target_date"])
+        return candidates[0]
 
     def navigation(self, user: AuthenticatedUser) -> dict[str, dict[str, Any]]:
         rows = self._db.select(
@@ -416,10 +469,19 @@ class AppAnalyticsService:
         rows = self._db.execute_query(
             """/* app_analytics:todos */ SELECT id, content, due_at, start_at, status, created_at
             FROM todos WHERE user_id = %s
+              AND status = 'pending'
+              AND DATE(due_at AT TIME ZONE 'Asia/Taipei') >= %s
               AND DATE(COALESCE(start_at, due_at) AT TIME ZONE 'Asia/Taipei') <= %s
               AND DATE(due_at AT TIME ZONE 'Asia/Taipei') >= %s
             ORDER BY due_at""",
-            (user.database_id, end, start),
+            (user.database_id, self._today, end, start),
+        )
+        overdue_rows = self._db.execute_query(
+            """/* app_analytics:todos_overdue */ SELECT id, content, due_at, start_at, status, created_at
+            FROM todos WHERE user_id = %s AND status = 'pending'
+              AND DATE(due_at AT TIME ZONE 'Asia/Taipei') < %s
+            ORDER BY due_at DESC, created_at DESC, id DESC""",
+            (user.database_id, self._today),
         )
         count_rows = self._db.execute_query(
             """/* app_analytics:todo_calendar_counts */
@@ -429,7 +491,7 @@ class AppAnalyticsService:
               DATE(COALESCE(t.start_at, t.due_at) AT TIME ZONE 'Asia/Taipei'),
               DATE(t.due_at AT TIME ZONE 'Asia/Taipei'), INTERVAL '1 day'
             ) AS day
-            WHERE t.user_id = %s AND day::date BETWEEN %s AND %s
+            WHERE t.user_id = %s AND t.status = 'pending' AND day::date BETWEEN %s AND %s
             GROUP BY day::date ORDER BY day::date""",
             (user.database_id, calendar_start, calendar_end),
         )
@@ -437,6 +499,8 @@ class AppAnalyticsService:
         return {
             "has_any_data": self._has_user_data("todos", user.database_id),
             "items": [{**_json_row(row), "can_edit": True} for row in rows],
+            "overdue_items": [{**_json_row(row), "can_edit": True} for row in overdue_rows],
+            "overdue_count": len(overdue_rows),
             "calendar_counts": calendar_counts,
             "calendar_days": self._calendar_days_for_user(
                 user,
@@ -472,14 +536,43 @@ class AppAnalyticsService:
             ORDER BY transaction_date DESC, created_at DESC, id DESC""",
             (user.database_id, start, end),
         )
+        latest_rows = self._db.execute_query(
+            """/* app_analytics:finance_latest */ SELECT id, type, category, amount, note,
+            transaction_date AS date, created_at FROM transactions
+            WHERE user_id = %s ORDER BY transaction_date DESC, created_at DESC, id DESC LIMIT 1""",
+            (user.database_id,),
+        )
+        goal_rows = self._db.execute_query(
+            """/* app_analytics:finance_goals */ SELECT g.id, g.module_key, g.target_description,
+            g.target_value, g.target_unit, g.baseline_value, g.target_date, g.status,
+            g.created_at, g.updated_at, g.completed_at,
+            CASE WHEN g.target_value IS NULL THEN NULL ELSE COALESCE((
+              SELECT SUM(CASE WHEN t.type = 'income' THEN t.amount ELSE -t.amount END)
+              FROM transactions t WHERE t.user_id = g.user_id
+                AND t.transaction_date >= DATE(g.created_at AT TIME ZONE 'Asia/Taipei')
+            ), 0) END AS current_value
+            FROM module_goals g WHERE g.user_id = %s AND g.module_key = 'finance'
+            ORDER BY g.updated_at DESC, g.id DESC""",
+            (user.database_id,),
+        )
         daily = list(by_day.values())
+        goals = [self._normalized_goal(row) for row in goal_rows]
+        latest_record = None
+        if latest_rows:
+            latest_record = {
+                **_json_row(latest_rows[0]),
+                "can_edit": latest_rows[0]["date"] == self._today,
+            }
         return {
             "has_any_data": self._has_user_data("transactions", user.database_id),
             "daily": daily,
             "expense_categories": categories,
             "expense_total": sum(point["expense"] for point in daily),
             "income_total": sum(point["income"] for point in daily),
-            "records": [{**_json_row(row), "can_edit": row["date"] == datetime.now(_TAIWAN_TZ).date()} for row in records],
+            "records": [{**_json_row(row), "can_edit": row["date"] == self._today} for row in records],
+            "latest_record": latest_record,
+            "goals": goals,
+            "goal_summary": self._goal_summary(goals),
         }
 
     def body(self, user: AuthenticatedUser, start: date, end: date) -> dict[str, Any]:
@@ -568,14 +661,33 @@ class AppAnalyticsService:
         weight_records = self._record_rows("body_weight_logs", "weight", user.database_id, start, end)
         diet_records = self._diet_record_rows(user.database_id, start, end)
         exercise_records = self._record_rows("exercise_logs", "exercise", user.database_id, start, end)
-        goals = [
-            _json_row(row)
-            for row in self._db.execute_query(
-                """/* app_analytics:body_goals */ SELECT goal_type, target_description, target_value, baseline_value, target_date
-                FROM body_goals WHERE user_id = %s AND status = 'active'""",
-                (user.database_id,),
-            )
-        ]
+        latest_diet_records = self._diet_record_rows(user.database_id, date.min, date.max)
+        latest_exercise_records = self._record_rows("exercise_logs", "exercise", user.database_id, date.min, date.max)
+        goal_rows = self._db.execute_query(
+            """/* app_analytics:body_goals */ SELECT g.id, g.goal_type, g.target_description,
+            g.target_value, g.target_unit, g.baseline_value, g.target_date, g.status,
+            g.progress_type, g.created_at, g.updated_at, g.completed_at,
+            CASE
+              WHEN g.goal_type = 'weight' THEN (SELECT w.weight_kg FROM body_weight_logs w
+                WHERE w.user_id = g.user_id ORDER BY w.entry_date DESC, w.created_at DESC, w.id DESC LIMIT 1)
+              WHEN g.goal_type = 'exercise' AND g.progress_type = 'numeric' THEN COALESCE((
+                SELECT SUM(e.duration_minutes) FROM exercise_logs e WHERE e.user_id = g.user_id
+                  AND e.entry_date >= DATE(g.created_at AT TIME ZONE 'Asia/Taipei')), 0)
+              WHEN g.goal_type = 'diet' AND g.target_direction = 'min' THEN COALESCE((
+                SELECT SUM(d.estimated_calories) FROM diet_logs d WHERE d.user_id = g.user_id
+                  AND d.entry_type = 'food' AND d.entry_date >= DATE(g.created_at AT TIME ZONE 'Asia/Taipei')), 0)
+              ELSE NULL
+            END AS current_value,
+            CASE
+              WHEN g.goal_type = 'weight' THEN 'improvement'
+              WHEN g.progress_type = 'milestone' THEN 'milestone'
+              WHEN g.target_value IS NOT NULL AND (g.goal_type != 'diet' OR g.target_direction = 'min') THEN 'cumulative'
+              ELSE 'unquantified'
+            END AS progress_mode
+            FROM body_goals g WHERE g.user_id = %s ORDER BY g.updated_at DESC, g.id DESC""",
+            (user.database_id,),
+        )
+        goals = [self._normalized_goal(row) for row in goal_rows]
         return {
             "has_any_data": any(
                 self._has_user_data(table, user.database_id)
@@ -585,12 +697,18 @@ class AppAnalyticsService:
             "diet": diet,
             "exercise": exercise,
             "goals": goals,
+            "goal_summary": self._goal_summary(goals),
             "body_defaults": {
                 "height_cm": _json_value(user_row.get("height_cm")),
                 "weight_kg": latest_body_record.get("weight_kg") if latest_body_record else None,
                 "waist_cm": latest_body_record.get("waist_cm") if latest_body_record else None,
             },
             "latest_body_record": latest_body_record,
+            "latest_records": {
+                "weight": latest_body_record,
+                "diet": latest_diet_records[0] if latest_diet_records else None,
+                "exercise": latest_exercise_records[0] if latest_exercise_records else None,
+            },
             "weight_records": weight_records,
             "diet_records": diet_records,
             "exercise_records": exercise_records,

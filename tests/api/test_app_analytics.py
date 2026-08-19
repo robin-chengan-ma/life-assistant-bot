@@ -58,16 +58,22 @@ def test_dashboard_returns_navigation_and_summary(client, monkeypatch):
     assert response.get_json()["date"] == "2026-08-11"
 
 
-def test_analytics_rejects_range_shorter_than_seven_days(client):
+def test_analytics_accepts_single_day_for_general_module(client, monkeypatch):
     test_client, _ = client
 
+    class Service:
+        def finance(self, user, start, end):
+            assert start == end
+            return {"has_any_data": False, "daily": [], "records": []}
+
+    monkeypatch.setattr(_, "_build_analytics", lambda db: Service())
+
     response = test_client.get(
-        "/api/app/analytics/finance?start=2026-08-01&end=2026-08-03",
+        "/api/app/analytics/finance?start=2026-08-01&end=2026-08-01",
         headers=auth_headers(),
     )
 
-    assert response.status_code == 400
-    assert response.get_json() == {"message": "日期區間必須介於 7 到 30 天"}
+    assert response.status_code == 200
 
 
 def test_todo_analytics_accepts_single_future_date(client, monkeypatch):
