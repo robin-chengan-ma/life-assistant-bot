@@ -12,10 +12,10 @@ export type ChartSeries = { color: string; label: string; marker?: "solid" | "ho
 
 const WIDTH = 340;
 const HEIGHT = 190;
-const LEFT = 48;
+const LEFT = 58;
 const RIGHT = 18;
 const TOP = 16;
-const BOTTOM = 32;
+const BOTTOM = 45;
 
 function axisDomain(values: number[], zeroBased: boolean) {
   const sourceMin = Math.min(...values);
@@ -45,7 +45,11 @@ function tickText(value: number) {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
 }
 
-export function LineChart({ series, zeroBased = false }: { series: ChartSeries[]; zeroBased?: boolean }) {
+function xTickText(label: string, axisLabel: string) {
+  return axisLabel === "日期" && /^\d{4}-\d{2}-\d{2}$/.test(label) ? label.slice(5) : label;
+}
+
+export function LineChart({ series, xAxisLabel = "日期", yAxisLabel, zeroBased = false }: { series: ChartSeries[]; xAxisLabel?: string; yAxisLabel: string; zeroBased?: boolean }) {
   const [tooltip, setTooltip] = useState<string | null>(null);
   const values = series.flatMap((item) => item.points.map((point) => point.value)).filter((value): value is number => value !== null);
   if (!values.length) return <EmptyChart />;
@@ -57,6 +61,7 @@ export function LineChart({ series, zeroBased = false }: { series: ChartSeries[]
   return (
     <View>
       <Svg accessibilityLabel="趨勢折線圖" height={HEIGHT} viewBox={`0 0 ${WIDTH} ${HEIGHT}`} width="100%">
+        <SvgText fill={colors.textMuted} fontSize={9} textAnchor="middle" transform={`rotate(-90 11 ${(TOP + HEIGHT - BOTTOM) / 2})`} x={11} y={(TOP + HEIGHT - BOTTOM) / 2}>{yAxisLabel}</SvgText>
         {ticks.map((tick) => <G key={tick}><Line stroke="#DCE6E3" strokeWidth={1} x1={LEFT} x2={WIDTH - RIGHT} y1={y(tick)} y2={y(tick)} /><SvgText fill={colors.textMuted} fontSize={9} textAnchor="end" x={LEFT - 6} y={y(tick) + 3}>{tickText(tick)}</SvgText></G>)}
         {series.map((item) => {
           const segments: string[][] = [];
@@ -79,7 +84,8 @@ export function LineChart({ series, zeroBased = false }: { series: ChartSeries[]
             </G>
           );
         })}
-        {visibleLabels(labels).map((label) => <SvgText fill={colors.textMuted} fontSize={9} key={label} textAnchor="middle" x={x(label)} y={HEIGHT - 8}>{label.slice(5)}</SvgText>)}
+        {visibleLabels(labels).map((label) => <SvgText fill={colors.textMuted} fontSize={9} key={label} textAnchor="middle" x={x(label)} y={HEIGHT - 20}>{xTickText(label, xAxisLabel)}</SvgText>)}
+        <SvgText fill={colors.textMuted} fontSize={9} textAnchor="middle" x={(LEFT + WIDTH - RIGHT) / 2} y={HEIGHT - 5}>{xAxisLabel}</SvgText>
       </Svg>
       {tooltip ? <Text style={styles.tooltip}>{tooltip}</Text> : null}
       <View style={styles.legend}>{series.map((item) => <View key={item.label} style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: item.marker === "hollow" ? colors.surface : item.color, borderColor: item.color, borderWidth: item.marker === "hollow" ? 2 : 0 }]} /><Text style={styles.legendText}>{item.label}</Text></View>)}</View>
@@ -87,7 +93,7 @@ export function LineChart({ series, zeroBased = false }: { series: ChartSeries[]
   );
 }
 
-export function BarChart({ data, color = colors.primary }: { data: ChartPoint[]; color?: string }) {
+export function BarChart({ data, color = colors.primary, xAxisLabel = "日期", yAxisLabel }: { data: ChartPoint[]; color?: string; xAxisLabel?: string; yAxisLabel: string }) {
   const usable = data.filter((point): point is { label: string; value: number } => point.value !== null);
   if (!usable.length) return <EmptyChart />;
   const { max, ticks } = axisDomain(usable.map((point) => point.value), true);
@@ -95,13 +101,15 @@ export function BarChart({ data, color = colors.primary }: { data: ChartPoint[];
   const y = (value: number) => HEIGHT - BOTTOM - (value / max) * (HEIGHT - TOP - BOTTOM);
   return (
     <Svg accessibilityLabel="長條圖" height={HEIGHT} viewBox={`0 0 ${WIDTH} ${HEIGHT}`} width="100%">
+      <SvgText fill={colors.textMuted} fontSize={9} textAnchor="middle" transform={`rotate(-90 11 ${(TOP + HEIGHT - BOTTOM) / 2})`} x={11} y={(TOP + HEIGHT - BOTTOM) / 2}>{yAxisLabel}</SvgText>
       {ticks.map((tick) => <G key={tick}><Line stroke="#DCE6E3" strokeWidth={1} x1={LEFT} x2={WIDTH - RIGHT} y1={y(tick)} y2={y(tick)} /><SvgText fill={colors.textMuted} fontSize={9} textAnchor="end" x={LEFT - 6} y={y(tick) + 3}>{tickText(tick)}</SvgText></G>)}
       {usable.map((point, index) => {
         const barY = y(point.value);
         const barHeight = HEIGHT - BOTTOM - barY;
         const barX = LEFT + index * ((WIDTH - LEFT - RIGHT) / usable.length) + 5;
-        return <G key={`${point.label}-${index}`}><Rect fill={color} height={barHeight} rx={4} width={barWidth} x={barX} y={barY} /><SvgText fill={colors.textMuted} fontSize={9} textAnchor="middle" x={barX + barWidth / 2} y={HEIGHT - 10}>{point.label.slice(5)}</SvgText></G>;
+        return <G key={`${point.label}-${index}`}><Rect fill={color} height={barHeight} rx={4} width={barWidth} x={barX} y={barY} /><SvgText fill={colors.textMuted} fontSize={9} textAnchor="middle" x={barX + barWidth / 2} y={HEIGHT - 20}>{xTickText(point.label, xAxisLabel)}</SvgText></G>;
       })}
+      <SvgText fill={colors.textMuted} fontSize={9} textAnchor="middle" x={(LEFT + WIDTH - RIGHT) / 2} y={HEIGHT - 5}>{xAxisLabel}</SvgText>
     </Svg>
   );
 }

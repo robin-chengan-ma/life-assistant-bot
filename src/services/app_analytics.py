@@ -125,7 +125,7 @@ _MODULES: dict[str, dict[str, Any]] = {
     "todos": {"label": "待辦事項", "feature_key": "todo", "owner_only": False, "color": "#3B82F6"},
     "body": {"label": "體態分析", "feature_key": "body", "owner_only": False, "color": "#2E9D74"},
     "finance": {"label": "記帳分析", "feature_key": "budget", "owner_only": False, "color": "#EB9741"},
-    "mood": {"label": "心情趨勢", "feature_key": "mood_journal", "owner_only": False, "color": "#A56CC1"},
+    "mood": {"label": "心情小記", "feature_key": "mood_journal", "owner_only": False, "color": "#A56CC1"},
     "skills": {"label": "技術分享", "feature_key": "tech_intel", "owner_only": True, "color": "#D9544D"},
     "jobs": {"label": "求職分析", "feature_key": "job_search", "owner_only": True, "color": "#7656C9"},
     "exams": {"label": "考試成績", "feature_key": "certificate", "owner_only": True, "color": "#D89B20"},
@@ -762,12 +762,25 @@ class AppAnalyticsService:
         rows = self._db.execute_query(
             """/* app_analytics:mood */ SELECT DISTINCT ON (entry_date) id, entry_date AS date, mood_category, content, achievement_note, created_at
             FROM mood_journals WHERE user_id = %s AND entry_date BETWEEN %s AND %s
-            ORDER BY entry_date, created_at DESC, id DESC""",
+            ORDER BY entry_date DESC, created_at DESC, id DESC""",
             (user.database_id, start, end),
         )
+        latest_rows = self._db.execute_query(
+            """/* app_analytics:mood_latest */ SELECT id, entry_date AS date, mood_category,
+            content, achievement_note, created_at FROM mood_journals WHERE user_id = %s
+            ORDER BY entry_date DESC, created_at DESC, id DESC LIMIT 1""",
+            (user.database_id,),
+        )
+        latest_record = None
+        if latest_rows:
+            latest_record = {
+                **_json_row(latest_rows[0]),
+                "can_edit": latest_rows[0]["date"] == self._today,
+            }
         return {
             "has_any_data": self._has_user_data("mood_journals", user.database_id),
-            "items": [{**_json_row(row), "can_edit": row["date"] == datetime.now(_TAIWAN_TZ).date()} for row in rows],
+            "items": [{**_json_row(row), "can_edit": row["date"] == self._today} for row in rows],
+            "latest_record": latest_record,
         }
 
     def jobs(self, user: AuthenticatedUser, start: date, end: date) -> dict[str, Any]:

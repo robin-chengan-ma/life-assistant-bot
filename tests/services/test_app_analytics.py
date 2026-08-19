@@ -164,6 +164,7 @@ def test_owner_navigation_uses_confirmed_mobile_drawer_order():
     navigation = AppAnalyticsService(FakeDatabase()).navigation(user(is_owner=True))
 
     assert list(navigation) == ["todos", "body", "finance", "mood", "skills", "jobs", "exams"]
+    assert navigation["mood"]["label"] == "心情小記"
 
 
 def test_finance_returns_chart_ready_daily_category_and_income_data():
@@ -216,6 +217,38 @@ def test_finance_returns_latest_record_outside_selected_range_and_normalized_goa
     assert result["goal_summary"]["id"] == 2
     assert result["goal_summary"]["progress_percent"] == 50
     assert result["goals"] == [result["goal_summary"]]
+
+
+def test_mood_returns_latest_record_outside_selected_range():
+    db = FakeDatabase(
+        select_rows={"mood_journals": [{"id": 7}]},
+        query_rows={
+            "app_analytics:mood */": [{
+                "id": 6,
+                "date": date(2026, 8, 10),
+                "mood_category": "calm_relaxed",
+                "content": "區間內紀錄",
+                "achievement_note": None,
+                "created_at": "2026-08-10T08:00:00",
+            }],
+            "app_analytics:mood_latest": [{
+                "id": 7,
+                "date": date(2026, 8, 11),
+                "mood_category": "happy_excited",
+                "content": "最新紀錄",
+                "achievement_note": "完成測試",
+                "created_at": "2026-08-11T09:00:00",
+            }],
+        },
+    )
+
+    result = AppAnalyticsService(db, today=date(2026, 8, 11)).mood(
+        user(), date(2026, 8, 1), date(2026, 8, 10)
+    )
+
+    assert result["items"][0]["can_edit"] is False
+    assert result["latest_record"]["id"] == 7
+    assert result["latest_record"]["can_edit"] is True
 
 
 def test_goal_normalization_handles_improvement_milestone_and_expired_status():

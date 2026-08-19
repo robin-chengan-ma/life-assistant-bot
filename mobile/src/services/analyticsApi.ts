@@ -195,6 +195,7 @@ export type MoodAnalytics = {
     created_at: string;
     can_edit: boolean;
   }>;
+  latest_record: RecordItem | null;
 };
 
 export type JobsAnalytics = {

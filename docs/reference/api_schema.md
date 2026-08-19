@@ -218,7 +218,7 @@ payload、帳號、密碼或 Token。
 | 項目 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
 | `GET /api/app/dashboard` | 已實作（`dashboard()`） | FR-64 | 首頁摘要卡片資料，複用 `AppAnalyticsService.dashboard()` |
-| `GET /api/app/analytics/<module_key>` | 已實作（`analytics()`） | FR-64／FR-64b～FR-64d | 唯讀分析頁面資料，`module_key` 對應 todos/body/finance/mood/jobs/exams/skills；todos 查詢 1～7 天且額外支援月曆月份，其餘一般分析查詢 1～30 天，skills 維持單日。一般生活模組不讀舊功能開關；Owner 專屬 skills/jobs/exams 關閉回 409，越權存取回 403。body／finance 已回傳共用目標摘要及不受區間影響的最新紀錄；todos 已分流未逾期待處理與逾期待處理清單 |
+| `GET /api/app/analytics/<module_key>` | 已實作（`analytics()`） | FR-64／FR-64b～FR-64d | 唯讀分析頁面資料，`module_key` 對應 todos/body/finance/mood/jobs/exams/skills；todos 查詢 1～7 天且額外支援月曆月份，其餘一般分析查詢 1～30 天，skills 維持單日。一般生活模組不讀舊功能開關；Owner 專屬 skills/jobs/exams 關閉回 409，越權存取回 403。body／finance 回傳共用目標摘要；body／finance／mood 回傳不受區間影響的最新紀錄；todos 分流未逾期待處理與逾期待處理清單 |
 | `PATCH /api/app/system-errors/<id>/resolution` | 已移除 | FR-19j | Mobile App 只作為事故來源；Owner 統一從 Telegram 系統錯誤管理結案 |
 | `POST /api/app/body/weight-logs` | 已實作（`create_weight_log()`） | FR-64a | App 端手動輸入體重（取代已移除的藍牙體重計整合方案），40～150 公斤範圍檢查，複用 `src/bot/body.py::create_weight_log()` |
 | `POST /api/app/diet/recognize-photo` | 已實作（`recognize_diet_image()`） | FR-64 | 飲食照片辨識（LLM Vision），App 端專屬能力，Telegram 端沒有對應路由 |
@@ -234,7 +234,7 @@ payload、帳號、密碼或 Token。
 - Query：todos 使用 `start`、`end`、`calendar_month=YYYY-MM`；body／finance／mood／jobs／exams 使用 `start`、`end`；skills 使用 `date`。
 - 日期驗證：todos 為 1～7 天且允許未來；一般分析為 1～30 天且結束日不可晚於今天；skills 僅單日且不可為未來。
 - body／finance 的 `goals` 為完整唯讀目標清單，`goal_summary` 為進行中目標依「最近期限、同日最近更新、全無期限最近更新」挑出的單筆摘要。共同欄位包含 `status`、`target_date`、`current_value`、`target_value`、`progress_percent`、`progress_unavailable`、`is_exceeded`。
-- body 的 `latest_records.weight|diet|exercise` 與 finance 的 `latest_record` 不受查詢日期區間影響；區間內紀錄仍由 `weight_records`／`diet_records`／`exercise_records`／`records` 回傳。
+- body 的 `latest_records.weight|diet|exercise` 與 finance／mood 的 `latest_record` 不受查詢日期區間影響；區間內紀錄仍由各模組的 `weight_records`／`diet_records`／`exercise_records`／`records`／`items` 回傳。
 - todos 的 `items` 只含查詢區間內、尚未逾期且狀態為 `pending` 的資料；`overdue_items` 只含台灣日期已逾期且仍為 `pending` 的資料，`overdue_count` 為其件數。逾期待辦沿用 `PATCH /api/app/records/todo/<id>` 完成、延期或取消，不提供刪除入口。
 - 錯誤：日期格式或範圍不合法回 400、Owner 功能未開啟回 409、無權存取 Owner 模組回 403、未預期錯誤回安全化 503 文案。
 

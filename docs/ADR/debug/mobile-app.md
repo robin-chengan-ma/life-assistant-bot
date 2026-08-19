@@ -248,3 +248,11 @@
 **根因**：求職分析 SQL 查詢不存在的 `job_postings.match_score`，且測試 fixture 沿用同一錯誤欄位名稱，未能攔截 schema 漂移。
 **修復方式**：`src/services/app_analytics.py` 改查詢正式欄位 `score AS match_score`，維持 Mobile API 既有輸出格式；新增 SQL 防回歸斷言。`src/api/app_analytics.py` 補上只寫入伺服器端的分析模組例外日誌，App 仍只收到安全通用訊息。
 **驗證方式**：Python compileall 與 `git diff --check` 通過，並以靜態斷言確認 SQL 使用 `score AS match_score`。環境缺少 pytest／lunarcalendar，Service／API 自動測試未執行；仍待部署後驗證求職分布、推薦清單與應徵時間軸。
+
+## 2026-08-19 分析圖表缺軸名與目標摘要順序錯誤
+**現象**：實機圖表已有 X／Y 軸刻度，但未標示「日期」、「台幣金額(元)」或「熱量(大卡)」等軸名；目標摘要也放在日期篩選之後。
+**排查過程**：`Charts.tsx` 只繪製刻度數字，元件介面沒有軸名參數；分析頁的 `DateRangeFilter` 在模組內容之前繪製，而目標摘要放在模組內容中。
+**根因**：第一批只實作了刻度與去重，漏了軸名；目標摘要沒有提升至頁面層級。
+**修復方式**：`Charts.tsx` 新增 X／Y 軸名參數與繪製；分析頁於頁面層級繪製目標摘要，再顯示頁籤與日期篩選。
+**驗證方式**：Mobile TypeScript typecheck、Service／API 62 項測試與聚焦 `ruff` 通過；尚待 Robin 實機驗證。
+**未驗證範圍**：iOS／Android 實機窄螢幕的軸名排版。
