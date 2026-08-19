@@ -1,4 +1,4 @@
-import type { AuthRequest } from "@/services/analyticsApi";
+import type { AuthRequest, GoalItem } from "@/services/analyticsApi";
 
 export type CollectionItemType = "restaurant" | "attraction" | "mountain" | "accommodation" | "activity" | "other";
 export type CollectionStatus = "saved" | "added_to_trip" | "visited" | "cancelled";
@@ -54,6 +54,8 @@ export type CollectionResponse = {
   items: CollectionItem[];
   summary: { total: number; saved: number; added_to_trip: number; visited: number };
   filters: { countries: string[]; cities: string[] };
+  goals: GoalItem[];
+  goal_summary: GoalItem | null;
 };
 
 export function getCollectionItems(

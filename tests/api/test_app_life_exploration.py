@@ -78,6 +78,32 @@ def test_candidate_decision_requires_boolean(client):
     assert response.status_code == 400
 
 
+def test_achievement_pin_route_uses_authenticated_user(client, monkeypatch):
+    test_client, module = client
+    calls = []
+
+    class Service:
+        def set_achievement_pinned(self, achievement_id, user_id, pinned):
+            calls.append((achievement_id, user_id, pinned))
+            return {"id": achievement_id, "pinned": pinned}
+
+    monkeypatch.setattr(module, "_service", lambda db: Service())
+    response = test_client.patch(
+        "/api/app/life/achievements/8/pin", headers=headers(), json={"pinned": True}
+    )
+
+    assert response.status_code == 200
+    assert calls == [(8, 1, True)]
+
+
+def test_achievement_pin_route_requires_boolean(client):
+    test_client, _module = client
+    response = test_client.patch(
+        "/api/app/life/achievements/8/pin", headers=headers(), json={"pinned": "yes"}
+    )
+    assert response.status_code == 400
+
+
 def test_relocate_exploration_route_uses_authenticated_user(client, monkeypatch):
     test_client, module = client
     calls = []

@@ -5,6 +5,7 @@ import { ActivityIndicator, Modal, ScrollView, StyleSheet, useWindowDimensions }
 
 import { AppPressable as Pressable } from "@/components/AppPressable";
 import { AppShell } from "@/components/AppShell";
+import { GoalSummaryCard } from "@/components/AnalyticsShared";
 import { AppText as Text } from "@/components/AppText";
 import { AppView as View } from "@/components/AppView";
 import { SensitiveValue } from "@/components/SensitiveValue";
@@ -91,7 +92,7 @@ export default function CollectionsScreen() {
   ), [city, country, data?.items, itemStatus, type]);
 
   if (status === "guest") return <Redirect href="/login" />;
-  return <AppShell title="收藏清單">
+  return <AppShell title="收藏清單">{data ? <GoalSummaryCard goal={data.goal_summary} goals={data.goals} /> : null}
     <View style={styles.intro}><MaterialCommunityIcons color="#D39719" name="bookmark-multiple-outline" size={30} /><View style={styles.flex}><Text style={styles.heading}>想去、想吃、想體驗</Text><Text style={styles.muted}>收藏可組成當天或多日旅遊行程；新增收藏請從首頁進入。</Text></View><Pressable onPress={() => router.push("/trips" as Href)} style={styles.tripButton}><MaterialCommunityIcons color={theme === "dark" ? colors.background : colors.white} name="bag-suitcase-outline" size={18} /><Text style={styles.tripButtonText}>旅遊行程</Text></Pressable></View>
     {message ? <View style={styles.undoBar}><Text style={styles.undoText}>{message}</Text>{pendingDeletion ? <Pressable onPress={undoDelete}><Text style={styles.undoAction}>復原</Text></Pressable> : null}</View> : null}
     {loading ? <ActivityIndicator color={colors.primary} size="large" /> : null}

@@ -191,3 +191,30 @@ def test_delete_requires_ownership():
     text, _keyboard = achievements.handle_delete(db, USER_ID, 1)
 
     assert "找不到" in text
+
+
+def test_list_shows_pin_and_unpin_buttons():
+    db = FakeDatabase()
+    db.tables["user_achievements"] = [
+        {"id": 1, "user_id": USER_ID, "title": "新成果", "category": "other", "unlocked_on": "2026-08-18", "creation_source": "manual", "pinned_at": None, "deleted_at": None},
+        {"id": 2, "user_id": USER_ID, "title": "重要成果", "category": "other", "unlocked_on": "2026-08-10", "creation_source": "manual", "pinned_at": "2026-08-19T09:00:00+08:00", "deleted_at": None},
+    ]
+
+    text, keyboard = achievements.handle_list(db, USER_ID)
+    buttons = [button for row in keyboard["inline_keyboard"] for button in row]
+
+    assert "📌 重要成果" in text
+    assert any(button["callback_data"] == "achievements:unpin:2" for button in buttons)
+    assert any(button["callback_data"] == "achievements:pin:1" for button in buttons)
+
+
+def test_handle_pin_updates_shared_state():
+    db = FakeDatabase()
+    db.tables["user_achievements"] = [
+        {"id": 1, "user_id": USER_ID, "title": "成果", "pinned_at": None, "deleted_at": None},
+    ]
+
+    reply, _keyboard = achievements.handle_pin(db, USER_ID, 1, True)
+
+    assert reply == "已置頂該筆成果。"
+    assert db.tables["user_achievements"][0]["pinned_at"] is not None

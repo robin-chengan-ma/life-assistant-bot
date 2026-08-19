@@ -58,7 +58,7 @@ export default function AnalyticsScreen() {
   const [payload, setPayload] = useState<AnalyticsResponseMap[AnalyticsModule] | null>(null);
   const [filterCalendarDays, setFilterCalendarDays] = useState<TodoAnalytics["calendar_days"]>({});
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [savedMessage, setSavedMessage] = useState<string | null>(null);
   const [editing, setEditing] = useState<{ kind: RecordKind; item: RecordItem } | null>(null);
   const [deleting, setDeleting] = useState<{ kind: RecordKind; item: RecordItem } | null>(null);
@@ -116,12 +116,13 @@ export default function AnalyticsScreen() {
   const title = dashboard?.navigation[module]?.label ?? "分析頁面";
   const hasAnyData = payload?.has_any_data ?? false;
   const hasRangeData = payload ? rangeHasData(module, payload) : false;
+  const initialLoading = loading && !payload;
 
   return (
     <AppShell scrollViewRef={scrollViewRef} title={title}>
-      {!loading && !error && payload ? <TopGoalSummary bodyTab={bodyTab} module={module} payload={payload} /> : null}
-      {!loading && !error && module === "body" && payload ? <BodyTabs selected={bodyTab} onSelect={setBodyTab} /> : null}
-      {module === "skills" ? (
+      {!error && payload ? <TopGoalSummary bodyTab={bodyTab} module={module} payload={payload} /> : null}
+      {!error && module === "body" && payload ? <BodyTabs selected={bodyTab} onSelect={setBodyTab} /> : null}
+      {!initialLoading && payload && (module === "skills" ? (
         <SingleDateFilter calendarDays={filterCalendarDays} date={skillDate} onCalendarMonthChange={setCalendarMonth} onApply={setSkillDate} />
       ) : (
         <DateRangeFilter
@@ -136,13 +137,13 @@ export default function AnalyticsScreen() {
           onApply={setRange}
           range={range}
         />
-      )}
-      {loading ? <ActivityIndicator color={colors.primary} size="large" /> : null}
+      ))}
+      {initialLoading ? <View style={styles.initialLoading}><ActivityIndicator color={colors.primary} size="large" /><Text style={styles.emptyText}>資料載入中…</Text></View> : null}
       {error ? <View style={styles.errorCard}><Text style={styles.errorText}>{error}</Text><Pressable onPress={() => void load()}><Text style={styles.retry}>重新載入</Text></Pressable></View> : null}
-      {!loading && !error && payload && !hasRangeData && module !== "todos" ? <EmptyState hasAnyData={hasAnyData} /> : null}
-      {!loading && !error && payload ? renderModule(module, payload, range, calendarMonth, setCalendarMonth, scrollViewRef, bodyTab) : null}
-      {!loading && !error && payload ? <EditableRecords bodyTab={bodyTab} module={module} onDelete={setDeleting} onEdit={setEditing} payload={payload} /> : null}
-      {!loading && !error && module === "todos" && payload ? <OverdueTodos authorizedRequest={authorizedRequest} data={payload as TodoAnalytics} onEdit={(item) => setEditing({ kind: "todo", item: item as unknown as RecordItem })} onSaved={load} /> : null}
+      {!error && payload && !hasRangeData && module !== "todos" ? <EmptyState hasAnyData={hasAnyData} /> : null}
+      {!error && payload ? renderModule(module, payload, range, calendarMonth, setCalendarMonth, scrollViewRef, bodyTab) : null}
+      {!error && payload ? <EditableRecords bodyTab={bodyTab} module={module} onDelete={setDeleting} onEdit={setEditing} payload={payload} /> : null}
+      {!error && module === "todos" && payload ? <OverdueTodos authorizedRequest={authorizedRequest} data={payload as TodoAnalytics} onEdit={(item) => setEditing({ kind: "todo", item: item as unknown as RecordItem })} onSaved={load} /> : null}
       {savedMessage ? <View style={styles.savedToast}><Text style={styles.savedText}>{savedMessage}</Text>{pendingDeletion ? <Pressable onPress={undoDelete}><Text style={styles.undoText}>復原</Text></Pressable> : null}</View> : null}
       {editing ? <RecordModal authorizedRequest={authorizedRequest} initial={editing.item} kind={editing.kind} onClose={() => setEditing(null)} onSaved={async () => { await load(); setSavedMessage("紀錄已更新"); setTimeout(() => setSavedMessage(null), 2400); }} visible /> : null}
       <Modal animationType="fade" onRequestClose={() => setDeleting(null)} transparent visible={Boolean(deleting)}><View style={styles.deleteBackdrop}><View style={styles.deleteCard}><Text style={styles.deleteTitle}>確認刪除？</Text><Text style={styles.bodyText}>確認後有 5 秒可復原，逾時才會正式刪除。</Text><View style={styles.recordActions}><Pressable onPress={() => setDeleting(null)} style={[styles.recordButton, styles.editButton]}><Text style={styles.recordButtonText}>取消</Text></Pressable><Pressable disabled={Boolean(pendingDeletion)} onPress={scheduleDelete} style={[styles.recordButton, styles.deleteButton]}><Text style={styles.deleteButtonText}>刪除</Text></Pressable></View></View></View></Modal>
@@ -362,6 +363,7 @@ function Section({ children, title }: { children: React.ReactNode; title: string
 function Metric({ label, sensitive = false, value }: { label: string; sensitive?: boolean; value: string }) { return <View style={styles.metric}><Text style={styles.metricLabel}>{label}</Text>{sensitive ? <SensitiveValue style={styles.metricValue}>{value}</SensitiveValue> : <Text style={styles.metricValue}>{value}</Text>}</View>; }
 
 const styles = StyleSheet.create({
+  initialLoading: { alignItems: "center", gap: 12, justifyContent: "center", minHeight: 360 },
   errorCard: { backgroundColor: "#FFF0F0", borderRadius: 14, gap: 7, padding: 16 }, errorText: { color: "#A33D3D" }, retry: { color: colors.primary, fontWeight: "800" },
   empty: { alignItems: "center", gap: 12, justifyContent: "center", minHeight: 240 }, emptyText: { color: colors.textMuted, fontSize: 15, fontWeight: "700" }, aiEstimateNotice: { color: colors.accent, fontSize: 13, fontWeight: "800", lineHeight: 20, textAlign: "center" },
   section: { gap: 10 }, sectionTitle: { color: colors.text, fontSize: 18, fontWeight: "900", marginTop: 5 },

@@ -787,6 +787,12 @@ def handle_callback_query(
         if action.startswith("delete:"):
             achievement_id = int(action[len("delete:") :])
             return achievements.handle_delete(db, user["id"], achievement_id)
+        if action.startswith("pin:"):
+            achievement_id = int(action[len("pin:") :])
+            return achievements.handle_pin(db, user["id"], achievement_id, True)
+        if action.startswith("unpin:"):
+            achievement_id = int(action[len("unpin:") :])
+            return achievements.handle_pin(db, user["id"], achievement_id, False)
         if action.startswith("candidate_accept:"):
             candidate_id = int(action[len("candidate_accept:") :])
             return achievements.handle_candidate_decision(db, user["id"], candidate_id, True)

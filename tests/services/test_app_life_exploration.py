@@ -6,6 +6,7 @@ import pytest
 
 from src.services.app_life_exploration import (
     AppLifeExplorationService,
+    LifeNotFoundError,
     LifeValidationError,
 )
 
@@ -109,6 +110,27 @@ def test_manual_achievement_requires_category_and_date():
         1, {"category": "other", "title": "學會料理", "completed_on": datetime.now(ZoneInfo("Asia/Taipei")).date().isoformat()}
     )
     assert result["message"] == "成果已建立"
+
+
+def test_achievements_sort_pinned_first_and_unpin_restores_date_order():
+    db = FakeDatabase()
+    db.tables["user_achievements"] = [
+        {"id": 1, "user_id": 1, "unlocked_on": "2026-08-18", "pinned_at": None, "deleted_at": None},
+        {"id": 2, "user_id": 1, "unlocked_on": "2026-08-10", "pinned_at": "2026-08-19T08:00:00+08:00", "deleted_at": None},
+        {"id": 3, "user_id": 1, "unlocked_on": "2026-08-12", "pinned_at": "2026-08-19T09:00:00+08:00", "deleted_at": None},
+    ]
+    service = AppLifeExplorationService(db)
+
+    assert [row["id"] for row in service.list_achievements(1)["achievements"]] == [3, 2, 1]
+
+    service.set_achievement_pinned(3, 1, False)
+    assert [row["id"] for row in service.list_achievements(1)["achievements"]] == [2, 1, 3]
+
+
+def test_achievement_pinning_requires_ownership():
+    service = AppLifeExplorationService(FakeDatabase())
+    with pytest.raises(LifeNotFoundError):
+        service.set_achievement_pinned(999, 1, True)
 
 
 def test_relocate_exploration_updates_coordinates_and_address_change_clears_them():

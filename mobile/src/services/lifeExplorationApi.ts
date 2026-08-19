@@ -7,7 +7,7 @@ export type TripPayload = { title: string; start_date?: string; end_date?: strin
 export type ExplorationVisit = { id: number; collection_item_id: number | null; event_type: string; title: string; start_date: string; country_name: string | null; city_name: string | null; address: string | null; source_url: string | null; notes: string | null };
 export type ExplorationMarker = { latitude: number; longitude: number; title: string; visits: ExplorationVisit[] };
 export type ExplorationResponse = { markers: ExplorationMarker[]; unlocated: ExplorationVisit[]; filters: { countries: string[]; cities: string[] } };
-export type Achievement = { id: number; category: string; title: string; description: string | null; unlocked_on: string; creation_source: "manual" | "suggested"; cover_image_url: string | null };
+export type Achievement = { id: number; category: string; title: string; description: string | null; unlocked_on: string; creation_source: "manual" | "suggested"; cover_image_url: string | null; pinned_at: string | null };
 export type AchievementCandidate = { id: number; category: string; title: string; description: string | null; completed_on: string };
 export type AchievementResponse = { achievements: Achievement[]; candidates: AchievementCandidate[] };
 
@@ -26,4 +26,5 @@ export const getAchievements = (request: AuthRequest): Promise<AchievementRespon
 export const createAchievement = (request: AuthRequest, payload: { category: string; title: string; description?: string; completed_on: string; cover_image_url?: string }) => request("/api/app/life/achievements", { method: "POST", body: JSON.stringify(payload) });
 export const deleteAchievement = (request: AuthRequest, id: number) => request(`/api/app/life/achievements/${id}`, { method: "DELETE" });
 export const restoreAchievement = (request: AuthRequest, id: number) => request(`/api/app/life/achievements/${id}/restore`, { method: "POST" });
+export const setAchievementPinned = (request: AuthRequest, id: number, pinned: boolean) => request(`/api/app/life/achievements/${id}/pin`, { method: "PATCH", body: JSON.stringify({ pinned }) });
 export const decideAchievement = (request: AuthRequest, id: number, accept: boolean) => request(`/api/app/life/achievement-candidates/${id}/decision`, { method: "POST", body: JSON.stringify({ accept }) });

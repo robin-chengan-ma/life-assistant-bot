@@ -266,7 +266,7 @@ payload、帳號、密碼或 Token。
 
 | 項目 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `GET /api/app/collections` | 已實作（`list_collection_items()`） | FR-73 | 依國家／區域城市／類型／推導狀態篩選個人收藏，按最近更新時間排序 |
+| `GET /api/app/collections` | 已實作（`list_collection_items()`） | FR-73／FR-73a | 依國家／區域城市／類型／推導狀態篩選個人收藏，按最近更新時間排序；同時回傳 `goals` 與最近到期的 `goal_summary`，進度為目前已造訪數減設定目標時基準值 |
 | `POST /api/app/collections` | 已實作（`create_collection_item()`） | FR-73 | 新增收藏；初始狀態固定為 `saved`，不接受用戶端手動指定狀態 |
 | `PATCH /api/app/collections/<id>` | 已實作（`update_collection_item()`） | FR-73 | 更新收藏內容，不覆寫由行程／造訪流程推導的狀態 |
 | `DELETE /api/app/collections/<id>` | 已實作（`delete_collection_item()`） | FR-73 | 軟刪除收藏並移除規劃中／已確認行程關聯；既有探索快照保留，回傳 5 秒復原資訊 |
@@ -289,7 +289,12 @@ payload、帳號、密碼或 Token。
 | `GET／POST /api/app/life/achievements` | 已實作 | FR-76 | 列出成果與待確認候選；手動新增成果可帶類別、完成日、說明與 HTTPS 封面照片網址 |
 | `DELETE /api/app/life/achievements/<id>` | 已實作 | FR-76 | 軟刪除成果，不異動來源資料 |
 | `POST /api/app/life/achievements/<id>/restore` | 已實作 | FR-76 | 復原已刪除成果 |
+| `PATCH /api/app/life/achievements/<id>/pin` | 已實作 | FR-76b | Request 為 `{ "pinned": true／false }`；只允許本人置頂或取消置頂，回傳共用的 `pinned_at` 狀態 |
 | `POST /api/app/life/achievement-candidates/<id>/decision` | 已實作 | FR-76 | `accept=true／false` 接受或拒絕成果候選；拒絕後相同 `candidate_key` 不重複提示 |
+
+`PATCH /api/app/life/achievements/<id>/pin` 使用 Bearer Access Token；成功回傳
+`{ "id": 8, "pinned": true, "pinned_at": "2026-08-19T10:30:00+08:00", "message": "成果已置頂" }`。
+`pinned` 非布林值回 400；成果不存在或不屬於本人回 404；未預期錯誤回安全的 503 訊息。
 
 > FR-75 Nominatim 呼叫由後端代理，需設定 `NOMINATIM_USER_AGENT`；未設定時回 503，不會以匿名預設值呼叫公開服務。
 

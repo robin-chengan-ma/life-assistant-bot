@@ -14,6 +14,7 @@ class FakeDatabase:
         self.tables = {
             "collection_items": [],
             "trips": [{"id": 9, "user_id": 1, "title": "東京行"}],
+            "module_goals": [],
         }
         self.next_id = 1
 
@@ -45,6 +46,9 @@ class FakeDatabase:
         return before - len(self.tables[table])
 
     def execute_query(self, query, params=None):
+        if "app_collections:goals" in query:
+            visited = sum(row.get("status") == "visited" for row in self.tables["collection_items"])
+            return [{**row, "current_value": visited - (row.get("baseline_value") or 0)} for row in self.tables["module_goals"]]
         return list(self.tables["collection_items"])
 
 
@@ -143,6 +147,33 @@ def test_list_returns_summary_and_serializable_numbers():
     assert result["summary"] == {"total": 2, "saved": 1, "added_to_trip": 0, "visited": 1}
     assert result["filters"]["countries"] == ["日本"]
     assert result["items"][0]["estimated_cost"] == 1000.5
+
+
+def test_list_returns_collection_goal_summary_and_progress():
+    db = FakeDatabase()
+    db.tables["collection_items"] = [
+        {"id": 1, "user_id": 1, "status": "visited"},
+        {"id": 2, "user_id": 1, "status": "visited"},
+    ]
+    db.tables["module_goals"] = [{
+        "id": 8,
+        "user_id": 1,
+        "module_key": "collections",
+        "target_description": "再完成 4 個收藏",
+        "target_value": Decimal(4),
+        "target_unit": "count",
+        "baseline_value": Decimal(1),
+        "target_date": "2026-09-01",
+        "status": "active",
+        "updated_at": "2026-08-19T08:00:00+08:00",
+    }]
+
+    result = AppCollectionService(db).list_for_user(1)
+
+    assert result["goal_summary"]["description"] == "再完成 4 個收藏"
+    assert result["goal_summary"]["current_value"] == 1.0
+    assert result["goal_summary"]["progress_percent"] == 25
+    assert result["goals"] == [result["goal_summary"]]
 
 
 def test_update_does_not_overwrite_derived_status():

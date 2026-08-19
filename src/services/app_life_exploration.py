@@ -323,8 +323,33 @@ class AppLifeExplorationService:
         candidates = self._db.select(
             "achievement_candidates", where="user_id = %s AND status = 'pending'", params=(user_id,)
         )
-        cards = sorted(cards, key=lambda row: (row.get("unlocked_on"), row.get("id")), reverse=True)
+        cards = sorted(
+            cards,
+            key=lambda row: (
+                row.get("pinned_at") is not None,
+                str(row.get("pinned_at") or ""),
+                str(row.get("unlocked_on") or ""),
+                row.get("id") or 0,
+            ),
+            reverse=True,
+        )
         return {"achievements": _serialize(cards), "candidates": _serialize(candidates)}
+
+    def set_achievement_pinned(self, achievement_id: int, user_id: int, pinned: bool) -> dict[str, Any]:
+        self._owned("user_achievements", achievement_id, user_id)
+        pinned_at = datetime.now(_TAIWAN_TZ) if pinned else None
+        self._db.update(
+            "user_achievements",
+            {"pinned_at": pinned_at},
+            where="id = %s AND user_id = %s",
+            params=(achievement_id, user_id),
+        )
+        return {
+            "id": achievement_id,
+            "pinned": pinned,
+            "pinned_at": pinned_at.isoformat() if pinned_at else None,
+            "message": "成果已置頂" if pinned else "成果已取消置頂",
+        }
 
     def create_achievement(self, user_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         category = payload.get("category")

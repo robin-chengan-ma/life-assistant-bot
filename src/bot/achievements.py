@@ -70,7 +70,8 @@ def _format_candidate(candidate: dict[str, Any], index: int) -> str:
 def _format_achievement(row: dict[str, Any], index: int) -> str:
     category_label = _CATEGORY_LABELS.get(row["category"], row["category"])
     source_label = "手動新增" if row["creation_source"] == "manual" else "系統候選"
-    return f"{index}. {row['title']}（{category_label}｜{row['unlocked_on']}｜{source_label}）"
+    pin_label = "📌 " if row.get("pinned_at") else ""
+    return f"{index}. {pin_label}{row['title']}（{category_label}｜{row['unlocked_on']}｜{source_label}）"
 
 
 def handle_list(db: CloudSQLClient, user_id: int) -> tuple[str, dict]:
@@ -100,7 +101,12 @@ def handle_list(db: CloudSQLClient, user_id: int) -> tuple[str, dict]:
         lines.append("")
         for index, row in enumerate(achievements, start=1):
             lines.append(_format_achievement(row, index))
-            buttons.append([{"text": f"🗑 刪除 {index}", "callback_data": f"achievements:delete:{row['id']}"}])
+            pin_action = "unpin" if row.get("pinned_at") else "pin"
+            pin_text = "取消置頂" if row.get("pinned_at") else "置頂"
+            buttons.append([
+                {"text": f"📌 {pin_text} {index}", "callback_data": f"achievements:{pin_action}:{row['id']}"},
+                {"text": f"🗑 刪除 {index}", "callback_data": f"achievements:delete:{row['id']}"},
+            ])
     elif not candidates:
         lines.append("目前還沒有任何成果，也沒有待確認的候選，可以按「➕ 新增成果」建立第一筆！")
 
@@ -258,3 +264,14 @@ def handle_delete(db: CloudSQLClient, user_id: int, achievement_id: int) -> tupl
     except LifeNotFoundError as exc:
         return str(exc), menu.back_to_main_menu_keyboard()
     return "已刪除該筆成果。", menu.back_to_main_menu_keyboard()
+
+
+def handle_pin(
+    db: CloudSQLClient, user_id: int, achievement_id: int, pinned: bool
+) -> tuple[str, dict]:
+    service = _service(db)
+    try:
+        service.set_achievement_pinned(achievement_id, user_id, pinned)
+    except LifeNotFoundError as exc:
+        return str(exc), menu.back_to_main_menu_keyboard()
+    return ("已置頂該筆成果。" if pinned else "已取消置頂該筆成果。"), menu.back_to_main_menu_keyboard()

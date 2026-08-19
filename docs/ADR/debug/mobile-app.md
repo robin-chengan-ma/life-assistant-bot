@@ -256,3 +256,11 @@
 **修復方式**：`Charts.tsx` 新增 X／Y 軸名參數與繪製；分析頁於頁面層級繪製目標摘要，再顯示頁籤與日期篩選。
 **驗證方式**：Mobile TypeScript typecheck、Service／API 62 項測試與聚焦 `ruff` 通過；尚待 Robin 實機驗證。
 **未驗證範圍**：iOS／Android 實機窄螢幕的軸名排版。
+
+## 2026-08-19 分析頁首次載入先顯示不完整畫面
+**現象**：進入體態分析或記帳分析時，先只出現日期區間與轉圈，資料回來後才補上目標摘要、頁籤及圖表，造成版面跳動；共用頁面的其他分析模組也有相同風險。
+**排查過程**：檢查 `mobile/app/analytics/[module].tsx`，確認 `loading` 初始為 `false`，日期篩選器又不依賴 `payload`，因此第一次 Effect 發出 API 請求前會先渲染半成品畫面。
+**根因**：首次載入狀態與後續重新整理共用同一個布林值，且日期篩選器沒有等待第一份資料契約。
+**修復方式**：首次狀態改為 loading；尚無 payload 時只顯示完整載入畫面，資料完成後一次呈現頁面。後續切換日期則保留既有內容，避免再次清空整頁。此修正一次涵蓋 todos、body、finance、mood、jobs、exams、skills 七個共用分析頁。
+**驗證方式**：Mobile TypeScript typecheck、Expo Web export、全專案 1806 項 pytest 與 Ruff 均通過；實機驗收待完成。
+**未驗證範圍**：正式 Vercel／iOS PWA 的首次冷啟動與慢速網路體感。

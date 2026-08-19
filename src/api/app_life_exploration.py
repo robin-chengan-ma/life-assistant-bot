@@ -168,6 +168,17 @@ def restore_achievement(achievement_id: int):
     return _run(lambda service: service.restore_achievement(achievement_id, g.app_user.database_id))
 
 
+@app_life_exploration_bp.patch("/achievements/<int:achievement_id>/pin")
+@require_access_token
+def set_achievement_pinned(achievement_id: int):
+    payload = _payload()
+    if not isinstance(payload.get("pinned"), bool):
+        return jsonify({"message": "請確認成果置頂狀態"}), 400
+    return _run(lambda service: service.set_achievement_pinned(
+        achievement_id, g.app_user.database_id, payload["pinned"]
+    ))
+
+
 @app_life_exploration_bp.post("/achievement-candidates/<int:candidate_id>/decision")
 @require_access_token
 def decide_achievement(candidate_id: int):

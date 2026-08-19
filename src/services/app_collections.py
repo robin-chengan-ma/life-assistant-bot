@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
 from urllib.parse import urlparse
@@ -102,6 +102,26 @@ class AppCollectionService:
             tuple(params),
         )
         items = [self._serialize(row) for row in rows]
+        goal_rows = self._db.execute_query(
+            """/* app_collections:goals */
+            SELECT g.*,
+              GREATEST(COUNT(c.id) FILTER (WHERE c.status = 'visited') - COALESCE(g.baseline_value, 0), 0)
+                AS current_value
+            FROM module_goals g
+            LEFT JOIN collection_items c ON c.user_id = g.user_id AND c.deleted_at IS NULL
+            WHERE g.user_id = %s AND g.module_key = 'collections'
+            GROUP BY g.id
+            ORDER BY g.updated_at DESC, g.id DESC""",
+            (user_id,),
+        )
+        goals = [self._normalize_goal(row) for row in goal_rows]
+        active_goals = [goal for goal in goals if goal["status"] == "active"]
+        dated_goals = [goal for goal in active_goals if goal["target_date"]]
+        goal_summary = (
+            min(dated_goals, key=lambda goal: goal["target_date"])
+            if dated_goals
+            else max(active_goals, key=lambda goal: str(goal.get("updated_at") or ""), default=None)
+        )
         return {
             "items": items,
             "summary": {
@@ -114,6 +134,28 @@ class AppCollectionService:
                 "countries": sorted({item["country_name"] for item in items if item.get("country_name")}),
                 "cities": sorted({item["city_name"] for item in items if item.get("city_name")}),
             },
+            "goals": goals,
+            "goal_summary": goal_summary,
+        }
+
+    @staticmethod
+    def _normalize_goal(row: dict[str, Any]) -> dict[str, Any]:
+        target = float(row["target_value"]) if row.get("target_value") is not None else None
+        current = float(row["current_value"]) if row.get("current_value") is not None else None
+        progress = None if not target or current is None else min(round(current / target * 100), 100)
+        target_date = row.get("target_date")
+        status = row.get("status", "active")
+        if status == "active" and target_date and date.fromisoformat(str(target_date)[:10]) < datetime.now(_TAIWAN_TZ).date():
+            status = "expired"
+        description = row.get("target_description") or "收藏清單目標"
+        return {
+            "id": row.get("id"), "goal_type": "collections", "description": description,
+            "target_description": description, "status": status,
+            "target_date": str(target_date)[:10] if target_date else None,
+            "target_value": target, "current_value": current, "unit": row.get("target_unit"),
+            "progress_percent": progress, "progress_unavailable": progress is None,
+            "is_exceeded": bool(target and current is not None and current > target),
+            "updated_at": row.get("updated_at"), "completed_at": row.get("completed_at"),
         }
 
     def create(self, user_id: int, payload: dict[str, Any]) -> dict[str, Any]:
