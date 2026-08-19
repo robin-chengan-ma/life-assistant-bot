@@ -36,7 +36,7 @@ updated: 2026-08-19
 
 | 日期 | 對應 FR | 任務內容 | 開發者 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- | --- |
-| 2026-08-19 | FR-64b～FR-64d | Mobile 分析頁共用基礎與待辦第一批：一般分析支援 1～30 天、體態／記帳共用目標摘要與區間／最新紀錄、圖表 X／Y 軸刻度、未逾期待辦與逾期待辦分流及完成／延期／取消入口 | Codex | 程式完成／待 Robin 實機測試與 commit | TDD RED：聚焦測試 4 failed；GREEN：聚焦 API／Service／Records 96 passed。全專案 `pytest -q`：1798 passed、1 項第三方 `pydub` warning；`ruff check .`、Mobile typecheck、Web export、`git diff --check` 通過。Web export 僅既有 Leaflet 圖片資源警告。無 Migration、無 Schema 變更。 |
+| 2026-08-19 | FR-64b～FR-64d | Mobile 分析頁共用基礎與待辦第一批：一般分析支援 1～30 天、體態／記帳共用目標摘要與區間／最新紀錄、圖表 X／Y 軸刻度、未逾期待辦與逾期待辦分流及完成／延期／取消入口 | Codex | 已 commit／待 push、部署與 Robin 實機驗收 | commit `28ad29a`。TDD RED：聚焦測試 4 failed；GREEN：聚焦 API／Service／Records 96 passed。全專案 `pytest -q`：1798 passed、1 項第三方 `pydub` warning；`ruff check .`、Mobile typecheck、Web export、`git diff --check` 通過。Web export 僅既有 Leaflet 圖片資源警告。無 Migration、無 Schema 變更。 |
 | 2026-08-19 | FR-64c／FR-72a | Telegram 全目標手動完成：統一體態、飲食、運動、記帳、收藏與考試的完成操作、二次確認、權限檢查及連動事件清理 | Codex | 完成（已 push／部署／實機驗收） | commit `c2b3d50`。Robin 已核准 `0096`，完成 push、正式環境部署與 Telegram 實機驗收。Codex 聚焦測試 100 passed；全專案 1796 passed、1 項第三方 warning；`ruff check .`、`git diff --check` 通過。自動達成仍保留；正式考試分數達標會持久化 achieved，運動可建立累積型或文字里程碑。 |
 | 2026-08-18 | FR-64b～FR-64d／FR-76b | 定案 Mobile 分析頁、共用目標摘要、紀錄分區、圖表座標、逾期待辦、體態／記帳／心情、收藏目標、求職／考試頁及跨端成果置頂規格 | Codex | 規格完成／已 push／第一批已開工 | commit `0fad51f`。已由 DRAFT 移入 SPEC；2026-08-19 開始實作共用基礎與待辦第一批。成果置頂如需 Schema 變更，Migration SQL 必須另行審核。 |
 | 2026-08-18 | 功能開關 FR-3／FR-30／FR-41b／FR-77 | Telegram 大重構後 Mobile 跨端盤點與相容修正：一般功能忽略舊開關、清除客訴與舊錯誤結案殘留、顯示正式考試備註、區分關閉職缺的推薦與歷史分布 | Codex | 已 commit／待 push、部署與實機驗收 | commit `fb8c616`。TDD RED：聚焦測試 3 failed；GREEN：API／Service 聚焦測試 59 passed。全專案 `pytest -q`：1793 passed、1 項第三方 `pydub` warning；Mobile `tsc --noEmit`、`ruff check .`、`git diff --check` 通過；Robin 已回報本機測試通過。無 Migration、無資料刪除。 |
@@ -258,10 +258,11 @@ updated: 2026-08-19
 
 ## Commit 紀錄
 
-> 本表只代表本地 Git commit，不等同於已 push 或已部署。資料來源為 `git log --format="%h|%ad|%s" --date=short`；最近紀錄已於 2026-08-18 比對。git author 全部是 Robin 本人，因此「開發者」欄依 commit 內容與工作階段判斷。
+> 本表只代表本地 Git commit，不等同於已 push 或已部署。資料來源為 `git log --format="%h|%ad|%s" --date=short`；最近紀錄已於 2026-08-19 比對。git author 全部是 Robin 本人，因此「開發者」欄依 commit 內容與工作階段判斷。
 
 | 日期 | 版本 / commit | 異動摘要 | 開發者 |
 | --- | --- | --- | --- |
+| 2026-08-19 | `28ad29a` | 完成 Mobile 分析頁共用目標、紀錄與圖表基礎及逾期待辦處理 | Codex |
 | 2026-08-19 | `c2b3d50` | 新增全目標手動完成、二次確認、權限防護、里程碑類型與一致完成狀態 | Codex |
 | 2026-08-18 | `0fad51f` | 定案 Mobile 分析頁、共用目標摘要、成果置頂及求職／考試頁改版規格 | Codex |
 | 2026-08-18 | `fb8c616` | 修正 Telegram 重構後 Mobile 功能開關、取消功能殘留、考試備註與關閉職缺分析規則 | Codex |
