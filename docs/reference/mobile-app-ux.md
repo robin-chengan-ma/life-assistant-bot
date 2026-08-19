@@ -9,13 +9,9 @@ updated: 2026-08-19
 > `docs/specs/SPEC.md`）。內容力求簡述：一行講得完就不要展開成段落，需要脈絡時用連結指回
 > `docs/ADR/discuss/<功能>.md` 或 `docs/specs/PROGRESS.md` 的推版紀錄，不要把歷史敘事寫在這裡。
 >
-> 本文件承接自 `docs/specs/_archive/mobile-app/SPEC.md`（Step 4.4／4.5 規劃階段文件，整併進
-> `docs/specs/SPEC.md` 時已歸檔，`docs/specs/SPEC.md`「羅賓森 Mobile App」區塊的架構決策摘要指回本
-> 文件看細節）。內容原為規劃階段撰寫，已依 `docs/specs/PROGRESS.md`／`docs/reference/api_schema.md`
-> 核對過大致仍符合已上線版本（登入／選單／個人資訊／APP設定／唯讀分析／體態飲食記錄已於 2026-08-12
-> 上線）；但本文件無法直接查看 App 實際畫面或前端程式碼執行結果，**規劃版本與實際上線可能有出入，
-> 如發現不一致以程式碼與畫面實際呈現為準**。已知一項尚未在 PROGRESS.md／api_schema.md 找到明確上線
-> 佐證的規劃見下方「首頁圖表預覽區」小節的但書。
+> 本文件承接自 `docs/specs/_archive/mobile-app/SPEC.md`，現已依 Mobile 程式、
+> `docs/specs/PROGRESS.md` 與 `docs/reference/api_schema.md` 核對為目前上線 UX；正式產品行為仍以
+> `docs/specs/SPEC.md` 為準。
 >
 > 「客訴回饋」已正式取消；Mobile 頁面、型別與 API Client 均不保留。
 

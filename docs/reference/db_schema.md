@@ -34,7 +34,7 @@ updated: 2026-08-19
 | `0071`～`0077` | 已建立 | 前置 POC | 建立 `trips`、`collection_items`、`exploration_events`、舊版每日行程、探索照片、成果及 `transactions.trip_id` |
 | `0079_align_life_exploration_phase5.sql` | 已套用 | FR-73～FR-76a | 以追加 migration 對齊 2026-08-14 定案規格，不回寫既有 migration |
 | `0080_create_geocoding_cache.sql` | 已套用 | FR-75 | 建立 Nominatim 地址轉座標快取；以正規化查詢字串唯一去重，保存座標、顯示名稱及來源 |
-| `0097_add_achievement_pinning.sql` | 已建立／待 push 與部署 | FR-76b | `user_achievements` 新增 nullable `pinned_at`，並建立個人有效成果的置頂／完成日排序索引；既有成果不回填，預設仍為未置頂 |
+| `0097_add_achievement_pinning.sql` | 已建立／已 push／跨端實機驗收 | FR-76b | `user_achievements` 新增 nullable `pinned_at`，並建立個人有效成果的置頂／完成日排序索引；既有成果不回填，預設仍為未置頂；正式資料庫套用時間仍以 `schema_migrations` 為準 |
 
 `0079` Schema 異動摘要：
 
@@ -322,8 +322,8 @@ CREATE TABLE budget_overrides (
 | `exercise_categories` | 已套用 | FR-47a | 全域共用運動類別表，新增自訂類別採正規化比對＋LLM 語意判斷兩段式同義詞合併 |
 | `exercise_logs` | 已套用 0084 新結構 | FR-47／FR-47a、FR-64 | 已移除 `input_mode`／`training_details` 並新增 `category_id`；使用新版單一表單結構 |
 | `diet_logs` | 已建立 | FR-48、FR-64 | 飲食與飲水共用一表，營養數值可由 AI 估算或人工輸入並保留來源 |
-| `body_goals` | 已建立；`0096` 待部署 | FR-45～FR-48／FR-64c／FR-72a | 體重/運動/飲食三子功能共用；`progress_type` 區分 numeric／milestone／unquantified，`completed_at` 保存達成時間；`important_day_id` 連結期限事件 |
-| `module_goals` | 已套用；`0096` 待部署 | FR-41b／FR-73a／FR-64c | 記帳／收藏清單通用目標表；`completed_at` 保存達成時間；完成後停用重要日子並清除既有 Calendar 事件 |
+| `body_goals` | 已建立；`0096` 已部署 | FR-45～FR-48／FR-64c／FR-72a | 體重/運動/飲食三子功能共用；`progress_type` 區分 numeric／milestone／unquantified，`completed_at` 保存達成時間；`important_day_id` 連結期限事件 |
+| `module_goals` | 已套用；`0096` 已部署 | FR-41b／FR-73a／FR-64c | 記帳／收藏清單通用目標表；`completed_at` 保存達成時間；完成後停用重要日子並清除既有 Calendar 事件 |
 | `goal_summaries` | 已套用 | FR-45a（批次3） | 🎯 目標追蹤每日排程（01:00）快取摘要，`goal_source` 區分來源表（`body_goals`／`module_goals`／`certificate_goals`），只保留最新一份快取 |
 
 <details>
@@ -514,7 +514,7 @@ CREATE TABLE important_notifications_log (
 | `toeic_vocab_questions` | 已建立 | FR-25d、FR-25e | TOEIC 題庫軌道二（Gemini 即時生成單字題），刻意維持 TOEIC 專用不隨軌道一泛用化 |
 | `answer_logs` | 已建立 | FR-27、FR-29 | 作答紀錄，跨軌道一/二共用一表；`assignment_id`（2026-08-08 追加）精準對應「今天這一批」 |
 | `certificate_profiles` | 已套用 | FR-30a | Owner 證照名冊；TOEIC 為內建項目，自訂證照以停用保留歷史資料 |
-| `certificate_goals` | 已建立；`0096` 待部署 | FR-24／FR-64c／FR-72a | 證照準備目標；`status` 統一 active／achieved／cancelled，`completed_at` 保存達成時間；重新設定會恢復 active |
+| `certificate_goals` | 已建立；`0096` 已部署 | FR-24／FR-64c／FR-72a | 證照準備目標；`status` 統一 active／achieved／cancelled，`completed_at` 保存達成時間；重新設定會恢復 active |
 | `exam_official_scores` | 已建立／待擴充 | FR-30／FR-30b | 正式應考成績，僅新增與查詢；`0091` 新增選填補充內容 |
 | `certificate_daily_settings` | 已建立／待擴充 | FR-26／FR-30a | 每日出題數量與新題／複習比例；`0091` 新增 TOEIC 三軌固定題數 |
 | `certificate_daily_schedule_overrides` | 已建立／待擴充 | FR-26／FR-30a | 日期區間覆蓋；`0091` 新增 TOEIC 固定題數與不可重疊約束 |
@@ -863,9 +863,9 @@ CREATE INDEX idx_job_applications_job_id_104 ON job_applications (job_id_104);
 
 | 資料表 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `system_error_reports` | 已建立；`0095` 擴充待部署套用 | FR-19j～FR-20 | Telegram／Mobile 事故、10 分鐘合併次數、Owner Telegram／Email 送達、結案與康復狀態；`error_summary` 寫入前先去除 URL 查詢字串 |
+| `system_error_reports` | 已建立；`0095` 擴充已部署 | FR-19j～FR-20 | Telegram／Mobile 事故、10 分鐘合併次數、Owner Telegram／Email 送達、結案與康復狀態；`error_summary` 寫入前先去除 URL 查詢字串 |
 | `system_error_notification_recipients` | 已建立 | FR-19g／FR-20 | 每次事故／康復通知的家人收件人、Telegram 送達結果與時間 |
-| `system_error_affected_users` | Migration `0095` 已建立／待部署套用 | FR-19l／FR-20 | Mobile App 事故可辨識的受影響使用者；未知使用者不建立關聯資料 |
+| `system_error_affected_users` | Migration `0095` 已部署 | FR-19l／FR-20 | Mobile App 事故可辨識的受影響使用者；未知使用者不建立關聯資料 |
 
 <details>
 <summary>SQL 與設計理由</summary>

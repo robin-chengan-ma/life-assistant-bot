@@ -16,13 +16,14 @@ updated: 2026-08-19
 
 | 範圍 | 目前狀態 | 依據／剩餘工作 |
 | --- | --- | --- |
-| Telegram Phase 6 選單化、功能開關、排程、一般對話、FR-6c 草稿保護、FR-77 取消功能清理 | 完成（已 push／部署／實機驗收）；Mobile 殘留修正已 push、待部署與實機驗收確認 | 既有功能 commit `1601f34`；migration 修復 commit `07e986a`。Render 於 2026-08-18 12:25 依序成功套用 0084～0094，0094 已完成四張取消功能資料表清理；Mobile 客訴與舊錯誤結案死程式已由 commit `fb8c616` 移除並推送。 |
+| Telegram Phase 6 選單化、功能開關、排程、一般對話、FR-6c 草稿保護、FR-77 取消功能清理 | 完成（已 push／部署／實機驗收） | 既有功能 commit `1601f34`；migration 修復 commit `07e986a`。Render 於 2026-08-18 12:25 依序成功套用 0084～0094，0094 已完成四張取消功能資料表清理；Mobile 客訴與舊錯誤結案死程式已由 commit `fb8c616` 移除，Robin 已 push 並完成實機驗收。 |
 | FR-72b 帳號層隱私數字遮罩 | 完成 | Mobile 與 Telegram 共用 `users.privacy_mask_enabled`；Telegram 資料查詢已套用遮罩。 |
 | FR-19j～FR-20 跨平台系統錯誤治理 | 已 push／部署；Telegram 管理頁已實機確認 | commit `005752b`、文件 commit `94eea15` 已在 `origin/main`。Owner Telegram 錯誤管理畫面已由 Robin 提供實機截圖確認；Mobile API 未預期 5xx 事故通報、10 分鐘合併、受影響者追蹤與跨平台康復通知已實作，Mobile 真實 5xx 不刻意於正式環境製造事故。 |
-| Telegram 重構後 Mobile 跨端相容修正 | 已 push／待部署與實機驗收確認 | commit `fb8c616` 與文件 commit `fa9f03c` 已在 `origin/main`。一般生活模組不再受舊 `feature_toggles` 關閉；Mobile 客訴與舊錯誤結案程式徹底移除；考試成績顯示 `note`；求職 Top 推薦排除關閉職缺、契合度分布保留全部本期分析。無 Migration、無正式資料刪除；Robin 已回報本機測試通過。 |
+| Telegram 重構後 Mobile 跨端相容修正 | 完成（已 push／實機驗收；部署狀態未單獨回報） | commit `fb8c616` 與文件 commit `fa9f03c` 已 push。一般生活模組不再受舊 `feature_toggles` 關閉；Mobile 客訴與舊錯誤結案程式徹底移除；考試成績顯示 `note`；求職 Top 推薦排除關閉職缺、契合度分布保留全部本期分析。無 Migration、無正式資料刪除。 |
 | FR-6a／FR-6b 舊 Slash Command 入口清理 | 完成 | Slash Command 只保留 `/start`；`/rule`、`/my_toggles`、`/set_toggle`、`/set_family_birthday`、`/friend_chat` 及舊文字狀態機、死程式與過時測試均已移除。功能改由使用規則選單、功能開關與排程設定、重要日子設定及自然語言「陪我聊聊」提供。 |
-| Mobile 分析頁、目標摘要、成果置頂、求職與考試頁改版（FR-64b～FR-64d／FR-73a／FR-76b） | 第一～四批已 push 並實機驗收；求職／考試與獨立頁載入修正已 commit，待 push、部署與實機驗收 | commit `28ad29a`、`e667a11`、`83db1ec` 及文件 commit `ccfd08a` 已 push，Robin 已實機驗收第三、四批。求職三頁籤、考試證照切換分析與四個獨立頁載入修正已由 commit `2f7de66` 完成；無 Migration。 |
-| 英文口說／其他語言學習、非 TOEIC 證照題庫、完整 README | 擱置／未排入 Roadmap | 只放 `DRAFT.md`，不列為當前待開發任務。 |
+| Mobile 分析頁、目標摘要、成果置頂、求職與考試頁改版（FR-64b～FR-64d／FR-73a／FR-76b） | 完成（已 push／實機驗收；最終批部署狀態未單獨回報） | commit `28ad29a`、`e667a11`、`83db1ec`、`2f7de66` 與對應文件 commit 已 push。Robin 已完成全部實機驗收；求職三頁籤、考試證照切換分析及四個獨立頁載入畫面正常。 |
+| 英文口說／其他語言學習、非 TOEIC 證照題庫 | 擱置／未排入 Roadmap | 只放 `DRAFT.md`，不列為當前待開發任務。 |
+| 最終跨頁回歸與根目錄 README | 完成（待 commit／push） | 完整 `pytest -q`：1806 passed、1 項第三方 warning；`ruff check .`、Mobile TypeScript、Expo Web export 與文件交叉檢查通過。根 README 已依現行架構、功能、啟動、測試、部署、Migration、安全與文件索引重寫。 |
 
 ## 目前修復中
 
@@ -39,10 +40,11 @@ updated: 2026-08-19
 | 2026-08-19 | FR-64b～FR-64d | Mobile 分析頁共用基礎與待辦第一批：一般分析支援 1～30 天、體態／記帳共用目標摘要與區間／最新紀錄、圖表 X／Y 軸刻度、未逾期待辦與逾期待辦分流及完成／延期／取消入口 | Codex | 完成（已 push／實機驗收；部署狀態未單獨回報） | commit `28ad29a`。Robin 已回報 push 並完成實機測試；實機發現軸名與目標摘要順序兩項小問題，已於第二批修正。TDD RED：4 failed；GREEN：96 passed；全專案 1798 passed。1 項第三方 warning；`ruff`、typecheck、Web export、`git diff --check` 通過。 |
 | 2026-08-19 | FR-64b～FR-64d | Mobile 分析頁第二批：圖表補 X／Y 軸名、目標摘要移至日期篩選上方、體態／飲食／運動頁籤、記帳只留收支比較、心情小記移除圖表並補最近紀錄 | Codex | 完成（已 push／實機驗收；部署狀態未單獨回報） | commit `e667a11`、文件 commit `557ec10`。Robin 已回報 push 並完成實機測試；實機發現首次進入頁面會短暫顯示不完整內容，已納入第三批修正。 |
 | 2026-08-19 | FR-64b～FR-64d／FR-73a／FR-76b | Mobile 第三、四批：統一首次載入畫面、收藏目標摘要、Mobile／Telegram 跨端成果置頂與排序 | Codex | 完成（已 push／實機驗收；部署狀態未單獨回報） | commit `83db1ec`、文件 commit `ccfd08a`已 push。Robin 已實機驗收，並回報四個獨立頁缺少載入文案，本批另行修正。 |
-| 2026-08-19 | FR-64b～FR-64d | Mobile 分析收尾：四個獨立頁補完整載入畫面；求職分析完成總覽／推薦／應徵頁籤；考試成績完成證照切換、目標進度、練習／弱點／正式成績 | Codex | 已 commit／待 push、部署與 Robin 實機驗收 | commit `2f7de66`。TDD RED：證照分析契約 1 failed；GREEN：分析 API／Service 62 passed。全專案 `pytest -q`：1806 passed、1 項第三方 warning；`ruff check .`、Mobile typecheck、Web export 通過。本批無 Migration。 |
+| 2026-08-19 | FR-64b～FR-64d | Mobile 分析收尾：四個獨立頁補完整載入畫面；求職分析完成總覽／推薦／應徵頁籤；考試成績完成證照切換、目標進度、練習／弱點／正式成績 | Codex | 完成（已 push／實機驗收；部署狀態未單獨回報） | commit `2f7de66`、文件 commit `99fc3a5`。TDD RED：證照分析契約 1 failed；GREEN：分析 API／Service 62 passed。全專案 `pytest -q`：1806 passed、1 項第三方 warning；`ruff check .`、Mobile typecheck、Web export 通過。本批無 Migration。 |
+| 2026-08-19 | 文件治理 | 最終跨頁自動化回歸、現行文件狀態清理及根目錄 README 完整重寫 | Codex | 完成（待 commit／push） | `pytest -q`：1806 passed、1 項第三方 `pydub` warning；`ruff check .`、Mobile TypeScript、Expo Web export 通過。README 不含正式網址、Token 或密碼。 |
 | 2026-08-19 | FR-64c／FR-72a | Telegram 全目標手動完成：統一體態、飲食、運動、記帳、收藏與考試的完成操作、二次確認、權限檢查及連動事件清理 | Codex | 完成（已 push／部署／實機驗收） | commit `c2b3d50`。Robin 已核准 `0096`，完成 push、正式環境部署與 Telegram 實機驗收。Codex 聚焦測試 100 passed；全專案 1796 passed、1 項第三方 warning；`ruff check .`、`git diff --check` 通過。自動達成仍保留；正式考試分數達標會持久化 achieved，運動可建立累積型或文字里程碑。 |
 | 2026-08-18 | FR-64b～FR-64d／FR-76b | 定案 Mobile 分析頁、共用目標摘要、紀錄分區、圖表座標、逾期待辦、體態／記帳／心情、收藏目標、求職／考試頁及跨端成果置頂規格 | Codex | 規格完成／已 push／第一批已開工 | commit `0fad51f`。已由 DRAFT 移入 SPEC；2026-08-19 開始實作共用基礎與待辦第一批。成果置頂如需 Schema 變更，Migration SQL 必須另行審核。 |
-| 2026-08-18 | 功能開關 FR-3／FR-30／FR-41b／FR-77 | Telegram 大重構後 Mobile 跨端盤點與相容修正：一般功能忽略舊開關、清除客訴與舊錯誤結案殘留、顯示正式考試備註、區分關閉職缺的推薦與歷史分布 | Codex | 已 commit／待 push、部署與實機驗收 | commit `fb8c616`。TDD RED：聚焦測試 3 failed；GREEN：API／Service 聚焦測試 59 passed。全專案 `pytest -q`：1793 passed、1 項第三方 `pydub` warning；Mobile `tsc --noEmit`、`ruff check .`、`git diff --check` 通過；Robin 已回報本機測試通過。無 Migration、無資料刪除。 |
+| 2026-08-18 | 功能開關 FR-3／FR-30／FR-41b／FR-77 | Telegram 大重構後 Mobile 跨端盤點與相容修正：一般功能忽略舊開關、清除客訴與舊錯誤結案殘留、顯示正式考試備註、區分關閉職缺的推薦與歷史分布 | Codex | 完成（已 push／實機驗收；部署狀態未單獨回報） | commit `fb8c616`、文件 commit `fa9f03c`。TDD RED：聚焦測試 3 failed；GREEN：API／Service 聚焦測試 59 passed。全專案 `pytest -q`：1793 passed、1 項第三方 `pydub` warning；Mobile `tsc --noEmit`、`ruff check .`、`git diff --check` 通過。無 Migration、無資料刪除。 |
 | 2026-08-18 | FR-19j～FR-20 | 異常通知、康復通知與 Owner 系統錯誤管理擴充至 Mobile App 事故；新增 Telegram 管理選單、Mobile 5xx 通報、10 分鐘去重、受影響者關聯、處理追蹤與跨平台康復通知 | Codex | 已 push／部署；Telegram 管理頁已實機確認 | commit `005752b`、文件 commit `94eea15` 已在 `origin/main`。Robin 已核准 migration `0095`；Owner 管理頁由 Robin 提供正式 Telegram 截圖確認。移除舊「錯誤ID=N 已處理：…」與 Mobile 結案 API；Mobile 當下只回安全文案且僅通知 Owner。Codex 聚焦測試 332 passed；全專案 `pytest -q`：1791 passed、1 項第三方 `pydub` warning；`ruff check .`、`git diff --check` 通過。Mobile 真實 5xx 未刻意於正式環境製造事故。 |
 | 2026-08-18 | FR-6a／FR-6b／FR-51～FR-53 | 移除最後五個 Slash Command：`/rule`、`/my_toggles`、`/set_toggle`、`/set_family_birthday`、`/friend_chat`；同步刪除舊版本人／代管功能開關與家人生日文字狀態機，保留對應選單與「陪我聊聊」自然語言入口 | Codex | 完成（已 push／部署／實機驗收） | commit `759fbf5`、文件 commit `6ceed9d`。聚焦 Router／Commands 測試 206 passed；全專案 `pytest -q`：1785 passed、1 項第三方 `pydub` warning；`ruff check .` 與 `git diff --check` 通過。Robin 已回報 push 並完成全部實機測試。 |
 | 2026-08-18 | FR-6c／FR-77 | 功能模式 10 分鐘逾時、草稿 30 分鐘保護、跨功能三選一、草稿恢復二選一與固定別名選單導引；移除客訴、持久化知識庫、逐則對話與長摘要的執行程式、Mobile 分析入口及相關測試 | Codex | 完成（已 push／部署／實機驗收） | commit `1601f34`。Codex 全專案 `pytest -q`：1822 passed、1 項第三方 `pydub` warning；`ruff check .`、`git diff --check` 通過，Robin 本機亦回報測試通過。正式盤點：`complaints` 0 筆、`knowledge_base` 5 筆、`conversation_logs` 180 筆、`conversation_summaries` 1 筆，均僅外鍵指向 `users.id`。Robin 已二次核准 `0094_drop_cancelled_chat_tables.sql`，並明確決定不留備份、直接刪除；舊 migration 保留，`0094` 不使用 `CASCADE`。 |
@@ -429,6 +431,7 @@ updated: 2026-08-19
 
 | 日期 | Branch／版本 | 遠端 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- |
+| 2026-08-19 | `main`／`2f7de66`＋`99fc3a5` | GitHub | 完成 | 08/19 Robin 已推版並完成 Mobile 全部實機驗收；部署狀態未單獨回報 |
 | 2026-08-19 | `main`／`e667a11`＋`557ec10` | GitHub | 完成 | 08/19 Robin 已推版並完成 Mobile 實機驗收；部署狀態未單獨回報 |
 | 2026-08-18 | `main`／`759fbf5`＋`6ceed9d` | GitHub | 完成 | 08/18 Robin 已推版，並完成全部實機驗收 |
 | 2026-08-18 | `main`／`07e986a`＋`b67cce0` | GitHub | 完成 | 08/18 Robin 已推版，Render 隨後成功套用 0084～0094 |
