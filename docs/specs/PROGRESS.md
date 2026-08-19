@@ -23,7 +23,7 @@ updated: 2026-08-19
 | FR-6a／FR-6b 舊 Slash Command 入口清理 | 完成 | Slash Command 只保留 `/start`；`/rule`、`/my_toggles`、`/set_toggle`、`/set_family_birthday`、`/friend_chat` 及舊文字狀態機、死程式與過時測試均已移除。功能改由使用規則選單、功能開關與排程設定、重要日子設定及自然語言「陪我聊聊」提供。 |
 | Mobile 分析頁、目標摘要、成果置頂、求職與考試頁改版（FR-64b～FR-64d／FR-73a／FR-76b） | 完成（已 push／實機驗收；最終批部署狀態未單獨回報） | commit `28ad29a`、`e667a11`、`83db1ec`、`2f7de66` 與對應文件 commit 已 push。Robin 已完成全部實機驗收；求職三頁籤、考試證照切換分析及四個獨立頁載入畫面正常。 |
 | 英文口說／其他語言學習、非 TOEIC 證照題庫 | 擱置／未排入 Roadmap | 只放 `DRAFT.md`，不列為當前待開發任務。 |
-| 最終跨頁回歸與根目錄 README | 完成（待 commit／push） | 完整 `pytest -q`：1806 passed、1 項第三方 warning；`ruff check .`、Mobile TypeScript、Expo Web export 與文件交叉檢查通過。根 README 已依現行架構、功能、啟動、測試、部署、Migration、安全與文件索引重寫。 |
+| 最終跨頁回歸與根目錄 README | 完成（已 commit／待 push） | commit `37b3345`。完整 `pytest -q`：1806 passed、1 項第三方 warning；`ruff check .`、Mobile TypeScript、Expo Web export 與文件交叉檢查通過。根 README 已依現行架構、功能、啟動、測試、部署、Migration、安全與文件索引重寫。 |
 
 ## 目前修復中
 
@@ -41,7 +41,7 @@ updated: 2026-08-19
 | 2026-08-19 | FR-64b～FR-64d | Mobile 分析頁第二批：圖表補 X／Y 軸名、目標摘要移至日期篩選上方、體態／飲食／運動頁籤、記帳只留收支比較、心情小記移除圖表並補最近紀錄 | Codex | 完成（已 push／實機驗收；部署狀態未單獨回報） | commit `e667a11`、文件 commit `557ec10`。Robin 已回報 push 並完成實機測試；實機發現首次進入頁面會短暫顯示不完整內容，已納入第三批修正。 |
 | 2026-08-19 | FR-64b～FR-64d／FR-73a／FR-76b | Mobile 第三、四批：統一首次載入畫面、收藏目標摘要、Mobile／Telegram 跨端成果置頂與排序 | Codex | 完成（已 push／實機驗收；部署狀態未單獨回報） | commit `83db1ec`、文件 commit `ccfd08a`已 push。Robin 已實機驗收，並回報四個獨立頁缺少載入文案，本批另行修正。 |
 | 2026-08-19 | FR-64b～FR-64d | Mobile 分析收尾：四個獨立頁補完整載入畫面；求職分析完成總覽／推薦／應徵頁籤；考試成績完成證照切換、目標進度、練習／弱點／正式成績 | Codex | 完成（已 push／實機驗收；部署狀態未單獨回報） | commit `2f7de66`、文件 commit `99fc3a5`。TDD RED：證照分析契約 1 failed；GREEN：分析 API／Service 62 passed。全專案 `pytest -q`：1806 passed、1 項第三方 warning；`ruff check .`、Mobile typecheck、Web export 通過。本批無 Migration。 |
-| 2026-08-19 | 文件治理 | 最終跨頁自動化回歸、現行文件狀態清理及根目錄 README 完整重寫 | Codex | 完成（待 commit／push） | `pytest -q`：1806 passed、1 項第三方 `pydub` warning；`ruff check .`、Mobile TypeScript、Expo Web export 通過。README 不含正式網址、Token 或密碼。 |
+| 2026-08-19 | 文件治理 | 最終跨頁自動化回歸、現行文件狀態清理及根目錄 README 完整重寫 | Codex | 完成（已 commit／待 push） | commit `37b3345`。`pytest -q`：1806 passed、1 項第三方 `pydub` warning；`ruff check .`、Mobile TypeScript、Expo Web export 通過。README 不含正式網址、Token 或密碼。 |
 | 2026-08-19 | FR-64c／FR-72a | Telegram 全目標手動完成：統一體態、飲食、運動、記帳、收藏與考試的完成操作、二次確認、權限檢查及連動事件清理 | Codex | 完成（已 push／部署／實機驗收） | commit `c2b3d50`。Robin 已核准 `0096`，完成 push、正式環境部署與 Telegram 實機驗收。Codex 聚焦測試 100 passed；全專案 1796 passed、1 項第三方 warning；`ruff check .`、`git diff --check` 通過。自動達成仍保留；正式考試分數達標會持久化 achieved，運動可建立累積型或文字里程碑。 |
 | 2026-08-18 | FR-64b～FR-64d／FR-76b | 定案 Mobile 分析頁、共用目標摘要、紀錄分區、圖表座標、逾期待辦、體態／記帳／心情、收藏目標、求職／考試頁及跨端成果置頂規格 | Codex | 規格完成／已 push／第一批已開工 | commit `0fad51f`。已由 DRAFT 移入 SPEC；2026-08-19 開始實作共用基礎與待辦第一批。成果置頂如需 Schema 變更，Migration SQL 必須另行審核。 |
 | 2026-08-18 | 功能開關 FR-3／FR-30／FR-41b／FR-77 | Telegram 大重構後 Mobile 跨端盤點與相容修正：一般功能忽略舊開關、清除客訴與舊錯誤結案殘留、顯示正式考試備註、區分關閉職缺的推薦與歷史分布 | Codex | 完成（已 push／實機驗收；部署狀態未單獨回報） | commit `fb8c616`、文件 commit `fa9f03c`。TDD RED：聚焦測試 3 failed；GREEN：API／Service 聚焦測試 59 passed。全專案 `pytest -q`：1793 passed、1 項第三方 `pydub` warning；Mobile `tsc --noEmit`、`ruff check .`、`git diff --check` 通過。無 Migration、無資料刪除。 |
@@ -267,6 +267,7 @@ updated: 2026-08-19
 
 | 日期 | 版本 / commit | 異動摘要 | 開發者 |
 | --- | --- | --- | --- |
+| 2026-08-19 | `37b3345` | 完成根目錄 README、最終跨頁回歸及文件現況收尾 | Codex |
 | 2026-08-19 | `83db1ec` | 完成七個分析頁載入修正、收藏目標摘要及跨端成果置頂 | Codex |
 | 2026-08-19 | `2f7de66` | 完成求職與考試分析頁及獨立頁載入修正 | Codex |
 | 2026-08-19 | `e667a11` | 完成 Mobile 生活分析頁第二階段與實機回饋修正 | Codex |
