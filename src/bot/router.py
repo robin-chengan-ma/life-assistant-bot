@@ -936,6 +936,8 @@ def handle_callback_query(
             return job_settings.start_criteria_delete_confirm(state_store, telegram_user_id, user["id"], int(action.rsplit(":", 1)[1]))
         if action.startswith("criteria:confirm_delete:"):
             return job_settings.handle_criteria_delete_confirm(db, state_store, telegram_user_id, user["id"], int(action.rsplit(":", 1)[1])), menu.back_to_main_menu_keyboard()
+        if action.startswith("criteria:edit:"):
+            return job_settings.start_criteria_edit(db, state_store, telegram_user_id, user["id"], int(action.rsplit(":", 1)[1]))
         if action == "jobs":
             return job_settings.start_jobs_list(db)
         if action.startswith("status:"):
@@ -1656,6 +1658,8 @@ def _dispatch_active_flow(
         return job_settings.handle_requirements_edit(db, state_store, telegram_user_id, text)
     if flow == "pending_job_settings_criteria":
         return job_settings.handle_criteria_add(db, llm_client, state_store, telegram_user_id, text)
+    if flow == "pending_job_settings_criteria_edit":
+        return job_settings.handle_criteria_edit(db, llm_client, state_store, telegram_user_id, text)
     # 2026-08-09（Step 4.3，見 robinson SPEC.md FR-40、ADR-27）：外部管道職缺新增流程，六輪
     # 依序收集管道／職稱／公司名／連結／內容／公司背景，結構比照求職模組設定流程但不經 LLM
     # 解析（純自由文字直接記錄），只有內容/背景這兩輪需要 privacy_llm_client 做個資遮蔽。

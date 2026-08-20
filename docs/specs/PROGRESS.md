@@ -24,6 +24,7 @@ updated: 2026-08-19
 | Mobile 分析頁、目標摘要、成果置頂、求職與考試頁改版（FR-64b～FR-64d／FR-73a／FR-76b） | 完成（已 push／實機驗收；最終批部署狀態未單獨回報） | commit `28ad29a`、`e667a11`、`83db1ec`、`2f7de66` 與對應文件 commit 已 push。Robin 已完成全部實機驗收；求職三頁籤、考試證照切換分析及四個獨立頁載入畫面正常。 |
 | 英文口說／其他語言學習、非 TOEIC 證照題庫 | 擱置／未排入 Roadmap | 只放 `DRAFT.md`，不列為當前待開發任務。 |
 | 最終跨頁回歸與根目錄 README | 完成（已 commit／待 push） | commit `37b3345`。完整 `pytest -q`：1806 passed、1 項第三方 warning；`ruff check .`、Mobile TypeScript、Expo Web export 與文件交叉檢查通過。根 README 已依現行架構、功能、啟動、測試、部署、Migration、安全與文件索引重寫。 |
+| 「職缺關鍵字設定」多地區、清單顯示、編輯功能（FR-41c） | 程式碼與測試完成（尚未 commit／push／部署） | 不需 Migration。`src/bot/commands.py`（Prompt）、`src/bot/job_search.py`（多地區 OR 比對＋`update_search_criteria()`／`format_search_criteria()`）、`src/bot/job_settings.py`（清單顯示＋編輯流程）、`src/bot/router.py`（`criteria:edit:*`）已異動；`tests/bot/test_job_settings.py` 新增 6 項測試，全專案 `pytest -q` 1602 passed（`tests/migrations/test_migration_sql.py` 1 項因 Cowork 沙盒未攜帶完整 `.sql` migration 檔案而失敗，屬環境限制非程式碼問題）；`ruff check .` 對本次異動檔案全過。Prompt 對單一技術詞判斷的實際效果待 Robin 在正式環境用 Gemini 實測驗證。 |
 
 ## 目前修復中
 
@@ -37,6 +38,7 @@ updated: 2026-08-19
 
 | 日期 | 對應 FR | 任務內容 | 開發者 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- | --- |
+| 2026-08-20 | FR-41c | 「職缺關鍵字設定」實機使用後三項調整：①`_JOB_SEARCH_CRITERIA_PARSE_PROMPT` 修正單一技術詞（如「AI」）被誤判 `UNCLEAR` 的問題，追加「單一技術詞/縮寫即視為明確關鍵字」規則②`job_search_criteria.region` 支援逗號分隔多地區，`crawl_and_upsert_jobs()` 比對邏輯改成任一地區符合即算通過（OR）③清單改為同時顯示關鍵字／地區／薪資範圍（新增 `job_search.format_search_criteria()`），並新增「✏️ 編輯」操作（`job_search:criteria:edit:<id>`，新增 `job_search.update_search_criteria()`），走跟新增相同的自然語言整段描述、整筆覆蓋 | Claude | 完成（程式碼與測試已完成，尚未 commit／push／部署） | 不需 Migration。`tests/bot/test_job_settings.py` 新增 6 項測試；全專案 `python3 -m pytest -q`：1602 passed（`tests/migrations/test_migration_sql.py` 1 項因本次雲端沙盒未攜帶完整 `.sql` migration 檔案而失敗，屬環境限制、非本次程式碼問題，未計入回歸範圍）；`ruff check .` 對本次異動檔案全過。`docs/reference/db_schema.md`（`job_search_criteria.region` 格式慣例）已同步；完整互動決策見 `docs/ADR/discuss/job-search.md` 2026-08-18「職缺關鍵字設定支援多地區、清單顯示地區/薪資、新增編輯功能」條目；根因排查見 `docs/ADR/debug/job-search.md`。Prompt 調整效果無法在 Cowork 沙盒對正式 Gemini API 驗證，待 Robin 正式環境實測。 |
 | 2026-08-19 | FR-64b～FR-64d | Mobile 分析頁共用基礎與待辦第一批：一般分析支援 1～30 天、體態／記帳共用目標摘要與區間／最新紀錄、圖表 X／Y 軸刻度、未逾期待辦與逾期待辦分流及完成／延期／取消入口 | Codex | 完成（已 push／實機驗收；部署狀態未單獨回報） | commit `28ad29a`。Robin 已回報 push 並完成實機測試；實機發現軸名與目標摘要順序兩項小問題，已於第二批修正。TDD RED：4 failed；GREEN：96 passed；全專案 1798 passed。1 項第三方 warning；`ruff`、typecheck、Web export、`git diff --check` 通過。 |
 | 2026-08-19 | FR-64b～FR-64d | Mobile 分析頁第二批：圖表補 X／Y 軸名、目標摘要移至日期篩選上方、體態／飲食／運動頁籤、記帳只留收支比較、心情小記移除圖表並補最近紀錄 | Codex | 完成（已 push／實機驗收；部署狀態未單獨回報） | commit `e667a11`、文件 commit `557ec10`。Robin 已回報 push 並完成實機測試；實機發現首次進入頁面會短暫顯示不完整內容，已納入第三批修正。 |
 | 2026-08-19 | FR-64b～FR-64d／FR-73a／FR-76b | Mobile 第三、四批：統一首次載入畫面、收藏目標摘要、Mobile／Telegram 跨端成果置頂與排序 | Codex | 完成（已 push／實機驗收；部署狀態未單獨回報） | commit `83db1ec`、文件 commit `ccfd08a`已 push。Robin 已實機驗收，並回報四個獨立頁缺少載入文案，本批另行修正。 |

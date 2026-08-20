@@ -221,9 +221,11 @@ def crawl_and_upsert_jobs(
 
     地區篩選（`criteria["region"]`）2026-08-09 起改為**呼叫端自行做子字串比對篩選**，不送給
     104 API——104 的 `area` 參數要傳它自己的地區數字代碼，不是使用者輸入的地區文字，沒有可靠
-    對照表（見 `submodules/job104/client.py` 模組 docstring）。分頁停止判斷仍然依據**未篩選**
-    的原始清單是否為空（`jobs`），不是篩選後的 `matching_jobs`——避免某一頁剛好篩不到符合地區
-    的職缺，就誤判成「這組條件已經爬完」而提早停止翻頁。
+    對照表（見 `submodules/job104/client.py` 模組 docstring）。2026-08-18（求職設定選單化，
+    ADR-28 決策②）追加支援多地區：`region` 存成逗號分隔字串（例如「台北,新竹」）時，只要職缺
+    地區文字包含其中任一個地區就算符合（OR 比對，不是要求同時包含全部）。分頁停止判斷仍然
+    依據**未篩選**的原始清單是否為空（`jobs`），不是篩選後的 `matching_jobs`——避免某一頁剛好
+    篩不到符合地區的職缺，就誤判成「這組條件已經爬完」而提早停止翻頁。
 
     回傳這次爬蟲的統計摘要：`{"new_company_ids": [...], "new_job_count": int,
     "updated_job_count": int}`；`new_company_ids` 供 FR-35a 判斷這批職缺所屬公司是否需要
@@ -238,6 +240,7 @@ def crawl_and_upsert_jobs(
 
     for criteria in criteria_list:
         region_filter = criteria.get("region")
+        region_filters = [r.strip() for r in region_filter.split(",") if r.strip()] if region_filter else []
         page = 1
         while page <= _MAX_PAGES_PER_CRITERIA:
             jobs = job104_client.search_list(
@@ -250,7 +253,10 @@ def crawl_and_upsert_jobs(
             if not jobs:
                 break
 
-            matching_jobs = [j for j in jobs if not region_filter or region_filter in (j.get("region") or "")]
+            matching_jobs = [
+                j for j in jobs
+                if not region_filters or any(r in (j.get("region") or "") for r in region_filters)
+            ]
             for job in matching_jobs:
                 _, is_new_company = upsert_company(db, job["company_id"], job["company_name"], job["region"])
                 if is_new_company and job["company_id"] not in new_company_ids:
@@ -1007,6 +1013,48 @@ def update_profile_field(db: CloudSQLClient, user_id: int, field: str, value) ->
 def delete_search_criteria(db: CloudSQLClient, user_id: int, criteria_id: int) -> bool:
     """刪除指定使用者的一筆搜尋條件，避免跨帳號刪除。"""
     return bool(db.delete("job_search_criteria", "id = %s AND user_id = %s", (criteria_id, user_id)))
+
+
+def update_search_criteria(
+    db: CloudSQLClient,
+    user_id: int,
+    criteria_id: int,
+    keyword: str,
+    region: str | None,
+    salary_min: int | None,
+    salary_max: int | None,
+) -> bool:
+    """整筆覆蓋更新指定使用者的一筆搜尋條件（2026-08-18，求職設定選單化 ADR-28 決策④）。
+
+    比照 `delete_search_criteria()` 用 `user_id` 限定範圍，避免跨帳號誤改；不提供只更新單一
+    欄位的介面——編輯流程走的是跟新增一樣的自然語言整段描述，解析出來的四個欄位一次覆蓋，
+    語意上跟「先刪除、再照新描述新增一筆」等價，只是保留原本的 `id`。回傳是否真的有找到並
+    更新到這筆（`criteria_id` 不存在或不屬於這個使用者都回傳 `False`）。
+    """
+    return bool(
+        db.update(
+            "job_search_criteria",
+            {"keyword": keyword, "region": region, "salary_min": salary_min, "salary_max": salary_max},
+            where="id = %s AND user_id = %s",
+            params=(criteria_id, user_id),
+        )
+    )
+
+
+def format_search_criteria(item: dict) -> str:
+    """把一筆搜尋條件組成單行顯示文字，供「職缺關鍵字設定」清單使用（2026-08-18，FR-41 決策
+    更新）：同時顯示地區與薪資範圍，避免只看關鍵字猜不出當初設定的篩選條件。多地區以「、」
+    分隔顯示（資料庫存的是逗號分隔字串，見 `crawl_and_upsert_jobs()` 的比對邏輯）。
+    """
+    region = item.get("region")
+    region_text = "、".join(part.strip() for part in region.split(",") if part.strip()) if region else "不限地區"
+    salary_min = item.get("salary_min")
+    salary_max = item.get("salary_max")
+    if salary_min is None and salary_max is None:
+        salary_text = "不限薪資"
+    else:
+        salary_text = f"{salary_min if salary_min is not None else '不限'}～{salary_max if salary_max is not None else '不限'} 元"
+    return f"・{item['keyword']}（{region_text}，{salary_text}）"
 
 
 def list_jobs_by_score(db: CloudSQLClient) -> list[dict]:

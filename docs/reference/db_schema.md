@@ -773,7 +773,7 @@ CREATE INDEX idx_youtube_pushed_videos_user_pushed_on ON youtube_pushed_videos (
 
 | 資料表 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `job_search_criteria` | 已建立 | FR-33 | 多組搜尋條件，`industry` 欄位 2026-08-09 起停用（保留於 DB 不刪除） |
+| `job_search_criteria` | 已建立 | FR-33 | 多組搜尋條件，`industry` 欄位 2026-08-09 起停用（保留於 DB 不刪除）；`region` 2026-08-18 起支援逗號分隔多地區（FR-41c） |
 | `job_companies` | 已建立 | FR-35 | 104 公司背景，`source`（2026-08-09）擴充支援外部管道公司共用 |
 | `job_postings` | 已建立 | FR-34 | 104 職缺，陸續擴充 `is_closed`／評分欄位／`source` |
 | `job_applications` | 已建立 | FR-39c | 應徵狀態歷程，append-only 設計 |
@@ -797,6 +797,7 @@ CREATE INDEX idx_job_search_criteria_user_id ON job_search_criteria (user_id);
 `src/migrations/0054_create_job_search_criteria_table.sql`
 
 - 不設唯一約束：允許同時存多組條件；`industry` 欄位停用後保留於 DB（不做破壞性刪除），對話流程已不再收集寫入
+- `region` 格式慣例（2026-08-18，FR-41c）：單一地區直接存文字（例如「台北」）；多個地區用半形逗號分隔全部列出（例如「台北,新竹」），比對邏輯（`crawl_and_upsert_jobs()`）對多地區採 OR 判斷，任一地區有比對到即算符合，不要求同時包含全部；欄位型別本身沒有變動，仍是單一 `TEXT`
 
 ```sql
 CREATE TABLE job_companies (

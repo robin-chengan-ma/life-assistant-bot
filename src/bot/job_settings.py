@@ -121,17 +121,30 @@ def handle_requirements_edit(db, state_store: ConversationStateStore, telegram_u
     return "已更新必要條件設定。"
 
 
+_CRITERIA_EXAMPLE_TEXT = (
+    "請用自然語言描述搜尋條件，例如「台北的 AI 工程師，薪資 5 到 8 萬」，"
+    "或「台北或新竹的 AI 工程師，薪資 5 到 8 萬」（可以同時指定多個地區）。"
+)
+
+
 def start_criteria_menu(db, user_id: int) -> tuple[str, dict]:
+    """2026-08-18（求職設定選單化第二批，見 docs/ADR/discuss/job-search.md ADR-28 決策更新）：
+    清單同時顯示地區／薪資範圍（`format_search_criteria()`），不再只印關鍵字；每筆各自補上
+    「✏️ 編輯」按鈕，改地區/薪資不用再先刪除重建。"""
     criteria = job_search.list_search_criteria(db, user_id)
+    lines = ["職缺關鍵字設定："] + [job_search.format_search_criteria(item) for item in criteria]
     rows = [("➕ 新增關鍵字", "job_search:criteria:add")]
-    rows += [(f"🗑 刪除：{item['keyword']}", f"job_search:criteria:delete:{item['id']}") for item in criteria]
+    for item in criteria:
+        rows.append((f"✏️ 編輯：{item['keyword']}", f"job_search:criteria:edit:{item['id']}"))
+        rows.append((f"🗑 刪除：{item['keyword']}", f"job_search:criteria:delete:{item['id']}"))
     rows.append(("🔙 返回求職設定", "job_search:menu"))
-    return ("職缺關鍵字設定：" if criteria else "目前沒有職缺關鍵字，可新增一筆。"), _keyboard(rows)
+    text = "\n".join(lines) if criteria else "目前沒有職缺關鍵字，可新增一筆。"
+    return text, _keyboard(rows)
 
 
 def start_criteria_add(state_store: ConversationStateStore, telegram_user_id: int, user_id: int) -> str:
     state_store.set(telegram_user_id, {"flow": "pending_job_settings_criteria", "user_id": user_id})
-    return "請用自然語言描述搜尋條件，例如「台北的 AI 工程師，薪資 5 到 8 萬」。"
+    return _CRITERIA_EXAMPLE_TEXT
 
 
 def handle_criteria_add(db, llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
@@ -144,6 +157,40 @@ def handle_criteria_add(db, llm_client, state_store: ConversationStateStore, tel
     job_search.save_search_criteria(db, state["user_id"], keyword, commands._parse_optional_text(parsed.get("REGION", "")), commands._parse_optional_int(parsed.get("SALARY_MIN", "")), commands._parse_optional_int(parsed.get("SALARY_MAX", "")))
     state_store.clear(telegram_user_id)
     return "已新增職缺關鍵字設定。"
+
+
+def start_criteria_edit(db, state_store: ConversationStateStore, telegram_user_id: int, user_id: int, criteria_id: int) -> tuple[str, dict | None]:
+    """2026-08-18（求職設定選單化第二批，ADR-28 決策④）：編輯走跟新增相同的自然語言整段描述，
+    解析完成後整筆覆蓋（不做逐欄位局部編輯），語意上跟「移除＝清空該欄位」一致，只是保留原本
+    的 `id` 不變。回傳固定是 `(文字, keyboard 或 None)`——找不到這筆設定時附返回鍵盤，正常進入
+    編輯狀態時 `keyboard` 為 `None`（比照 `start_criteria_add()` 的純文字提示，等使用者下一則
+    訊息才由 `handle_criteria_edit()` 接手）。"""
+    criteria = next((item for item in job_search.list_search_criteria(db, user_id) if item["id"] == criteria_id), None)
+    if criteria is None:
+        return "找不到這筆職缺關鍵字設定，可能已經被刪除了。", _keyboard([("🔙 返回求職設定", "job_search:menu")])
+    state_store.set(telegram_user_id, {"flow": "pending_job_settings_criteria_edit", "user_id": user_id, "criteria_id": criteria_id})
+    text = f"目前設定：{job_search.format_search_criteria(criteria)}\n\n{_CRITERIA_EXAMPLE_TEXT}（會整筆覆蓋原本設定）"
+    return text, None
+
+
+def handle_criteria_edit(db, llm_client, state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
+    from src.bot import commands
+    parsed = commands._parse_key_value_block(llm_client.generate_text(commands._JOB_SEARCH_CRITERIA_PARSE_PROMPT.format(text=text)))
+    keyword = (parsed.get("KEYWORD") or "").strip()
+    if parsed.get("STATUS") != "CLEAR" or not keyword:
+        return "不太確定職缺關鍵字，請再描述得明確一些。"
+    state = state_store.get(telegram_user_id)
+    updated = job_search.update_search_criteria(
+        db,
+        state["user_id"],
+        state["criteria_id"],
+        keyword,
+        commands._parse_optional_text(parsed.get("REGION", "")),
+        commands._parse_optional_int(parsed.get("SALARY_MIN", "")),
+        commands._parse_optional_int(parsed.get("SALARY_MAX", "")),
+    )
+    state_store.clear(telegram_user_id)
+    return "已更新職缺關鍵字設定。" if updated else "找不到這筆職缺關鍵字設定，可能已經被刪除了。"
 
 
 def start_criteria_delete_confirm(state_store: ConversationStateStore, telegram_user_id: int, user_id: int, criteria_id: int) -> tuple[str, dict]:
