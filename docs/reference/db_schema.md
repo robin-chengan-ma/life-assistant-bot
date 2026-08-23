@@ -1,6 +1,6 @@
 ---
 title: DB Schema
-updated: 2026-08-19
+updated: 2026-08-23
 ---
 
 # DB Schema
@@ -23,7 +23,7 @@ updated: 2026-08-19
 > Render 自動部署套用（實際套用時間以資料庫 `schema_migrations` 追蹤表為準）。
 >
 > 本文件多數章節涵蓋到 migration `0061`（`system_error_reports`）；後續異動依功能逐步補登，
-> 考試設定、求職設定與通知接收設定已涵蓋至 `0093`；FR-77 清理為 `0094`，跨平台事故追蹤為 `0095`，目標完成狀態為 `0096`，成果置頂為 `0097`。其他 `0062` 之後的異動見 `src/migrations/` 與 `docs/specs/SPEC.md`
+> 考試設定、求職設定與通知接收設定已涵蓋至 `0093`；FR-77 清理為 `0094`，跨平台事故追蹤為 `0095`，目標完成狀態為 `0096`，成果置頂為 `0097`，Mobile App 帳密登入鎖定為 `0098`。其他 `0062` 之後的異動見 `src/migrations/` 與 `docs/specs/SPEC.md`
 > 對應功能區塊掌握最新範圍。CREATE TABLE 語法只保留欄位定義本身，`COMMENT ON` 逐欄註解請直接看
 > 對應 migration 檔案，不在此重複。
 
@@ -91,7 +91,10 @@ CREATE TABLE users (
     -- 0083 追加：
     nickname TEXT,                                                   -- FR-4a 暱稱，與家庭稱謂、授權身分分開保存
     family_title TEXT,                                               -- FR-4a 家庭稱謂（例如「爸爸」），只作顯示用途
-    is_active BOOLEAN NOT NULL DEFAULT TRUE                          -- FR-4d 帳號是否啟用（停用不刪除帳號與資料）
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,                         -- FR-4d 帳號是否啟用（停用不刪除帳號與資料）
+    -- 0098 追加：
+    mobile_login_failed_attempts INT NOT NULL DEFAULT 0,             -- FR-65a 連續密碼錯誤次數，登入成功歸零
+    mobile_login_locked_at TIMESTAMPTZ                               -- FR-65a NULL＝未鎖定；有值＝鎖定時間，僅 Owner 手動解鎖
 );
 ```
 `src/migrations/0001_create_users_table.sql`（後續多個 migration 陸續 `ALTER TABLE` 新增，見上方註解編號；完整清單見各 migration 檔案）
@@ -100,6 +103,7 @@ CREATE TABLE users (
 - `is_owner` 由程式依 `telegram_user_id` 是否等於 `ROBIN_TELEGRAM_TOKEN` 判斷寫入
 - 後續各模組陸續在此表新增個人化設定欄位，皆以「新增可選欄位、不動既有結構」為原則；記帳（monthly_budget／三個去重欄位）對應 FR-41～FR-44a，體態（height_cm／waist_cm）對應 FR-46，生日對應 FR-53，TOEIC（toeic_weekly_question_count／toeic_pipeline_last_run_on）對應 Step 3.2，YouTube 週推播去重對應 FR-59a，求職五個履歷欄位對應 FR-36；舊版證照作答提醒去重欄位為向前相容保留、現行流程已不使用；逐欄 `COMMENT ON` 與核准脈絡見對應 migration 檔案
 - **2026-08-15（0083，Phase 6 第一批，FR-4a／FR-4d）**：`role` 欄位過去混用「Robin 標記」與「家人稱謂」兩種語意，新增 `nickname`／`family_title` 分開保存，`role` 保留不刪除（向前相容，尚未有 DROP 排程）；新增 `is_active` 供 Owner 停用／恢復使用者，預設 `TRUE`，停用時程式一併清空 `refresh_token_hash`／`refresh_token_expires_at`（沿用 0062 既有欄位）撤銷 Mobile 存取
+- **2026-08-23（0098，FR-65a，見 `docs/ADR/discuss/mobile-app.md` 條目）**：Mobile App 帳密登入新增連續錯誤鎖定，`mobile_login_failed_attempts` 每次密碼錯誤累加、登入成功歸零；累加達 2 次時寫入 `mobile_login_locked_at`（鎖定時間），之後 `AppAuthService.login()` 直接拋 `AccountLockedError` 擋下，不再比對密碼；解鎖只能由 Owner 在 Telegram「權限管理→🔓 解鎖 Mobile App 帳號」按鈕操作（`auth.unlock_mobile_login()`），清空兩欄，不會自動過期。與 `invite_codes` 通關密碼鎖定不同，這裡刻意落地 DB（理由：需要 Owner 手動解鎖、且必須撐過 Render 服務重啟）
 
 ```sql
 CREATE TABLE invite_codes (
@@ -773,7 +777,7 @@ CREATE INDEX idx_youtube_pushed_videos_user_pushed_on ON youtube_pushed_videos (
 
 | 資料表 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `job_search_criteria` | 已建立 | FR-33 | 多組搜尋條件，`industry` 欄位 2026-08-09 起停用（保留於 DB 不刪除）；`region` 2026-08-18 起支援逗號分隔多地區（FR-41c） |
+| `job_search_criteria` | 已建立 | FR-33 | 多組搜尋條件，`industry` 欄位 2026-08-09 起停用（保留於 DB 不刪除） |
 | `job_companies` | 已建立 | FR-35 | 104 公司背景，`source`（2026-08-09）擴充支援外部管道公司共用 |
 | `job_postings` | 已建立 | FR-34 | 104 職缺，陸續擴充 `is_closed`／評分欄位／`source` |
 | `job_applications` | 已建立 | FR-39c | 應徵狀態歷程，append-only 設計 |
@@ -797,7 +801,6 @@ CREATE INDEX idx_job_search_criteria_user_id ON job_search_criteria (user_id);
 `src/migrations/0054_create_job_search_criteria_table.sql`
 
 - 不設唯一約束：允許同時存多組條件；`industry` 欄位停用後保留於 DB（不做破壞性刪除），對話流程已不再收集寫入
-- `region` 格式慣例（2026-08-18，FR-41c）：單一地區直接存文字（例如「台北」）；多個地區用半形逗號分隔全部列出（例如「台北,新竹」），比對邏輯（`crawl_and_upsert_jobs()`）對多地區採 OR 判斷，任一地區有比對到即算符合，不要求同時包含全部；欄位型別本身沒有變動，仍是單一 `TEXT`
 
 ```sql
 CREATE TABLE job_companies (

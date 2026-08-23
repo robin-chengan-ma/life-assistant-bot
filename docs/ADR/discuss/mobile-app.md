@@ -491,3 +491,39 @@
 **決策**：①收藏清單、探索地圖、成果展示與重要日子設定首次取得資料前只顯示「資料載入中…」。②求職分析依既定總覽／推薦職缺／應徵紀錄三頁籤實作，推薦卡顯示公司、地區、來源、分數、理由、技能缺口與職缺連結。③考試頁先切換證照，各自顯示目標摘要、區間練習正確率、弱點與正式成績；無題庫時顯示說明。④兩頁保持唯讀，設定繼續引導至 Telegram，不建立深層連結。
 **理由**：沿用 FR-64c～FR-64d 已接受資訊架構與跨端分工，避免 Mobile 重複實作 Telegram 寫入流程。
 **後果**：擴充既有分析 API 回傳欄位，不新增 Migration 或變更寫入權限。
+
+## 2026-08-23 [標籤：使用者] Mobile App 帳密登入連續錯誤鎖定（FR-65a）
+
+**狀態**：accepted
+
+**背景**：Robin 發現先前把 Render 後端 API 網址曝露在 GitHub（repo About 欄位被 Vercel GitHub 整合自動寫回），確認過 `require_access_token` 已完整掛在所有對外端點後，進一步發現 `login()`（`src/services/app_auth.py`）完全沒有錯誤次數限制，`user_id` 又是 `user01`／`user02` 這種可預測序號，等於留了一個可被無限次嘗試密碼的破口。
+
+**討論內容**：討論過「N 分鐘後自動解鎖」與「純手動解鎖」兩種方向；Robin 選擇連續錯誤 2 次即鎖定、只能由 Owner 手動解鎖，不自動過期。同時確認了兩件事：① Owner 身分（`src/bot/auth.py::is_owner()`）綁定 Telegram 帳號，與 Mobile App 密碼、鎖定狀態完全無關，所以 Robin 自己的 Mobile App 帳號被鎖時仍可用 Telegram 解鎖自己；② 這個機制的代價是「惡意鎖定」風險——陌生人不需要猜對密碼，只要故意連續打錯 2 次就能鎖死任何一組 `userXX`，形成騷擾／小型可用性攻擊，Robin 已明確接受這個 tradeoff。`UNKNOWN_USER`／`INVALID_PASSWORD` 兩種訊息目前仍可被用來探測帳號是否存在（帳號枚舉風險），本次不處理，留待之後視需要再議。
+
+**決策**：
+①`users` 新增 `mobile_login_failed_attempts`（連續錯誤次數，登入成功歸零）與 `mobile_login_locked_at`（NULL＝未鎖定，非 NULL＝鎖定時間），見 migration `0098_add_mobile_login_lockout_to_users.sql`。
+②`AppAuthService.login()`：先檢查 `mobile_login_locked_at`，非 NULL 直接拋 `AccountLockedError`，不比對密碼；密碼錯誤時累加錯誤次數，達到 `MOBILE_LOGIN_LOCKOUT_THRESHOLD`（＝2）即寫入鎖定時間；密碼正確時歸零錯誤次數。
+③`src/api/app_auth.py` `/auth/login` 新增 `except AccountLockedError`，回 401 + `{"code": "ACCOUNT_LOCKED", "message": "帳號已被鎖定，請聯絡管理者解鎖"}`，與 `INVALID_PASSWORD` 分開，避免使用者誤以為打錯字而重試。
+④Telegram「權限管理」選單新增「🔓 解鎖 Mobile App 帳號」，列出目前被鎖定的使用者（`auth.list_mobile_login_locked_users()`），按鈕式二次點選解鎖（`auth.unlock_mobile_login()`，清空鎖定時間並歸零錯誤次數），不走文字輸入編號，避免手滑解鎖到別人。
+⑤Mobile App `login.tsx` 把 `ACCOUNT_LOCKED` 併入既有密碼欄位錯誤顯示（比照 `INVALID_PASSWORD`），顯示「帳號已被鎖定，請聯絡管理者解鎖」。
+⑥明確不做：不做「N 分鐘後自動解鎖」，維持純手動解鎖。（原「不做鎖定通知」已由下方 2026-08-23 續篇條目取代，見 `superseded` 標記）
+
+**理由**：鎖定狀態需要在 Render 服務重啟後仍然有效、且只能由 Owner 手動清除，因此必須落地 DB，不能沿用既有 Telegram 通關密碼鎖定（`src/bot/auth.py::_verification_attempts`）那種 process 記憶體＋自動 30 分鐘過期的簡化模式；解鎖入口刻意只放在 Telegram（Owner 專屬管道），不讓 Mobile App 自己有任何解鎖或重試機制。
+
+**後果**：新增 migration `0098`；`AppAuthService.login()`、`src/api/app_auth.py`、`src/bot/auth.py`、`src/bot/commands.py`（權限管理選單與 callback 分派）、`mobile/app/login.tsx` 同批修改；新增 `tests/api/test_app_auth.py`、`tests/bot/test_permission_unlock_mobile.py` 測試。帳號枚舉風險（`UNKNOWN_USER` vs `INVALID_PASSWORD`）與惡意鎖定風險維持現狀，不在本次範圍內處理。
+
+**原第⑥點「不做鎖定通知」部分：superseded**，見下方 2026-08-23 續篇條目。
+
+## 2026-08-23 續：鎖定時主動通知 Owner（FR-65a 補充）
+
+**狀態**：accepted（取代上一則決策第⑥點「不做鎖定通知」）
+
+**背景**：Robin 追問「如果家人的帳號被鎖住，是不是只能由他們主動告訴我」，確認上一則決策目前確實只能被動等對方反應，才會發現帳號被鎖。
+
+**討論內容**：家人不見得知道「登入不了」要來找 Owner 解鎖，尤其是不熟 3C 或年紀小的家人；且鎖定機制本身可能被陌生人惡意觸發（連續打錯 2 次密碼），沒有通知的話 Robin 完全不會知道帳號正被異常嘗試。比照既有 `reset_password()` 用 Telegram 私訊發送新密碼的既有模式，改成鎖定觸發時私訊通知 Owner，技術上不是新的複雜度。
+
+**決策**：`AppAuthService.login()` 新增可選參數 `notify_owner_locked: Callable[[dict], None] | None`，只在「這次呼叫剛好觸發鎖定」（`failed_attempts` 剛好達到門檻的那一次，不是每次密碼錯誤）才呼叫；通知內容含被鎖定使用者的暱稱／家庭稱謂。`src/api/app_auth.py` 提供 `_notify_owner_account_locked()` 實作，透過 `TelegramClient` 私訊 `ROBIN_TELEGRAM_TOKEN`（Owner 的 Telegram 使用者 ID），文字為「⚠️「{暱稱}」的 Mobile App 帳號已被鎖定，可至「權限管理」選單解鎖。」。`ROBIN_TELEGRAM_TOKEN` 未設定時直接略過，不阻擋登入流程；通知本身發送失敗（Telegram API 錯誤、網路問題等）一律吞掉例外只影響通知，不能讓登入錯誤的 HTTP 回應跟著失敗。
+
+**理由**：鎖定機制的價值在於「擋住陌生人亂猜密碼」，但如果沒人知道鎖定發生過，這個安全訊號就白白浪費；主動通知讓 Owner 能及早發現異常，也不用依賴家人主動反應。失敗吞例外是延續 `_unexpected_error()` 一貫「內部錯誤不能中斷主流程」的原則。
+
+**後果**：`AppAuthService.login()` 簽名新增一個可選參數（向前相容，預設 `None` 不影響既有呼叫端）；新增 `tests/api/test_app_auth.py` 兩項測試（觸發時通知＋未設定環境變數時不通知）。不新增 Migration，不影響資料庫結構。

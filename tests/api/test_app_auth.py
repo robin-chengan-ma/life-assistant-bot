@@ -7,6 +7,7 @@ from flask import Flask
 
 from src.api import app_auth
 from src.services.app_auth import (
+    AccountLockedError,
     AppAuthService,
     InvalidAccessTokenError,
     InvalidNewPasswordError,
@@ -118,6 +119,52 @@ def test_login_rejects_wrong_password(fake_db):
 
     with pytest.raises(InvalidPasswordError):
         _service(fake_db).login("user01", "wrong-password", keep_logged_in=False)
+
+
+def test_login_locks_account_after_two_consecutive_wrong_passwords(fake_db):
+    # 2026-08-23（Mobile App 帳密登入鎖定，見 docs/ADR/discuss/mobile-app-auth.md）：
+    # 連續錯誤密碼達 2 次即鎖定，之後即使密碼正確也擋下，須由 Owner 手動解鎖。
+    _seed_user(fake_db, password="correct-password")
+    service = _service(fake_db)
+
+    with pytest.raises(InvalidPasswordError):
+        service.login("user01", "wrong-1", keep_logged_in=False)
+    with pytest.raises(InvalidPasswordError):
+        service.login("user01", "wrong-2", keep_logged_in=False)
+
+    locked_user = fake_db.select("users", where="id = %s", params=(1,), fetch_one=True)
+    assert locked_user["mobile_login_locked_at"] is not None
+    assert locked_user["mobile_login_failed_attempts"] == 2
+
+    with pytest.raises(AccountLockedError):
+        service.login("user01", "correct-password", keep_logged_in=False)
+
+
+def test_login_success_resets_failed_attempt_counter(fake_db):
+    _seed_user(fake_db, password="correct-password")
+    service = _service(fake_db)
+
+    with pytest.raises(InvalidPasswordError):
+        service.login("user01", "wrong-1", keep_logged_in=False)
+    service.login("user01", "correct-password", keep_logged_in=False)
+
+    user = fake_db.select("users", where="id = %s", params=(1,), fetch_one=True)
+    assert user["mobile_login_failed_attempts"] == 0
+    assert user.get("mobile_login_locked_at") is None
+
+
+def test_login_rejects_locked_account_even_with_correct_password(fake_db):
+    _seed_user(fake_db, password="correct-password")
+    fake_db.update(
+        "users",
+        {"mobile_login_locked_at": datetime.now(timezone.utc), "mobile_login_failed_attempts": 2},
+        where="id = %s",
+        params=(1,),
+    )
+    service = _service(fake_db)
+
+    with pytest.raises(AccountLockedError):
+        service.login("user01", "correct-password", keep_logged_in=False)
 
 
 def test_login_without_keep_logged_in_returns_only_access_token(fake_db):
@@ -495,6 +542,70 @@ def test_login_api_distinguishes_unknown_identity(api_client):
         "code": "UNKNOWN_USER",
         "message": "很抱歉，我無法辨識您",
     }
+
+
+def test_login_api_locks_account_after_two_wrong_passwords_and_reports_locked_code(api_client):
+    client, fake_db, _telegram = api_client
+    _seed_user(fake_db, password="correct-password")
+
+    for _ in range(2):
+        response = client.post(
+            "/api/app/auth/login",
+            json={"user_id": "user01", "password": "wrong", "keep_logged_in": False},
+        )
+        assert response.status_code == 401
+        assert response.get_json()["code"] == "INVALID_PASSWORD"
+
+    locked_response = client.post(
+        "/api/app/auth/login",
+        json={"user_id": "user01", "password": "correct-password", "keep_logged_in": False},
+    )
+    assert locked_response.status_code == 401
+    assert locked_response.get_json() == {
+        "code": "ACCOUNT_LOCKED",
+        "message": "帳號已被鎖定，請聯絡管理者解鎖",
+    }
+
+
+def test_login_api_notifies_owner_via_telegram_when_lock_is_triggered(api_client, monkeypatch):
+    # 2026-08-23（見 docs/ADR/discuss/mobile-app.md「鎖定通知」補充條目）：鎖定「觸發的那一刻」
+    # 才通知 Owner，且訊息要點出是誰被鎖定，不能只發一次密碼錯誤就通知。
+    client, fake_db, telegram = api_client
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", "999888777")
+    _seed_user(fake_db, user_id=2, password="correct-password", telegram_user_id=2002)
+    fake_db._tables["users"][0]["nickname"] = "媽媽"
+
+    first = client.post(
+        "/api/app/auth/login",
+        json={"user_id": "user02", "password": "wrong", "keep_logged_in": False},
+    )
+    assert first.status_code == 401
+    telegram.send_text.assert_not_called()
+
+    second = client.post(
+        "/api/app/auth/login",
+        json={"user_id": "user02", "password": "wrong-again", "keep_logged_in": False},
+    )
+    assert second.status_code == 401
+    telegram.send_text.assert_called_once()
+    call_kwargs = telegram.send_text.call_args.kwargs
+    assert call_kwargs["chat_id"] == 999888777
+    assert "媽媽" in call_kwargs["text"]
+    assert "鎖定" in call_kwargs["text"]
+
+
+def test_login_api_skips_owner_notification_when_env_not_set(api_client, monkeypatch):
+    client, fake_db, telegram = api_client
+    monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
+    _seed_user(fake_db, password="correct-password")
+
+    for _ in range(2):
+        client.post(
+            "/api/app/auth/login",
+            json={"user_id": "user01", "password": "wrong", "keep_logged_in": False},
+        )
+
+    telegram.send_text.assert_not_called()
 
 
 def test_identify_api_checks_user_before_password_entry(api_client):

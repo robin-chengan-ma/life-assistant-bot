@@ -40,7 +40,10 @@ export default function LoginScreen() {
       setPasswordError(null);
       return;
     }
-    if (error instanceof ApiError && error.code === "INVALID_PASSWORD") {
+    if (
+      error instanceof ApiError &&
+      (error.code === "INVALID_PASSWORD" || error.code === "ACCOUNT_LOCKED")
+    ) {
       setPasswordError(error.message);
       return;
     }

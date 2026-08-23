@@ -256,6 +256,7 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 負責�
 - FR-64：分析頁面（記帳、體態等模組圖表）＋生活紀錄與 APP 設定；寫入一律複用既有 service 層函式——已實作
 - FR-64a：藍牙體重計整合已全面移除（見上方技術棧「決定不用」），改為手動輸入按鈕「記錄一下」——已實作
 - FR-65：帳密登入（使用者ID＋密碼），密碼單向雜湊（bcrypt/argon2），忘記密碼＝重設新密碼透過 Telegram 發送，保持登入 Refresh Token 30 天效期——已實作
+- FR-65a（2026-08-23 定案，見 `docs/ADR/discuss/mobile-app.md` 條目）：帳密登入連續密碼錯誤達 2 次即鎖定帳號（`users.mobile_login_locked_at`／`mobile_login_failed_attempts`），登入成功歸零；鎖定不會自動過期，只能由 Owner 在 Telegram「權限管理→🔓 解鎖 Mobile App 帳號」按鈕式手動解鎖；API 回應獨立的 `ACCOUNT_LOCKED` 錯誤碼，與密碼錯誤區分；鎖定觸發當下同步用 Telegram 私訊通知 Owner（見 2026-08-23 續篇條目），不需等家人主動反應——已實作
 - FR-67：左上選單導覽＋右上頭像下拉選單，權限矩陣依 `owner_only` 決定可見項目——已實作
 - FR-68：個人基本資訊頁面（唯讀）——已實作
 - FR-72：APP設定（深色模式／字體大小／隱私數字遮罩／修改密碼）——已實作
@@ -539,8 +540,7 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 負責�
 - FR-41（2026-08-18 定案，見 `docs/ADR/discuss/job-search.md` 對應日期條目）：主選單「💼 求職分析」改名「💼 求職設定」，全面選單化（`job_search:*`），取代舊有文字觸發詞（`/set_job_search`、`ID=XXX 職缺已應徵`等），比照 `collections.py`／`achievements.py` 的單層子選單模式。子選單 10 項：我的履歷（可編輯／清空）、期望工作內容（可編輯／清空）、必要條件設定（年資／期望薪資上下限，原 FR-36 `save_profile()` 五欄位中拆出的三個結構化欄位，`users.years_of_experience`／`expected_salary_min`／`expected_salary_max`，獨立於履歷／期望工作內容之外）、職缺關鍵字設定（`job_search_criteria` 清單，可新增／個別刪除）、職缺清單（唯讀，依 `score` 排序）、已應徵職缺設定／獲得面試職缺設定／拿到 offer 職缺設定（各自依 `job_applications` 最新狀態過濾，可改狀態）、職缺已關閉設定（可人工覆寫 `is_closed`）、其他平台職缺（沿用既有 `add_external_job()` 邏輯，改選單觸發）。履歷／期望工作內容／職缺關鍵字設定各自獨立清空或刪除，互不影響其餘欄位（不再是 FR-36 原本「一輪對話全部覆蓋」的設計）
 - FR-41a（2026-08-18 定案，見 `docs/ADR/discuss/job-search.md` 對應日期條目）：`job_postings` 新增 `is_closed_manual_override` 欄位，人工於「職缺已關閉設定」手動切換時寫入；旗標為 `TRUE` 時，每週爬蟲 `upsert_job_posting()` 的自動 `is_closed` 判斷須跳過該筆，避免蓋掉人工設定；人工再切回「開啟」時同步清回 `FALSE`
 - FR-41b（2026-08-18 定案）：Mobile「本期 Top 推薦」排除 `is_closed=TRUE` 的職缺，避免推薦無法應徵的工作；「契合度分布」仍統計本期所有已分析職缺，保留歷史分析全貌
-- FR-41c（2026-08-18 定案，見 `docs/ADR/discuss/job-search.md` ADR-28 決策更新）：「職缺關鍵字設定」實機使用後追加三項調整。①`job_search_criteria.region` 支援逗號分隔多地區（例如「台北,新竹」），`crawl_and_upsert_jobs()` 比對邏輯改成任一地區符合即算通過（OR），不要求同時包含全部；`_JOB_SEARCH_CRITERIA_PARSE_PROMPT` 同步追加「多地區全部列出、逗號分隔」規則 ②清單畫面改成同時顯示關鍵字／地區／薪資範圍（`job_search.format_search_criteria()`），不再只顯示關鍵字 ③新增「✏️ 編輯」操作（`job_search:criteria:edit:<id>`，`job_search.update_search_criteria()`），走跟新增相同的自然語言整段描述、整筆覆蓋，不做逐欄位局部編輯，語意上跟既有「移除＝清空該欄位」一致。同時修正 `_JOB_SEARCH_CRITERIA_PARSE_PROMPT` 對單一技術詞（如「AI」）過度保守誤判成 `UNCLEAR` 的問題，明確追加「單一技術詞/縮寫本身即視為明確關鍵字」規則（根因與繞過方法見 `docs/ADR/debug/job-search.md` 2026-08-18 條目）
-- FR-41／FR-41a 已完成選單化、人工關閉覆寫與實機驗收；FR-41b Mobile 顯示規則已由 commit `fb8c616` 完成並推送；FR-41c 程式碼與測試已完成（`tests/bot/test_job_settings.py` 新增 6 個測試案例、全數通過），尚未 commit／push，Prompt 調整效果尚待 Robin 在正式環境用 Gemini 實測驗證
+- FR-41／FR-41a 已完成選單化、人工關閉覆寫與實機驗收；FR-41b Mobile 顯示規則已由 commit `fb8c616` 完成並推送
 
 **實作階段**
 - Phase 4 Step 4.1～4.3：全數完成

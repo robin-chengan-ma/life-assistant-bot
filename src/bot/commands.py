@@ -103,6 +103,7 @@ def start_permission_menu() -> tuple[str, dict]:
             [{"text": "⛔ 停用使用者", "callback_data": "permission:disable"}],
             [{"text": "✅ 恢復使用者", "callback_data": "permission:enable"}],
             [{"text": "🔁 重發通關密碼", "callback_data": "permission:resend"}],
+            [{"text": "🔓 解鎖 Mobile App 帳號", "callback_data": "permission:unlock_mobile"}],
             [{"text": "🔙 返回主選單", "callback_data": "menu:main"}],
         ]
     }
@@ -135,6 +136,32 @@ def handle_permission_callback(
             display_name = user.get("nickname") or user.get("family_title") or user["role"]
             lines.append(f"{index}. {display_name}（{status}）")
         return "\n".join(lines), None
+
+    if action == "unlock_mobile":
+        # 2026-08-23（Mobile App 帳密登入鎖定，見 docs/ADR/discuss/mobile-app.md）：
+        # 列出目前被鎖定的使用者，按鈕式操作，不走文字輸入編號（比照 job_settings 編輯/刪除
+        # 按鈕模式），避免打錯編號解鎖到別人。
+        locked_users = auth.list_mobile_login_locked_users(db)
+        if not locked_users:
+            return "目前沒有帳號被鎖定。", menu.back_to_main_menu_keyboard()
+        keyboard = {
+            "inline_keyboard": [
+                [
+                    {
+                        "text": f"🔓 解鎖：{user.get('nickname') or user.get('family_title') or user['role']}",
+                        "callback_data": f"permission:unlock_mobile_confirm:{user['id']}",
+                    }
+                ]
+                for user in locked_users
+            ]
+            + [[{"text": "🔙 返回主選單", "callback_data": "menu:main"}]]
+        }
+        return "請選擇要解鎖的使用者：", keyboard
+
+    if action.startswith("unlock_mobile_confirm:"):
+        target_user_id = int(action[len("unlock_mobile_confirm:") :])
+        auth.unlock_mobile_login(db, target_user_id)
+        return "已解鎖該使用者的 Mobile App 帳號，對方可以重新嘗試登入了。", menu.back_to_main_menu_keyboard()
 
     raise ValueError(f"未知的權限管理操作：{action}")
 

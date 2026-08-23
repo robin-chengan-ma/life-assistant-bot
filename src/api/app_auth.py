@@ -10,6 +10,7 @@ from flask import Blueprint, Response, g, jsonify, request
 
 from src.api.error_reporting import report_mobile_error
 from src.services.app_auth import (
+    AccountLockedError,
     AppAuthService,
     AuthSession,
     InvalidAccessTokenError,
@@ -101,6 +102,22 @@ def require_access_token(handler):
     return wrapped
 
 
+def _notify_owner_account_locked(user: dict) -> None:
+    """（2026-08-23，見 docs/ADR/discuss/mobile-app.md「鎖定通知」補充條目）帳號剛被鎖定時，
+    主動私訊 Owner，不必等家人自己反應才發現。ROBIN_TELEGRAM_TOKEN 未設定時直接略過
+    （比照 `src/bot/auth.is_owner()` 未設定即視為沒有 Owner 的保守原則）。
+    """
+    owner_telegram_id = os.environ.get("ROBIN_TELEGRAM_TOKEN")
+    if not owner_telegram_id:
+        return
+    display_name = user.get("nickname") or user.get("family_title") or user.get("role")
+    telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
+    telegram_client.send_text(
+        chat_id=int(owner_telegram_id),
+        text=f"⚠️「{display_name}」的 Mobile App 帳號已被鎖定，可至「權限管理」選單解鎖。",
+    )
+
+
 @app_bp.post("/auth/login")
 def login():
     payload = _json_object()
@@ -125,10 +142,21 @@ def login():
             user_id,
             password,
             keep_logged_in=keep_logged_in,
+            notify_owner_locked=_notify_owner_account_locked,
         )
         return _session_response(session, "身份驗證成功，歡迎使用羅賓森")
     except UnknownUserError:
         return jsonify({"code": "UNKNOWN_USER", "message": "很抱歉，我無法辨識您"}), 401
+    except AccountLockedError:
+        return (
+            jsonify(
+                {
+                    "code": "ACCOUNT_LOCKED",
+                    "message": "帳號已被鎖定，請聯絡管理者解鎖",
+                }
+            ),
+            401,
+        )
     except InvalidPasswordError:
         return (
             jsonify(

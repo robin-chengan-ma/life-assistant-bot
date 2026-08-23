@@ -1,6 +1,6 @@
 ---
 title: API Schema
-updated: 2026-08-19
+updated: 2026-08-23
 ---
 
 # API Schema
@@ -204,7 +204,7 @@ payload、帳號、密碼或 Token。
 
 | 項目 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `POST /api/app/auth/login` | 已實作（`login()`） | FR-65 | 帳密登入（`user_id`＋`password`＋`keep_logged_in`），密碼單向雜湊比對，成功回傳 access/refresh token；使用者不存在或密碼錯誤回傳明確錯誤碼（`UNKNOWN_USER`／`INVALID_PASSWORD`） |
+| `POST /api/app/auth/login` | 已實作（`login()`） | FR-65／FR-65a | 帳密登入（`user_id`＋`password`＋`keep_logged_in`），密碼單向雜湊比對，成功回傳 access/refresh token；使用者不存在或密碼錯誤回傳明確錯誤碼（`UNKNOWN_USER`／`INVALID_PASSWORD`）；連續密碼錯誤達 2 次鎖定帳號，之後一律回 401 `ACCOUNT_LOCKED`（訊息「帳號已被鎖定，請聯絡管理者解鎖」），需 Owner 於 Telegram 手動解鎖才能再次嘗試；鎖定觸發當下同步以 Telegram 私訊通知 Owner（`ROBIN_TELEGRAM_TOKEN` 未設定時略過，不影響登入回應） |
 | `POST /api/app/auth/identify` | 已實作（`identify()`） | FR-65 | 依 `user_id` 確認身份是否存在，供忘記密碼流程前置步驟使用 |
 | `POST /api/app/auth/forgot-password` | 已實作（`forgot_password()`） | FR-65 | 重設新密碼並透過 Telegram 私訊發送（複用 `TelegramClient`，不寄 Email）；Telegram 傳送失敗回傳 503 並提示聯絡 Robin |
 | `POST /api/app/auth/refresh` | 已實作（`refresh()`） | FR-65 | 用 `refresh_token` 換發新 access token，保持登入 30 天效期 |

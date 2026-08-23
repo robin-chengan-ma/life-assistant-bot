@@ -18,6 +18,10 @@ _JWT_ALGORITHM = "HS256"
 _JWT_AUDIENCE = "robinson-mobile-app"
 _JWT_ISSUER = "robinson-api"
 _TEMPORARY_PASSWORD_ALPHABET = string.ascii_letters + string.digits
+# 2026-08-23（Mobile App 帳密登入鎖定，見 docs/ADR/discuss/mobile-app.md）：連續密碼
+# 錯誤達此次數即鎖定帳號，登入成功會歸零；鎖定後只能由 Owner 在 Telegram「權限管理」選單
+# 手動解鎖，不會自動過期，理由見上述 ADR。
+MOBILE_LOGIN_LOCKOUT_THRESHOLD = 2
 
 
 class DatabaseClient(Protocol):
@@ -45,6 +49,10 @@ class UnknownUserError(AppAuthError):
 
 class InvalidPasswordError(AppAuthError):
     """使用者存在，但尚未設定密碼或密碼錯誤。"""
+
+
+class AccountLockedError(AppAuthError):
+    """帳號因連續密碼錯誤已被鎖定，需 Owner 手動解鎖才能再次嘗試登入。"""
 
 
 class InvalidNewPasswordError(AppAuthError):
@@ -161,16 +169,42 @@ class AppAuthService:
         """只確認 App 使用者 ID 是否存在，不讀取或驗證密碼。"""
         self._find_user(app_user_id)
 
-    def login(self, app_user_id: str, password: str, *, keep_logged_in: bool) -> AuthSession:
+    def login(
+        self,
+        app_user_id: str,
+        password: str,
+        *,
+        keep_logged_in: bool,
+        notify_owner_locked: Callable[[dict], None] | None = None,
+    ) -> AuthSession:
         user = self._find_user(app_user_id)
+        if user.get("mobile_login_locked_at") is not None:
+            raise AccountLockedError
+
         password_hash = user.get("password_hash")
         if not password_hash or not self._password_matches(password, password_hash):
+            failed_attempts = int(user.get("mobile_login_failed_attempts") or 0) + 1
+            update_fields: dict = {"mobile_login_failed_attempts": failed_attempts}
+            just_locked = failed_attempts >= MOBILE_LOGIN_LOCKOUT_THRESHOLD
+            if just_locked:
+                update_fields["mobile_login_locked_at"] = self._now()
+            self._db.update("users", update_fields, where="id = %s", params=(user["id"],))
+            # 2026-08-23（Mobile App 帳密登入鎖定主動通知，見 docs/ADR/discuss/mobile-app.md
+            # 「鎖定通知」補充條目）：剛好在這次呼叫觸發鎖定時才通知 Owner，不是每次密碼錯誤
+            # 都通知；通知本身失敗（例如 Telegram 額度、網路問題）不能影響登入錯誤本身的回應，
+            # 因此吞掉例外只記 log，不往外拋。
+            if just_locked and notify_owner_locked is not None:
+                try:
+                    notify_owner_locked(user)
+                except Exception:  # noqa: BLE001 - 通知失敗不能影響登入錯誤回應本身
+                    pass
             raise InvalidPasswordError
 
         login_at = self._now()
         login_times = {
             "previous_login_at": user.get("current_login_at"),
             "current_login_at": login_at,
+            "mobile_login_failed_attempts": 0,
         }
         self._db.update("users", login_times, where="id = %s", params=(user["id"],))
         user = {**user, **login_times}

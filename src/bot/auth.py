@@ -213,3 +213,19 @@ def set_user_active(db: CloudSQLClient, user_id: int, active: bool) -> None:
         data["refresh_token_hash"] = None
         data["refresh_token_expires_at"] = None
     db.update("users", data, where="id = %s", params=(user_id,))
+
+
+def list_mobile_login_locked_users(db: CloudSQLClient) -> list[dict]:
+    """（2026-08-23，Mobile App 帳密登入鎖定）列出目前被鎖定的使用者，依鎖定時間排序。"""
+    users = [u for u in db.select("users") if u.get("mobile_login_locked_at") is not None]
+    return sorted(users, key=lambda u: u["mobile_login_locked_at"])
+
+
+def unlock_mobile_login(db: CloudSQLClient, user_id: int) -> None:
+    """（2026-08-23，Mobile App 帳密登入鎖定）Owner 手動解鎖，錯誤次數一併歸零。"""
+    db.update(
+        "users",
+        {"mobile_login_locked_at": None, "mobile_login_failed_attempts": 0},
+        where="id = %s",
+        params=(user_id,),
+    )
