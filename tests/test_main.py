@@ -4,6 +4,12 @@ Step 1.7 新增的 `_check_todo_pushes()`（FR-31a、FR-32）。
 main.py 其餘部分（Flask app 註冊、`_run_startup_migrations()`）沿用既有慣例，
 未強制要求覆蓋率（不在 AGENTS.md／CLAUDE.md 明訂的 100% 覆蓋率範圍內），這裡只補
 本次實際新增的邏輯，避免範圍蔓延。
+
+2026-08-24（見 docs/ADR/debug/infra.md「/healthz 每次觸發都開 14 個獨立資料庫連線」條目）：
+14 個 `_check_*()` 改成接受呼叫端傳入的共用 `db`，不再各自 `CloudSQLClient()`／
+`db.close()`；以下測試改成直接傳一個 `fake_db = MagicMock()` 進去，不再 monkeypatch
+`submodules.cloudsql.client.CloudSQLClient`，也不再斷言個別函式呼叫 `db.close()`
+（連線生命週期改由 `_run_background_checks()` 統一管理，見該函式對應測試）。
 """
 from unittest.mock import MagicMock
 
@@ -11,61 +17,50 @@ import main
 
 
 def test_check_neon_capacity_skips_when_env_vars_missing(monkeypatch):
-    monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     monkeypatch.delenv("ROBIN_TELEGRAM_TOKEN", raising=False)
 
-    main._check_neon_capacity()  # 不應該拋例外，直接跳過
+    main._check_neon_capacity(db=None)  # 不應該拋例外，直接跳過（不該碰 db）
 
 
 def test_check_neon_capacity_calls_monitor_when_env_vars_set(monkeypatch):
-    monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
     monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", "999")
 
     fake_db = MagicMock()
-    monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", MagicMock(return_value=fake_db))
     fake_telegram = MagicMock()
     monkeypatch.setattr("submodules.telegram.client.TelegramClient", MagicMock(return_value=fake_telegram))
 
     fake_monitor = MagicMock()
     monkeypatch.setattr(main, "_neon_capacity_monitor", fake_monitor)
 
-    main._check_neon_capacity()
+    main._check_neon_capacity(fake_db)
 
     fake_monitor.check_and_notify.assert_called_once_with(fake_db, fake_telegram, robin_chat_id="999")
-    fake_db.close.assert_called_once()
 
 
 def test_check_neon_capacity_swallows_exception(monkeypatch):
-    monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
     monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", "999")
 
     fake_db = MagicMock()
-    monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", MagicMock(return_value=fake_db))
     monkeypatch.setattr(
         "submodules.telegram.client.TelegramClient", MagicMock(side_effect=RuntimeError("boom"))
     )
 
-    main._check_neon_capacity()  # 不應該往外拋
-
-    fake_db.close.assert_called_once()
+    main._check_neon_capacity(fake_db)  # 不應該往外拋
 
 
 def test_check_todo_pushes_skips_when_env_vars_missing(monkeypatch):
-    monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
 
-    main._check_todo_pushes()  # 不應該拋例外，直接跳過
+    main._check_todo_pushes(db=None)  # 不應該拋例外，直接跳過（不該碰 db）
 
 
 def test_check_todo_pushes_calls_todo_module_when_env_vars_set(monkeypatch):
-    monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
 
     fake_db = MagicMock()
-    monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", MagicMock(return_value=fake_db))
     fake_telegram = MagicMock()
     monkeypatch.setattr("submodules.telegram.client.TelegramClient", MagicMock(return_value=fake_telegram))
 
@@ -76,82 +71,66 @@ def test_check_todo_pushes_calls_todo_module_when_env_vars_set(monkeypatch):
     monkeypatch.setattr("src.bot.todo.check_and_push_reminders", fake_check_reminders)
     monkeypatch.setattr("src.bot.todo.check_and_push_daily_digest", fake_check_daily)
 
-    main._check_todo_pushes()
+    main._check_todo_pushes(fake_db)
 
     fake_mark_overdue.assert_called_once_with(fake_db)
     fake_check_reminders.assert_called_once_with(fake_db, fake_telegram)
     fake_check_daily.assert_called_once_with(fake_db, fake_telegram)
-    fake_db.close.assert_called_once()
 
 
 def test_check_todo_pushes_swallows_exception(monkeypatch):
-    monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
 
     fake_db = MagicMock()
-    monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", MagicMock(return_value=fake_db))
     monkeypatch.setattr(
         "submodules.telegram.client.TelegramClient", MagicMock(side_effect=RuntimeError("boom"))
     )
 
-    main._check_todo_pushes()  # 不應該往外拋
-
-    fake_db.close.assert_called_once()
+    main._check_todo_pushes(fake_db)  # 不應該往外拋
 
 
 def test_check_body_goal_alerts_skips_when_env_vars_missing(monkeypatch):
-    monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
 
-    main._check_body_goal_alerts()  # 不應該拋例外，直接跳過
+    main._check_body_goal_alerts(db=None)  # 不應該拋例外，直接跳過
 
 
 def test_check_body_goal_alerts_calls_body_module_when_env_vars_set(monkeypatch):
-    monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
 
     fake_db = MagicMock()
-    monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", MagicMock(return_value=fake_db))
     fake_telegram = MagicMock()
     monkeypatch.setattr("submodules.telegram.client.TelegramClient", MagicMock(return_value=fake_telegram))
 
     fake_check_exercise = MagicMock()
     monkeypatch.setattr("src.bot.body.check_and_push_exercise_goal_achievements", fake_check_exercise)
 
-    main._check_body_goal_alerts()
+    main._check_body_goal_alerts(fake_db)
 
     fake_check_exercise.assert_called_once_with(fake_db, fake_telegram, calendar_client=None)
-    fake_db.close.assert_called_once()
 
 
 def test_check_body_goal_alerts_swallows_exception(monkeypatch):
-    monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
 
     fake_db = MagicMock()
-    monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", MagicMock(return_value=fake_db))
     monkeypatch.setattr(
         "submodules.telegram.client.TelegramClient", MagicMock(side_effect=RuntimeError("boom"))
     )
 
-    main._check_body_goal_alerts()  # 不應該往外拋
-
-    fake_db.close.assert_called_once()
+    main._check_body_goal_alerts(fake_db)  # 不應該往外拋
 
 
 def test_check_important_notifications_skips_when_env_vars_missing(monkeypatch):
-    monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
 
-    main._check_important_notifications()  # 不應該拋例外，直接跳過
+    main._check_important_notifications(db=None)  # 不應該拋例外，直接跳過
 
 
 def test_check_important_notifications_calls_notifications_module_when_env_vars_set(monkeypatch):
-    monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
 
     fake_db = MagicMock()
-    monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", MagicMock(return_value=fake_db))
     fake_telegram = MagicMock()
     monkeypatch.setattr("submodules.telegram.client.TelegramClient", MagicMock(return_value=fake_telegram))
 
@@ -160,16 +139,14 @@ def test_check_important_notifications_calls_notifications_module_when_env_vars_
         "src.bot.notifications.check_and_push_important_notifications", fake_check_notifications
     )
 
-    main._check_important_notifications()
+    main._check_important_notifications(fake_db)
 
     fake_check_notifications.assert_called_once_with(fake_db, fake_telegram, calendar_client=None)
-    fake_db.close.assert_called_once()
 
 
 def test_check_important_notifications_passes_calendar_client_when_env_vars_set(monkeypatch):
     # 2026-08-05（FR-66b、ADR-17）：GOOGLE_CALENDAR_* 四個環境變數都設定時，要建立 CalendarClient
     # 並傳給 notifications 模組。
-    monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
     monkeypatch.setenv("GOOGLE_CALENDAR_OAUTH_REFRESH_TOKEN", "fake-refresh")
     monkeypatch.setenv("GOOGLE_CALENDAR_OAUTH_CLIENT_ID", "fake-client-id")
@@ -177,7 +154,6 @@ def test_check_important_notifications_passes_calendar_client_when_env_vars_set(
     monkeypatch.setenv("GOOGLE_CALENDAR_ID", "fake-calendar-id")
 
     fake_db = MagicMock()
-    monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", MagicMock(return_value=fake_db))
     fake_telegram = MagicMock()
     monkeypatch.setattr("submodules.telegram.client.TelegramClient", MagicMock(return_value=fake_telegram))
     fake_calendar = MagicMock()
@@ -189,7 +165,7 @@ def test_check_important_notifications_passes_calendar_client_when_env_vars_set(
         "src.bot.notifications.check_and_push_important_notifications", fake_check_notifications
     )
 
-    main._check_important_notifications()
+    main._check_important_notifications(fake_db)
 
     fake_calendar_client_cls.assert_called_once_with(
         refresh_token="fake-refresh", client_id="fake-client-id",
@@ -199,47 +175,39 @@ def test_check_important_notifications_passes_calendar_client_when_env_vars_set(
 
 
 def test_check_important_notifications_swallows_exception(monkeypatch):
-    monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
 
     fake_db = MagicMock()
-    monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", MagicMock(return_value=fake_db))
     monkeypatch.setattr(
         "submodules.telegram.client.TelegramClient", MagicMock(side_effect=RuntimeError("boom"))
     )
 
-    main._check_important_notifications()  # 不應該往外拋
-
-    fake_db.close.assert_called_once()
+    main._check_important_notifications(fake_db)  # 不應該往外拋
 
 
 def test_check_skill_growth_collection_skips_when_env_vars_missing(monkeypatch):
-    monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("GMAIL_USER", raising=False)
     monkeypatch.delenv("GMAIL_PASSWORD", raising=False)
     monkeypatch.delenv("GEMINI_API_SKILL_GROWTH_KEY", raising=False)
 
-    main._check_skill_growth_collection()  # 不應該拋例外，直接跳過
+    main._check_skill_growth_collection(db=None)  # 不應該拋例外，直接跳過
 
 
 def test_check_skill_growth_collection_skips_when_only_gemini_key_missing(monkeypatch):
     # DB/Gmail 都設定齊全，但缺這個功能專屬的 Gemini Key 時，同樣要優雅跳過。
-    monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
     monkeypatch.setenv("GMAIL_USER", "you@gmail.com")
     monkeypatch.setenv("GMAIL_PASSWORD", "fake-app-password")
     monkeypatch.delenv("GEMINI_API_SKILL_GROWTH_KEY", raising=False)
 
-    main._check_skill_growth_collection()  # 不應該拋例外，直接跳過
+    main._check_skill_growth_collection(db=None)  # 不應該拋例外，直接跳過
 
 
 def test_check_skill_growth_collection_calls_skill_growth_module_when_env_vars_set(monkeypatch):
-    monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
     monkeypatch.setenv("GMAIL_USER", "you@gmail.com")
     monkeypatch.setenv("GMAIL_PASSWORD", "fake-app-password")
     monkeypatch.setenv("GEMINI_API_SKILL_GROWTH_KEY", "fake-gemini-key")
 
     fake_db = MagicMock()
-    monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", MagicMock(return_value=fake_db))
     fake_email = MagicMock()
     fake_email_cls = MagicMock(return_value=fake_email)
     monkeypatch.setattr("submodules.email.client.EmailClient", fake_email_cls)
@@ -252,128 +220,104 @@ def test_check_skill_growth_collection_calls_skill_growth_module_when_env_vars_s
     fake_collect = MagicMock()
     monkeypatch.setattr("src.bot.skill_growth.collect_and_store_daily_digest", fake_collect)
 
-    main._check_skill_growth_collection()
+    main._check_skill_growth_collection(fake_db)
 
     fake_email_cls.assert_called_once_with(username="you@gmail.com", password="fake-app-password")
     fake_llm_cls.assert_called_once_with(api_key="fake-gemini-key")
     fake_collect.assert_called_once_with(fake_db, fake_email, fake_newsfeed, fake_llm)
-    fake_db.close.assert_called_once()
 
 
 def test_check_skill_growth_collection_swallows_exception(monkeypatch):
-    monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
     monkeypatch.setenv("GMAIL_USER", "you@gmail.com")
     monkeypatch.setenv("GMAIL_PASSWORD", "fake-app-password")
     monkeypatch.setenv("GEMINI_API_SKILL_GROWTH_KEY", "fake-gemini-key")
 
     fake_db = MagicMock()
-    monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", MagicMock(return_value=fake_db))
     monkeypatch.setattr(
         "submodules.email.client.EmailClient", MagicMock(side_effect=RuntimeError("boom"))
     )
 
-    main._check_skill_growth_collection()  # 不應該往外拋
-
-    fake_db.close.assert_called_once()
+    main._check_skill_growth_collection(fake_db)  # 不應該往外拋
 
 
 def test_check_skill_growth_push_skips_when_env_vars_missing(monkeypatch):
-    monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
 
-    main._check_skill_growth_push()  # 不應該拋例外，直接跳過
+    main._check_skill_growth_push(db=None)  # 不應該拋例外，直接跳過
 
 
 def test_check_skill_growth_push_calls_skill_growth_module_when_env_vars_set(monkeypatch):
-    monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
 
     fake_db = MagicMock()
-    monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", MagicMock(return_value=fake_db))
     fake_telegram = MagicMock()
     monkeypatch.setattr("submodules.telegram.client.TelegramClient", MagicMock(return_value=fake_telegram))
 
     fake_push = MagicMock()
     monkeypatch.setattr("src.bot.skill_growth.check_and_push_daily_digest", fake_push)
 
-    main._check_skill_growth_push()
+    main._check_skill_growth_push(fake_db)
 
     fake_push.assert_called_once_with(fake_db, fake_telegram)
-    fake_db.close.assert_called_once()
 
 
 def test_check_skill_growth_push_swallows_exception(monkeypatch):
-    monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
 
     fake_db = MagicMock()
-    monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", MagicMock(return_value=fake_db))
     monkeypatch.setattr(
         "submodules.telegram.client.TelegramClient", MagicMock(side_effect=RuntimeError("boom"))
     )
 
-    main._check_skill_growth_push()  # 不應該往外拋
-
-    fake_db.close.assert_called_once()
+    main._check_skill_growth_push(fake_db)  # 不應該往外拋
 
 
 def test_check_certificate_daily_quiz_push_skips_when_env_vars_missing(monkeypatch):
-    monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
 
-    main._check_certificate_daily_quiz_push()  # 不應該拋例外，直接跳過
+    main._check_certificate_daily_quiz_push(db=None)  # 不應該拋例外，直接跳過
 
 
 def test_check_certificate_daily_quiz_push_calls_certificate_quiz_module_when_env_vars_set(monkeypatch):
-    monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
 
     fake_db = MagicMock()
-    monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", MagicMock(return_value=fake_db))
     fake_telegram = MagicMock()
     monkeypatch.setattr("submodules.telegram.client.TelegramClient", MagicMock(return_value=fake_telegram))
 
     fake_push = MagicMock()
     monkeypatch.setattr("src.bot.certificate_quiz.check_and_push_daily_quiz", fake_push)
 
-    main._check_certificate_daily_quiz_push()
+    main._check_certificate_daily_quiz_push(fake_db)
 
     fake_push.assert_called_once_with(fake_db, fake_telegram)
-    fake_db.close.assert_called_once()
 
 
 def test_check_certificate_daily_quiz_push_swallows_exception(monkeypatch):
-    monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
 
     fake_db = MagicMock()
-    monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", MagicMock(return_value=fake_db))
     monkeypatch.setattr(
         "submodules.telegram.client.TelegramClient", MagicMock(side_effect=RuntimeError("boom"))
     )
 
-    main._check_certificate_daily_quiz_push()  # 不應該往外拋
-
-    fake_db.close.assert_called_once()
+    main._check_certificate_daily_quiz_push(fake_db)  # 不應該往外拋
 
 
 def test_check_youtube_weekly_push_skips_when_env_vars_missing(monkeypatch):
-    monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("YOUTUBE_API_KEY", raising=False)
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     monkeypatch.delenv("GEMINI_API_SKILL_GROWTH_KEY", raising=False)
 
-    main._check_youtube_weekly_push()  # 不應該拋例外，直接跳過
+    main._check_youtube_weekly_push(db=None)  # 不應該拋例外，直接跳過
 
 
 def test_check_youtube_weekly_push_calls_youtube_module_when_env_vars_set(monkeypatch):
-    monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
     monkeypatch.setenv("YOUTUBE_API_KEY", "fake-youtube-key")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
     monkeypatch.setenv("GEMINI_API_SKILL_GROWTH_KEY", "fake-gemini-key")
 
     fake_db = MagicMock()
-    monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", MagicMock(return_value=fake_db))
     fake_youtube_client = MagicMock()
     monkeypatch.setattr("submodules.youtube.client.YouTubeClient", MagicMock(return_value=fake_youtube_client))
     fake_llm_client = MagicMock()
@@ -384,47 +328,39 @@ def test_check_youtube_weekly_push_calls_youtube_module_when_env_vars_set(monkey
     fake_push = MagicMock()
     monkeypatch.setattr("src.bot.youtube.check_and_push_weekly_youtube", fake_push)
 
-    main._check_youtube_weekly_push()
+    main._check_youtube_weekly_push(fake_db)
 
     fake_push.assert_called_once_with(fake_db, fake_youtube_client, fake_llm_client, fake_telegram)
-    fake_db.close.assert_called_once()
 
 
 def test_check_youtube_weekly_push_swallows_exception(monkeypatch):
-    monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
     monkeypatch.setenv("YOUTUBE_API_KEY", "fake-youtube-key")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
     monkeypatch.setenv("GEMINI_API_SKILL_GROWTH_KEY", "fake-gemini-key")
 
     fake_db = MagicMock()
-    monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", MagicMock(return_value=fake_db))
     monkeypatch.setattr(
         "submodules.youtube.client.YouTubeClient", MagicMock(side_effect=RuntimeError("boom"))
     )
 
-    main._check_youtube_weekly_push()  # 不應該往外拋
-
-    fake_db.close.assert_called_once()
+    main._check_youtube_weekly_push(fake_db)  # 不應該往外拋
 
 
 def test_check_job_search_weekly_crawl_skips_when_env_vars_missing(monkeypatch):
-    monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     monkeypatch.delenv("GMAIL_USER", raising=False)
     monkeypatch.delenv("GMAIL_PASSWORD", raising=False)
 
-    main._check_job_search_weekly_crawl()  # 不應該拋例外，直接跳過
+    main._check_job_search_weekly_crawl(db=None)  # 不應該拋例外，直接跳過
 
 
 def test_check_job_search_weekly_crawl_calls_job_search_module_when_env_vars_set(monkeypatch):
-    monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
     monkeypatch.setenv("GMAIL_USER", "you@gmail.com")
     monkeypatch.setenv("GMAIL_PASSWORD", "fake-app-password")
     monkeypatch.delenv("GEMINI_API_JOB_SEARCH_KEY", raising=False)
 
     fake_db = MagicMock()
-    monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", MagicMock(return_value=fake_db))
     fake_job104_client = MagicMock()
     monkeypatch.setattr("submodules.job104.client.Job104Client", MagicMock(return_value=fake_job104_client))
     fake_email_client = MagicMock()
@@ -435,25 +371,22 @@ def test_check_job_search_weekly_crawl_calls_job_search_module_when_env_vars_set
     fake_check = MagicMock()
     monkeypatch.setattr("src.bot.job_search.check_and_run_weekly_job_search", fake_check)
 
-    main._check_job_search_weekly_crawl()
+    main._check_job_search_weekly_crawl(fake_db)
 
     # GEMINI_API_JOB_SEARCH_KEY 未設定時，llm_client 傳 None，FR-37/FR-38 評分整段優雅跳過
     # （見 job_search.check_and_run_weekly_job_search() docstring），不影響爬蟲本身照常執行。
     fake_check.assert_called_once_with(
         fake_db, fake_job104_client, fake_email_client, "you@gmail.com", fake_telegram, llm_client=None
     )
-    fake_db.close.assert_called_once()
 
 
 def test_check_job_search_weekly_crawl_builds_llm_client_when_gemini_key_set(monkeypatch):
-    monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
     monkeypatch.setenv("GMAIL_USER", "you@gmail.com")
     monkeypatch.setenv("GMAIL_PASSWORD", "fake-app-password")
     monkeypatch.setenv("GEMINI_API_JOB_SEARCH_KEY", "fake-gemini-key")
 
     fake_db = MagicMock()
-    monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", MagicMock(return_value=fake_db))
     monkeypatch.setattr("submodules.job104.client.Job104Client", MagicMock(return_value=MagicMock()))
     monkeypatch.setattr("submodules.email.client.EmailClient", MagicMock(return_value=MagicMock()))
     monkeypatch.setattr("submodules.telegram.client.TelegramClient", MagicMock(return_value=MagicMock()))
@@ -464,25 +397,21 @@ def test_check_job_search_weekly_crawl_builds_llm_client_when_gemini_key_set(mon
     fake_check = MagicMock()
     monkeypatch.setattr("src.bot.job_search.check_and_run_weekly_job_search", fake_check)
 
-    main._check_job_search_weekly_crawl()
+    main._check_job_search_weekly_crawl(fake_db)
 
     fake_llm_client_cls.assert_called_once_with(api_key="fake-gemini-key")
     assert fake_check.call_args.kwargs["llm_client"] is fake_llm_client
 
 
 def test_check_job_search_weekly_crawl_swallows_exception(monkeypatch):
-    monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
     monkeypatch.setenv("GMAIL_USER", "you@gmail.com")
     monkeypatch.setenv("GMAIL_PASSWORD", "fake-app-password")
 
     fake_db = MagicMock()
-    monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", MagicMock(return_value=fake_db))
     monkeypatch.setattr("submodules.job104.client.Job104Client", MagicMock(side_effect=RuntimeError("boom")))
 
-    main._check_job_search_weekly_crawl()  # 不應該往外拋
-
-    fake_db.close.assert_called_once()
+    main._check_job_search_weekly_crawl(fake_db)  # 不應該往外拋
 
 
 def test_healthz_endpoint_still_returns_ok(monkeypatch):
@@ -536,6 +465,8 @@ class _ImmediateThread:
 def test_healthz_returns_ok_without_waiting_for_checks(monkeypatch):
     # 檢查函式故意做一件「如果同步執行會被觀察到」的事（設一個 flag），驗證 /healthz 回應時
     # 不會等它執行完——用真正的 threading.Thread（不 mock），只確認回應本身正常。
+    monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
+    monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", MagicMock(return_value=MagicMock()))
     for name in _HEALTH_CHECK_NAMES:
         monkeypatch.setattr(main, name, MagicMock())
 
@@ -547,6 +478,12 @@ def test_healthz_returns_ok_without_waiting_for_checks(monkeypatch):
 
 
 def test_healthz_dispatches_all_checks_via_background_thread(monkeypatch):
+    # 2026-08-24（見 docs/ADR/debug/infra.md「/healthz 每次觸發都開 14 個獨立資料庫連線」條目）：
+    # `_run_background_checks()` 現在會先統一建立一個共用 `db`，才把它傳給 14 個 `_check_*()`；
+    # 這裡 mock `CloudSQLClient` 回傳一個共用的 fake_db，驗證每個 `_check_*()` 都有拿到同一個 db。
+    monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
+    fake_db = MagicMock()
+    monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", MagicMock(return_value=fake_db))
     monkeypatch.setattr(main.threading, "Thread", _ImmediateThread)
     fakes = {name: MagicMock() for name in _HEALTH_CHECK_NAMES}
     for name, fake in fakes.items():
@@ -557,10 +494,32 @@ def test_healthz_dispatches_all_checks_via_background_thread(monkeypatch):
 
     assert response.status_code == 200
     for fake in fakes.values():
-        fake.assert_called_once()
+        fake.assert_called_once_with(fake_db)
+    fake_db.close.assert_called_once()
+
+
+def test_healthz_skips_all_checks_when_database_url_missing(monkeypatch):
+    # 沒有設定 DATABASE_URL（本機測試環境常見）時，整批直接跳過，連 CloudSQLClient() 都不建立。
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    fake_cloudsql_cls = MagicMock()
+    monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", fake_cloudsql_cls)
+    monkeypatch.setattr(main.threading, "Thread", _ImmediateThread)
+    fakes = {name: MagicMock() for name in _HEALTH_CHECK_NAMES}
+    for name, fake in fakes.items():
+        monkeypatch.setattr(main, name, fake)
+
+    client = main.app.test_client()
+    response = client.get("/healthz")
+
+    assert response.status_code == 200
+    fake_cloudsql_cls.assert_not_called()
+    for fake in fakes.values():
+        fake.assert_not_called()
 
 
 def test_healthz_thread_is_started_as_daemon(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
+    monkeypatch.setattr("submodules.cloudsql.client.CloudSQLClient", MagicMock(return_value=MagicMock()))
     captured = {}
 
     class _CapturingThread(_ImmediateThread):

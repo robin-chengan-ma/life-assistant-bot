@@ -337,7 +337,8 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 負責�
 - FR-19l：Mobile API 的未預期 5xx 例外必須進入與 Telegram Bot 共用的錯誤紀錄、Owner Telegram→Email 備援通知與系統錯誤管理；預期 4xx 不建立事故。一般使用者當下只看到不含技術細節的 Mobile 安全錯誤文案，不另外收到 Telegram 異常推播。錯誤紀錄要區分來源平台並在可辨識時關聯受影響使用者；登入階段未驗證身分時記為「未知使用者」，不保存帳號、密碼或其他登入輸入。同一平台、功能與安全錯誤摘要在 10 分鐘內重複時合併為同一事故、累計次數且不重複通知 Owner。新 Schema 的舊資料回填規則為：來源平台設為 `telegram`；已有處理說明者以 Owner 及原 `updated_at` 回填處理人／處理時間；無法判定的受影響使用者保持 `NULL`
 - FR-20：問題修復後由 Owner 專屬「發送康復通知」選單處理；先選擇尚未完成康復通知的 Telegram Bot 或 Mobile App 事故。Telegram Bot 事故的候選收件人為該次實際成功收到事故通知的家人；Mobile App 事故優先列出可辨識的受影響使用者，無法辨識時列出所有已綁定 Telegram 的家人。預設全選且 Owner 可自行取消勾選，預覽收件名單與對應平台文案後必須二次確認才逐一以 Telegram 發送。單一失敗不影響其他收件人，部分失敗的事故保留於清單供重試；不自動發送康復通知，舊 `/recovered` 入口移除
 - FR-20a：待辦、重要日子、目標、旅遊及其他模組只產生領域事件，由統一通知服務負責通知規則、去重、Telegram 發送及 Robin 系統錯誤的 Email fallback；通知紀錄保存類型、接收者、預計／實際發送時間、管道與結果，不保存敏感原始錯誤
-- FR-21：Neon 容量監控（達 80% 告警，借用 `/healthz` 頻率）；Gemini 免費額度用量監控刻意暫緩（官方無查詢即時用量的 API）
+- FR-21：Neon 儲存空間監控（免費額度 0.5GB，達 80% 告警，借用 `/healthz` 頻率）；只涵蓋儲存空間，不涵蓋 Neon compute CU-hours（另一項獨立的免費額度上限，官方無查詢即時用量的 API，暫緩監控，見 `docs/specs/DRAFT.md` 待討論）；Gemini 免費額度用量監控同樣刻意暫緩（官方無查詢即時用量的 API）
+- FR-21a（2026-08-24）：`/healthz` 每 10 分鐘被 cron-job.org 觸發一次，`_run_background_checks()` 改成統一建立一個共用的 `CloudSQLClient()`，傳給全部 14 個 `_check_*()` 排程檢查共用，跑完才在最外層 統一關閉；不再讓每個檢查各自建立並關閉獨立連線（原本一天累積 2016 次連線 churn，改為 144 次），疑似是 Neon compute CU-hours 額度快速消耗的主因，詳見 `docs/ADR/debug/infra.md`
 
 **非功能性需求**
 - NFR-6：可維護性——錯誤訊息一律去技術化

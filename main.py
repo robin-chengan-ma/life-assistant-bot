@@ -30,21 +30,23 @@ app.register_blueprint(bot_bp)
 _neon_capacity_monitor = monitoring.NeonCapacityMonitor()
 
 
-def _check_neon_capacity() -> None:
+def _check_neon_capacity(db) -> None:
     """在 /healthz 被 cron-job.org 呼叫（每 10 分鐘一次）時順便檢查 Neon 容量（FR-21）。
 
     刻意包一層 try/except：健康檢查端點本身絕對不能因為監控邏輯出錯而回傳失敗，
-    否則 cron-job.org 會誤判服務下線；沒設定 DATABASE_URL／TELEGRAM_BOT_TOKEN／
-    ROBIN_TELEGRAM_TOKEN（本機測試環境常見）時直接跳過，不視為錯誤。
+    否則 cron-job.org 會誤判服務下線；沒設定 TELEGRAM_BOT_TOKEN／ROBIN_TELEGRAM_TOKEN
+    （本機測試環境常見）時直接跳過，不視為錯誤。
+
+    2026-08-24（見 docs/ADR/debug/infra.md「/healthz 每次觸發都開 14 個獨立資料庫連線，
+    疑似是 Neon compute CU-hours 額度快速消耗的主因」條目）：`db` 改由呼叫端
+    `_run_background_checks()` 統一建立、統一關閉，這裡不再各自 `CloudSQLClient()`／
+    `db.close()`，避免每次 /healthz 觸發都重複建立/關閉大量資料庫連線。
     """
-    if not (os.environ.get("DATABASE_URL") and os.environ.get("TELEGRAM_BOT_TOKEN")
-            and os.environ.get("ROBIN_TELEGRAM_TOKEN")):
+    if not (os.environ.get("TELEGRAM_BOT_TOKEN") and os.environ.get("ROBIN_TELEGRAM_TOKEN")):
         return
 
-    from submodules.cloudsql.client import CloudSQLClient
     from submodules.telegram.client import TelegramClient
 
-    db = CloudSQLClient()
     try:
         telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
         _neon_capacity_monitor.check_and_notify(
@@ -52,28 +54,25 @@ def _check_neon_capacity() -> None:
         )
     except Exception:
         logger.exception("Neon 容量監控檢查失敗，不影響健康檢查端點本身")
-    finally:
-        db.close()
 
 
-def _check_todo_pushes() -> None:
+def _check_todo_pushes(db) -> None:
     """在 /healthz 被呼叫時順便處理待辦事項的自動化邏輯（Step 1.7，見 robinson SPEC.md FR-31a、
     FR-32）：①把逾期的 pending 待辦標記為 expired ②推播「預定時間前 30 分鐘」提醒 ③台灣時間
     08 點推播當天待辦摘要，見 src/bot/todo.py 模組 docstring 的完整說明。
 
     跟 `_check_neon_capacity()` 一樣包一層 try/except，不能因為這裡出錯就讓 `/healthz` 回傳失敗；
-    沒設定 DATABASE_URL／TELEGRAM_BOT_TOKEN 時直接跳過（本機測試環境常見）。這裡不像
+    沒設定 TELEGRAM_BOT_TOKEN 時直接跳過（本機測試環境常見）。這裡不像
     `_check_neon_capacity()` 需要 `ROBIN_TELEGRAM_TOKEN`——待辦事項是推播給每一位有待辦的使用者
-    自己（依 todos.user_id 查對應的 users.telegram_user_id），不是固定通知 Robin。
+    自己（依 todos.user_id 查對應的 users.telegram_user_id），不是固定通知 Robin。`db`
+    共用連線，見 `_check_neon_capacity()` 2026-08-24 追記。
     """
-    if not (os.environ.get("DATABASE_URL") and os.environ.get("TELEGRAM_BOT_TOKEN")):
+    if not os.environ.get("TELEGRAM_BOT_TOKEN"):
         return
 
     from src.bot import todo
-    from submodules.cloudsql.client import CloudSQLClient
     from submodules.telegram.client import TelegramClient
 
-    db = CloudSQLClient()
     try:
         telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
         todo.mark_overdue_as_expired(db)
@@ -81,60 +80,52 @@ def _check_todo_pushes() -> None:
         todo.check_and_push_daily_digest(db, telegram_client)
     except Exception:
         logger.exception("待辦事項推播檢查失敗，不影響健康檢查端點本身")
-    finally:
-        db.close()
 
 
-def _check_finance_alerts() -> None:
+def _check_finance_alerts(db) -> None:
     """在 /healthz 被呼叫時順便檢查記帳預算門檻預警（Step 2.1，見 robinson SPEC.md FR-43）：
     50% 門檻只在每月 15 日（含）以前檢查、80% 門檻整月都檢查，各自每月最多推播一次，
     詳見 src/bot/finance.py 模組 docstring 的完整說明。
 
     跟 `_check_todo_pushes()` 一樣包一層 try/except 且不需要 `ROBIN_TELEGRAM_TOKEN`
-    （推播對象是每一位有設定預算的使用者自己，不是固定通知 Robin）。
+    （推播對象是每一位有設定預算的使用者自己，不是固定通知 Robin）。`db` 共用連線，
+    見 `_check_neon_capacity()` 2026-08-24 追記。
     """
-    if not (os.environ.get("DATABASE_URL") and os.environ.get("TELEGRAM_BOT_TOKEN")):
+    if not os.environ.get("TELEGRAM_BOT_TOKEN"):
         return
 
     from src.bot import finance
-    from submodules.cloudsql.client import CloudSQLClient
     from submodules.telegram.client import TelegramClient
 
-    db = CloudSQLClient()
     try:
         telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
         finance.check_and_push_budget_alerts(db, telegram_client)
     except Exception:
         logger.exception("記帳預算門檻預警檢查失敗，不影響健康檢查端點本身")
-    finally:
-        db.close()
 
 
-def _check_finance_monthly_report() -> None:
+def _check_finance_monthly_report(db) -> None:
     """在 /healthz 被呼叫時順便檢查月底自動月報推播（記帳模組擴充，見 robinson SPEC.md FR-44a）：
     每月最後一天台灣時間 21:00，對「這個月有生效預算或有記帳」的使用者各推播一次月報，
     詳見 src/bot/finance.py 模組 docstring 決策⑦。
 
     跟 `_check_finance_alerts()` 一樣包一層 try/except 且不需要 `ROBIN_TELEGRAM_TOKEN`。
+    `db` 共用連線，見 `_check_neon_capacity()` 2026-08-24 追記。
     """
-    if not (os.environ.get("DATABASE_URL") and os.environ.get("TELEGRAM_BOT_TOKEN")):
+    if not os.environ.get("TELEGRAM_BOT_TOKEN"):
         return
 
     from src.bot import finance
-    from submodules.cloudsql.client import CloudSQLClient
     from submodules.telegram.client import TelegramClient
 
-    db = CloudSQLClient()
     try:
         telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
         finance.check_and_push_monthly_report(db, telegram_client)
     except Exception:
         logger.exception("月底記帳月報推播檢查失敗，不影響健康檢查端點本身")
-    finally:
-        db.close()
 
 
-def _check_body_goal_alerts() -> None:
+def _check_body_goal_alerts(db) -> None:
     """在 /healthz 被呼叫時順便檢查體態目標的排程型預警（Step 2.2，見 robinson SPEC.md
     FR-45；批次3補上飲食目標自動判斷，見 FR-48 方案A）：①運動目標累積分鐘數達成通知（體重
     目標則是記錄體重當下即時檢查，不需要排程）②飲食目標達成判斷（依 `target_direction` 分
@@ -142,16 +133,15 @@ def _check_body_goal_alerts() -> None:
     提醒，詳見 src/bot/body.py 模組 docstring 決策③。
 
     跟 `_check_finance_alerts()` 一樣包一層 try/except 且不需要 `ROBIN_TELEGRAM_TOKEN`
-    （推播對象是每一位有設定體態目標的使用者自己，不是固定通知 Robin）。
+    （推播對象是每一位有設定體態目標的使用者自己，不是固定通知 Robin）。`db` 共用連線，
+    見 `_check_neon_capacity()` 2026-08-24 追記。
     """
-    if not (os.environ.get("DATABASE_URL") and os.environ.get("TELEGRAM_BOT_TOKEN")):
+    if not os.environ.get("TELEGRAM_BOT_TOKEN"):
         return
 
     from src.bot import body
-    from submodules.cloudsql.client import CloudSQLClient
     from submodules.telegram.client import TelegramClient
 
-    db = CloudSQLClient()
     try:
         telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
         body.check_and_push_exercise_goal_achievements(
@@ -160,34 +150,29 @@ def _check_body_goal_alerts() -> None:
         body.check_and_push_diet_goal_achievements(db, telegram_client)
     except Exception:
         logger.exception("體態目標預警檢查失敗，不影響健康檢查端點本身")
-    finally:
-        db.close()
 
 
-def _check_goal_summaries() -> None:
+def _check_goal_summaries(db) -> None:
     """在 /healthz 被呼叫時順便產生🎯目標追蹤每日摘要快取（批次3，見 robinson SPEC.md
     FR-45a）：固定台灣時間凌晨 01:00，掃描 `body_goals`／`module_goals`／`certificate_goals`
     三張來源表的所有 active 目標，各生成一份「過去一週／一個月」摘要寫進 `goal_summaries`，
     詳見 `src/services/goal_summary_job.py` 模組 docstring。
 
     不需要 `TELEGRAM_BOT_TOKEN`（只寫快取，不推播）；需要 `GEMINI_API_TEXT_KEY`（沿用既有
-    通用文字生成 Key，摘要生成屬於一般文字任務，不需要獨立申請新 Key）。
+    通用文字生成 Key，摘要生成屬於一般文字任務，不需要獨立申請新 Key）。`db` 共用連線，
+    見 `_check_neon_capacity()` 2026-08-24 追記。
     """
-    if not (os.environ.get("DATABASE_URL") and os.environ.get("GEMINI_API_TEXT_KEY")):
+    if not os.environ.get("GEMINI_API_TEXT_KEY"):
         return
 
     from src.services import goal_summary_job
-    from submodules.cloudsql.client import CloudSQLClient
     from submodules.llm.client import LLMClient
 
-    db = CloudSQLClient()
     try:
         llm_client = LLMClient(api_key=os.environ["GEMINI_API_TEXT_KEY"])
         goal_summary_job.generate_daily_goal_summaries(db, llm_client)
     except Exception:
         logger.exception("🎯目標追蹤每日摘要生成失敗，不影響健康檢查端點本身")
-    finally:
-        db.close()
 
 
 def _build_calendar_client():
@@ -213,25 +198,24 @@ def _build_calendar_client():
     )
 
 
-def _check_important_notifications() -> None:
+def _check_important_notifications(db) -> None:
     """在 /healthz 被呼叫時順便檢查重要通知（Step 2.3，見 robinson SPEC.md FR-53）：固定節日
     （元旦/除夕/初一/掃墓提醒/中秋/端午/父親節/母親節）與家人生日，固定台灣時間 08:00 推播，
     詳見 src/bot/notifications.py 模組 docstring。
 
     跟 `_check_body_goal_alerts()` 一樣包一層 try/except 且不需要 `ROBIN_TELEGRAM_TOKEN`
-    （推播對象是所有已綁定的使用者，不是固定通知 Robin 一人）。
+    （推播對象是所有已綁定的使用者，不是固定通知 Robin 一人）。`db` 共用連線，見
+    `_check_neon_capacity()` 2026-08-24 追記。
 
     2026-08-05（見 FR-66b、ADR-17）：額外注入 `calendar_client`，通過判斷的節日/生日同時建立
     Google Calendar 全天事件，`_build_calendar_client()` 回傳 `None` 時優雅降級。
     """
-    if not (os.environ.get("DATABASE_URL") and os.environ.get("TELEGRAM_BOT_TOKEN")):
+    if not os.environ.get("TELEGRAM_BOT_TOKEN"):
         return
 
     from src.bot import notifications
-    from submodules.cloudsql.client import CloudSQLClient
     from submodules.telegram.client import TelegramClient
 
-    db = CloudSQLClient()
     try:
         telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
         notifications.check_and_push_important_notifications(
@@ -239,30 +223,26 @@ def _check_important_notifications() -> None:
         )
     except Exception:
         logger.exception("重要通知檢查失敗，不影響健康檢查端點本身")
-    finally:
-        db.close()
 
 
-def _check_scheduled_important_days() -> None:
-    """統一推播自訂重要日子，以及由目標與旅遊行程同步建立的日期提醒。"""
-    if not (os.environ.get("DATABASE_URL") and os.environ.get("TELEGRAM_BOT_TOKEN")):
+def _check_scheduled_important_days(db) -> None:
+    """統一推播自訂重要日子，以及由目標與旅遊行程同步建立的日期提醒。`db` 共用連線，
+    見 `_check_neon_capacity()` 2026-08-24 追記。
+    """
+    if not os.environ.get("TELEGRAM_BOT_TOKEN"):
         return
 
     from src.bot import scheduled_notifications
-    from submodules.cloudsql.client import CloudSQLClient
     from submodules.telegram.client import TelegramClient
 
-    db = CloudSQLClient()
     try:
         telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
         scheduled_notifications.check_and_push_important_days(db, telegram_client)
     except Exception:
         logger.exception("重要日子／目標／旅遊日期提醒檢查失敗，不影響健康檢查端點本身")
-    finally:
-        db.close()
 
 
-def _check_skill_growth_collection() -> None:
+def _check_skill_growth_collection(db) -> None:
     """在 /healthz 被呼叫時順便檢查每日技術摘要的「收集」階段（Step 3.1，見 robinson SPEC.md
     FR-22、FR-23）：固定台灣時間 23:00，讀取 Robin 訂閱的 TLDR 電子報＋IThome／TechCrunch
     「當天」新聞，經 Gemini 產出中文重點摘要寫入 `skill_growth_digests`，詳見
@@ -271,23 +251,21 @@ def _check_skill_growth_collection() -> None:
     這個階段不需要 `TELEGRAM_BOT_TOKEN`（不推播，只收集寫入 DB）；需要 `GMAIL_USER`／
     `GMAIL_PASSWORD`（讀信用）與 `GEMINI_API_SKILL_GROWTH_KEY`（獨立一把 Key，避免佔用
     聊天/長記憶/圖片辨識既有 Key 的配額，比照 `GEMINI_API_PRIVACY_KEY` 的既有慣例），
-    任一項未設定就直接跳過（本機測試環境或 Robin 尚未申請新 Key 時常見）。
+    任一項未設定就直接跳過（本機測試環境或 Robin 尚未申請新 Key 時常見）。`db` 共用連線，
+    見 `_check_neon_capacity()` 2026-08-24 追記。
     """
     if not (
-        os.environ.get("DATABASE_URL")
-        and os.environ.get("GMAIL_USER")
+        os.environ.get("GMAIL_USER")
         and os.environ.get("GMAIL_PASSWORD")
         and os.environ.get("GEMINI_API_SKILL_GROWTH_KEY")
     ):
         return
 
     from src.bot import skill_growth
-    from submodules.cloudsql.client import CloudSQLClient
     from submodules.email.client import EmailClient
     from submodules.llm.client import LLMClient
     from submodules.newsfeed.client import NewsFeedClient
 
-    db = CloudSQLClient()
     try:
         email_client = EmailClient(username=os.environ["GMAIL_USER"], password=os.environ["GMAIL_PASSWORD"])
         newsfeed_client = NewsFeedClient()
@@ -295,37 +273,31 @@ def _check_skill_growth_collection() -> None:
         skill_growth.collect_and_store_daily_digest(db, email_client, newsfeed_client, llm_client)
     except Exception:
         logger.exception("每日技術摘要收集失敗，不影響健康檢查端點本身")
-    finally:
-        db.close()
 
 
-def _check_skill_growth_push() -> None:
+def _check_skill_growth_push(db) -> None:
     """在 /healthz 被呼叫時順便檢查每日技術摘要的「推播」階段（Step 3.1，見 robinson SPEC.md
     FR-22、FR-23）：固定台灣時間 08:00，把前一晚 23:00 收集到的技術摘要推播給 Robin，詳見
     src/bot/skill_growth.py 模組 docstring。
 
     這個階段只需要 `TELEGRAM_BOT_TOKEN`，不需要 Gmail／Gemini 相關金鑰（收集階段已經處理完，
     這裡只是把結果讀出來推播）；收件人是查 `users.is_owner = TRUE` 動態決定，不需要
-    `ROBIN_TELEGRAM_TOKEN`。
+    `ROBIN_TELEGRAM_TOKEN`。`db` 共用連線，見 `_check_neon_capacity()` 2026-08-24 追記。
     """
-    if not (os.environ.get("DATABASE_URL") and os.environ.get("TELEGRAM_BOT_TOKEN")):
+    if not os.environ.get("TELEGRAM_BOT_TOKEN"):
         return
 
     from src.bot import skill_growth
-    from submodules.cloudsql.client import CloudSQLClient
     from submodules.telegram.client import TelegramClient
 
-    db = CloudSQLClient()
     try:
         telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
         skill_growth.check_and_push_daily_digest(db, telegram_client)
     except Exception:
         logger.exception("每日技術摘要推播失敗，不影響健康檢查端點本身")
-    finally:
-        db.close()
 
 
-def _check_toeic_pipeline() -> None:
+def _check_toeic_pipeline(db) -> None:
     """在 /healthz 被呼叫時順便檢查 TOEIC 雙軌題庫 Pipeline（Step 3.2，見 robinson SPEC.md
     FR-24、FR-25a～FR-25f）：固定台灣時間週日 22:00，掃描 Google Drive 資料夾比對/解析軌道一
     題目，並生成軌道二單字題，詳見 src/bot/toeic.py 模組 docstring。這支函式只負責「把題庫
@@ -334,10 +306,10 @@ def _check_toeic_pipeline() -> None:
     需要 `GDRIVE_*`（Drive 掃描/上傳）、`GEMINI_API_IMAGE_KEY1`／`GEMINI_API_IMAGE_KEY2`
     （軌道一圖片解析，隨機擇一，見 ADR-12）、`VOICE_API_KEY`（軌道一整包音檔切割）、
     `GEMINI_API_TEXT_KEY`（軌道二單字題生成）；任一項未設定就直接跳過（本機測試環境或
-    Robin 尚未完成 OAuth 重新授權時常見）。
+    Robin 尚未完成 OAuth 重新授權時常見）。`db` 共用連線，見 `_check_neon_capacity()`
+    2026-08-24 追記。
     """
     required_env_vars = (
-        "DATABASE_URL",
         "GDRIVE_OAUTH_REFRESH_TOKEN",
         "GDRIVE_OAUTH_CLIENT_ID",
         "GDRIVE_OAUTH_CLIENT_SECRET",
@@ -351,12 +323,10 @@ def _check_toeic_pipeline() -> None:
         return
 
     from src.bot import toeic
-    from submodules.cloudsql.client import CloudSQLClient
     from submodules.gdrive.client import GDriveClient
     from submodules.llm.client import LLMClient
     from submodules.voice.client import VoiceClient
 
-    db = CloudSQLClient()
     try:
         gdrive_client = GDriveClient(
             refresh_token=os.environ["GDRIVE_OAUTH_REFRESH_TOKEN"],
@@ -373,11 +343,9 @@ def _check_toeic_pipeline() -> None:
         toeic.run_weekly_pipeline(db, gdrive_client, image_llm_clients, voice_client, text_llm_client)
     except Exception:
         logger.exception("TOEIC 雙軌題庫 Pipeline 執行失敗，不影響健康檢查端點本身")
-    finally:
-        db.close()
 
 
-def _check_certificate_daily_quiz_push() -> None:
+def _check_certificate_daily_quiz_push(db) -> None:
     """在 /healthz 被呼叫時順便檢查證照題庫每日推播出題（Step 3.3，見 robinson SPEC.md FR-26、
     ADR-20）：固定台灣時間 08:00，依題庫裡目前有的每個 exam_type 各自計算今天要出的題目、
     寫入 `certificate_daily_assignments` 並推播通知，詳見 src/bot/certificate_quiz.py 模組
@@ -385,26 +353,23 @@ def _check_certificate_daily_quiz_push() -> None:
 
     這個階段只需要 `TELEGRAM_BOT_TOKEN`（軌道一/軌道二題庫已經由 `_check_toeic_pipeline()`
     的週排程建好，這裡只是依題庫現況出題推播），不需要任何 Gemini/Drive 相關金鑰；收件人是查
-    `users.is_owner = TRUE` 動態決定，不需要 `ROBIN_TELEGRAM_TOKEN`。
+    `users.is_owner = TRUE` 動態決定，不需要 `ROBIN_TELEGRAM_TOKEN`。`db` 共用連線，見
+    `_check_neon_capacity()` 2026-08-24 追記。
     """
-    if not (os.environ.get("DATABASE_URL") and os.environ.get("TELEGRAM_BOT_TOKEN")):
+    if not os.environ.get("TELEGRAM_BOT_TOKEN"):
         return
 
     from src.bot import certificate_quiz
-    from submodules.cloudsql.client import CloudSQLClient
     from submodules.telegram.client import TelegramClient
 
-    db = CloudSQLClient()
     try:
         telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
         certificate_quiz.check_and_push_daily_quiz(db, telegram_client)
     except Exception:
         logger.exception("證照題庫每日推播出題失敗，不影響健康檢查端點本身")
-    finally:
-        db.close()
 
 
-def _check_youtube_weekly_push() -> None:
+def _check_youtube_weekly_push(db) -> None:
     """在 /healthz 被呼叫時順便檢查 YouTube 技術情報週推播（Step 3.4，見 robinson SPEC.md
     FR-57～FR-59、ADR-21）：固定台灣時間週四 08:00，依 Robin 設定的各組主題呼叫 YouTube Data API
     蒐集候選影片、交給 LLM 語意判讀評分，依「保底 + 輪替」規則選出本週推薦，推播 Markdown 連結，
@@ -413,23 +378,21 @@ def _check_youtube_weekly_push() -> None:
     需要 `YOUTUBE_API_KEY`（YouTube Data API v3）、`TELEGRAM_BOT_TOKEN`（推播）；LLM 評分沿用
     `GEMINI_API_SKILL_GROWTH_KEY`（跟每日技術分享共用同一把獨立 Key——兩者同屬「技術情報訂閱」
     性質、共用 `tech_intel` 功能開關，見 feature-toggles SPEC.md FR-3 追記，不需要為此另外申請
-    第 6 把 Gemini Key）；任一項未設定就直接跳過。
+    第 6 把 Gemini Key）；任一項未設定就直接跳過。`db` 共用連線，見 `_check_neon_capacity()`
+    2026-08-24 追記。
     """
     if not (
-        os.environ.get("DATABASE_URL")
-        and os.environ.get("YOUTUBE_API_KEY")
+        os.environ.get("YOUTUBE_API_KEY")
         and os.environ.get("TELEGRAM_BOT_TOKEN")
         and os.environ.get("GEMINI_API_SKILL_GROWTH_KEY")
     ):
         return
 
     from src.bot import youtube
-    from submodules.cloudsql.client import CloudSQLClient
     from submodules.llm.client import LLMClient
     from submodules.telegram.client import TelegramClient
     from submodules.youtube.client import YouTubeClient
 
-    db = CloudSQLClient()
     try:
         youtube_client = YouTubeClient(api_key=os.environ["YOUTUBE_API_KEY"])
         llm_client = LLMClient(api_key=os.environ["GEMINI_API_SKILL_GROWTH_KEY"])
@@ -437,11 +400,9 @@ def _check_youtube_weekly_push() -> None:
         youtube.check_and_push_weekly_youtube(db, youtube_client, llm_client, telegram_client)
     except Exception:
         logger.exception("YouTube 技術情報週推播失敗，不影響健康檢查端點本身")
-    finally:
-        db.close()
 
 
-def _check_job_search_weekly_crawl() -> None:
+def _check_job_search_weekly_crawl(db) -> None:
     """在 /healthz 被呼叫時順便檢查求職模組週排程（Step 4.1／4.2，見 robinson SPEC.md
     FR-34b、FR-35a～FR-35c、FR-37、FR-38、ADR-24、ADR-26）：固定台灣時間週一 08:00，依 Robin
     設定的各組搜尋條件呼叫 104 公開 AJAX API 爬取職缺（FR-34a～FR-34d），若這批職缺涉及資料庫
@@ -449,9 +410,10 @@ def _check_job_search_weekly_crawl() -> None:
     Gemini 批次契合度評分＋技能缺口分析（FR-37）與雙重排名 Excel 寄送（FR-38a～FR-38c），詳見
     src/bot/job_search.py 模組內 `check_and_run_weekly_job_search()` docstring。
 
-    需要 `DATABASE_URL`、`TELEGRAM_BOT_TOKEN`（私訊通知）、`GMAIL_USER`／`GMAIL_PASSWORD`
+    需要 `TELEGRAM_BOT_TOKEN`（私訊通知）、`GMAIL_USER`／`GMAIL_PASSWORD`
     （FR-35b／FR-38b 寄信，沿用 FR-19b 既有備援信箱憑證，同一組帳密自寄自收）；104 搜尋/詳情
     API 為公開端點，不需要額外金鑰（見 submodules/job104/client.py）。任一項未設定就直接跳過。
+    `db` 共用連線，見 `_check_neon_capacity()` 2026-08-24 追記。
 
     `GEMINI_API_JOB_SEARCH_KEY`（2026-08-09 新增，Step 4.2 專用，比照 `GEMINI_API_SKILL_GROWTH_KEY`
     「每個功能領域獨立一把 Key，避免佔用其他功能既有配額」的既有慣例）未設定時，
@@ -459,21 +421,18 @@ def _check_job_search_weekly_crawl() -> None:
     整段優雅跳過，但不影響 FR-34／FR-35 爬蟲與公司背景協作流程本身照常執行。
     """
     if not (
-        os.environ.get("DATABASE_URL")
-        and os.environ.get("TELEGRAM_BOT_TOKEN")
+        os.environ.get("TELEGRAM_BOT_TOKEN")
         and os.environ.get("GMAIL_USER")
         and os.environ.get("GMAIL_PASSWORD")
     ):
         return
 
     from src.bot import job_search
-    from submodules.cloudsql.client import CloudSQLClient
     from submodules.email.client import EmailClient
     from submodules.job104.client import Job104Client
     from submodules.llm.client import LLMClient
     from submodules.telegram.client import TelegramClient
 
-    db = CloudSQLClient()
     try:
         job104_client = Job104Client()
         gmail_user = os.environ["GMAIL_USER"]
@@ -493,8 +452,6 @@ def _check_job_search_weekly_crawl() -> None:
         )
     except Exception:
         logger.exception("求職模組週排程（104 職缺爬蟲／FR-37 評分）失敗，不影響健康檢查端點本身")
-    finally:
-        db.close()
 
 
 def _run_startup_migrations() -> None:
@@ -543,21 +500,37 @@ def _run_background_checks() -> None:
     這些檢查函式本來就已經各自做好「同一小時內多次觸發也不會重複推播」的去重設計（例如
     `daily_pushed_on`、`skill_growth_digests.pushed_on` 等欄位，見各自模組 docstring），所以
     背景執行緒偶爾跟下一次 `/healthz` 觸發重疊執行，本身是安全的，不會造成重複推播。
+
+    **2026-08-24 追加（見 docs/ADR/debug/infra.md「/healthz 每次觸發都開 14 個獨立資料庫連線」
+    條目）**：原本這 14 個 `_check_*()` 各自 `CloudSQLClient()`／`db.close()`，等於每次
+    `/healthz` 觸發（cron-job.org 每 10 分鐘一次）就建立並關閉 14 條獨立的 Neon 連線，一天累積
+    2016 次連線churn，疑似是 Neon 免費方案 compute CU-hours 額度快速被消耗的主因。改成這裡統一
+    開一個 `db`、傳給全部 14 個檢查共用，跑完才在最外層關閉一次，一天的連線次數從 2016 降到
+    144 次。沒有設定 `DATABASE_URL`（本機測試環境常見）時，整批直接跳過，不建立連線。
     """
-    _check_neon_capacity()
-    _check_todo_pushes()
-    _check_finance_alerts()
-    _check_finance_monthly_report()
-    _check_body_goal_alerts()
-    _check_goal_summaries()
-    _check_important_notifications()
-    _check_scheduled_important_days()
-    _check_skill_growth_collection()
-    _check_toeic_pipeline()
-    _check_skill_growth_push()
-    _check_certificate_daily_quiz_push()
-    _check_youtube_weekly_push()
-    _check_job_search_weekly_crawl()
+    if not os.environ.get("DATABASE_URL"):
+        return
+
+    from submodules.cloudsql.client import CloudSQLClient
+
+    db = CloudSQLClient()
+    try:
+        _check_neon_capacity(db)
+        _check_todo_pushes(db)
+        _check_finance_alerts(db)
+        _check_finance_monthly_report(db)
+        _check_body_goal_alerts(db)
+        _check_goal_summaries(db)
+        _check_important_notifications(db)
+        _check_scheduled_important_days(db)
+        _check_skill_growth_collection(db)
+        _check_toeic_pipeline(db)
+        _check_skill_growth_push(db)
+        _check_certificate_daily_quiz_push(db)
+        _check_youtube_weekly_push(db)
+        _check_job_search_weekly_crawl(db)
+    finally:
+        db.close()
 
 
 @app.route("/healthz")

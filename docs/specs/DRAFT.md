@@ -9,6 +9,8 @@ updated: 2026-08-19
 
 ## 待討論
 
+- 2026-08-24：Neon compute CU-hours（免費額度 100 CU-hours／月）用量監控——Robin 收到 Neon 官方 email 顯示已用 80%，但既有 FR-21 `NeonCapacityMonitor` 只監控儲存空間（0.5GB），完全沒有涵蓋 compute CU-hours，才會沒有 Telegram 主動預警。目前排查認為主因是 `/healthz`（cron-job.org 每 10 分鐘觸發）過去讓 14 個排程檢查各自開關資料庫連線，已於 FR-21a 修正改為共用一個連線；是否要另外監控 CU-hours 本身，需先確認 Neon 官方是否有查詢即時 compute 用量的 API（目前跟 Gemini 額度監控一樣，暫時找不到），有的話再排入 Roadmap，詳見 `docs/ADR/debug/infra.md`
+
 ## 已取消
 
 - 2026-08-18：NFR-14～NFR-15 架構遷移正式取消；本專案不再將 `main.py`／`src/` 搬至 `backend/`，不拆建 `backend/api`、`backend/services`、`backend/repositories`、`backend/agents` 或 `data/`，也不為此調整部署入口。維持目前已完成實測的目錄與執行方式，避免大範圍搬遷造成既有功能回歸；當時保留的 FR-6c 與 FR-77 已於後續批次完成 — 詳見 `docs/ADR/discuss/robinson.md` 2026-08-18「取消 NFR-14～NFR-15 架構遷移」及「FR-6c 與 FR-77 開工執行紀錄」條目
