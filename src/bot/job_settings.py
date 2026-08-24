@@ -228,10 +228,14 @@ def start_jobs_list(db, page: int = 1) -> tuple[str, dict]:
     start = (page - 1) * _JOBS_LIST_PAGE_SIZE
     page_items = jobs[start : start + _JOBS_LIST_PAGE_SIZE]
 
-    lines = [f"📋 職缺清單（依契合度排序，第 {page}／{total_pages} 頁）："]
-    for item in page_items:
-        score = item.get("score")
-        lines.append(f"・{item['title']}（ID={item['job_id_104']}，分數：{score if score is not None else '尚未評分'}）")
+    # 2026-08-24（Robin 反饋排版太擠）：每筆職缺之間空一行分隔，比較好讀；固定 `_JOBS_LIST_PAGE_SIZE`
+    # 每頁筆數，即使加空行，單頁內容仍遠低於 Telegram 單則訊息 4096 字元上限，不需要另外限縮頁數。
+    header = f"📋 職缺清單（依契合度排序，第 {page}／{total_pages} 頁）："
+    items = [
+        f"・{item['title']}（ID={item['job_id_104']}，分數：{item.get('score') if item.get('score') is not None else '尚未評分'}）"
+        for item in page_items
+    ]
+    text = header + "\n\n" + "\n\n".join(items)
 
     nav_row = []
     if page > 1:
@@ -239,7 +243,7 @@ def start_jobs_list(db, page: int = 1) -> tuple[str, dict]:
     if page < total_pages:
         nav_row.append({"text": "➡️ 下一頁", "callback_data": f"job_search:jobs:page:{page + 1}"})
     keyboard = {"inline_keyboard": ([nav_row] if nav_row else []) + [[{"text": "🔙 返回求職設定", "callback_data": "job_search:menu"}]]}
-    return "\n".join(lines), keyboard
+    return text, keyboard
 
 
 def start_status_list(db, status: str) -> tuple[str, dict]:
