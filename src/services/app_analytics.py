@@ -479,9 +479,13 @@ class AppAnalyticsService:
             ORDER BY due_at""",
             (user.database_id, self._today, end, start),
         )
+        # 2026-08-24（Robin 反饋「代辦事項過期後 Mobile App 逾期待辦看不到」）：
+        # `mark_overdue_as_expired()`（src/bot/todo.py）約每 10 分鐘就會把過期的 `pending`
+        # 轉成 `expired`，若這裡仍只抓 `pending`，代辦一過期就會從逾期清單／月曆計數消失，
+        # 使用者完全看不到也無法標記完成或取消。改成同時納入 `pending` 與 `expired`。
         overdue_rows = self._db.execute_query(
             """/* app_analytics:todos_overdue */ SELECT id, content, due_at, start_at, status, created_at
-            FROM todos WHERE user_id = %s AND status = 'pending'
+            FROM todos WHERE user_id = %s AND status IN ('pending', 'expired')
               AND DATE(due_at AT TIME ZONE 'Asia/Taipei') < %s
             ORDER BY due_at DESC, created_at DESC, id DESC""",
             (user.database_id, self._today),
@@ -494,7 +498,7 @@ class AppAnalyticsService:
               DATE(COALESCE(t.start_at, t.due_at) AT TIME ZONE 'Asia/Taipei'),
               DATE(t.due_at AT TIME ZONE 'Asia/Taipei'), INTERVAL '1 day'
             ) AS day
-            WHERE t.user_id = %s AND t.status = 'pending' AND day::date BETWEEN %s AND %s
+            WHERE t.user_id = %s AND t.status IN ('pending', 'expired') AND day::date BETWEEN %s AND %s
             GROUP BY day::date ORDER BY day::date""",
             (user.database_id, calendar_start, calendar_end),
         )

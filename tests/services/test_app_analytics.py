@@ -495,6 +495,40 @@ def test_todos_separates_pending_current_and_overdue_items():
     assert result["overdue_items"][0]["can_edit"] is True
 
 
+def test_todos_overdue_and_calendar_counts_include_auto_expired_items():
+    # 2026-08-24（Robin 反饋「代辦事項過期後 Mobile App 逾期待辦看不到」）：
+    # `mark_overdue_as_expired()` 會把過期的 pending 轉成 expired，逾期清單／月曆計數
+    # 查詢都要能撈到 status='expired' 的項目，不能讓它們消失不見。
+    db = FakeDatabase(
+        select_rows={"todos": [{"id": 1}]},
+        query_rows={
+            "app_analytics:todos */": [],
+            "app_analytics:todos_overdue": [{
+                "id": 2, "content": "已逾期且已自動標記過期", "due_at": "2026-08-10T18:00:00+08:00",
+                "start_at": None, "status": "expired", "created_at": "2026-08-09T00:00:00",
+            }],
+            "app_analytics:todo_calendar_counts": [{"day": date(2026, 8, 10), "count": 1}],
+        },
+    )
+
+    result = AppAnalyticsService(db, today=date(2026, 8, 11)).todos(
+        user(), date(2026, 8, 11), date(2026, 8, 11),
+        calendar_start=date(2026, 8, 1), calendar_end=date(2026, 8, 31),
+    )
+
+    assert [item["id"] for item in result["overdue_items"]] == [2]
+    assert result["overdue_items"][0]["status"] == "expired"
+    assert result["overdue_count"] == 1
+    assert result["calendar_counts"] == {"2026-08-10": 1}
+
+    overdue_query = next(q for q in db.executed_queries if "app_analytics:todos_overdue" in q)
+    assert "status IN ('pending', 'expired')" in overdue_query
+    calendar_query = next(q for q in db.executed_queries if "app_analytics:todo_calendar_counts" in q)
+    assert "status IN ('pending', 'expired')" in calendar_query
+    items_query = next(q for q in db.executed_queries if "app_analytics:todos */" in q)
+    assert "status = 'pending'" in items_query
+
+
 def test_jobs_excludes_closed_postings_from_recommendations_but_keeps_distribution():
     db = FakeDatabase(
         toggles=[{"feature_key": "job_search", "is_enabled": True}],
