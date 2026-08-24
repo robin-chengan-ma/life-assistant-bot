@@ -118,6 +118,39 @@ def test_crawl_matches_any_region_when_multiple_regions_set(fake_db, monkeypatch
     assert result["new_job_count"] == 2
 
 
+def test_crawl_skips_single_failed_job_instead_of_aborting_whole_batch(fake_db):
+    # 2026-08-24（見 docs/ADR/debug/job-search.md「週排程爬蟲遇 104 429 限流，整批中斷」條目）：
+    # 單筆 fetch_job_detail 失敗（例如 104 限流）不該讓後面還沒爬的職缺全部被跳過。
+    user_id = fake_db.insert("users", {"telegram_user_id": 1})
+    job_search.save_search_criteria(fake_db, user_id, "AI", None, None, None)
+
+    class FlakyJob104Client:
+        def search_list(self, keyword, salary_min=None, salary_max=None, page=1):
+            if page > 1:
+                return []
+            return [
+                {"job_id": "job-ok-1", "company_id": "c1", "company_name": "公司甲", "region": "台北市", "job_slug": "s1", "title": "AI 工程師 1", "url": "https://example.com/1"},
+                {"job_id": "job-fails", "company_id": "c2", "company_name": "公司乙", "region": "台北市", "job_slug": "s2", "title": "AI 工程師 2", "url": "https://example.com/2"},
+                {"job_id": "job-ok-2", "company_id": "c3", "company_name": "公司丙", "region": "台北市", "job_slug": "s3", "title": "AI 工程師 3", "url": "https://example.com/3"},
+            ]
+
+        def fetch_job_detail(self, job_slug):
+            if job_slug == "s2":
+                raise RuntimeError("429 Too Many Requests")
+            return {}
+
+    result = job_search.crawl_and_upsert_jobs(
+        fake_db, FlakyJob104Client(), user_id,
+        sleep_func=lambda _seconds: None, random_func=lambda _a, _b: 0,
+        now="now",
+    )
+
+    job_ids = {row["job_id_104"] for row in fake_db.select("job_postings")}
+    assert job_ids == {"job-ok-1", "job-ok-2"}
+    assert result["new_job_count"] == 2
+    assert result["skipped_job_count"] == 1
+
+
 def test_manual_closed_override_protects_crawler_value(fake_db):
     _seed_jobs(fake_db)
     job_search.set_job_closed_manually(fake_db, "job-1", True)
@@ -157,3 +190,51 @@ def test_resume_clear_requires_confirmation(fake_db):
 
     job_settings.handle_profile_clear_confirm(fake_db, store, 1, user_id, "job_resume")
     assert fake_db.select("users", where="id = %s", params=(user_id,), fetch_one=True)["job_resume"] is None
+
+
+def _seed_many_jobs(fake_db, count):
+    for i in range(count):
+        fake_db.insert(
+            "job_postings",
+            {
+                "job_id_104": f"job-{i}",
+                "company_id_104": "c1",
+                "title": f"職缺{i}",
+                "url": f"https://example.com/{i}",
+                "score": i,
+                "is_closed": False,
+                "is_closed_manual_override": False,
+            },
+        )
+
+
+def test_jobs_list_paginates_instead_of_one_giant_message(fake_db):
+    # 2026-08-24（見 docs/ADR/debug/job-search.md「職缺清單訊息過長打不開」條目）：職缺數量一多
+    # 就會超過 Telegram 4096 字元上限，改成分頁顯示。
+    _seed_many_jobs(fake_db, 25)
+
+    text, keyboard = job_settings.start_jobs_list(fake_db)
+    assert "第 1／3 頁" in text
+    buttons = [b["callback_data"] for row in keyboard["inline_keyboard"] for b in row]
+    assert "job_search:jobs:page:2" in buttons
+    assert not any(b.startswith("job_search:jobs:page:") and b.endswith(":0") for b in buttons)
+
+    text2, keyboard2 = job_settings.start_jobs_list(fake_db, page=2)
+    assert "第 2／3 頁" in text2
+    buttons2 = [b["callback_data"] for row in keyboard2["inline_keyboard"] for b in row]
+    assert "job_search:jobs:page:1" in buttons2
+    assert "job_search:jobs:page:3" in buttons2
+
+    text3, keyboard3 = job_settings.start_jobs_list(fake_db, page=3)
+    assert "第 3／3 頁" in text3
+    buttons3 = [b["callback_data"] for row in keyboard3["inline_keyboard"] for b in row]
+    assert "job_search:jobs:page:2" in buttons3
+    assert "job_search:jobs:page:4" not in buttons3
+
+
+def test_jobs_list_out_of_range_page_clamps_to_last_page(fake_db):
+    _seed_many_jobs(fake_db, 5)
+
+    text, _keyboard = job_settings.start_jobs_list(fake_db, page=99)
+
+    assert "第 1／1 頁" in text

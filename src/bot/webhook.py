@@ -142,20 +142,22 @@ def _send_email_fallback(subject: str, body: str) -> bool:
     """FR-19b 追加：Telegram 本身故障時的備援通知管道（見 robinson SPEC.md ADR-16）。
 
     Telegram 是 Robinson 唯一的對外管道，一旦 Telegram API 本身掛掉或 `TELEGRAM_BOT_TOKEN`
-    失效，私訊 Robin 這件事本身就送不出去，連錯誤通知都收不到。這裡用完全獨立的 Gmail SMTP
-    （`submodules/email/client.py`）當最後一道防線，只在 Telegram 送達失敗時才觸發。
+    失效，私訊 Robin 這件事本身就送不出去，連錯誤通知都收不到。這裡用完全獨立的 Email 管道
+    （`submodules/email/client.py`，2026-08-24 起寄信改走 SendGrid API）當最後一道防線，只在
+    Telegram 送達失敗時才觸發。
 
-    `GMAIL_USER`／`GMAIL_PASSWORD` 沒設定，或寄信本身也失敗（Gmail 也在鬧脾氣、App Password
+    `GMAIL_USER`／`SENDGRID_API_KEY` 沒設定，或寄信本身也失敗（SendGrid 也在鬧脾氣、金鑰
     失效等），一律只記警告/例外 log、不往外拋——這是最後一道備援，沒有再下一層可以退了，失敗
     也不能讓呼叫端整個處理流程崩潰。
     """
     gmail_user = os.environ.get("GMAIL_USER")
     gmail_password = os.environ.get("GMAIL_PASSWORD")
-    if not gmail_user or not gmail_password:
-        _logger.warning("Telegram 私訊 Robin 失敗，且未設定 GMAIL_USER/GMAIL_PASSWORD，無法寄送備援 email 通知")
+    sendgrid_api_key = os.environ.get("SENDGRID_API_KEY")
+    if not gmail_user or not gmail_password or not sendgrid_api_key:
+        _logger.warning("Telegram 私訊 Robin 失敗，且未設定 GMAIL_USER/GMAIL_PASSWORD/SENDGRID_API_KEY，無法寄送備援 email 通知")
         return False
     try:
-        EmailClient(username=gmail_user, password=gmail_password).send_text(
+        EmailClient(username=gmail_user, password=gmail_password, send_api_key=sendgrid_api_key).send_text(
             to=gmail_user, subject=subject, body=body
         )
         return True

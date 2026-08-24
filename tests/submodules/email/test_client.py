@@ -1,17 +1,18 @@
 """submodules/email/client.py 的單元測試。
 
-不呼叫真正的 Gmail SMTP／IMAP，一律 mock `smtplib.SMTP_SSL`／`imaplib.IMAP4_SSL`。
+不呼叫真正的 SendGrid API／Gmail IMAP，寄信一律 mock `requests.post`，讀信一律 mock
+`imaplib.IMAP4_SSL`（2026-08-24 起寄信改走 SendGrid API，見模組 docstring）。
 """
+import base64
 import email as email_lib
 import imaplib
-import smtplib
 from datetime import datetime
-from email.header import decode_header
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from unittest.mock import MagicMock
 
 import pytest
+import requests
 
 from submodules.email import client as client_module
 from submodules.email.client import (
@@ -33,150 +34,147 @@ def test_init_raises_on_empty_password():
         EmailClient(username="you@gmail.com", password="")
 
 
-def _patch_smtp_ssl(monkeypatch):
-    mock_server = MagicMock()
-    mock_smtp_ssl_cls = MagicMock()
-    mock_smtp_ssl_cls.return_value.__enter__.return_value = mock_server
-    mock_smtp_ssl_cls.return_value.__exit__.return_value = False
-    monkeypatch.setattr(client_module.smtplib, "SMTP_SSL", mock_smtp_ssl_cls)
-    return mock_smtp_ssl_cls, mock_server
+def _make_response(status_code=202):
+    response = MagicMock()
+    response.status_code = status_code
+    if status_code >= 400:
+        error = requests.exceptions.HTTPError(f"{status_code} error")
+        error.response = response
+        response.raise_for_status.side_effect = error
+    else:
+        response.raise_for_status.return_value = None
+    return response
 
 
-def test_send_text_connects_to_gmail_smtp_ssl_and_logs_in(monkeypatch):
-    mock_smtp_ssl_cls, mock_server = _patch_smtp_ssl(monkeypatch)
+def _patch_requests_post(monkeypatch, side_effect=None, response=None):
+    mock_post = MagicMock(return_value=response or _make_response())
+    if side_effect is not None:
+        mock_post.side_effect = side_effect
+    monkeypatch.setattr(client_module.requests, "post", mock_post)
+    return mock_post
 
+
+def test_send_text_raises_without_send_api_key():
     client = EmailClient(username="you@gmail.com", password="app-password")
+    with pytest.raises(ValueError):
+        client.send_text(to="robin@gmail.com", subject="測試主旨", body="測試內容")
+
+
+def test_send_text_posts_to_sendgrid_with_bearer_token(monkeypatch):
+    mock_post = _patch_requests_post(monkeypatch)
+
+    client = EmailClient(username="you@gmail.com", password="app-password", send_api_key="sg-key")
     client.send_text(to="robin@gmail.com", subject="測試主旨", body="測試內容")
 
-    mock_smtp_ssl_cls.assert_called_once_with("smtp.gmail.com", 465)
-    mock_server.login.assert_called_once_with("you@gmail.com", "app-password")
+    mock_post.assert_called_once()
+    args, kwargs = mock_post.call_args
+    assert args[0] == "https://api.sendgrid.com/v3/mail/send"
+    assert kwargs["headers"]["Authorization"] == "Bearer sg-key"
+    payload = kwargs["json"]
+    assert payload["from"] == {"email": "you@gmail.com"}
+    assert payload["personalizations"] == [{"to": [{"email": "robin@gmail.com"}]}]
+    assert payload["subject"] == "測試主旨"
+    assert payload["content"] == [{"type": "text/plain", "value": "測試內容"}]
 
 
-def test_send_text_sends_correct_envelope_and_body(monkeypatch):
-    _, mock_server = _patch_smtp_ssl(monkeypatch)
+def test_send_text_propagates_permanent_http_error(monkeypatch):
+    _patch_requests_post(monkeypatch, response=_make_response(status_code=401))
 
-    client = EmailClient(username="you@gmail.com", password="app-password")
-    client.send_text(to="robin@gmail.com", subject="測試主旨", body="測試內容")
-
-    mock_server.sendmail.assert_called_once()
-    from_addr, to_addrs, raw_message = mock_server.sendmail.call_args.args
-    assert from_addr == "you@gmail.com"
-    assert to_addrs == ["robin@gmail.com"]
-
-    parsed = email_lib.message_from_string(raw_message)
-    decoded_subject, encoding = decode_header(parsed["Subject"])[0]
-    assert decoded_subject.decode(encoding or "utf-8") == "測試主旨"
-    assert parsed["From"] == "you@gmail.com"
-    assert parsed["To"] == "robin@gmail.com"
-    assert parsed.get_payload(decode=True).decode("utf-8") == "測試內容"
-
-
-def test_send_text_propagates_smtp_exception(monkeypatch):
-    _mock_smtp_ssl_cls, mock_server = _patch_smtp_ssl(monkeypatch)
-    mock_server.login.side_effect = RuntimeError("535 Authentication failed")
-
-    client = EmailClient(username="you@gmail.com", password="wrong-password")
-    with pytest.raises(RuntimeError):
+    client = EmailClient(username="you@gmail.com", password="app-password", send_api_key="wrong-key")
+    with pytest.raises(requests.exceptions.HTTPError):
         client.send_text(to="robin@gmail.com", subject="主旨", body="內容")
 
 
 # --- 外部 API 重試機制（FR-19i，見 docs/specs/submodules-core/SPEC.md ADR-13）---
 
 
-def test_send_text_retries_on_server_disconnected_then_succeeds(monkeypatch):
+def test_send_text_retries_on_429_then_succeeds(monkeypatch):
     mock_sleep = MagicMock()
     monkeypatch.setattr(retry_client_module.time, "sleep", mock_sleep)
-    _, mock_server = _patch_smtp_ssl(monkeypatch)
-    mock_server.login.side_effect = [smtplib.SMTPServerDisconnected("connection lost"), None]
+    mock_post = _patch_requests_post(
+        monkeypatch, side_effect=[_make_response(status_code=429), _make_response()]
+    )
 
-    client = EmailClient(username="you@gmail.com", password="app-password")
+    client = EmailClient(username="you@gmail.com", password="app-password", send_api_key="sg-key")
     client.send_text(to="robin@gmail.com", subject="主旨", body="內容")
 
-    assert mock_server.login.call_count == 2
+    assert mock_post.call_count == 2
     mock_sleep.assert_called_once_with(1)
 
 
 def test_send_text_does_not_retry_authentication_error(monkeypatch):
     mock_sleep = MagicMock()
     monkeypatch.setattr(retry_client_module.time, "sleep", mock_sleep)
-    _, mock_server = _patch_smtp_ssl(monkeypatch)
-    mock_server.login.side_effect = smtplib.SMTPAuthenticationError(535, b"Authentication failed")
+    mock_post = _patch_requests_post(monkeypatch, response=_make_response(status_code=401))
 
-    client = EmailClient(username="you@gmail.com", password="wrong-password")
-    with pytest.raises(smtplib.SMTPAuthenticationError):
+    client = EmailClient(username="you@gmail.com", password="app-password", send_api_key="wrong-key")
+    with pytest.raises(requests.exceptions.HTTPError):
         client.send_text(to="robin@gmail.com", subject="主旨", body="內容")
 
-    assert mock_server.login.call_count == 1
+    assert mock_post.call_count == 1
     mock_sleep.assert_not_called()
 
 
 def test_send_text_raises_after_exhausting_retries(monkeypatch):
     mock_sleep = MagicMock()
     monkeypatch.setattr(retry_client_module.time, "sleep", mock_sleep)
-    _, mock_server = _patch_smtp_ssl(monkeypatch)
-    mock_server.login.side_effect = smtplib.SMTPServerDisconnected("still down")
+    _patch_requests_post(monkeypatch, response=_make_response(status_code=503))
 
-    client = EmailClient(username="you@gmail.com", password="app-password")
-    with pytest.raises(smtplib.SMTPServerDisconnected):
+    client = EmailClient(username="you@gmail.com", password="app-password", send_api_key="sg-key")
+    with pytest.raises(requests.exceptions.HTTPError):
         client.send_text(to="robin@gmail.com", subject="主旨", body="內容")
 
-    assert mock_server.login.call_count == 3
     assert mock_sleep.call_args_list == [((1,),), ((2,),)]
 
 
-# --- send_text_with_attachment（2026-08-09，見 robinson SPEC.md FR-35b、ADR-24 後果）---
+# --- send_text_with_attachment（2026-08-09，見 robinson SPEC.md FR-35b、ADR-24 後果；
+#     2026-08-24 起改走 SendGrid API）---
 
 
-def test_send_text_with_attachment_sends_envelope_body_and_filename(monkeypatch):
-    _, mock_server = _patch_smtp_ssl(monkeypatch)
+def test_send_text_with_attachment_posts_body_and_base64_attachment(monkeypatch):
+    mock_post = _patch_requests_post(monkeypatch)
 
-    client = EmailClient(username="you@gmail.com", password="app-password")
+    client = EmailClient(username="you@gmail.com", password="app-password", send_api_key="sg-key")
     client.send_text_with_attachment(
         to="you@gmail.com", subject="測試主旨", body="附件請參閱！",
         attachment_filename="2026-08-09-104職缺公司.csv", attachment_bytes="104公司ID,背景\n999,\n".encode(),
     )
 
-    mock_server.sendmail.assert_called_once()
-    from_addr, to_addrs, raw_message = mock_server.sendmail.call_args.args
-    assert from_addr == "you@gmail.com"
-    assert to_addrs == ["you@gmail.com"]
+    mock_post.assert_called_once()
+    payload = mock_post.call_args.kwargs["json"]
+    assert payload["from"] == {"email": "you@gmail.com"}
+    assert payload["personalizations"] == [{"to": [{"email": "you@gmail.com"}]}]
+    assert payload["content"] == [{"type": "text/plain", "value": "附件請參閱！"}]
 
-    parsed = email_lib.message_from_string(raw_message)
-    assert parsed.is_multipart()
-    decoded_subject, encoding = decode_header(parsed["Subject"])[0]
-    assert decoded_subject.decode(encoding or "utf-8") == "測試主旨"
-
-    text_part, attachment_part = parsed.get_payload()
-    assert text_part.get_payload(decode=True).decode("utf-8") == "附件請參閱！"
-    assert attachment_part.get_filename() == "2026-08-09-104職缺公司.csv"
-    assert attachment_part.get_payload(decode=True) == "104公司ID,背景\n999,\n".encode()
+    attachment = payload["attachments"][0]
+    assert attachment["filename"] == "2026-08-09-104職缺公司.csv"
+    assert attachment["type"] == "application/octet-stream"
+    assert base64.b64decode(attachment["content"]) == "104公司ID,背景\n999,\n".encode()
 
 
-def test_send_text_with_attachment_propagates_smtp_exception(monkeypatch):
-    _, mock_server = _patch_smtp_ssl(monkeypatch)
-    mock_server.login.side_effect = RuntimeError("535 Authentication failed")
-
-    client = EmailClient(username="you@gmail.com", password="wrong-password")
-    with pytest.raises(RuntimeError):
+def test_send_text_with_attachment_raises_without_send_api_key():
+    client = EmailClient(username="you@gmail.com", password="app-password")
+    with pytest.raises(ValueError):
         client.send_text_with_attachment(
             to="you@gmail.com", subject="主旨", body="內容",
             attachment_filename="test.csv", attachment_bytes=b"a,b\n1,2\n",
         )
 
 
-def test_send_text_with_attachment_retries_on_server_disconnected_then_succeeds(monkeypatch):
+def test_send_text_with_attachment_retries_on_429_then_succeeds(monkeypatch):
     mock_sleep = MagicMock()
     monkeypatch.setattr(retry_client_module.time, "sleep", mock_sleep)
-    _, mock_server = _patch_smtp_ssl(monkeypatch)
-    mock_server.login.side_effect = [smtplib.SMTPServerDisconnected("connection lost"), None]
+    mock_post = _patch_requests_post(
+        monkeypatch, side_effect=[_make_response(status_code=429), _make_response()]
+    )
 
-    client = EmailClient(username="you@gmail.com", password="app-password")
+    client = EmailClient(username="you@gmail.com", password="app-password", send_api_key="sg-key")
     client.send_text_with_attachment(
         to="you@gmail.com", subject="主旨", body="內容",
         attachment_filename="test.csv", attachment_bytes=b"a,b\n1,2\n",
     )
 
-    assert mock_server.login.call_count == 2
+    assert mock_post.call_count == 2
     mock_sleep.assert_called_once_with(1)
 
 

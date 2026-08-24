@@ -236,7 +236,7 @@ payload、帳號、密碼或 Token。
 - body／finance 的 `goals` 為完整唯讀目標清單，`goal_summary` 為進行中目標依「最近期限、同日最近更新、全無期限最近更新」挑出的單筆摘要。共同欄位包含 `status`、`target_date`、`current_value`、`target_value`、`progress_percent`、`progress_unavailable`、`is_exceeded`。
 - body 的 `latest_records.weight|diet|exercise` 與 finance／mood 的 `latest_record` 不受查詢日期區間影響；區間內紀錄仍由各模組的 `weight_records`／`diet_records`／`exercise_records`／`records`／`items` 回傳。
 - todos 的 `items` 只含查詢區間內、尚未逾期且狀態為 `pending` 的資料；`overdue_items` 只含台灣日期已逾期且仍為 `pending` 的資料，`overdue_count` 為其件數。逾期待辦沿用 `PATCH /api/app/records/todo/<id>` 完成、延期或取消，不提供刪除入口。
-- jobs 的 `recommendations` 只列出查詢區間內未關閉的前 10 筆職缺；`score_distribution` 仍依本期全部已評分職缺統計；`timeline` 為 append-only 應徵狀態歷程。
+- jobs 的 `recommendations` 只列出查詢區間內未關閉、且 `match_score` 已評分並達門檻（＝60，FR-41e）的前 10 筆職缺；未達門檻或尚未評分（`score` 為 NULL）一律不列入，找不到符合項目時回傳空陣列；`score_distribution` 仍依本期全部已評分職缺統計；`timeline` 為 append-only 應徵狀態歷程。
 - exams 的 `certificates[]` 含 `key`、`display_name`、`has_question_bank`；`goals[]` 使用共用目標欄位，`goal_summaries` 以證照 key 對應該證照進行中摘要。可量化分數進度依全部正式成績最高分除以目標分數；非數字分數不猜測進度。`practice` 與 `official_scores` 只回傳查詢區間內資料。
 - 求職範例：`GET /api/app/analytics/jobs?start=2026-08-01&end=2026-08-07` 回傳 `{"funnel":{"applied":1},"score_distribution":{"high":2},"recommendations":[{"title":"後端工程師","company_name":"範例公司","match_score":88,"url":"https://example.com/job"}],"timeline":[]}`。
 - 考試範例：`GET /api/app/analytics/exams?start=2026-08-01&end=2026-08-07` 回傳 `{"certificates":[{"key":"toeic","display_name":"TOEIC","has_question_bank":true}],"goals":[],"goal_summaries":{"toeic":null},"practice":[],"official_scores":[]}`。

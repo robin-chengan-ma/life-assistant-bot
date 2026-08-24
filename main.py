@@ -477,7 +477,11 @@ def _check_job_search_weekly_crawl() -> None:
     try:
         job104_client = Job104Client()
         gmail_user = os.environ["GMAIL_USER"]
-        email_client = EmailClient(username=gmail_user, password=os.environ["GMAIL_PASSWORD"])
+        email_client = EmailClient(
+            username=gmail_user,
+            password=os.environ["GMAIL_PASSWORD"],
+            send_api_key=os.environ.get("SENDGRID_API_KEY"),
+        )
         telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
         llm_client = (
             LLMClient(api_key=os.environ["GEMINI_API_JOB_SEARCH_KEY"])

@@ -209,15 +209,37 @@ def handle_criteria_delete_confirm(db, state_store: ConversationStateStore, tele
     return "已刪除職缺關鍵字設定。" if job_search.delete_search_criteria(db, user_id, criteria_id) else "找不到這筆職缺關鍵字設定。"
 
 
-def start_jobs_list(db) -> tuple[str, dict]:
+_JOBS_LIST_PAGE_SIZE = 10
+
+
+def start_jobs_list(db, page: int = 1) -> tuple[str, dict]:
+    """2026-08-24（見 docs/ADR/debug/job-search.md「職缺清單訊息過長打不開」條目）：職缺會隨每週
+    爬蟲持續累積，過去把全部職缺一次串成一則訊息，職缺數一多就會超過 Telegram 單則訊息 4096
+    字元上限，導致 `send_text()` 送出失敗；`webhook.py` 又刻意把送出失敗的例外整個吞掉只記
+    log（避免單一功能壞掉波及其他功能），使用者端因此完全沒有任何反應。改成每頁固定
+    `_JOBS_LIST_PAGE_SIZE` 筆＋上一頁／下一頁按鈕，徹底避免單則訊息無上限增長。
+    """
     jobs = job_search.list_jobs_by_score(db)
     if not jobs:
         return "目前沒有職缺資料。", _keyboard([("🔙 返回求職設定", "job_search:menu")])
-    lines = ["📋 職缺清單（依契合度排序）："]
-    for item in jobs:
+
+    total_pages = (len(jobs) + _JOBS_LIST_PAGE_SIZE - 1) // _JOBS_LIST_PAGE_SIZE
+    page = max(1, min(page, total_pages))
+    start = (page - 1) * _JOBS_LIST_PAGE_SIZE
+    page_items = jobs[start : start + _JOBS_LIST_PAGE_SIZE]
+
+    lines = [f"📋 職缺清單（依契合度排序，第 {page}／{total_pages} 頁）："]
+    for item in page_items:
         score = item.get("score")
         lines.append(f"・{item['title']}（ID={item['job_id_104']}，分數：{score if score is not None else '尚未評分'}）")
-    return "\n".join(lines), _keyboard([("🔙 返回求職設定", "job_search:menu")])
+
+    nav_row = []
+    if page > 1:
+        nav_row.append({"text": "⬅️ 上一頁", "callback_data": f"job_search:jobs:page:{page - 1}"})
+    if page < total_pages:
+        nav_row.append({"text": "➡️ 下一頁", "callback_data": f"job_search:jobs:page:{page + 1}"})
+    keyboard = {"inline_keyboard": ([nav_row] if nav_row else []) + [[{"text": "🔙 返回求職設定", "callback_data": "job_search:menu"}]]}
+    return "\n".join(lines), keyboard
 
 
 def start_status_list(db, status: str) -> tuple[str, dict]:

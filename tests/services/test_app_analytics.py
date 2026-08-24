@@ -514,6 +514,44 @@ def test_jobs_excludes_closed_postings_from_recommendations_but_keeps_distributi
     assert result["score_distribution"] == {"high": 2, "medium": 0, "low": 0}
 
 
+def test_jobs_recommendations_exclude_unscored_and_low_score_postings():
+    # 2026-08-24（見 docs/ADR/debug/job-search.md「推薦職缺不分青紅皂白」條目）：契合度評分
+    # 尚未執行（match_score 為 NULL）或分數未達 60 分門檻的職缺，不該被硬塞進推薦清單。
+    db = FakeDatabase(
+        toggles=[{"feature_key": "job_search", "is_enabled": True}],
+        select_rows={"job_postings": [{"id": 1}]},
+        query_rows={
+            "app_analytics:jobs_postings": [
+                {"job_id_104": "unscored", "title": "尚未評分職缺", "match_score": None, "is_closed": False},
+                {"job_id_104": "too_low", "title": "分數太低職缺", "match_score": 1, "is_closed": False},
+                {"job_id_104": "just_enough", "title": "剛好達標職缺", "match_score": 60, "is_closed": False},
+            ],
+            "app_analytics:jobs_timeline": [],
+        },
+    )
+
+    result = AppAnalyticsService(db).jobs(user(is_owner=True), date(2026, 8, 1), date(2026, 8, 7))
+
+    assert [row["job_id_104"] for row in result["recommendations"]] == ["just_enough"]
+
+
+def test_jobs_recommendations_empty_when_nothing_meets_threshold():
+    db = FakeDatabase(
+        toggles=[{"feature_key": "job_search", "is_enabled": True}],
+        select_rows={"job_postings": [{"id": 1}]},
+        query_rows={
+            "app_analytics:jobs_postings": [
+                {"job_id_104": "unscored", "title": "尚未評分職缺", "match_score": None, "is_closed": False},
+            ],
+            "app_analytics:jobs_timeline": [],
+        },
+    )
+
+    result = AppAnalyticsService(db).jobs(user(is_owner=True), date(2026, 8, 1), date(2026, 8, 7))
+
+    assert result["recommendations"] == []
+
+
 def test_todo_calendar_days_include_role_visible_important_notifications_and_birthdays():
     db = FakeDatabase(
         users=[

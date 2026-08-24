@@ -8,6 +8,7 @@ from pydub import AudioSegment
 from pydub.generators import Sine
 
 from src.bot import toeic
+from submodules.llm.client import LLMQuotaGuardError
 
 
 def _utc(*args) -> datetime:
@@ -716,6 +717,39 @@ def test_generate_track2_degrades_gracefully_when_llm_raises(fake_db):
     generated = toeic.generate_track2_vocab_questions(fake_db, llm_client, count=1)
 
     assert generated == 1
+
+
+def test_generate_track2_waits_and_retries_on_quota_guard_error_without_wasting_attempt(fake_db):
+    # 2026-08-24（見 docs/ADR/debug/skill-growth.md「TOEIC 單字題生成撞本地端節流上限」條目）：
+    # 被本地端節流擋下時不該立刻放棄，應該等一下再試，且不該算浪費一次嘗試機會。
+    llm_client = MagicMock()
+    llm_client.generate_text.side_effect = [
+        LLMQuotaGuardError("節流中"),
+        LLMQuotaGuardError("節流中"),
+        _vocab_reply("abundant"),
+    ]
+    sleep_calls = []
+
+    generated = toeic.generate_track2_vocab_questions(
+        fake_db, llm_client, count=1, sleep_func=sleep_calls.append
+    )
+
+    assert generated == 1
+    assert llm_client.generate_text.call_count == 3
+    assert sleep_calls == [toeic._QUOTA_GUARD_RETRY_DELAY_SECONDS] * 2
+
+
+def test_generate_track2_quota_guard_retries_do_not_count_toward_max_attempts(fake_db):
+    llm_client = MagicMock()
+    # count=1 → max_attempts=3；被節流擋下 5 次不該算進 max_attempts，第 6 次才成功。
+    llm_client.generate_text.side_effect = [LLMQuotaGuardError("節流中")] * 5 + [_vocab_reply("abundant")]
+
+    generated = toeic.generate_track2_vocab_questions(
+        fake_db, llm_client, count=1, sleep_func=lambda _seconds: None
+    )
+
+    assert generated == 1
+    assert llm_client.generate_text.call_count == 6
 
 
 # --- run_weekly_pipeline ---

@@ -1,6 +1,6 @@
 ---
 title: Robinson — Robin 與家人們的生活小助手
-updated: 2026-08-19
+updated: 2026-08-24
 owner: Robin
 ---
 
@@ -37,7 +37,7 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 負責�
 | AI 語音轉文字 | Groq Whisper（OpenAI 相容 REST API） | — | 使用中 | 取代原規劃「語音一律用 Gemini」；`requests` 直打，不裝官方 `groq` SDK |
 | 家庭行事曆 | Google Calendar API v3（OAuth 2.0，獨立憑證，`calendar.events` scope） | — | 使用中 | 單一共用行事曆，僅 Robin 授權，家人訂閱瀏覽 |
 | 政府辦公日曆資料 | 中華民國政府行政機關辦公日曆 CSV（政府資料開放平臺） | — | 使用中 | 由 `TaiwanCalendarService` 按年度取得並快取至 `taiwan_calendar_days`，供休假日、補班日與節日顯示 |
-| 備援通知 | Gmail SMTP/IMAP（`smtplib`/`imaplib`，標準函式庫） | — | 使用中 | Telegram 故障備援 + TLDR 電子報讀取 |
+| 備援通知 | SendGrid HTTPS API（寄信）＋ Gmail IMAP（`imaplib`，標準函式庫，讀信） | — | 使用中 | Telegram 故障備援 + TLDR 電子報讀取；2026-08-24 起寄信改走 SendGrid API，取代原本 `smtplib` 直連 Gmail SMTP，因 Render 免費方案封鎖對外 SMTP 埠（見 `docs/ADR/discuss/submodules-core.md` 對應日期條目） |
 | RSS 擷取 | 標準函式庫 `xml.etree.ElementTree` + `requests` | — | 使用中 | 不裝 `feedparser` |
 | 網頁正文擷取 | `beautifulsoup4` | — | 使用中 | 技術新聞全文摘要用 |
 | 求職資料 | 104 前端 AJAX/JSON API（直接呼叫，非爬蟲工具） | — | 使用中 | 不用 Playwright/Selenium |
@@ -230,7 +230,7 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 負責�
 - `llm`：文字/圖文生成呼叫，本地端節流保護（同一 `api_key` 60 秒超過 8 次直接擋下）
 - `voice`：語音轉文字（Groq Whisper REST API），支援逐句時間軸切割
 - `gdrive`：OAuth 2.0 上傳/列表/下載，`Pillow` 壓縮流程
-- `email`：`smtplib`/`imaplib` 寄信/讀信（備援通知＋TLDR 電子報）
+- `email`：SendGrid HTTPS API 寄信、`imaplib` 讀信（備援通知＋TLDR 電子報；2026-08-24 起寄信改走 SendGrid API，取代原本直連 Gmail SMTP，見 `docs/ADR/discuss/submodules-core.md` 對應日期條目）
 - `calendar`：Google Calendar 事件建立/更新/刪除，獨立憑證
 - `retry`：`call_with_retry()` 共用重試迴圈（只重試暫時性錯誤，是子模組互相獨立原則的刻意例外）
 - `newsfeed`：RSS Feed 抓取＋全文擷取
@@ -490,7 +490,7 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 負責�
 - FR-22／FR-23：`tech_intel` 開關；`skill_growth_digests` 一天最多三筆（一筆一來源），任一來源失敗只記 log；三個來源皆無內容才推播固定訊息
 - FR-24：`certificate` 開關；證照準備目標依證照各自設定考試日期與目標分數，並可依近 30 天成效與目標生成客製化建議
 - FR-24a（2026-08-17 新增，批次3；2026-08-17 補做自動達成判斷）：考試準備目標整合進🎯 目標追蹤主選單（FR-45a），沿用既有 `certificate_goals` 表不新建資料表；每日 01:00 排程（`goal_summary_job.py`）依 `certificate_stats.compute_daily_period_stats()` 統計近一週／一個月作答成效生成快取摘要，寫入 `goal_summaries`（`goal_source='certificate_goals'`）；自動達成判斷：使用者透過 `/record_official_score` 記錄「實際應考成績」（`handle_exam_score_value_step()`）後，立即呼叫 `certificate_goals.check_score_achievement()` 跟該 `exam_type` 設定的 `target_score` 做數字比對（兩者皆為 TEXT，只在都能抽出數字時比較，`分數 ≥ 目標分數` 視為達成），達標就在記錄成功的回覆後面附加一句恭喜；`target_score` 或成績本身不是數字（例如「通過／未通過」這類非量化證照）時優雅跳過，不誤判；跟 `/certificate_advice` 既有的即時方向建議並存，互不取代
-- FR-25：TOEIC 每次出題 1 聽力+2 填空+3 單字；軌道一檔名格式泛用化為 `{exam_type}_{test_id}_write/listen_{題號}.{ext}`；軌道二單字題即時生成入庫
+- FR-25：TOEIC 每次出題 1 聽力+2 填空+3 單字；軌道一檔名格式泛用化為 `{exam_type}_{test_id}_write/listen_{題號}.{ext}`；軌道二單字題即時生成入庫（2026-08-24 修正：`generate_track2_vocab_questions()` 遇到本地端節流保護觸發時改為等待後重試、不消耗嘗試次數，避免整批生成瞬間燒光所有嘗試機會，見 `docs/ADR/debug/skill-growth.md` 對應日期條目）
 - FR-26：每日出題數量、新題:複習題 7:3，彈性排程支援挪動/取消/區間覆蓋/平攤四種語意（平攤需提案確認才寫入）
 - FR-27：作答只接受 A/B/C/D；正解來自 Robin 拍照上傳的 `_ans` 答案照
 - FR-28：未作答題目不主動催促；使用者仍可在下一批題目產生前跨日晚補答
@@ -537,10 +537,14 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 負責�
 - FR-38：技能缺口分析以 104 職缺 ID 為單位；雙重排名（全庫／本週新職缺）；Excel 三工作表寄送，Robin 標記喜好後回填 `is_unliked`
 - FR-39：應徵狀態 Telegram 語句記錄（任意狀態可直接設定，含「未錄取/已婉拒」）；獨立歷程表；`/my_applications` 查詢
 - FR-40：外部管道職缺共用同一張表（`source` 欄位區分），合成識別碼，一起參與每週評分排名
-- FR-41（2026-08-18 定案，見 `docs/ADR/discuss/job-search.md` 對應日期條目）：主選單「💼 求職分析」改名「💼 求職設定」，全面選單化（`job_search:*`），取代舊有文字觸發詞（`/set_job_search`、`ID=XXX 職缺已應徵`等），比照 `collections.py`／`achievements.py` 的單層子選單模式。子選單 10 項：我的履歷（可編輯／清空）、期望工作內容（可編輯／清空）、必要條件設定（年資／期望薪資上下限，原 FR-36 `save_profile()` 五欄位中拆出的三個結構化欄位，`users.years_of_experience`／`expected_salary_min`／`expected_salary_max`，獨立於履歷／期望工作內容之外）、職缺關鍵字設定（`job_search_criteria` 清單，可新增／個別刪除）、職缺清單（唯讀，依 `score` 排序）、已應徵職缺設定／獲得面試職缺設定／拿到 offer 職缺設定（各自依 `job_applications` 最新狀態過濾，可改狀態）、職缺已關閉設定（可人工覆寫 `is_closed`）、其他平台職缺（沿用既有 `add_external_job()` 邏輯，改選單觸發）。履歷／期望工作內容／職缺關鍵字設定各自獨立清空或刪除，互不影響其餘欄位（不再是 FR-36 原本「一輪對話全部覆蓋」的設計）
+- FR-41（2026-08-18 定案，見 `docs/ADR/discuss/job-search.md` 對應日期條目）：主選單「💼 求職分析」改名「💼 求職設定」，全面選單化（`job_search:*`），取代舊有文字觸發詞（`/set_job_search`、`ID=XXX 職缺已應徵`等），比照 `collections.py`／`achievements.py` 的單層子選單模式。子選單 10 項：我的履歷（可編輯／清空）、期望工作內容（可編輯／清空）、必要條件設定（年資／期望薪資上下限，原 FR-36 `save_profile()` 五欄位中拆出的三個結構化欄位，`users.years_of_experience`／`expected_salary_min`／`expected_salary_max`，獨立於履歷／期望工作內容之外）、職缺關鍵字設定（`job_search_criteria` 清單，可新增／個別刪除）、職缺清單（唯讀，依 `score` 排序，2026-08-24 起每頁固定 10 筆＋上一頁／下一頁分頁按鈕，見下方 FR-41d）、已應徵職缺設定／獲得面試職缺設定／拿到 offer 職缺設定（各自依 `job_applications` 最新狀態過濾，可改狀態）、職缺已關閉設定（可人工覆寫 `is_closed`）、其他平台職缺（沿用既有 `add_external_job()` 邏輯，改選單觸發）。履歷／期望工作內容／職缺關鍵字設定各自獨立清空或刪除，互不影響其餘欄位（不再是 FR-36 原本「一輪對話全部覆蓋」的設計）
 - FR-41a（2026-08-18 定案，見 `docs/ADR/discuss/job-search.md` 對應日期條目）：`job_postings` 新增 `is_closed_manual_override` 欄位，人工於「職缺已關閉設定」手動切換時寫入；旗標為 `TRUE` 時，每週爬蟲 `upsert_job_posting()` 的自動 `is_closed` 判斷須跳過該筆，避免蓋掉人工設定；人工再切回「開啟」時同步清回 `FALSE`
 - FR-41b（2026-08-18 定案）：Mobile「本期 Top 推薦」排除 `is_closed=TRUE` 的職缺，避免推薦無法應徵的工作；「契合度分布」仍統計本期所有已分析職缺，保留歷史分析全貌
-- FR-41／FR-41a 已完成選單化、人工關閉覆寫與實機驗收；FR-41b Mobile 顯示規則已由 commit `fb8c616` 完成並推送
+- FR-41c（2026-08-18 定案，見 `docs/ADR/discuss/job-search.md` 對應日期條目）：「職缺關鍵字設定」支援多地區（`job_search_criteria.region` 以逗號分隔存多個地區，比對邏輯改任一地區符合即算通過）；清單同時顯示關鍵字／地區／薪資範圍（`format_search_criteria()`）；新增「✏️ 編輯」操作，走跟新增相同的自然語言整段描述、整筆覆蓋
+- FR-41d（2026-08-24 定案，見 `docs/ADR/debug/job-search.md`「職缺清單訊息過長打不開」條目）：Telegram「職缺清單」改為每頁固定 10 筆＋上一頁／下一頁按鈕，避免職缺數量隨每週爬蟲持續累積後，單則訊息超過 Telegram 4096 字元上限導致送出失敗、使用者端完全沒有反應
+- FR-41e（2026-08-24 定案，見 `docs/ADR/debug/job-search.md`「推薦職缺不分青紅皂白」條目）：Mobile App「推薦職缺」只顯示已完成契合度評分（`score` 非 NULL）且分數達到 60 分（沿用既有 high／medium 分界）的職缺；找不到符合門檻的職缺時，畫面顯示「目前沒有符合的推薦職缺」，不再無門檻硬塞未評分或低分職缺湊滿前 10 筆
+- FR-41f（2026-08-24 定案，見 `docs/ADR/debug/job-search.md`「週排程爬蟲遇 104 429 限流，整批中斷」條目）：每週爬蟲 `crawl_and_upsert_jobs()` 單筆職缺抓詳情（`fetch_job_detail()`）失敗（例如 104 限流回 429、重試 3 次仍失敗）只記 log 並略過該筆，繼續處理下一筆／下一組關鍵字，不讓一次限流中斷整批排程；回傳統計摘要新增 `skipped_job_count` 記錄略過筆數
+- FR-41／FR-41a 已完成選單化、人工關閉覆寫與實機驗收；FR-41b Mobile 顯示規則已由 commit `fb8c616` 完成並推送；FR-41c 已完成並 commit `07adf1f`
 
 **實作階段**
 - Phase 4 Step 4.1～4.3：全數完成

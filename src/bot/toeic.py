@@ -53,6 +53,7 @@ import json
 import logging
 import random
 import re
+import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -60,6 +61,7 @@ from pydub import AudioSegment
 
 from src.bot import toggles
 from submodules.cloudsql.client import CloudSQLClient
+from submodules.llm.client import LLMQuotaGuardError
 
 _logger = logging.getLogger(__name__)
 
@@ -608,12 +610,25 @@ def _parse_vocab_output(raw: str) -> dict | None:
     return fields
 
 
-def generate_track2_vocab_questions(db: CloudSQLClient, llm_client, count: int) -> int:
+_QUOTA_GUARD_RETRY_DELAY_SECONDS = 8
+
+
+def generate_track2_vocab_questions(
+    db: CloudSQLClient, llm_client, count: int, sleep_func=time.sleep
+) -> int:
     """FR-25d～FR-25e：呼叫 Gemini 生成 `count` 題新的單字題（跳過已存在單字），寫入 DB。
 
     回傳實際成功生成並寫入的題數；單題生成失敗（格式不符/單字重複）只記 log 跳過，不中斷整批
     生成，避免一次沒生成好就整批都拿不到；`max_attempts` 設上限避免 Gemini 一直重複給同一批
     單字時無限迴圈。
+
+    2026-08-24（見 docs/ADR/debug/skill-growth.md「TOEIC 單字題生成撞本地端節流上限」條目）：
+    `submodules/llm/client.py` 有本地端節流保護（同一把 API Key 60 秒內最多 8 次），原本這裡
+    兩次呼叫之間完全沒有延遲，且被節流擋下（`LLMQuotaGuardError`）時只是當成一般失敗略過，
+    立刻進下一輪——結果是前 8 次瞬間打完，後面所有嘗試機會在同一秒內全部被節流擋下、瞬間
+    燒光，`max_attempts` 形同虛設。現在遇到節流擋下時改成：**不算浪費一次嘗試機會**（`attempts`
+    退回），並等待 `_QUOTA_GUARD_RETRY_DELAY_SECONDS` 秒讓節流視窗消化一些額度再重試，讓整批
+    生成有機會真的用完 `max_attempts` 次真正呼叫 Gemini 的機會，而不是在毫秒內就放棄。
     """
     if count <= 0:
         return 0
@@ -628,6 +643,10 @@ def generate_track2_vocab_questions(db: CloudSQLClient, llm_client, count: int) 
         prompt = _VOCAB_GENERATE_PROMPT.format(existing_words="、".join(sorted(existing_words)) or "（無）")
         try:
             raw = llm_client.generate_text(prompt)
+        except LLMQuotaGuardError:
+            attempts -= 1
+            sleep_func(_QUOTA_GUARD_RETRY_DELAY_SECONDS)
+            continue
         except Exception:
             _logger.exception("Gemini 生成 TOEIC 單字題失敗")
             continue

@@ -18,38 +18,51 @@ Robin 要求固定台灣時間 23:00 收集「當天」的信件、隔天 08:00 
 
 `password` 必須是 Google 帳號的「應用程式密碼」（App Password），不是一般登入密碼——Google
 自 2022 年起要求已開啟兩步驟驗證的帳號改用應用程式密碼才能通過 SMTP／IMAP 驗證，這是
-Google 的既定機制，不是本模組可以繞過的限制。同一組 `GMAIL_USER`／`GMAIL_PASSWORD` 同時
-支援 SMTP 寄信與 IMAP 讀信，不需要另外申請憑證。
+Google 的既定機制，不是本模組可以繞過的限制。`GMAIL_USER`／`GMAIL_PASSWORD` 用於 IMAP 讀信。
 
-金鑰不寫死在程式碼中，一律由呼叫端在建立 Client 時傳入 username/password。
+2026-08-24（見 docs/ADR/discuss/job-search.md「寄信改走 SendGrid API，取代直連 SMTP」條目）：
+Render 免費方案自 2025 年 9 月起封鎖對外連到 SMTP 埠 25／465／587 的流量，原本寄信用的
+`smtplib.SMTP_SSL` 完全連不出去。寄信改成呼叫 SendGrid 的 HTTPS API（走 443 埠，不受影響）；
+讀信仍是 IMAP（`imaplib`，走 993 埠，不受此限制影響），維持原樣不動。呼叫端建立 Client 時
+額外傳入 `send_api_key`（對應環境變數 `SENDGRID_API_KEY`）才能呼叫 `send_text()`／
+`send_text_with_attachment()`；只讀信不寄信的呼叫端（例如 Step 3.1 每日技術摘要）可以不傳，
+省去申請用不到的金鑰。寄件地址沿用 `username`（即 `GMAIL_USER`），這是 Robin 在 SendGrid
+完成 Single Sender Verification 驗證過的同一個信箱，不需要另外持有網域。
+
+金鑰不寫死在程式碼中，一律由呼叫端在建立 Client 時傳入 username/password/send_api_key。
 """
+import base64
 import imaplib
-import smtplib
 from datetime import date, timedelta, timezone
-from email import encoders, message_from_bytes
-from email.mime.base import MIMEBase
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
+from email import message_from_bytes
 from email.utils import parseaddr, parsedate_to_datetime
 from zoneinfo import ZoneInfo
 
+import requests
+
 from submodules.retry.client import call_with_retry
 
-_SMTP_HOST = "smtp.gmail.com"
-_SMTP_PORT = 465
 _IMAP_HOST = "imap.gmail.com"
 _TAIWAN_TZ = ZoneInfo("Asia/Taipei")
+_SENDGRID_SEND_URL = "https://api.sendgrid.com/v3/mail/send"
+_SENDGRID_TIMEOUT_SECONDS = 15
+_RETRYABLE_RATE_LIMIT_STATUS = 429
+_RETRYABLE_HTTP_STATUS_MIN = 500
 
 # 2026-08-05：外部 API 重試機制（見 docs/specs/robinson/SPEC.md FR-19i、
-# docs/specs/submodules-core/SPEC.md ADR-13）。只重試「暫時性錯誤」：連線中斷、連線失敗等
-# 屬於 OSError／SMTPException 的暫時性狀況；`SMTPAuthenticationError`（帳密錯誤）是永久性
-# 錯誤，重試也沒用，直接往外拋，不浪費重試次數。
+# docs/specs/submodules-core/SPEC.md ADR-13）。只重試「暫時性錯誤」。
 
 
-def _is_retryable_smtp_error(exc: Exception) -> bool:
-    if isinstance(exc, smtplib.SMTPAuthenticationError):
-        return False
-    return isinstance(exc, OSError)
+def _is_retryable_sendgrid_error(exc: Exception) -> bool:
+    if isinstance(exc, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
+        return True
+    if isinstance(exc, requests.exceptions.HTTPError):
+        status_code = exc.response.status_code if exc.response is not None else None
+        if status_code is None:
+            return False
+        # 401/403（金鑰錯誤或未驗證寄件人）、400（請求格式錯誤）都是永久性錯誤，重試也沒用。
+        return status_code == _RETRYABLE_RATE_LIMIT_STATUS or status_code >= _RETRYABLE_HTTP_STATUS_MIN
+    return False
 
 
 # 2026-08-07：IMAP 讀信同樣套用重試機制（FR-19i）。`imaplib.IMAP4.error`（帳密錯誤、指令格式
@@ -100,36 +113,50 @@ def _extract_plain_text(parsed_message) -> str:
 
 
 class EmailClient:
-    """封裝 Gmail SMTP（SSL）寄信、Gmail IMAP（SSL）讀信的最小 Client。
+    """封裝「SendGrid API 寄信」＋「Gmail IMAP（SSL）讀信」的最小 Client。
 
     寄信支援純文字信件（`send_text`）與純文字＋單一附件信件（`send_text_with_attachment`，
     2026-08-09 新增，見 robinson SPEC.md FR-35b、ADR-24 後果：Step 4.1 公司背景協作機制需要
-    寄送 CSV 附件，Step 4.2 職缺推薦交付機制需要寄送 Excel 附件，兩者共用同一個方法）；讀信只
-    支援「依寄件者網域＋指定日期」篩選收件匣信件（`fetch_emails_from_domain_on_date`），目前
-    唯一呼叫端是 Step 3.1 每日技術摘要（FR-23）讀取 TLDR 電子報，需要更多能力時再依實際需求擴充。
+    寄送 CSV 附件，Step 4.2 職缺推薦交付機制需要寄送 Excel 附件，兩者共用同一個方法）；
+    2026-08-24 起兩者改走 SendGrid HTTPS API（見模組 docstring），需要 `send_api_key`。
+    讀信只支援「依寄件者網域＋指定日期」篩選收件匣信件（`fetch_emails_from_domain_on_date`），
+    目前唯一呼叫端是 Step 3.1 每日技術摘要（FR-23）讀取 TLDR 電子報，只用到 `username`／
+    `password`，不需要 `send_api_key`。
     """
 
-    def __init__(self, username: str, password: str):
+    def __init__(self, username: str, password: str, send_api_key: str | None = None):
         if not username:
             raise ValueError("username 不可為空")
         if not password:
             raise ValueError("password 不可為空")
         self._username = username
         self._password = password
+        self._send_api_key = send_api_key
+
+    def _require_send_api_key(self) -> str:
+        if not self._send_api_key:
+            raise ValueError("寄信需要 send_api_key（對應環境變數 SENDGRID_API_KEY），建立 Client 時未傳入")
+        return self._send_api_key
+
+    def _send_via_sendgrid(self, payload: dict) -> None:
+        api_key = self._require_send_api_key()
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+        def _do_send():
+            response = requests.post(_SENDGRID_SEND_URL, json=payload, headers=headers, timeout=_SENDGRID_TIMEOUT_SECONDS)
+            response.raise_for_status()
+
+        call_with_retry(_do_send, is_retryable=_is_retryable_sendgrid_error)
 
     def send_text(self, to: str, subject: str, body: str) -> None:
         """寄送一封純文字信件給 `to`。"""
-        message = MIMEText(body, "plain", "utf-8")
-        message["Subject"] = subject
-        message["From"] = self._username
-        message["To"] = to
-
-        def _do_send():
-            with smtplib.SMTP_SSL(_SMTP_HOST, _SMTP_PORT) as server:
-                server.login(self._username, self._password)
-                server.sendmail(self._username, [to], message.as_string())
-
-        call_with_retry(_do_send, is_retryable=_is_retryable_smtp_error)
+        payload = {
+            "personalizations": [{"to": [{"email": to}]}],
+            "from": {"email": self._username},
+            "subject": subject,
+            "content": [{"type": "text/plain", "value": body}],
+        }
+        self._send_via_sendgrid(payload)
 
     def send_text_with_attachment(
         self, to: str, subject: str, body: str, attachment_filename: str, attachment_bytes: bytes
@@ -137,31 +164,25 @@ class EmailClient:
         """寄送一封純文字信件給 `to`，並附帶單一檔案附件。
 
         附件一律用通用二進位型別 `application/octet-stream` 編碼（不特別分辨 CSV/Excel 等實際
-        格式）——收件端（Gmail 網頁/App）會依副檔名自行判斷開啟方式，寄件端不需要精確指定
-        MIME type，維持跟 `send_text()` 一樣「只用標準函式庫 `email.mime`，不額外安裝第三方
-        套件」的做法（見模組 docstring）。`attachment_filename` 可能含中文（例如
-        `2026-08-09-104職缺公司.csv`），用 `email.message.Message.add_header()` 官方支援的
-        `(charset, language, value)` 三元組寫法觸發 RFC 2231 編碼，避免中文檔名在部分信箱
-        客戶端顯示成亂碼或副檔名遺失。
+        格式）——收件端（Gmail 網頁/App）會依副檔名自行判斷開啟方式。SendGrid API 的附件欄位
+        本身就是 UTF-8 JSON 字串，`attachment_filename` 含中文（例如 `2026-08-09-104職缺公司.csv`）
+        不需要像過去 SMTP／MIME 那樣額外做 RFC 2231 編碼，直接放進 `filename` 欄位即可。
         """
-        message = MIMEMultipart()
-        message["Subject"] = subject
-        message["From"] = self._username
-        message["To"] = to
-        message.attach(MIMEText(body, "plain", "utf-8"))
-
-        part = MIMEBase("application", "octet-stream")
-        part.set_payload(attachment_bytes)
-        encoders.encode_base64(part)
-        part.add_header("Content-Disposition", "attachment", filename=("utf-8", "", attachment_filename))
-        message.attach(part)
-
-        def _do_send():
-            with smtplib.SMTP_SSL(_SMTP_HOST, _SMTP_PORT) as server:
-                server.login(self._username, self._password)
-                server.sendmail(self._username, [to], message.as_string())
-
-        call_with_retry(_do_send, is_retryable=_is_retryable_smtp_error)
+        payload = {
+            "personalizations": [{"to": [{"email": to}]}],
+            "from": {"email": self._username},
+            "subject": subject,
+            "content": [{"type": "text/plain", "value": body}],
+            "attachments": [
+                {
+                    "content": base64.b64encode(attachment_bytes).decode("ascii"),
+                    "filename": attachment_filename,
+                    "type": "application/octet-stream",
+                    "disposition": "attachment",
+                }
+            ],
+        }
+        self._send_via_sendgrid(payload)
 
     def fetch_emails_from_domain_on_date(self, sender_domain: str, target_date: date) -> list[str]:
         """讀取寄件者網域符合 `sender_domain`、寄送日期（台灣時間）為 `target_date` 的信件純文字內容清單。

@@ -15,6 +15,9 @@ from src.services.app_important_days import AppImportantDayService
 from src.services.taiwan_calendar import TaiwanCalendarService
 
 _TAIWAN_TZ = ZoneInfo("Asia/Taipei")
+# 2026-08-24（見 docs/ADR/debug/job-search.md「推薦職缺不分青紅皂白」條目）：`jobs()` 推薦職缺
+# 門檻，沿用既有 high/medium 分界（60 分）。
+_RECOMMENDATION_MIN_SCORE = 60
 
 
 class AnalyticsDatabase(Protocol):
@@ -814,11 +817,19 @@ class AppAnalyticsService:
                 continue
             distribution["high" if score >= 80 else "medium" if score >= 60 else "low"] += 1
         open_postings = [row for row in postings if not row.get("is_closed", False)]
+        # 2026-08-24（見 docs/ADR/debug/job-search.md「推薦職缺不分青紅皂白」條目）：契合度
+        # 評分尚未執行時 `match_score` 為 NULL，過去沒有門檻，未評分／低分職缺也會被硬塞進推薦
+        # 清單。只有真正評過分、且分數達到 `_RECOMMENDATION_MIN_SCORE`（沿用上方 medium/high
+        # 分界＝60）的職缺才算「推薦」；找不到合適職缺時回傳空陣列，由前端顯示對應文案。
+        recommended_postings = [
+            row for row in open_postings
+            if row.get("match_score") is not None and float(row["match_score"]) >= _RECOMMENDATION_MIN_SCORE
+        ]
         return {
             "has_any_data": self._has_data("job_postings"),
             "funnel": funnel,
             "score_distribution": distribution,
-            "recommendations": [_json_row(row) for row in open_postings[:10]],
+            "recommendations": [_json_row(row) for row in recommended_postings[:10]],
             "timeline": [_json_row(row) for row in timeline],
         }
 

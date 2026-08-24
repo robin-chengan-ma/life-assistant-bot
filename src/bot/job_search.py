@@ -228,8 +228,11 @@ def crawl_and_upsert_jobs(
     篩不到符合地區的職缺，就誤判成「這組條件已經爬完」而提早停止翻頁。
 
     回傳這次爬蟲的統計摘要：`{"new_company_ids": [...], "new_job_count": int,
-    "updated_job_count": int}`；`new_company_ids` 供 FR-35a 判斷這批職缺所屬公司是否需要
-    走 Email/CSV/Drive 協作流程（見 `build_new_companies_csv()`）。
+    "updated_job_count": int, "skipped_job_count": int}`；`new_company_ids` 供 FR-35a
+    判斷這批職缺所屬公司是否需要走 Email/CSV/Drive 協作流程（見 `build_new_companies_csv()`）。
+    `skipped_job_count`（2026-08-24）是抓詳情失敗（例如 104 限流回 429，重試 3 次仍失敗）被
+    略過的筆數——單筆失敗只跳過該筆，不會讓整批爬蟲中斷，見 `docs/ADR/debug/job-search.md`
+    「週排程爬蟲遇 104 429 限流，整批中斷」條目。
     """
     now = now or _now()
     criteria_list = list_search_criteria(db, user_id)
@@ -237,6 +240,7 @@ def crawl_and_upsert_jobs(
     new_company_ids: list[str] = []
     new_job_count = 0
     updated_job_count = 0
+    skipped_job_count = 0
 
     for criteria in criteria_list:
         region_filter = criteria.get("region")
@@ -262,7 +266,21 @@ def crawl_and_upsert_jobs(
                 if is_new_company and job["company_id"] not in new_company_ids:
                     new_company_ids.append(job["company_id"])
 
-                detail = job104_client.fetch_job_detail(job["job_slug"])
+                # 2026-08-24（見 docs/ADR/debug/job-search.md「週排程爬蟲遇 104 429 限流，整批中斷」
+                # 條目）：104 偶爾會在重試 3 次後仍回 429，若不攔截，這個例外會炸穿整個函式，讓
+                # 後面所有還沒爬的關鍵字／分頁全部被跳過、整次排程算失敗。這裡只讓「這一筆」職缺
+                # 失敗記 log 略過，不影響其他筆繼續爬；不動 submodules/retry、submodules/job104
+                # 既有的重試次數與延遲秒數（那是共用模組，其他呼叫端也在用）。
+                try:
+                    detail = job104_client.fetch_job_detail(job["job_slug"])
+                except Exception:
+                    _logger.exception(
+                        "抓取職缺詳情失敗，略過此筆（job_id=%s，job_slug=%s）",
+                        job.get("job_id"), job.get("job_slug"),
+                    )
+                    skipped_job_count += 1
+                    _polite_delay(sleep_func, random_func)
+                    continue
                 _polite_delay(sleep_func, random_func)
 
                 if upsert_job_posting(db, job, detail, now):
@@ -276,6 +294,7 @@ def crawl_and_upsert_jobs(
         "new_company_ids": new_company_ids,
         "new_job_count": new_job_count,
         "updated_job_count": updated_job_count,
+        "skipped_job_count": skipped_job_count,
     }
 
 

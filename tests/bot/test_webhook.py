@@ -676,6 +676,7 @@ def test_notify_robin_of_error_swallows_record_failure(monkeypatch):
 def _set_gmail_env(monkeypatch):
     monkeypatch.setenv("GMAIL_USER", "you@gmail.com")
     monkeypatch.setenv("GMAIL_PASSWORD", "fake-app-password")
+    monkeypatch.setenv("SENDGRID_API_KEY", "fake-sendgrid-key")
 
 
 def test_send_email_fallback_sends_via_email_client(monkeypatch):
@@ -686,13 +687,30 @@ def test_send_email_fallback_sends_via_email_client(monkeypatch):
 
     webhook._send_email_fallback(subject="主旨", body="內容")
 
-    mock_email_cls.assert_called_once_with(username="you@gmail.com", password="fake-app-password")
+    mock_email_cls.assert_called_once_with(
+        username="you@gmail.com", password="fake-app-password", send_api_key="fake-sendgrid-key"
+    )
     mock_email_instance.send_text.assert_called_once_with(to="you@gmail.com", subject="主旨", body="內容")
 
 
 def test_send_email_fallback_skips_when_env_vars_missing(monkeypatch):
     monkeypatch.delenv("GMAIL_USER", raising=False)
     monkeypatch.delenv("GMAIL_PASSWORD", raising=False)
+    monkeypatch.delenv("SENDGRID_API_KEY", raising=False)
+    mock_email_cls = MagicMock()
+    monkeypatch.setattr(webhook, "EmailClient", mock_email_cls)
+
+    webhook._send_email_fallback(subject="主旨", body="內容")
+
+    mock_email_cls.assert_not_called()
+
+
+def test_send_email_fallback_skips_when_only_sendgrid_key_missing(monkeypatch):
+    # 2026-08-24（Render 免費方案封鎖 SMTP 埠，寄信改走 SendGrid API）：GMAIL_USER／
+    # GMAIL_PASSWORD 都設定了，但還沒補上 SENDGRID_API_KEY，一樣不能寄信。
+    monkeypatch.setenv("GMAIL_USER", "you@gmail.com")
+    monkeypatch.setenv("GMAIL_PASSWORD", "fake-app-password")
+    monkeypatch.delenv("SENDGRID_API_KEY", raising=False)
     mock_email_cls = MagicMock()
     monkeypatch.setattr(webhook, "EmailClient", mock_email_cls)
 

@@ -246,7 +246,7 @@ def test_crawl_and_upsert_jobs_no_criteria_makes_no_requests(fake_db):
 
     result = job_search.crawl_and_upsert_jobs(fake_db, client, 1, sleep_func=_fake_sleep, random_func=_fake_random)
 
-    assert result == {"new_company_ids": [], "new_job_count": 0, "updated_job_count": 0}
+    assert result == {"new_company_ids": [], "new_job_count": 0, "updated_job_count": 0, "skipped_job_count": 0}
     assert client.search_calls == []
 
 
@@ -267,7 +267,7 @@ def test_crawl_and_upsert_jobs_single_criteria_single_page(fake_db):
 
     result = job_search.crawl_and_upsert_jobs(fake_db, client, 1, sleep_func=_fake_sleep, random_func=_fake_random)
 
-    assert result == {"new_company_ids": ["100"], "new_job_count": 2, "updated_job_count": 0}
+    assert result == {"new_company_ids": ["100"], "new_job_count": 2, "updated_job_count": 0, "skipped_job_count": 0}
     assert client.search_calls == [("AI 工程師", 1), ("AI 工程師", 2)]  # 第 2 頁空清單才停止翻頁
     assert sorted(client.detail_calls) == ["slug1", "slug2"]
     jobs = fake_db.select("job_postings")
@@ -314,7 +314,7 @@ def test_crawl_and_upsert_jobs_region_filter_does_not_stop_pagination_early(fake
 
     result = job_search.crawl_and_upsert_jobs(fake_db, client, 1, sleep_func=_fake_sleep, random_func=_fake_random)
 
-    assert result == {"new_company_ids": [], "new_job_count": 0, "updated_job_count": 0}
+    assert result == {"new_company_ids": [], "new_job_count": 0, "updated_job_count": 0, "skipped_job_count": 0}
     assert client.search_calls == [("AI 工程師", 1), ("AI 工程師", 2)]
     assert client.detail_calls == []
 
@@ -325,7 +325,7 @@ def test_crawl_and_upsert_jobs_stops_pagination_on_empty_page(fake_db):
 
     result = job_search.crawl_and_upsert_jobs(fake_db, client, 1, sleep_func=_fake_sleep, random_func=_fake_random)
 
-    assert result == {"new_company_ids": [], "new_job_count": 0, "updated_job_count": 0}
+    assert result == {"new_company_ids": [], "new_job_count": 0, "updated_job_count": 0, "skipped_job_count": 0}
     assert client.search_calls == [("AI 工程師", 1)]
 
 

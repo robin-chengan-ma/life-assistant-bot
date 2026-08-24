@@ -233,3 +233,19 @@
 **後果**：新增 `submodules/newsfeed/`，`requirements.txt` 只需要 `requests`；只回傳「標題＋連結」，不解析全文內容（後續於 ADR-29〔skill-growth 討論紀錄〕新增 `fetch_article_content()` 抓全文）。
 
 **2026-08-07 同日修正**：排程需求改為固定 23:00 收集「當天」內容，移除 `fetch_yesterday_articles()` 便利方法，只保留 `fetch_articles_published_on(feed_url, target_date)`。
+
+## 2026-08-24 [標籤：使用者] `submodules/email` 寄信改走 SendGrid API，取代直連 Gmail SMTP
+
+**狀態**：accepted
+
+**背景**：Robin 提供 Render 正式環境錯誤 log，`send_new_companies_email()` 呼叫 `smtplib.SMTP_SSL` 連線 `smtp.gmail.com:465` 時拋出 `OSError: Network is unreachable`（見 `docs/ADR/debug/job-search.md` 2026-08-24「週排程寄送公司列表信件 SMTP 連線失敗」條目）。查證 Render 官方 changelog 確認：Render 免費方案自 2025 年 9 月起全面封鎖對外連到 SMTP 埠 25／465／587 的流量，只有升級付費方案才能恢復；這不是帳密或憑證問題，重試 3 次全部一樣失敗也證實是連線層被擋，不是暫時性狀況。
+
+**討論內容**：Robin 明確表示不想付費升級 Render，需要在 Free 方案下解決。兩個方向：①升級 Render 付費方案，維持現有 SMTP 直連程式碼不動；②改用 Email API（HTTPS，不受埠限制）取代直連 SMTP。Robin 選②。API 供應商比較：Resend 免費但**現行政策要求驗證自有網域**（需要 DNS 設定），Robin 沒有網域；SendGrid 提供「Single Sender Verification」，只需驗證單一 email 地址（不需要網域、不需要 DNS），且有免費額度，符合 Robin 的實際狀況（一週最多寄一封公司列表 CSV，遠低於免費額度）。Robin 已完成 SendGrid 註冊、Single Sender Verification（驗證信箱與 `GMAIL_USER` 為同一組）、API Key 建立，並已貼到 Render 環境變數 `SENDGRID_API_KEY`。
+
+**決策**：`submodules/email/client.py` 的 `send_text()`／`send_text_with_attachment()` 改成呼叫 SendGrid HTTPS API（`POST https://api.sendgrid.com/v3/mail/send`，`Authorization: Bearer <SENDGRID_API_KEY>`），取代原本的 `smtplib.SMTP_SSL` 直連；寄件地址沿用 `username`（即 `GMAIL_USER`，與 SendGrid 驗證的寄件信箱是同一個）,不需要另外新增寄件地址的環境變數。讀信（`fetch_emails_from_domain_on_date()`，IMAP／993 埠）完全不受 Render 這次限制影響，維持原樣不動。`EmailClient.__init__` 新增可選參數 `send_api_key`；只讀信不寄信的呼叫端（Step 3.1 每日技術摘要收集）不需要傳入，省去申請用不到的金鑰。附件的 Base64／檔名編碼交給 SendGrid JSON API 處理，不再需要過去 SMTP／MIME 手動做的 RFC 2231 中文檔名編碼。
+
+**理由**：SendGrid Single Sender Verification 免除網域需求，是 Robin 現況下唯一免費且可行的路徑；只換寄信實作、保留 `send_text()`／`send_text_with_attachment()` 對外介面，讓現有呼叫端（`job_search.py` 公司協作信、`webhook.py` FR-19b Telegram 故障備援通知）改動範圍降到最小；不動共用 `submodules/retry` 的重試次數／延遲秒數，改用 SendGrid 專屬的可重試判斷（429／5xx 重試，401／403／400 等永久性錯誤不重試）。
+
+**替代方案**：升級 Render 付費方案（已否決，Robin 明確不想付費）；改用 Resend（已否決，現行政策需要驗證自有網域，Robin 沒有網域）。
+
+**後果**：新增環境變數 `SENDGRID_API_KEY`（`.env.example`、`README.md` 已同步）；`GMAIL_PASSWORD` 只留給 IMAP 讀信使用，不再用於寄信；FR-19b 的 Telegram 故障備援通知過去在 Render 上其實也一樣被 SMTP 封鎖擋住而失效，這次一併修好；`requirements.txt` 不需新增套件（`requests` 已是既有依賴）。實際寄信效果尚待 Robin 在正式環境觀察下次排程與備援通知是否成功送達。

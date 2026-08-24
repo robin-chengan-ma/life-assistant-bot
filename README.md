@@ -51,7 +51,7 @@ flowchart LR
 | Database | PostgreSQL（Neon）、psycopg2 |
 | Mobile | Expo 57、React Native 0.86、React 19、TypeScript 6 |
 | AI／媒體 | Google Gemini、Groq Whisper、Pillow、pydub／ffmpeg |
-| 外部服務 | Telegram、Google Drive／Calendar、Gmail、YouTube、104、Nominatim |
+| 外部服務 | Telegram、Google Drive／Calendar、Gmail（IMAP 讀信）、SendGrid（寄信 API）、YouTube、104、Nominatim |
 | 測試／品質 | pytest、pytest-cov、Ruff、TypeScript |
 | 部署 | Docker、Render、Vercel、cron-job.org |
 
@@ -102,7 +102,7 @@ cp .env.example .env
 - 語音：`VOICE_API_KEY`
 - Google Drive：`GDRIVE_OAUTH_CLIENT_ID`、`GDRIVE_OAUTH_CLIENT_SECRET`、`GDRIVE_OAUTH_REFRESH_TOKEN`、`GDRIVE_FOLDER_ID`
 - Google Calendar：`GOOGLE_CALENDAR_OAUTH_CLIENT_ID`、`GOOGLE_CALENDAR_OAUTH_CLIENT_SECRET`、`GOOGLE_CALENDAR_OAUTH_REFRESH_TOKEN`、`GOOGLE_CALENDAR_ID`
-- Gmail／YouTube／定位：`GMAIL_USER`、`GMAIL_PASSWORD`、`YOUTUBE_API_KEY`、`NOMINATIM_USER_AGENT`
+- Gmail（IMAP 讀信）／SendGrid（寄信 API，2026-08-24 起取代直連 SMTP，因 Render 免費方案封鎖對外 SMTP 埠）／YouTube／定位：`GMAIL_USER`、`GMAIL_PASSWORD`、`SENDGRID_API_KEY`、`YOUTUBE_API_KEY`、`NOMINATIM_USER_AGENT`
 - 選填調校：`APP_BCRYPT_ROUNDS`、`PORT`
 
 完整名稱與假值範例見 [`.env.example`](.env.example)。

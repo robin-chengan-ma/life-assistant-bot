@@ -940,6 +940,8 @@ def handle_callback_query(
             return job_settings.start_criteria_edit(db, state_store, telegram_user_id, user["id"], int(action.rsplit(":", 1)[1]))
         if action == "jobs":
             return job_settings.start_jobs_list(db)
+        if action.startswith("jobs:page:"):
+            return job_settings.start_jobs_list(db, page=int(action.rsplit(":", 1)[1]))
         if action.startswith("status:"):
             parts = action.split(":")
             if len(parts) == 2 and parts[1] in {"applied", "interview", "offer"}:
