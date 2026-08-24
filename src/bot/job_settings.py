@@ -211,38 +211,87 @@ def handle_criteria_delete_confirm(db, state_store: ConversationStateStore, tele
 
 _JOBS_LIST_PAGE_SIZE = 10
 
+# 2026-08-24（Robin 要求「職缺清單」點擊後先選縣市再顯示）：台灣 22 縣市（6 直轄市＋3 市＋13
+# 縣），依 `job_postings.region`（例如「台北市內湖區」）子字串比對篩選；額外加一個「不限」選項
+# 代表不篩選，回到原本顯示全部職缺的行為。
+_TAIWAN_COUNTIES = (
+    "台北市", "新北市", "桃園市", "台中市", "台南市", "高雄市",
+    "基隆市", "新竹市", "嘉義市",
+    "新竹縣", "苗栗縣", "彰化縣", "南投縣", "雲林縣", "嘉義縣",
+    "屏東縣", "宜蘭縣", "花蓮縣", "台東縣", "澎湖縣", "金門縣", "連江縣",
+)
+_JOBS_REGION_UNLIMITED = "不限"
 
-def start_jobs_list(db, page: int = 1) -> tuple[str, dict]:
+
+def start_jobs_region_menu() -> tuple[str, dict]:
+    """2026-08-24（Robin 要求加上縣市篩選）：點擊「職缺清單」後，先跳出縣市選單，選定縣市（或
+    「不限」）後才呼叫 `start_jobs_list()` 顯示職缺，避免每次都要滑過全部 108 筆職缺才找得到
+    想看的地區。
+    """
+    rows = [
+        [
+            {"text": county, "callback_data": f"job_search:jobs:region:{county}"}
+            for county in _TAIWAN_COUNTIES[i : i + 3]
+        ]
+        for i in range(0, len(_TAIWAN_COUNTIES), 3)
+    ]
+    rows.append([{"text": f"🌏 {_JOBS_REGION_UNLIMITED}", "callback_data": f"job_search:jobs:region:{_JOBS_REGION_UNLIMITED}"}])
+    rows.append([{"text": "🔙 返回求職設定", "callback_data": "job_search:menu"}])
+    return "📋 請選擇要看哪個縣市的職缺：", {"inline_keyboard": rows}
+
+
+def start_jobs_list(db, region: str | None = None, page: int = 1) -> tuple[str, dict]:
     """2026-08-24（見 docs/ADR/debug/job-search.md「職缺清單訊息過長打不開」條目）：職缺會隨每週
     爬蟲持續累積，過去把全部職缺一次串成一則訊息，職缺數一多就會超過 Telegram 單則訊息 4096
     字元上限，導致 `send_text()` 送出失敗；`webhook.py` 又刻意把送出失敗的例外整個吞掉只記
     log（避免單一功能壞掉波及其他功能），使用者端因此完全沒有任何反應。改成每頁固定
     `_JOBS_LIST_PAGE_SIZE` 筆＋上一頁／下一頁按鈕，徹底避免單則訊息無上限增長。
+
+    2026-08-24（Robin 要求加上縣市篩選＋改版排版）：`region` 是 `start_jobs_region_menu()`
+    選定的縣市（`None` 或 `_JOBS_REGION_UNLIMITED` 代表不篩選），依 `job_postings.region` 子
+    字串比對；分頁按鈕的 `callback_data` 一併帶著 `region`，翻頁時維持同一個篩選結果。清單改成
+    每筆用分隔線包起來，第一行顯示「公司名稱 | 地區」、第二行顯示「職缺名稱（ID=...，分數=...）」，
+    比純文字清單更好對照公司與地區；確認加上分隔線與公司名稱後，單頁 10 筆內容仍遠低於 Telegram
+    單則訊息 4096 字元上限，不需要另外限縮頁數。
     """
     jobs = job_search.list_jobs_by_score(db)
+    if region and region != _JOBS_REGION_UNLIMITED:
+        jobs = [job for job in jobs if region in (job.get("region") or "")]
     if not jobs:
-        return "目前沒有職缺資料。", _keyboard([("🔙 返回求職設定", "job_search:menu")])
+        text = "目前沒有職缺資料。" if not region or region == _JOBS_REGION_UNLIMITED else f"「{region}」目前沒有符合的職缺。"
+        return text, _keyboard([("🔙 重新選擇縣市", "job_search:jobs"), ("🔙 返回求職設定", "job_search:menu")])
 
     total_pages = (len(jobs) + _JOBS_LIST_PAGE_SIZE - 1) // _JOBS_LIST_PAGE_SIZE
     page = max(1, min(page, total_pages))
     start = (page - 1) * _JOBS_LIST_PAGE_SIZE
     page_items = jobs[start : start + _JOBS_LIST_PAGE_SIZE]
 
-    # 2026-08-24（Robin 反饋排版太擠）：每筆職缺之間空一行分隔，比較好讀；固定 `_JOBS_LIST_PAGE_SIZE`
-    # 每頁筆數，即使加空行，單頁內容仍遠低於 Telegram 單則訊息 4096 字元上限，不需要另外限縮頁數。
+    companies_by_id = job_search.get_companies_by_id_map(db)
+    separator = "-" * 88
     header = f"📋 職缺清單（依契合度排序，第 {page}／{total_pages} 頁）："
-    items = [
-        f"・{item['title']}（ID={item['job_id_104']}，分數：{item.get('score') if item.get('score') is not None else '尚未評分'}）"
-        for item in page_items
-    ]
-    text = header + "\n\n" + "\n\n".join(items)
+    blocks = []
+    for item in page_items:
+        company = companies_by_id.get(item.get("company_id_104"), {})
+        company_name = company.get("company_name") or "未知公司"
+        item_region = item.get("region") or "地區未提供"
+        score = item.get("score") if item.get("score") is not None else "尚未評分"
+        blocks.append(
+            f"{separator}\n"
+            f"・{company_name} | {item_region}\n"
+            f"・{item['title']}（ID={item['job_id_104']}，分數：{score}）"
+        )
+    text = header + "\n\n" + "\n".join(blocks) + f"\n{separator}"
 
+    region_suffix = f":region:{region}" if region else ""
     nav_row = []
     if page > 1:
-        nav_row.append({"text": "⬅️ 上一頁", "callback_data": f"job_search:jobs:page:{page - 1}"})
+        nav_row.append({"text": "⬅️ 上一頁", "callback_data": f"job_search:jobs{region_suffix}:page:{page - 1}"})
     if page < total_pages:
-        nav_row.append({"text": "➡️ 下一頁", "callback_data": f"job_search:jobs:page:{page + 1}"})
-    keyboard = {"inline_keyboard": ([nav_row] if nav_row else []) + [[{"text": "🔙 返回求職設定", "callback_data": "job_search:menu"}]]}
+        nav_row.append({"text": "➡️ 下一頁", "callback_data": f"job_search:jobs{region_suffix}:page:{page + 1}"})
+    keyboard = {
+        "inline_keyboard": ([nav_row] if nav_row else [])
+        + [[{"text": "🔙 重新選擇縣市", "callback_data": "job_search:jobs"}, {"text": "🔙 返回求職設定", "callback_data": "job_search:menu"}]]
+    }
     return text, keyboard
 
 

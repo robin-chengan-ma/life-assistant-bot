@@ -89,3 +89,17 @@
 **替代方案**：`region` 改成獨立正規化資料表（一個條件對多個地區列）（已否決，個人單一使用者情境下過度工程，逗號分隔字串已經足夠）；編輯做成逐欄位表單（分別問「要改關鍵字嗎？地區呢？」）（已否決，跟新增流程的自然語言整段輸入體驗不一致，也會拉長對話輪數）。
 
 **後果**：不需要新增 Migration；`src/bot/commands.py`（Prompt）、`src/bot/job_search.py`（比對邏輯＋`update_search_criteria()`＋`format_search_criteria()`）、`src/bot/job_settings.py`（清單顯示＋編輯流程）、`src/bot/router.py`（`criteria:edit:*` callback 與 `pending_job_settings_criteria_edit` 狀態）皆有異動；`tests/bot/test_job_settings.py` 新增 6 個測試案例，連同既有測試全數通過（`ruff check` 亦全過）。Prompt 調整（單一技術詞判斷）沒辦法在 Cowork 沙盒對正式 Gemini API 驗證，需要 Robin 在正式環境用「AI，薪資 5 到 6 萬」這類輸入實測確認。詳見 SPEC.md 求職模組 FR-41c。
+
+### 2026-08-24 補充：職缺清單加縣市篩選、排版改版
+
+**狀態**：accepted
+
+**背景**：FR-41d 分頁上線後，Robin 提出職缺清單應該要能依縣市篩選，不用每次都從第 1／108 頁滑過全部職缺；同時給出具體排版範例，希望每筆職缺同時顯示公司名稱與地區、用分隔線清楚區隔每一筆。
+
+**決策**：①點擊「職缺清單」時，先跳出台灣 22 縣市＋「不限」共 23 個選項的縣市選單（`job_settings.start_jobs_region_menu()`），選定後才呼叫 `start_jobs_list(db, region=..., page=1)` 依 `job_postings.region` 子字串比對篩選（「不限」等同不篩選，回到原本顯示全部職缺）②分頁按鈕 `callback_data` 一併帶著選定縣市（`job_search:jobs:region:<縣市>:page:<n>`），翻頁時維持同一個篩選結果；沒有帶縣市的舊版 `job_search:jobs:page:<n>` callback 仍相容（不篩選）③清單排版改成每筆用 88 個 `-` 組成的分隔線包起來，第一行「公司名稱 | 地區」（`job_companies.company_name`／`job_postings.region`）、第二行「職缺名稱（ID=...，分數：...）」，比純文字清單更容易對照公司與地區④新增 `job_search.get_companies_by_id_map()` 公開函式（內部沿用既有 `_companies_by_id()` 邏輯），供 `job_settings.py` 查公司名稱使用，避免對外暴露底線開頭的模組內部函式。
+
+**理由**：地區篩選是既有 `job_postings.region`／`job_companies.region` 欄位就能支援的查詢邏輯，不需要新增 Migration；縣市清單用台灣現行 22 縣市固定常數即可，不需要另外查詢或維護資料表；分頁 callback 帶縣市是延續 FR-41d 既有分頁機制最小的擴充方式。
+
+**替代方案**：地區篩選做成自由文字輸入（已否決，Robin 明確要求「顯示全台所有縣市」選單，且固定選項比自由文字更不會篩不到結果）；縣市清單存資料表（已否決，22 縣市是台灣固定行政區劃，不會變動，存常數即可，過度工程）。
+
+**後果**：不需要新增 Migration。`src/bot/job_settings.py`（新增 `start_jobs_region_menu()`、`start_jobs_list()` 新增 `region` 參數與分隔線排版）、`src/bot/job_search.py`（新增 `get_companies_by_id_map()`）、`src/bot/router.py`（`jobs:region:*` 分派，`jobs:page:*` 舊版相容）已異動；`tests/bot/test_job_settings.py` 新增 7 項測試。詳見 `docs/specs/SPEC.md` FR-41g。

@@ -238,3 +238,101 @@ def test_jobs_list_out_of_range_page_clamps_to_last_page(fake_db):
     text, _keyboard = job_settings.start_jobs_list(fake_db, page=99)
 
     assert "第 1／1 頁" in text
+
+
+def test_jobs_region_menu_lists_all_counties_plus_unlimited():
+    # 2026-08-24（Robin 要求職缺清單先選縣市）：22 縣市＋「不限」共 23 個選項。
+    text, keyboard = job_settings.start_jobs_region_menu()
+    buttons = [b for row in keyboard["inline_keyboard"] for b in row]
+    callback_data = [b["callback_data"] for b in buttons]
+
+    assert "請選擇要看哪個縣市" in text
+    assert "job_search:jobs:region:台北市" in callback_data
+    assert "job_search:jobs:region:連江縣" in callback_data
+    assert "job_search:jobs:region:不限" in callback_data
+    assert "job_search:menu" in callback_data
+    # 23 個縣市／不限按鈕 + 1 個返回按鈕
+    assert len(callback_data) == 24
+
+
+def _seed_jobs_with_region(fake_db):
+    fake_db.insert(
+        "job_companies", {"company_id_104": "c1", "company_name": "台北公司", "region": "台北市"},
+    )
+    fake_db.insert(
+        "job_companies", {"company_id_104": "c2", "company_name": "高雄公司", "region": "高雄市"},
+    )
+    fake_db.insert(
+        "job_postings",
+        {
+            "job_id_104": "job-taipei", "company_id_104": "c1", "title": "台北職缺", "region": "台北市內湖區",
+            "url": "https://example.com/1", "score": 80, "is_closed": False, "is_closed_manual_override": False,
+        },
+    )
+    fake_db.insert(
+        "job_postings",
+        {
+            "job_id_104": "job-kaohsiung", "company_id_104": "c2", "title": "高雄職缺", "region": "高雄市前鎮區",
+            "url": "https://example.com/2", "score": 90, "is_closed": False, "is_closed_manual_override": False,
+        },
+    )
+
+
+def test_jobs_list_filters_by_selected_region(fake_db):
+    _seed_jobs_with_region(fake_db)
+
+    text, _keyboard = job_settings.start_jobs_list(fake_db, region="台北市")
+
+    assert "台北職缺" in text
+    assert "高雄職缺" not in text
+
+
+def test_jobs_list_unlimited_region_shows_all_jobs(fake_db):
+    _seed_jobs_with_region(fake_db)
+
+    text, _keyboard = job_settings.start_jobs_list(fake_db, region="不限")
+
+    assert "台北職缺" in text
+    assert "高雄職缺" in text
+
+
+def test_jobs_list_region_with_no_matching_jobs_shows_friendly_message(fake_db):
+    _seed_jobs_with_region(fake_db)
+
+    text, keyboard = job_settings.start_jobs_list(fake_db, region="台東縣")
+
+    assert "台東縣" in text and "沒有符合" in text
+    callback_data = [b["callback_data"] for row in keyboard["inline_keyboard"] for b in row]
+    assert "job_search:jobs" in callback_data
+
+
+def test_jobs_list_shows_company_name_and_region_with_separators(fake_db):
+    # 2026-08-24（Robin 給定排版範例）：每筆職缺用分隔線包起來，第一行「公司名稱 | 地區」，
+    # 第二行「職缺名稱（ID=...，分數：...）」。
+    _seed_jobs_with_region(fake_db)
+
+    text, _keyboard = job_settings.start_jobs_list(fake_db, region="不限")
+
+    separator = "-" * 88
+    assert text.count(separator) == 3  # 2 筆職缺，各自前後夾一條分隔線，中間共用 1 條
+    assert "・台北公司 | 台北市內湖區" in text
+    assert "・台北職缺（ID=job-taipei，分數：80）" in text
+    assert "・高雄公司 | 高雄市前鎮區" in text
+
+
+def test_jobs_list_page_buttons_carry_selected_region(fake_db):
+    fake_db.insert("job_companies", {"company_id_104": "c1", "company_name": "測試公司", "region": "台北市"})
+    for i in range(15):
+        fake_db.insert(
+            "job_postings",
+            {
+                "job_id_104": f"job-{i}", "company_id_104": "c1", "title": f"職缺{i}", "region": "台北市信義區",
+                "url": f"https://example.com/{i}", "score": i, "is_closed": False, "is_closed_manual_override": False,
+            },
+        )
+
+    text, keyboard = job_settings.start_jobs_list(fake_db, region="台北市", page=1)
+    buttons = [b["callback_data"] for row in keyboard["inline_keyboard"] for b in row]
+
+    assert "第 1／2 頁" in text
+    assert "job_search:jobs:region:台北市:page:2" in buttons

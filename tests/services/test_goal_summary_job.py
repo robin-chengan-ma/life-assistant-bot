@@ -134,6 +134,48 @@ def test_generate_daily_goal_summaries_llm_failure_skips_goal_without_crashing(d
     assert db.tables["goal_summaries"] == []
 
 
+def test_gather_body_activity_text_weight_goal_combines_weight_exercise_and_diet(db):
+    # 2026-08-24（Robin 反饋「體態目標摘要應該綜合評估，不能只看體重」）：weight 目標要同時看
+    # 體重／運動／飲食三項資料，才能給出教練式的綜合建議。
+    db.tables["body_weight_logs"].append({"user_id": 1, "entry_date": date(2026, 8, 15), "weight_kg": 70})
+    db.tables["exercise_logs"].append({"user_id": 1, "entry_date": date(2026, 8, 15), "duration_minutes": 30})
+    db.tables["diet_logs"].append({"user_id": 1, "entry_date": date(2026, 8, 15), "note": "早餐"})
+
+    goal = {"user_id": 1, "goal_type": "weight"}
+    text = goal_summary_job._gather_body_activity_text(db, goal, date(2026, 8, 1), date(2026, 8, 18))
+
+    assert "體重" in text and "70" in text
+    assert "運動" in text and "30 分鐘" in text
+    assert "飲食" in text and "1 筆" in text
+
+
+def test_gather_body_activity_text_exercise_goal_only_looks_at_exercise_logs(db):
+    # exercise／飲食型目標本身就是在追蹤那件事有沒有做到，不需要參考體重或對方資料。
+    db.tables["body_weight_logs"].append({"user_id": 1, "entry_date": date(2026, 8, 15), "weight_kg": 70})
+    db.tables["exercise_logs"].append({"user_id": 1, "entry_date": date(2026, 8, 15), "duration_minutes": 30})
+    db.tables["diet_logs"].append({"user_id": 1, "entry_date": date(2026, 8, 15), "note": "早餐"})
+
+    goal = {"user_id": 1, "goal_type": "exercise"}
+    text = goal_summary_job._gather_body_activity_text(db, goal, date(2026, 8, 1), date(2026, 8, 18))
+
+    assert "體重" not in text
+    assert "飲食" not in text
+    assert "運動了 1 次" in text and "30 分鐘" in text
+
+
+def test_gather_body_activity_text_diet_goal_only_looks_at_diet_logs(db):
+    db.tables["body_weight_logs"].append({"user_id": 1, "entry_date": date(2026, 8, 15), "weight_kg": 70})
+    db.tables["exercise_logs"].append({"user_id": 1, "entry_date": date(2026, 8, 15), "duration_minutes": 30})
+    db.tables["diet_logs"].append({"user_id": 1, "entry_date": date(2026, 8, 15), "note": "早餐"})
+
+    goal = {"user_id": 1, "goal_type": "diet"}
+    text = goal_summary_job._gather_body_activity_text(db, goal, date(2026, 8, 1), date(2026, 8, 18))
+
+    assert "體重" not in text
+    assert "運動" not in text
+    assert "1 筆飲食" in text
+
+
 def test_deadline_text_no_target_date_returns_empty():
     assert goal_summary_job._deadline_text(None, date(2026, 8, 18)) == ""
 

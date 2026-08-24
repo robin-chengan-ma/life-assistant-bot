@@ -564,6 +564,14 @@ def _companies_by_id(db: CloudSQLClient) -> dict[str, dict]:
     return {c["company_id_104"]: c for c in db.select("job_companies")}
 
 
+def get_companies_by_id_map(db: CloudSQLClient) -> dict[str, dict]:
+    """依 `company_id_104` 建立 `job_companies` 查找表；供 FR-41d 職缺清單顯示公司名稱／地區使用
+    （與 `_companies_by_id()` 邏輯相同，這裡另外提供一個公開名稱給 `job_settings.py` 呼叫，
+    避免對外暴露底線開頭的模組內部函式）。
+    """
+    return _companies_by_id(db)
+
+
 def _to_taiwan_date(value) -> date | None:
     if value is None:
         return None

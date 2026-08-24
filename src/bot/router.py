@@ -939,8 +939,16 @@ def handle_callback_query(
         if action.startswith("criteria:edit:"):
             return job_settings.start_criteria_edit(db, state_store, telegram_user_id, user["id"], int(action.rsplit(":", 1)[1]))
         if action == "jobs":
-            return job_settings.start_jobs_list(db)
+            # 2026-08-24（Robin 要求加上縣市篩選）：點擊「職缺清單」先跳縣市選單，不再直接列出全部職缺。
+            return job_settings.start_jobs_region_menu()
+        if action.startswith("jobs:region:"):
+            rest = action[len("jobs:region:"):]
+            if ":page:" in rest:
+                region, _, page_str = rest.partition(":page:")
+                return job_settings.start_jobs_list(db, region=region, page=int(page_str))
+            return job_settings.start_jobs_list(db, region=rest, page=1)
         if action.startswith("jobs:page:"):
+            # 相容舊版（未帶縣市篩選）的分頁按鈕，避免使用者聊天室裡舊訊息的按鈕失效。
             return job_settings.start_jobs_list(db, page=int(action.rsplit(":", 1)[1]))
         if action.startswith("status:"):
             parts = action.split(":")
