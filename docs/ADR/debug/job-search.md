@@ -73,3 +73,15 @@
 **修復方式**：查證 Render 官方 changelog 確認免費方案確實自 2025 年 9 月起封鎖對外 SMTP 埠 25／465／587，只有升級付費方案能恢復；Robin 明確表示不想付費，改走 Email API。比較 Resend（現行政策需驗證自有網域，Robin 沒有網域，否決）與 SendGrid（提供 Single Sender Verification，只需驗證單一信箱、不需網域，符合 Robin 現況），與 Robin 討論後選定 SendGrid。Robin 完成 SendGrid 帳號、Single Sender Verification（驗證信箱與既有 `GMAIL_USER` 同一組）、API Key 並貼到 Render 環境變數 `SENDGRID_API_KEY` 後，`submodules/email/client.py` 的 `send_text()`／`send_text_with_attachment()` 改成呼叫 SendGrid HTTPS API（走 443 埠，不受此限制影響），取代原本直連 `smtplib.SMTP_SSL`；讀信 IMAP（993 埠）不受影響，維持原樣。完整架構決策見 `docs/ADR/discuss/submodules-core.md` 2026-08-24「`submodules/email` 寄信改走 SendGrid API，取代直連 Gmail SMTP」條目。
 
 **驗證方式**：`tests/submodules/email/test_client.py` 全面改寫寄信相關測試（mock `requests.post` 取代 mock `smtplib.SMTP_SSL`），涵蓋成功寄送、缺少 `send_api_key` 時報錯、429 重試、401/403/400 等永久性錯誤不重試；`tests/bot/test_webhook.py` 同步更新 FR-19b 備援通知測試（新增 `SENDGRID_API_KEY` 環境變數檢查與缺少時不寄信的案例）。全專案 `pytest -q` 1619 passed（`test_migration_sql.py` 1 項因沙盒環境限制失敗，屬既有已知問題），`ruff check .` 對本次異動檔案全過。**尚待 Robin 在正式環境觀察下次排程寄送公司列表信件、以及 Telegram 故障時的備援通知是否都能成功送達**。
+
+## 2026-08-24 職缺清單排版加空行的修改在 commit 訊息宣稱完成，但實際程式碼漏掉
+
+**現象**：Robin 依「職缺清單排版太擠」的反饋收到修好的通知，commit `7c648a1` 的 commit message 也寫著「職缺清單加空行」，`docs/specs/PROGRESS.md` 也記錄為完成。但 Render 部署 `b007008`（含 `7c648a1`）Live 後，Robin 重新點擊「職缺清單」，畫面截圖仍是舊的緊密排版（無空行、"第 1／108 頁"）。
+
+**排查過程**：先確認 Render Deploy 紀錄，`b007008` 已於 2026-08-24 14:56 部署為 Live，排除「還沒部署到」的可能。接著在 Robin 的機器上直接用 `git show b007008:src/bot/job_settings.py` 逐行核對實際內容，發現 `start_jobs_list()` 仍是修改前的 `lines = [...]` / `"\n".join(lines)` 寫法，完全沒有空行分隔的程式碼——與 commit message、`PROGRESS.md` 記載的「已完成」狀態不符。
+
+**根因**：Claude 在產生 `7c648a1` 這次合併多項修改的 commit 時，`src/bot/job_settings.py` 的空行排版變更沒有被真正寫入該次 commit（可能是編輯步驟遺漏或提交前未逐一核對每個檔案的實際內容），只有 commit message 與文件記錄反映了「應該要有」的變更，程式碼本身沒有同步。這代表先前「宣稱完成」的判斷是基於 commit message／文件描述，而非直接核對程式碼內容，屬於流程疏失。
+
+**修復方式**：直接在 `src/bot/job_settings.py::start_jobs_list()` 補上正確的空行分隔邏輯（`header` + `"\n\n".join(items)`），並用 `git show HEAD:...` 逐行印出提交後的實際內容核對無誤，才視為完成，建立新 commit `126b9dd`。往後任何宣稱「已修改」的邏輯，都必須先用 `git diff`／`git show`／`grep` 等方式核對實際檔案內容，不能只依賴 commit message 或文件記錄判斷是否真的改到。
+
+**驗證方式**：以 `git show 126b9dd:src/bot/job_settings.py` 核對程式碼內容確實為空行版本。本機沒有可用的 Python/pytest 環境可執行單元測試，改動內容與稍早在雲端沙盒環境跑過、`pytest -q` 1624 passed 的版本逐字一致。**尚待 Robin 在 push／Render 部署 `126b9dd` 後，重新點擊「職缺清單」確認畫面確實出現空行分隔**。
