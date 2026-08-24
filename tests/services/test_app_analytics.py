@@ -522,11 +522,36 @@ def test_todos_overdue_and_calendar_counts_include_auto_expired_items():
     assert result["calendar_counts"] == {"2026-08-10": 1}
 
     overdue_query = next(q for q in db.executed_queries if "app_analytics:todos_overdue" in q)
-    assert "status IN ('pending', 'expired')" in overdue_query
+    assert "status = 'expired'" in overdue_query
     calendar_query = next(q for q in db.executed_queries if "app_analytics:todo_calendar_counts" in q)
     assert "status IN ('pending', 'expired')" in calendar_query
     items_query = next(q for q in db.executed_queries if "app_analytics:todos */" in q)
     assert "status = 'pending'" in items_query
+
+
+def test_todos_overdue_shows_expired_item_due_today_even_though_date_is_not_before_today():
+    # 2026-08-24（Robin 實機測試反饋「id=4 這筆還是看不到」）：`due_at` 是「今天」但時間已過、
+    # 且已被 `mark_overdue_as_expired()` 轉成 expired 的待辦，不能因為到期日「不早於今天」就被
+    # 逾期查詢排除——只要 status 已經是 expired 就該算逾期，不該再看日期。
+    db = FakeDatabase(
+        select_rows={"todos": [{"id": 1}]},
+        query_rows={
+            "app_analytics:todos */": [],
+            "app_analytics:todos_overdue": [{
+                "id": 4, "content": "填寫勞資報酬單", "due_at": "2026-08-11T09:00:00+08:00",
+                "start_at": None, "status": "expired", "created_at": "2026-08-09T00:00:00",
+            }],
+            "app_analytics:todo_calendar_counts": [],
+        },
+    )
+
+    result = AppAnalyticsService(db, today=date(2026, 8, 11)).todos(
+        user(), date(2026, 8, 11), date(2026, 8, 11),
+        calendar_start=date(2026, 8, 1), calendar_end=date(2026, 8, 31),
+    )
+
+    assert [item["id"] for item in result["overdue_items"]] == [4]
+    assert result["overdue_count"] == 1
 
 
 def test_jobs_excludes_closed_postings_from_recommendations_but_keeps_distribution():

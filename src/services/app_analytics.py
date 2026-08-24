@@ -479,14 +479,18 @@ class AppAnalyticsService:
             ORDER BY due_at""",
             (user.database_id, self._today, end, start),
         )
-        # 2026-08-24（Robin 反饋「代辦事項過期後 Mobile App 逾期待辦看不到」）：
-        # `mark_overdue_as_expired()`（src/bot/todo.py）約每 10 分鐘就會把過期的 `pending`
-        # 轉成 `expired`，若這裡仍只抓 `pending`，代辦一過期就會從逾期清單／月曆計數消失，
-        # 使用者完全看不到也無法標記完成或取消。改成同時納入 `pending` 與 `expired`。
+        # 2026-08-24（Robin 反饋「代辦事項過期後 Mobile App 逾期待辦看不到」，後續實機測試發現
+        # 「到期日是今天、但時間已過」的項目仍然看不到）：`mark_overdue_as_expired()`
+        # （src/bot/todo.py）約每 10 分鐘就會把過期的 `pending` 轉成 `expired`，不論到期日是
+        # 今天還是更早。若這裡的逾期判斷仍額外要求「到期日 < 今天」，一筆到期日是「今天」但已經
+        # 被轉成 `expired` 的待辦，就會同時被「即將到期」（只看 pending）與「逾期待辦」（只看
+        # 日期早於今天）排除，掉進兩邊都撈不到的空隙。改成：只要 status 已經是 `expired` 就算
+        # 逾期（不論到期日是不是今天）；`pending` 則維持用日期判斷，作為 cron 尚未來得及轉態時
+        # 的緩衝。
         overdue_rows = self._db.execute_query(
             """/* app_analytics:todos_overdue */ SELECT id, content, due_at, start_at, status, created_at
-            FROM todos WHERE user_id = %s AND status IN ('pending', 'expired')
-              AND DATE(due_at AT TIME ZONE 'Asia/Taipei') < %s
+            FROM todos WHERE user_id = %s
+              AND (status = 'expired' OR (status = 'pending' AND DATE(due_at AT TIME ZONE 'Asia/Taipei') < %s))
             ORDER BY due_at DESC, created_at DESC, id DESC""",
             (user.database_id, self._today),
         )
