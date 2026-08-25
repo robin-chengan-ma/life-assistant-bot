@@ -109,3 +109,23 @@
 **後果**：需新增向前相容 migration 建立名冊、補充內容及 TOEIC 固定題數欄位，並回填既有 Owner 的 TOEIC 與既有 `exam_type` 資料；舊文字／Slash Command 證照入口不保留相容期。非 TOEIC 題庫實際導入與驗收仍維持擱置，見上方 2026-08-14 決策。
 
 **實作結果**：新增 `src/bot/certificate_settings.py` 與 migration `0091`；所有寫入包含自訂證照啟停、目標、全局／區間題數、正式成績與區間刪除，均採摘要後按鈕確認。日期區間在輸入與確認兩階段檢查重疊，資料庫再以 exclusion constraint 防止競態；變更或刪除涵蓋今天的區間時，會清除今天尚未作答的指派以便重新依有效設定產生。
+
+## 2026-08-25 [標籤：使用者] ADR-32：聽力題目庫改版——整包音檔 cutoff、解答照片統一驅動、聽力題禁止顯示文字
+
+**狀態**：accepted
+
+**背景**：Robin 打算把整份 ~45 分鐘的 TOEIC 聽力測驗錄音直接上傳，但現有整包音檔切割邏輯（`_find_split_plan()`）假設「1 題 = 1 段長度大致相等的獨立音檔」，只適用於 Part 1（照片描述）與 Part 2（問答），不適用於共用一段對話/短文音檔、每 3 題一組的 Part 3／4。Robin 明確表示只想自動切 Part 1+2，忽略後面的 Part 3+4。討論過程中經多輪對話與 AskUserQuestion 進一步釐清三種可能的上傳情境（整份聽力整包／單一 Part 整包／單一 Part 單題已切好的音檔），並確認不同 Part 一定來自不同場考試（不同 `test_id`），檔名不會衝突。
+
+過程中進一步發現一個更根本的設計缺陷：Part 2 是純聽力，完全沒有印刷內容可拍照，但既有設計要求「一定要有題目照片才能建題」，導致 Part 2 永遠無法建題。Robin 提出改用「解答照片」（測驗書的解答/詳解頁，本來就會印出原始題目/選項逐字稿）作為聽力題內容的統一來源，題目照片改為純顯示用（例如 Part 1）。
+
+這又牽出一個真正的資料風險：`certificate_questions.image_gdrive_url` 是 `NOT NULL`，且在作答時會顯示給使用者看（`certificate_answer.py` 的「🖼️ 題目圖片」）。若沒有題目照片時 fallback 顯示解答照片，會在使用者作答前就洩漏正解圖片，被 Claude 主動提出並向 Robin 說明後暫緩。
+
+最後 Robin 進一步釐清各 Part 的正確呈現方式，指出既有的 `_build_certificate_question_view()` 顯示邏輯本身就是錯的——目前不分聽力/閱讀，一律把 `question_text`／`options` 文字顯示出來，這對聽力題完全不符合考試情境（Part 1 只能看圖用聽的作答；Part 2 什麼都不顯示、純聽力；只有閱讀 Part 5 才應該顯示文字題目與選項）。
+
+**決策**：①整包聽力音檔檔名新增選填後綴 `_cutoff{秒數}`，只切割/處理指定秒數之前的內容（`_split_whole_audio()` 依 `cutoff_seconds` 先用 `pydub` 裁切音檔、再過濾逐字稿分段時間戳記）②聽力題（所有 Part）內容改由「解答照片」（`_ans`）統一驅動一次性建題（題目文字／選項／正解／詳解皆來自同一張解答照片的 Vision 解析，新增 `_LISTEN_ANSWER_VISION_PARSE_PROMPT`），題目照片（`listen_images`）改為選填，只用於顯示，不再是建題必要條件；`_process_answer_keys()`（原本「先建題後補正解」兩階段流程）限縮為只處理 `write`（閱讀）類型，聽力題改為一階段直接建立 ③`certificate_questions.image_gdrive_url` 改為 nullable（migration `0099`），避免用解答照片 fallback 造成洩題風險——沒有題目照片就是 `NULL`，不顯示圖片區塊 ④`_build_certificate_question_view()` 依 `question_type` 分流：`listen` 完全不顯示 `question_text`／`options` 文字，只顯示題目圖片（有的話，例如 Part 1）與聽力音檔連結；`write`（閱讀）維持原行為，照樣顯示文字題目＋選項。
+
+**理由**：`_cutoff` 後綴是最小侵入的解法，不需要額外的上傳介面或資料表，符合現有「檔名驅動」的一貫慣例；解答照片本來就有完整逐字稿，用它統一驅動聽力題內容，比要求 Part 2 也拍不存在的「題目照片」更貼近現實；把 `image_gdrive_url` 改 nullable 並嚴格區分「有沒有圖片」而非「fallback 成解答圖」，從資料層面直接杜絕洩題風險，比僅在顯示邏輯加判斷更安全；顯示邏輯依 `question_type` 分流，才真正符合真實考試的作答情境（聽力題只能靠聽的），修正前的「一律顯示文字」設計會讓聽力題失去測驗意義。
+
+**替代方案**：整包音檔額外要求 Robin 手動先剪好只含 Part 1+2 的音檔再上傳（已否決，Robin 希望直接丟整份錄音，減少人工前處理）；沒有題目照片時 fallback 顯示解答照片充當題目圖（已否決，會在作答前洩漏正解）；`image_gdrive_url` 維持 `NOT NULL`、改用空字串或佔位圖代替（已否決，語意不清楚，也無法乾淨地在顯示邏輯區分「真的沒有圖」與「資料異常」）。
+
+**後果**：新增 migration `0099_make_certificate_questions_image_nullable.sql`；`docs/reference/db_schema.md` 同步更新 `image_gdrive_url` 為 nullable 並註明來源 migration；`src/bot/toeic.py` 檔名比對正則（`_FILENAME_PATTERN`）新增選填 `cutoff` 群組，`parse_filename()`／`classify_drive_files()` 回傳結構隨之調整；既有依賴「聽力題一定有題目照片」的假設全面移除，未來若新增 Part 3/4 的整段共用音檔自動切割，仍需另外設計（目前僅止於用 `_cutoff` 排除，不主動處理）。

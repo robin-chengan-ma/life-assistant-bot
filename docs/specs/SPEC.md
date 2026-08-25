@@ -491,9 +491,10 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 負責�
 - FR-22／FR-23：`tech_intel` 開關；`skill_growth_digests` 一天最多三筆（一筆一來源），任一來源失敗只記 log；三個來源皆無內容才推播固定訊息
 - FR-24：`certificate` 開關；證照準備目標依證照各自設定考試日期與目標分數，並可依近 30 天成效與目標生成客製化建議
 - FR-24a（2026-08-17 新增，批次3；2026-08-17 補做自動達成判斷）：考試準備目標整合進🎯 目標追蹤主選單（FR-45a），沿用既有 `certificate_goals` 表不新建資料表；每日 01:00 排程（`goal_summary_job.py`）依 `certificate_stats.compute_daily_period_stats()` 統計近一週／一個月作答成效生成快取摘要，寫入 `goal_summaries`（`goal_source='certificate_goals'`）；自動達成判斷：使用者透過 `/record_official_score` 記錄「實際應考成績」（`handle_exam_score_value_step()`）後，立即呼叫 `certificate_goals.check_score_achievement()` 跟該 `exam_type` 設定的 `target_score` 做數字比對（兩者皆為 TEXT，只在都能抽出數字時比較，`分數 ≥ 目標分數` 視為達成），達標就在記錄成功的回覆後面附加一句恭喜；`target_score` 或成績本身不是數字（例如「通過／未通過」這類非量化證照）時優雅跳過，不誤判；跟 `/certificate_advice` 既有的即時方向建議並存，互不取代
-- FR-25：TOEIC 每次出題 1 聽力+2 填空+3 單字；軌道一檔名格式泛用化為 `{exam_type}_{test_id}_write/listen_{題號}.{ext}`；軌道二單字題即時生成入庫（2026-08-24 修正：`generate_track2_vocab_questions()` 遇到本地端節流保護觸發時改為等待後重試、不消耗嘗試次數，避免整批生成瞬間燒光所有嘗試機會，見 `docs/ADR/debug/skill-growth.md` 對應日期條目）
+- FR-25：TOEIC 每次出題 1 聽力+2 填空+3 單字；軌道一檔名格式泛用化為 `{exam_type}_{test_id}_write/listen_{題號}.{ext}`（整包聽力音檔另支援選填 `_cutoff{秒數}` 後綴，見 FR-25b）；軌道二單字題即時生成入庫（2026-08-24 修正：`generate_track2_vocab_questions()` 遇到本地端節流保護觸發時改為等待後重試、不消耗嘗試次數，避免整批生成瞬間燒光所有嘗試機會，見 `docs/ADR/debug/skill-growth.md` 對應日期條目）
 - FR-26：每日出題數量、新題:複習題 7:3，彈性排程支援挪動/取消/區間覆蓋/平攤四種語意（平攤需提案確認才寫入）
-- FR-27：作答只接受 A/B/C/D；正解來自 Robin 拍照上傳的 `_ans` 答案照
+- FR-25b（2026-08-25 定案，見 `docs/ADR/discuss/skill-growth.md` 對應日期條目）：軌道一聽力題內容改由「解答照片」（`_ans`）統一驅動建題（題目文字、選項、正解、詳解皆來自解答照片的 Vision 解析），題目照片（`listen_images`）改為選填，只用於顯示（例如 Part 1 的照片題），不再是建立聽力題的必要條件（Part 2 無題目照片仍可建題）；整包聽力音檔檔名支援選填後綴 `_cutoff{秒數}`，只切割/處理指定秒數之前的內容，用於整份錄音只想自動切 Part 1+2、忽略 Part 3+4 的情境；`certificate_questions.image_gdrive_url` 因此改為 nullable（`src/migrations/0099_make_certificate_questions_image_nullable.sql`）
+- FR-27：作答只接受 A/B/C/D；正解來自 Robin 拍照上傳的 `_ans` 答案照（2026-08-25 修正，見 `docs/ADR/discuss/skill-growth.md` 對應日期條目）：`question_type = listen` 的題目呈現時完全不顯示題目文字與選項（只顯示題目圖片，有的話，與聽力音檔連結），必須用聽的作答，避免顯示文字失去聽力測驗的意義；`question_type = write`（閱讀）維持顯示文字題目＋選項
 - FR-28：未作答題目不主動催促；使用者仍可在下一批題目產生前跨日晚補答
 - FR-29：`/my_quiz_stats` 彈性自然語言問答（不做圖表），排除未作答日子並支援跨區間比較
 - FR-30：正式成績獨立建表，僅查詢不修改；每筆保留證照、應考日期、分數與選填補充內容，Mobile 考試成績頁須同步顯示補充內容

@@ -23,14 +23,38 @@
   的單字避免重複出題、浪費 Token（FR-25e）。**這條軌道刻意維持 TOEIC 專屬**：「單字刷題」是
   語言檢定特有的概念，GCP／AWS 這類證照沒有對應需求，不需要、也不該泛用化。
 
-檔名規則（Robin 2026-08-07 確認，同日追加 `exam_type` 前綴支援任意證照類型）：
-- `{exam_type}_{test_id}_write_{題號}.{ext}`：填空/單字題（或任何無聽力的一般考題），只有圖片
-- `{exam_type}_{test_id}_listen_{題號}.{ext}`：聽力題，Robin 已切好的單題圖片/音檔
-- `{exam_type}_{test_id}_listen.mp3`：聽力題整包音檔（無題號），尚未切割，交給系統自動切割
+檔名規則（Robin 2026-08-07 確認，同日追加 `exam_type` 前綴支援任意證照類型；**2026-08-24 大幅
+擴充，見 `docs/ADR/discuss/skill-growth.md` 對應日期條目**，一題一張，不可整批/整頁拍）：
+- `{exam_type}_{test_id}_write_{題號}.{ext}`：閱讀/填空題目照片（圖片，一題一張）
+- `{exam_type}_{test_id}_write_{題號}_ans.{ext}`：閱讀/填空解答／詳解照片（圖片，一題一張）
+- `{exam_type}_{test_id}_listen_{題號}_ans.{ext}`：聽力解答照片（圖片，一題一張）——**2026-08-24
+  起，聽力題（不分 Part）的題目文字／選項／正解／詳解全部改成從這張解析**，不再需要題目照片
+  才能建立一題（見下方「聽力題內容來源」）
+- `{exam_type}_{test_id}_listen_{題號}.{ext}`（音檔）：這一題已經剪好的單題聽力音檔，有的話
+  直接使用，不會進整包切割
+- `{exam_type}_{test_id}_listen_{題號}.{ext}`（圖片，非音檔）：題目照片，**選填**，只有像 Part 1
+  這種作答時真的需要看圖的題型才需要；不影響這一題能不能建立
+- `{exam_type}_{test_id}_listen.mp3`：整包聽力音檔（無題號），依這個場次目前待處理的聽力解答
+  照片數量自動均分切割
+- `{exam_type}_{test_id}_listen_cutoff{秒數}.mp3`：**2026-08-24 新增**，整包聽力音檔＋只處理到
+  指定秒數為止（例如只要前 19 分鐘就是 `..._listen_cutoff1150.mp3`），超過秒數的內容完全不看、
+  不計入任何題目——用於「丟一整份涵蓋多個 Part 的錄音，但只要自動切某個 Part」的情境（例如整份
+  聽力 45 分鐘，只要自動切 Part 1+2，Part 3+4 不處理）；沒帶這個後綴的整包音檔維持原行為（整支
+  都視為要切割的範圍）
 - `exam_type` 開放任意小寫英數字/連字號組合（例如 `toeic`／`gcp`／`aws-saa`），不寫死清單；
   Drive 掃描不再用檔名關鍵字過濾（原本是 `name_contains="toeic"`），改成整個資料夾列出所有
   檔案，交給 `parse_filename()` 判斷哪些符合命名規則，不符合的直接忽略（Robin 2026-08-07
   確認：這個資料夾裡其他用途的檔案量不大，直接全列出換取實作簡單、不需要另外約定共用前綴）
+
+**聽力題內容來源（2026-08-24 決策，見 `docs/ADR/discuss/skill-growth.md` 對應日期條目）**：
+正式聽力考試現場沒有印刷版題目/選項可拍（Part 2 甚至完全沒有任何畫面），只有 Robin 的測驗書
+「詳解頁」印有題目/選項逐字稿與正解——因此聽力題（不分 Part）的存在判斷、去重與內容全部改用
+聽力解答照片（`answer_keys` 裡 type=listen 的項目）為準，`_process_answer_keys()`（原本負責事後
+補正解/詳解的兩階段流程）改成只處理 write／閱讀題型，聽力題一律一階段直接從解答照片建好完整
+內容。對應地，**作答時聽力題不顯示 `question_text`／`options` 文字**（見 `certificate_answer.py`
+`_build_certificate_question_view()`）——Part 1 只顯示題目照片（有的話）＋音檔，Part 2 什麼畫面
+都不顯示、只有音檔，文字題目只存在資料庫給事後對答案／看詳解使用，這樣才符合「聽力題只能用聽的
+作答」；write／閱讀題型不受影響，維持照樣顯示文字題目＋選項。
 
 去重（**2026-08-07 修正 FR-25f**：原規劃用「檔名日期是否在過去一週內」判斷，但 Robin 確認的
 實際檔名格式沒有日期，這條規則對不上；改用 `certificate_questions.source_image_filename` 是否
@@ -75,9 +99,11 @@ _AUDIO_EXTENSIONS = {"mp3", "m4a", "wav", "ogg"}
 # exam_type 開放任意小寫英數字/連字號組合（例如 toeic、gcp、aws-saa），不寫死清單；
 # test_id 沿用原本的英數字場次代號規則。2026-08-07（Step 3.3）新增選填的 `_ans` 後綴群組，
 # 辨識「答案照片」（跟一般題目照片共用同一套 exam_type/test_id/type/qnum 規則，差在多一段後綴）。
+# 2026-08-24 新增選填的 `_cutoff{秒數}` 群組，只用於整包聽力音檔（沒有 qnum、有 `_ans`）；
+# 見模組 docstring「檔名規則」。
 _FILENAME_PATTERN = re.compile(
     r"^(?P<exam_type>[0-9a-z][0-9a-z-]*)_(?P<test_id>[0-9A-Za-z]+)_(?P<type>write|listen)"
-    r"(?:_(?P<qnum>\d+))?(?P<ans>_ans)?\.(?P<ext>[A-Za-z0-9]+)$"
+    r"(?:_(?P<qnum>\d+))?(?:_cutoff(?P<cutoff>\d+))?(?P<ans>_ans)?\.(?P<ext>[A-Za-z0-9]+)$"
 )
 
 _VISION_PARSE_PROMPT = (
@@ -90,13 +116,26 @@ _VISION_PARSE_PROMPT = (
 )
 
 # 2026-08-07（Step 3.3，見 SPEC.md FR-27、ADR-19 決策 2）：解析 Robin 拍攝的測驗書正確解答／
-# 詳解照片，正解來自真實資料而非 AI 推論。
+# 詳解照片，正解來自真實資料而非 AI 推論。**只用於 write／閱讀題型**，聽力題改用下方
+# `_LISTEN_ANSWER_VISION_PARSE_PROMPT`（2026-08-24，見模組 docstring「聽力題內容來源」）。
 _ANSWER_VISION_PARSE_PROMPT = (
     "你是 Robinson，請解析這張「{exam_type}」證照考試的正確解答／詳解照片，用以下固定格式輸出，"
     "不要輸出其他任何文字：\n"
     "CORRECT_ANSWER: <正確答案，例如選項代號或完整正確選項內容>\n"
     "EXPLANATION: <詳解文字，說明為什麼這是正確答案>\n"
     "若圖片模糊到完全無法辨識文字，CORRECT_ANSWER 欄位請填「無法辨識」。"
+)
+
+# 2026-08-24（見模組 docstring「聽力題內容來源」）：聽力解答照片是聽力題唯一的內容來源，一次
+# 解析出題目逐字稿／選項／正解／詳解四項，取代原本「題目照片建題＋答案照片補正解」的兩階段流程。
+_LISTEN_ANSWER_VISION_PARSE_PROMPT = (
+    "你是 Robinson，請解析這張「{exam_type}」聽力測驗解答／詳解照片，這張照片上印有原始聽力題目、"
+    "選項的逐字稿，以及正確答案／詳解，用以下固定格式輸出，不要輸出其他任何文字：\n"
+    "QUESTION: <題目文字逐字稿>\n"
+    "OPTIONS: <選項，用「|」分隔，例如 A. xxx|B. xxx|C. xxx|D. xxx>\n"
+    "CORRECT_ANSWER: <正確答案，例如選項代號或完整正確選項內容>\n"
+    "EXPLANATION: <詳解文字，說明為什麼這是正確答案>\n"
+    "若圖片模糊到完全無法辨識文字，QUESTION 與 CORRECT_ANSWER 欄位請填「無法辨識」。"
 )
 
 _VOCAB_GENERATE_PROMPT = (
@@ -120,10 +159,13 @@ _VOCAB_GENERATE_PROMPT = (
 
 def parse_filename(filename: str) -> dict | None:
     """解析證照素材檔名，回傳 `exam_type`／`test_id`／`type`／`question_number`／`extension`／
-    `is_answer_key`；不符合規則（非本 Pipeline 使用的素材）回傳 `None`。
+    `is_answer_key`／`cutoff_seconds`；不符合規則（非本 Pipeline 使用的素材）回傳 `None`。
 
     `is_answer_key`（2026-08-07 追加，見 FR-27）：檔名是否帶 `_ans` 後綴，代表這是 Robin 拍攝
     的正確解答／詳解照片，而非題目本身。
+
+    `cutoff_seconds`（2026-08-24 追加）：整包聽力音檔檔名是否帶 `_cutoff{秒數}` 後綴，代表只
+    處理音檔前 N 秒、之後的內容完全忽略；沒有這個後綴回傳 `None`（維持整支都處理的原行為）。
     """
     match = _FILENAME_PATTERN.match(filename)
     if match is None:
@@ -136,6 +178,7 @@ def parse_filename(filename: str) -> dict | None:
         "question_number": int(groups["qnum"]) if groups["qnum"] else None,
         "extension": groups["ext"],
         "is_answer_key": groups["ans"] is not None,
+        "cutoff_seconds": int(groups["cutoff"]) if groups["cutoff"] else None,
     }
 
 
@@ -144,12 +187,16 @@ def classify_drive_files(files: list[dict]) -> dict:
 
     key 一律包含 `exam_type`，避免不同證照類型剛好用了相同 `test_id` 造成互相覆蓋。回傳結構：
     - `write_images`：`{(exam_type, test_id, qnum): file}`，填空/單字題（或任何無聽力考題）圖片
-    - `listen_images`：`{(exam_type, test_id, qnum): file}`，聽力題圖片
+    - `listen_images`：`{(exam_type, test_id, qnum): file}`，聽力題目照片（**選填**，2026-08-24
+      起不再是聽力題是否成立的判斷依據，只用於作答時額外顯示圖片，見模組 docstring）
     - `listen_audio_segments`：`{(exam_type, test_id, qnum): file}`，已切好的單題聽力音檔
-    - `listen_whole_audio`：`{(exam_type, test_id): file}`，尚未切割的整包聽力音檔
+    - `listen_whole_audio`：`{(exam_type, test_id): {"file": file, "cutoff_seconds": int | None}}`，
+      尚未切割的整包聽力音檔，`cutoff_seconds` 為 `None` 代表整支都要處理（2026-08-24 追加
+      cutoff 支援，見模組 docstring「檔名規則」）
     - `answer_keys`：`{(exam_type, test_id, type, qnum): file}`，Robin 拍攝的正確解答／詳解照片
-      （**2026-08-07 追加，見 FR-27**）；key 多帶 `type`（write/listen）避免同一題號在兩種題型
-      各自出現時互相覆蓋
+      （**2026-08-07 追加，見 FR-27**；**2026-08-24 起，聽力題型的這張照片同時也是題目文字／
+      選項的唯一來源**）；key 多帶 `type`（write/listen）避免同一題號在兩種題型各自出現時
+      互相覆蓋
     """
     write_images: dict = {}
     listen_images: dict = {}
@@ -178,7 +225,10 @@ def classify_drive_files(files: list[dict]) -> dict:
                 write_images[(exam_type, test_id, qnum)] = file
         else:  # listen
             if qnum is None and is_audio:
-                listen_whole_audio[(exam_type, test_id)] = file
+                listen_whole_audio[(exam_type, test_id)] = {
+                    "file": file,
+                    "cutoff_seconds": parsed["cutoff_seconds"],
+                }
             elif qnum is not None and is_audio:
                 listen_audio_segments[(exam_type, test_id, qnum)] = file
             elif qnum is not None and not is_audio:
@@ -274,25 +324,6 @@ def _process_write_questions(db: CloudSQLClient, gdrive_client, image_llm_client
         if parsed is None:
             continue
         _insert_question(db, exam_type, test_id, "write", qnum, parsed, image_file, audio_url=None)
-
-
-def _process_listen_questions_with_existing_audio(
-    db: CloudSQLClient, gdrive_client, image_llm_clients: list, classified: dict
-) -> None:
-    for key, image_file in classified["listen_images"].items():
-        audio_file = classified["listen_audio_segments"].get(key)
-        if audio_file is None:
-            continue
-        if _is_already_processed(db, image_file["name"]):
-            continue
-        exam_type, test_id, qnum = key
-        image_bytes = gdrive_client.download_file(image_file["id"])
-        parsed = _parse_question_image(image_bytes, image_llm_clients, exam_type)
-        if parsed is None:
-            continue
-        _insert_question(
-            db, exam_type, test_id, "listen", qnum, parsed, image_file, audio_url=audio_file.get("webViewLink")
-        )
 
 
 # 2026-08-07（Robin 實測 Test01_Part1.mp3 後追加）：有些整包音檔開頭會有一段作答說明語音
@@ -419,32 +450,152 @@ def split_audio_by_question_count(
     return result
 
 
-def _split_whole_audio(gdrive_client, voice_client, whole_audio_file: dict, question_numbers: list[int]) -> dict[int, bytes]:
+def _split_whole_audio(
+    gdrive_client, voice_client, whole_audio_file: dict, question_numbers: list[int], cutoff_seconds: int | None = None
+) -> dict[int, bytes]:
+    """`cutoff_seconds`（2026-08-24 新增）：只保留音檔前 N 秒再送進切割演算法，`None` 代表整支
+    都要處理（維持原行為）。裁切同時套用在音檔本身跟逐句時間軸，避免 cutoff 之後的內容（例如同一
+    支錄音裡的其他 Part）被誤算進切割範圍。
+    """
     audio_bytes = gdrive_client.download_file(whole_audio_file["id"])
     segments = voice_client.transcribe_with_segments(
         audio_bytes, filename=whole_audio_file["name"], mime_type="audio/mpeg"
     )
+    if cutoff_seconds is not None:
+        audio = AudioSegment.from_file(io.BytesIO(audio_bytes))
+        cutoff_ms = cutoff_seconds * 1000
+        trimmed_buffer = io.BytesIO()
+        audio[:cutoff_ms].export(trimmed_buffer, format="mp3")
+        audio_bytes = trimmed_buffer.getvalue()
+        segments = [seg for seg in segments if seg["start"] < cutoff_seconds]
     return split_audio_by_question_count(audio_bytes, question_numbers, segments)
 
 
-def _process_listen_questions_needing_split(
+def _parse_listen_answer_vision_output(raw: str) -> dict | None:
+    question_match = re.search(r"QUESTION:\s*(.+)", raw)
+    options_match = re.search(r"OPTIONS:\s*(.+)", raw)
+    answer_match = re.search(r"CORRECT_ANSWER:\s*(.+)", raw)
+    explanation_match = re.search(r"EXPLANATION:\s*(.+)", raw)
+    if not question_match or not options_match or not answer_match or not explanation_match:
+        return None
+    question_text = question_match.group(1).strip()
+    options = [opt.strip() for opt in options_match.group(1).split("|") if opt.strip()]
+    correct_answer = answer_match.group(1).strip()
+    explanation = explanation_match.group(1).strip()
+    if not question_text or question_text == "無法辨識" or not options:
+        return None
+    if not correct_answer or correct_answer == "無法辨識":
+        return None
+    return {
+        "question_text": question_text,
+        "options": options,
+        "correct_answer": correct_answer,
+        "explanation": explanation,
+    }
+
+
+def _parse_listen_answer_image(image_bytes: bytes, image_llm_clients: list, exam_type: str) -> dict | None:
+    """2026-08-24（見模組 docstring「聽力題內容來源」）：聽力解答照片是聽力題唯一的內容來源，
+    一次解析出題目逐字稿／選項／正解／詳解，解析失敗或格式不符回傳 `None`（呼叫端記 log 跳過，
+    不寫入髒資料）。"""
+    llm_client = random.choice(image_llm_clients)
+    prompt = _LISTEN_ANSWER_VISION_PARSE_PROMPT.format(exam_type=exam_type)
+    try:
+        raw = llm_client.generate_with_image(prompt, image_bytes, mime_type="image/jpeg")
+    except Exception:
+        _logger.exception("Gemini Vision 解析聽力解答照片失敗（exam_type=%s）", exam_type)
+        return None
+
+    parsed = _parse_listen_answer_vision_output(raw)
+    if parsed is None:
+        _logger.warning("Gemini Vision 聽力解答照片回覆格式不符預期，略過：%r", raw)
+    return parsed
+
+
+def _insert_listen_question_from_answer_key(
+    db: CloudSQLClient,
+    exam_type: str,
+    test_id: str,
+    qnum: int,
+    parsed: dict,
+    answer_file: dict,
+    image_file: dict | None,
+    audio_url: str | None,
+) -> None:
+    """2026-08-24：聽力題一階段直接從解答照片建好完整內容（題目文字/選項/正解/詳解），不再需要
+    `_process_answer_keys()` 事後補正解——`image_gdrive_url` 只有真的有題目照片（例如 Part 1）
+    才會填，Part 2 這種沒有題目照片的題型留空（見 migration 0099，`image_gdrive_url` 已改為
+    允許 NULL）；作答時聽力題不顯示 `question_text`／`options` 文字，見
+    `certificate_answer.py` `_build_certificate_question_view()`。
+    """
+    db.insert(
+        "certificate_questions",
+        {
+            "exam_type": exam_type,
+            "test_id": test_id,
+            "question_type": "listen",
+            "question_number": qnum,
+            "question_text": parsed["question_text"],
+            "options": json.dumps(parsed["options"]),
+            "image_gdrive_url": image_file.get("webViewLink") if image_file else None,
+            "audio_gdrive_url": audio_url,
+            "source_image_filename": answer_file["name"],
+            "correct_answer": parsed["correct_answer"],
+            "explanation": parsed["explanation"],
+            "answer_source_filename": answer_file["name"],
+        },
+    )
+
+
+def _process_listen_questions(
     db: CloudSQLClient, gdrive_client, image_llm_clients: list, voice_client, classified: dict
 ) -> None:
-    # 依 (exam_type, test_id) 分組：找出「有聽力圖片、還沒有對應單題音檔、且該場次有整包音檔」的題號。
+    """2026-08-24（見模組 docstring「聽力題內容來源」，取代原本的 `_process_listen_questions_
+    with_existing_audio()`／`_process_listen_questions_needing_split()` 兩個函式）：聽力題（不分
+    Part）改成完全由聽力解答照片（`answer_keys` 裡 type=listen 的項目）驅動，依序判斷：
+    ①有現成單題音檔（`listen_audio_segments`）→ 直接配對，不進切割 ②沒有單題音檔、但這個場次有
+    整包音檔（`listen_whole_audio`）→ 排進這批要切割的清單，依整批共幾題均分切割（套用 cutoff，
+    若有） ③兩者都沒有 → 先跳過，下次排程重新掃描時再試。
+    """
     pending_by_test: dict[tuple[str, str], list[int]] = {}
-    for (exam_type, test_id, qnum), image_file in classified["listen_images"].items():
+    answer_key_by_qnum: dict[tuple[str, str, int], dict] = {}
+
+    for (exam_type, test_id, qtype, qnum), answer_file in classified["answer_keys"].items():
+        if qtype != "listen" or qnum is None:
+            continue
+        if _is_already_processed(db, answer_file["name"]):
+            continue
+        answer_key_by_qnum[(exam_type, test_id, qnum)] = answer_file
         if (exam_type, test_id, qnum) in classified["listen_audio_segments"]:
             continue
-        if _is_already_processed(db, image_file["name"]):
-            continue
-        if (exam_type, test_id) not in classified["listen_whole_audio"]:
-            continue
-        pending_by_test.setdefault((exam_type, test_id), []).append(qnum)
+        if (exam_type, test_id) in classified["listen_whole_audio"]:
+            pending_by_test.setdefault((exam_type, test_id), []).append(qnum)
 
+    # ① 有現成單題音檔的，直接處理，不進切割。
+    for (exam_type, test_id, qnum), answer_file in answer_key_by_qnum.items():
+        audio_file = classified["listen_audio_segments"].get((exam_type, test_id, qnum))
+        if audio_file is None:
+            continue
+        answer_bytes = gdrive_client.download_file(answer_file["id"])
+        parsed = _parse_listen_answer_image(answer_bytes, image_llm_clients, exam_type)
+        if parsed is None:
+            continue
+        image_file = classified["listen_images"].get((exam_type, test_id, qnum))
+        _insert_listen_question_from_answer_key(
+            db, exam_type, test_id, qnum, parsed, answer_file, image_file, audio_url=audio_file.get("webViewLink")
+        )
+
+    # ② 需要整包切割的，依場次分組、依整批共幾題均分切割。
     for (exam_type, test_id), question_numbers in pending_by_test.items():
-        whole_audio_file = classified["listen_whole_audio"][(exam_type, test_id)]
+        whole_audio_entry = classified["listen_whole_audio"][(exam_type, test_id)]
         try:
-            segments_by_qnum = _split_whole_audio(gdrive_client, voice_client, whole_audio_file, question_numbers)
+            segments_by_qnum = _split_whole_audio(
+                gdrive_client,
+                voice_client,
+                whole_audio_entry["file"],
+                question_numbers,
+                cutoff_seconds=whole_audio_entry.get("cutoff_seconds"),
+            )
         except Exception:
             _logger.exception(
                 "整包 MP3 切割失敗（exam_type=%s, test_id=%s），這批聽力題暫緩處理，下次排程重試",
@@ -456,7 +607,7 @@ def _process_listen_questions_needing_split(
             segment_bytes = segments_by_qnum.get(qnum)
             if segment_bytes is None:
                 continue
-            image_file = classified["listen_images"][(exam_type, test_id, qnum)]
+            answer_file = answer_key_by_qnum[(exam_type, test_id, qnum)]
             try:
                 segment_filename = f"{exam_type}_{test_id}_listen_{qnum}.mp3"
                 audio_url = gdrive_client.upload_file(segment_filename, segment_bytes, mime_type="audio/mpeg")
@@ -466,11 +617,14 @@ def _process_listen_questions_needing_split(
                 )
                 continue
 
-            image_bytes = gdrive_client.download_file(image_file["id"])
-            parsed = _parse_question_image(image_bytes, image_llm_clients, exam_type)
+            answer_bytes = gdrive_client.download_file(answer_file["id"])
+            parsed = _parse_listen_answer_image(answer_bytes, image_llm_clients, exam_type)
             if parsed is None:
                 continue
-            _insert_question(db, exam_type, test_id, "listen", qnum, parsed, image_file, audio_url=audio_url)
+            image_file = classified["listen_images"].get((exam_type, test_id, qnum))
+            _insert_listen_question_from_answer_key(
+                db, exam_type, test_id, qnum, parsed, answer_file, image_file, audio_url=audio_url
+            )
 
 
 def _parse_answer_vision_output(raw: str) -> dict | None:
@@ -488,7 +642,8 @@ def _parse_answer_vision_output(raw: str) -> dict | None:
 def _parse_answer_image(image_bytes: bytes, image_llm_clients: list, exam_type: str) -> dict | None:
     """呼叫 Gemini Vision 解析答案照片中的正解與詳解；解析失敗或格式不符回傳 `None`（呼叫端記
     log 跳過，不覆蓋既有資料）。跟 `_parse_question_image` 是分開的 Prompt，因為讀取的版面內容
-    不同（答案頁 vs. 題目頁）。
+    不同（答案頁 vs. 題目頁）。**2026-08-24 起只服務 write／閱讀題型**，聽力題改走
+    `_parse_listen_answer_image()`（見 `_process_answer_keys()`）。
     """
     llm_client = random.choice(image_llm_clients)
     prompt = _ANSWER_VISION_PARSE_PROMPT.format(exam_type=exam_type)
@@ -529,12 +684,17 @@ def _find_matching_question(
 
 def _process_answer_keys(db: CloudSQLClient, gdrive_client, image_llm_clients: list, classified: dict) -> None:
     """FR-27（見 ADR-19 決策 2）：比對 `_ans` 答案照片到既有題目，`UPDATE` 補上正解與詳解。
+    **2026-08-24 起只處理 write／閱讀題型**——聽力題已改成在 `_process_listen_questions()` 一階段
+    直接從解答照片建好完整內容（含正解／詳解），這裡不需要也不應該重複處理，避免 `answer_source_
+    filename`（UNIQUE 欄位）衝突。
 
-    必須在其他三個 `_process_*`（建立題目）之後呼叫，確保同一批次內「題目照片與答案照片一起
+    必須在其他 `_process_*`（建立題目）之後呼叫，確保同一批次內「題目照片與答案照片一起
     上傳」也能正確比對到；找不到對應題目（例如題目照片還沒上傳、或還沒被本次批次處理到）的答案
     照片會被略過並記警告 log，不會報錯，下次排程重新掃描時會再次嘗試比對。
     """
     for (exam_type, test_id, qtype, qnum), answer_file in classified["answer_keys"].items():
+        if qtype != "write":
+            continue
         if _is_answer_already_processed(db, answer_file["name"]):
             continue
 
@@ -578,13 +738,15 @@ def sync_track1_from_drive(db: CloudSQLClient, gdrive_client, image_llm_clients:
 
     **2026-08-07（Step 3.3）追加**：`_process_answer_keys()` 必須排在最後執行——先把這批次能
     建的題目都建完，答案照片才有機會比對到「剛好同一批次一起上傳」的題目（見 ADR-19 決策 2）。
+    **2026-08-24 起 `_process_answer_keys()` 只處理 write／閱讀題型的答案照片；聽力題改由
+    `_process_listen_questions()` 一階段直接從聽力解答照片建好完整內容**（見模組 docstring
+    「聽力題內容來源」）。
     """
     files = gdrive_client.list_files()
     classified = classify_drive_files(files)
 
     _process_write_questions(db, gdrive_client, image_llm_clients, classified)
-    _process_listen_questions_with_existing_audio(db, gdrive_client, image_llm_clients, classified)
-    _process_listen_questions_needing_split(db, gdrive_client, image_llm_clients, voice_client, classified)
+    _process_listen_questions(db, gdrive_client, image_llm_clients, voice_client, classified)
     _process_answer_keys(db, gdrive_client, image_llm_clients, classified)
 
 

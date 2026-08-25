@@ -161,6 +161,48 @@ def test_build_question_view_includes_audio_link_for_listen_question(fake_db):
     assert "https://drive/x.mp3" in view["prompt"]
 
 
+def test_build_question_view_hides_question_text_and_options_for_listen_question(fake_db):
+    # 2026-08-24（Robin 確認：聽力題只能用聽的作答，不能顯示文字，否則失去聽力測驗的意義）
+    qid = _seed_certificate_question(
+        fake_db, question_type="listen", audio_gdrive_url="https://drive/x.mp3",
+        image_gdrive_url=None, question_text="What is being described?",
+        options=["A. A park", "B. A office", "C. A kitchen", "D. A store"],
+    )
+    assignment = {"certificate_question_id": qid, "vocab_question_id": None}
+
+    view = certificate_answer.build_question_view(fake_db, assignment)
+
+    assert "What is being described?" not in view["prompt"]
+    assert "A park" not in view["prompt"]
+    assert "https://drive/x.mp3" in view["prompt"]
+
+
+def test_build_question_view_shows_image_but_not_text_for_listen_question_with_photo(fake_db):
+    # Part 1 這種有題目照片的聽力題：只顯示圖片＋音檔，文字題目/選項一樣不顯示。
+    qid = _seed_certificate_question(
+        fake_db, question_type="listen", audio_gdrive_url="https://drive/x.mp3",
+        image_gdrive_url="https://drive/photo.png", question_text="Look at the photo.",
+        options=["A. xxx", "B. xxx", "C. xxx", "D. xxx"],
+    )
+    assignment = {"certificate_question_id": qid, "vocab_question_id": None}
+
+    view = certificate_answer.build_question_view(fake_db, assignment)
+
+    assert "https://drive/photo.png" in view["prompt"]
+    assert "https://drive/x.mp3" in view["prompt"]
+    assert "Look at the photo." not in view["prompt"]
+
+
+def test_build_question_view_still_shows_text_for_write_question(fake_db):
+    qid = _seed_certificate_question(fake_db, question_type="write")
+    assignment = {"certificate_question_id": qid, "vocab_question_id": None}
+
+    view = certificate_answer.build_question_view(fake_db, assignment)
+
+    assert "What is the capital" in view["prompt"]
+    assert "A. Paris" in view["prompt"]
+
+
 def test_build_question_view_returns_none_when_certificate_question_missing(fake_db):
     assignment = {"certificate_question_id": 9999, "vocab_question_id": None}
     assert certificate_answer.build_question_view(fake_db, assignment) is None

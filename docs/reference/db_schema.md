@@ -571,7 +571,7 @@ CREATE TABLE certificate_questions (  -- 原 toeic_questions，0038 migration �
     question_number INT NOT NULL,
     question_text TEXT NOT NULL,
     options JSONB NOT NULL,
-    image_gdrive_url TEXT NOT NULL,
+    image_gdrive_url TEXT,                -- 0099 起改為 nullable（聽力 Part 2 無題目照片）
     audio_gdrive_url TEXT,
     source_image_filename TEXT NOT NULL UNIQUE,
     exam_type TEXT NOT NULL,              -- 0038 追加
@@ -583,9 +583,10 @@ CREATE TABLE certificate_questions (  -- 原 toeic_questions，0038 migration �
 CREATE INDEX idx_certificate_questions_test_id ON certificate_questions (test_id);
 CREATE INDEX idx_certificate_questions_exam_type ON certificate_questions (exam_type);
 ```
-`src/migrations/0035_create_toeic_questions_table.sql`（建表）、`0038_generalize_toeic_questions_to_certificate_questions.sql`（改名＋`exam_type`）、`0039_add_answer_fields_to_certificate_questions.sql`（正解欄位）
+`src/migrations/0035_create_toeic_questions_table.sql`（建表）、`0038_generalize_toeic_questions_to_certificate_questions.sql`（改名＋`exam_type`）、`0039_add_answer_fields_to_certificate_questions.sql`（正解欄位）、`0099_make_certificate_questions_image_nullable.sql`（`image_gdrive_url` 改 nullable）
 
 - `source_image_filename UNIQUE` 做去重（取代原「檔名日期」方案）；`exam_type` 刻意不加 CHECK 清單，未來新增證照類型只需換檔名前綴；正解改為 Robin 拍照上傳答案照解析，非 AI 推論，見 `docs/ADR/discuss/skill-growth.md`
+- `image_gdrive_url` 自 `0099` 起改為 nullable：2026-08-25 聽力題目庫改版後，聽力題內容改由「解答照片」統一驅動（見 `docs/ADR/discuss/skill-growth.md`），Part 2 沒有題目照片可拍，`image_gdrive_url` 會是 `NULL`；呈現邏輯（`src/bot/certificate_answer.py`）沒有圖片就不顯示圖片區塊
 
 ```sql
 CREATE TABLE toeic_vocab_questions (

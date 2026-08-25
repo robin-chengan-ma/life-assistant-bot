@@ -31,6 +31,17 @@ def _vision_reply(question_text="這是題目", options="A. 選項一|B. 選項�
     return f"QUESTION: {question_text}\nOPTIONS: {options}"
 
 
+def _listen_answer_vision_reply(
+    question_text="聽力題目逐字稿", options="A. 選項一|B. 選項二", correct_answer="B", explanation="因為 xxx 所以答案是 B"
+):
+    # 2026-08-24：聽力解答照片一次解析 QUESTION/OPTIONS/CORRECT_ANSWER/EXPLANATION 四項，
+    # 見 `toeic._LISTEN_ANSWER_VISION_PARSE_PROMPT`。
+    return (
+        f"QUESTION: {question_text}\nOPTIONS: {options}\n"
+        f"CORRECT_ANSWER: {correct_answer}\nEXPLANATION: {explanation}"
+    )
+
+
 def _vocab_reply(word="abundant", correct="A"):
     return (
         f"WORD: {word}\n"
@@ -57,6 +68,7 @@ def test_parse_filename_write_question():
         "question_number": 1,
         "extension": "png",
         "is_answer_key": False,
+        "cutoff_seconds": None,
     }
 
 
@@ -69,6 +81,7 @@ def test_parse_filename_listen_split_audio():
         "question_number": 3,
         "extension": "mp3",
         "is_answer_key": False,
+        "cutoff_seconds": None,
     }
 
 
@@ -81,6 +94,21 @@ def test_parse_filename_listen_whole_audio_has_no_question_number():
         "question_number": None,
         "extension": "mp3",
         "is_answer_key": False,
+        "cutoff_seconds": None,
+    }
+
+
+def test_parse_filename_listen_whole_audio_with_cutoff():
+    # 2026-08-24 新增：整包聽力音檔可選加 cutoff 秒數後綴，只處理到指定秒數為止。
+    parsed = toeic.parse_filename("toeic_0001_listen_cutoff1150.mp3")
+    assert parsed == {
+        "exam_type": "toeic",
+        "test_id": "0001",
+        "type": "listen",
+        "question_number": None,
+        "extension": "mp3",
+        "is_answer_key": False,
+        "cutoff_seconds": 1150,
     }
 
 
@@ -94,6 +122,7 @@ def test_parse_filename_supports_other_exam_types():
         "question_number": 1,
         "extension": "png",
         "is_answer_key": False,
+        "cutoff_seconds": None,
     }
 
 
@@ -115,6 +144,7 @@ def test_parse_filename_answer_key_write():
         "question_number": 1,
         "extension": "png",
         "is_answer_key": True,
+        "cutoff_seconds": None,
     }
 
 
@@ -127,6 +157,7 @@ def test_parse_filename_answer_key_listen():
         "question_number": 3,
         "extension": "png",
         "is_answer_key": True,
+        "cutoff_seconds": None,
     }
 
 
@@ -147,8 +178,17 @@ def test_classify_drive_files_buckets_correctly():
     assert classified["write_images"] == {("toeic", "0001", 1): files[0]}
     assert classified["listen_images"] == {("toeic", "0001", 1): files[1]}
     assert classified["listen_audio_segments"] == {("toeic", "0001", 1): files[2]}
-    assert classified["listen_whole_audio"] == {("toeic", "0002"): files[3]}
+    assert classified["listen_whole_audio"] == {("toeic", "0002"): {"file": files[3], "cutoff_seconds": None}}
     assert classified["answer_keys"] == {}
+
+
+def test_classify_drive_files_captures_cutoff_seconds_for_whole_audio():
+    # 2026-08-24 新增：整包聽力音檔的 cutoff 秒數要一起存進 listen_whole_audio。
+    files = [{"id": "f1", "name": "toeic_0003_listen_cutoff900.mp3", "mimeType": "audio/mpeg"}]
+
+    classified = toeic.classify_drive_files(files)
+
+    assert classified["listen_whole_audio"] == {("toeic", "0003"): {"file": files[0], "cutoff_seconds": 900}}
 
 
 def test_classify_drive_files_buckets_answer_keys():
@@ -268,13 +308,15 @@ def test_sync_skips_when_vision_llm_raises(fake_db):
 
 
 def test_sync_processes_listen_question_with_existing_split_audio(fake_db):
+    # 2026-08-24 起，聽力題內容來源改成解答照片（`_ans`），題目照片變成選填、不影響題目能否建立。
     files = [
+        {"id": "f0", "name": "toeic_0001_listen_1_ans.png", "mimeType": "image/png", "webViewLink": "ans-url"},
         {"id": "f1", "name": "toeic_0001_listen_1.png", "mimeType": "image/png", "webViewLink": "image-url"},
         {"id": "f2", "name": "toeic_0001_listen_1.mp3", "mimeType": "audio/mpeg", "webViewLink": "audio-url"},
     ]
-    gdrive_client = _make_gdrive_client(files, {"f1": b"image-bytes"})
+    gdrive_client = _make_gdrive_client(files, {"f0": b"answer-bytes"})
     image_llm_clients = [MagicMock()]
-    image_llm_clients[0].generate_with_image.return_value = _vision_reply("聽力題目")
+    image_llm_clients[0].generate_with_image.return_value = _listen_answer_vision_reply("聽力題目")
     voice_client = MagicMock()
 
     toeic.sync_track1_from_drive(fake_db, gdrive_client, image_llm_clients, voice_client)
@@ -282,14 +324,37 @@ def test_sync_processes_listen_question_with_existing_split_audio(fake_db):
     rows = fake_db.select("certificate_questions")
     assert len(rows) == 1
     assert rows[0]["question_type"] == "listen"
+    assert rows[0]["question_text"] == "聽力題目"
+    assert rows[0]["correct_answer"] == "B"
     assert rows[0]["image_gdrive_url"] == "image-url"
     assert rows[0]["audio_gdrive_url"] == "audio-url"
+    assert rows[0]["source_image_filename"] == "toeic_0001_listen_1_ans.png"
     voice_client.transcribe_with_segments.assert_not_called()
 
 
+def test_sync_listen_question_leaves_image_blank_when_no_question_photo(fake_db):
+    # Part 2 這種完全沒有題目照片的題型：只要有解答照片＋音檔就能建立，image_gdrive_url 留空。
+    files = [
+        {"id": "f0", "name": "toeic_0001_listen_1_ans.png", "mimeType": "image/png", "webViewLink": "ans-url"},
+        {"id": "f2", "name": "toeic_0001_listen_1.mp3", "mimeType": "audio/mpeg", "webViewLink": "audio-url"},
+    ]
+    gdrive_client = _make_gdrive_client(files, {"f0": b"answer-bytes"})
+    image_llm_clients = [MagicMock()]
+    image_llm_clients[0].generate_with_image.return_value = _listen_answer_vision_reply()
+    voice_client = MagicMock()
+
+    toeic.sync_track1_from_drive(fake_db, gdrive_client, image_llm_clients, voice_client)
+
+    rows = fake_db.select("certificate_questions")
+    assert len(rows) == 1
+    assert rows[0]["image_gdrive_url"] is None
+    assert rows[0]["audio_gdrive_url"] == "audio-url"
+
+
 def test_sync_leaves_listen_question_pending_when_no_audio_available(fake_db):
-    files = [{"id": "f1", "name": "toeic_0001_listen_1.png", "mimeType": "image/png", "webViewLink": "image-url"}]
-    gdrive_client = _make_gdrive_client(files, {"f1": b"image-bytes"})
+    # 只有聽力解答照片、沒有現成單題音檔也沒有整包音檔：先跳過，下次排程重新掃描時再試。
+    files = [{"id": "f0", "name": "toeic_0001_listen_1_ans.png", "mimeType": "image/png", "webViewLink": "ans-url"}]
+    gdrive_client = _make_gdrive_client(files, {"f0": b"answer-bytes"})
     image_llm_clients = [MagicMock()]
     voice_client = MagicMock()
 
@@ -309,16 +374,16 @@ def _make_silent_mp3_bytes(duration_ms: int) -> bytes:
 def test_sync_splits_whole_audio_and_processes_listen_questions(fake_db):
     whole_audio_bytes = _make_silent_mp3_bytes(6000)
     files = [
-        {"id": "img1", "name": "toeic_0002_listen_1.png", "mimeType": "image/png", "webViewLink": "image-url-1"},
-        {"id": "img2", "name": "toeic_0002_listen_2.png", "mimeType": "image/png", "webViewLink": "image-url-2"},
+        {"id": "ans1", "name": "toeic_0002_listen_1_ans.png", "mimeType": "image/png", "webViewLink": "ans-url-1"},
+        {"id": "ans2", "name": "toeic_0002_listen_2_ans.png", "mimeType": "image/png", "webViewLink": "ans-url-2"},
         {"id": "audio", "name": "toeic_0002_listen.mp3", "mimeType": "audio/mpeg", "webViewLink": "whole-url"},
     ]
-    downloads = {"img1": b"image-bytes-1", "img2": b"image-bytes-2", "audio": whole_audio_bytes}
+    downloads = {"ans1": b"answer-bytes-1", "ans2": b"answer-bytes-2", "audio": whole_audio_bytes}
     gdrive_client = _make_gdrive_client(files, downloads)
     image_llm_clients = [MagicMock()]
     image_llm_clients[0].generate_with_image.side_effect = [
-        _vision_reply("聽力第一題"),
-        _vision_reply("聽力第二題"),
+        _listen_answer_vision_reply("聽力第一題"),
+        _listen_answer_vision_reply("聽力第二題"),
     ]
     voice_client = MagicMock()
     voice_client.transcribe_with_segments.return_value = [
@@ -334,15 +399,41 @@ def test_sync_splits_whole_audio_and_processes_listen_questions(fake_db):
     assert texts == {1: "聽力第一題", 2: "聽力第二題"}
     for row in rows:
         assert row["audio_gdrive_url"] == "https://drive.google.com/file/d/new-segment/view"
+        assert row["correct_answer"] == "B"
+        assert row["image_gdrive_url"] is None
     assert gdrive_client.upload_file.call_count == 2
+
+
+def test_sync_splits_whole_audio_respects_cutoff_seconds(fake_db):
+    # 2026-08-24 新增：整包音檔帶 cutoff 秒數時，只裁切前面那段送進切割演算法。
+    whole_audio_bytes = _make_silent_mp3_bytes(6000)
+    files = [
+        {"id": "ans1", "name": "toeic_0003_listen_1_ans.png", "mimeType": "image/png", "webViewLink": "ans-url-1"},
+        {"id": "audio", "name": "toeic_0003_listen_cutoff3.mp3", "mimeType": "audio/mpeg", "webViewLink": "whole-url"},
+    ]
+    downloads = {"ans1": b"answer-bytes-1", "audio": whole_audio_bytes}
+    gdrive_client = _make_gdrive_client(files, downloads)
+    image_llm_clients = [MagicMock()]
+    image_llm_clients[0].generate_with_image.return_value = _listen_answer_vision_reply("聽力第一題")
+    voice_client = MagicMock()
+    voice_client.transcribe_with_segments.return_value = [
+        {"start": 0.0, "end": 1.0, "text": "Question one."},
+        {"start": 4.5, "end": 5.5, "text": "Later part, should be ignored."},
+    ]
+
+    toeic.sync_track1_from_drive(fake_db, gdrive_client, image_llm_clients, voice_client)
+
+    rows = fake_db.select("certificate_questions")
+    assert len(rows) == 1
+    assert rows[0]["question_number"] == 1
 
 
 def test_sync_skips_split_batch_when_whisper_fails(fake_db):
     files = [
-        {"id": "img1", "name": "toeic_0002_listen_1.png", "mimeType": "image/png", "webViewLink": "image-url-1"},
+        {"id": "ans1", "name": "toeic_0002_listen_1_ans.png", "mimeType": "image/png", "webViewLink": "ans-url-1"},
         {"id": "audio", "name": "toeic_0002_listen.mp3", "mimeType": "audio/mpeg", "webViewLink": "whole-url"},
     ]
-    gdrive_client = _make_gdrive_client(files, {"img1": b"image-bytes", "audio": b"whole-audio-bytes"})
+    gdrive_client = _make_gdrive_client(files, {"ans1": b"answer-bytes", "audio": b"whole-audio-bytes"})
     image_llm_clients = [MagicMock()]
     voice_client = MagicMock()
     voice_client.transcribe_with_segments.side_effect = RuntimeError("Groq 掛了")
