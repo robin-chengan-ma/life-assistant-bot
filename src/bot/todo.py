@@ -169,6 +169,16 @@ def check_and_push_daily_digest(db: CloudSQLClient, telegram_client, now: dateti
     （`daily_pushed_on IS NULL`）改為「今天是否已經推播過」（`daily_pushed_on IS NULL OR
     daily_pushed_on != 今天`），讓區間待辦可以在開始日、結束日分別各推播一次；單一時間點待辦
     因為 `due_at` 只會落在單一天，這個改動不影響其原本「只推播一次」的語意。
+
+    **2026-08-26 修正（Robin 回報預定時間早於 08:00 的待辦完全沒收到早上摘要）**：`/healthz`
+    每 10 分鐘觸發一次，`mark_overdue_as_expired()` 跟這個函式在同一次呼叫（`main.py`
+    `_check_todo_pushes()`）依序執行，但只要預定時間早於 08:00（例如 07:30），在 08:00 這次
+    呼叫之前的某一次 `/healthz`（例如 07:30～07:40）就已經把它從 `pending` 轉成 `expired`，
+    等到 08:00 這次執行時查詢條件只認 `status = 'pending'`，這筆早就不是 `pending` 了，於是
+    永遠不會出現在早上摘要——跟 Mobile App「逾期待辦」看不到已過期事項是同一類根因（過期判斷
+    跟「今天有沒有事」判斷互相打架，見 `docs/ADR/debug/todo.md` 對應日期條目）。改為同時接受
+    `pending`／`expired` 兩種狀態；`due_at`／`start_at` 已經限定在今天的區間內，不會誤含前幾天
+    才過期的舊資料，`completed`／`cancelled` 也不在這兩個狀態內，不受影響。
     """
     now = now or datetime.now(timezone.utc)
     now_local = now.astimezone(_TAIWAN_TZ)
@@ -182,10 +192,10 @@ def check_and_push_daily_digest(db: CloudSQLClient, telegram_client, now: dateti
     due_today = db.select(
         "todos",
         where=(
-            "status = %s AND ((due_at >= %s AND due_at < %s) OR (start_at >= %s AND start_at < %s)) "
+            "status IN (%s, %s) AND ((due_at >= %s AND due_at < %s) OR (start_at >= %s AND start_at < %s)) "
             "AND (daily_pushed_on IS NULL OR daily_pushed_on != %s)"
         ),
-        params=("pending", day_start, day_end, day_start, day_end, today_local),
+        params=("pending", "expired", day_start, day_end, day_start, day_end, today_local),
     )
     if not due_today:
         return

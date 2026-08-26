@@ -25,3 +25,15 @@
 **修復方式**：`src/services/app_analytics.py` 的 `overdue_items` 查詢改成「`status = 'expired'` 直接算逾期（不論到期日）；`status = 'pending'` 才用日期判斷（作為 cron 尚未來得及轉態時的緩衝）」。`mobile/app/analytics/[module].tsx` 的 `recordActions` 樣式加上 `flexWrap: "wrap"`、`recordButton` 加大 `paddingVertical`／`minHeight`，並在「逾期待辦」三顆按鈕加上 `hitSlop={8}` 增加觸控熱區。
 
 **驗證方式**：新增 `tests/services/test_app_analytics.py::test_todos_overdue_shows_expired_item_due_today_even_though_date_is_not_before_today`，驗證到期日是今天、狀態已是 `expired` 的項目仍會出現在 `overdue_items`；同步更新既有測試對新 SQL 字串（`status = 'expired'`）的斷言。於 Cowork 沙盒執行 `pytest tests/services/test_app_analytics.py -q`，42 個測試全數通過；`ruff check` 通過。Mobile UI 樣式調整為純 CSS／熱區異動，無法在沙盒實機驗證，待 Robin push 後在正式環境／實機確認：①`id=4` 這筆到期日是今天的逾期待辦能正常出現且可標記完成／取消；②「逾期待辦」彈窗三顆按鈕點擊誤觸情況改善。
+
+## 2026-08-26 Telegram 每日 08:00 摘要漏推「預定時間早於 08:00」的待辦事項
+
+**現象**：Robin 在 Mobile App 把一筆待辦的到期時間改成當天 07:30，隔天早上完全沒收到 Telegram 08:00 每日摘要推播；一開始誤以為是 `status` 已被自己手動標記 `completed` 才沒推播（`status='completed'` 本來就不該出現在摘要裡，這部分是預期行為），但 Robin 確認「completed 是我剛剛才標記完成的」，代表 07:30 當下、乃至 08:00 摘要理論上要跑的那個時間點，這筆待辦其實還是 `pending`，不該被排除。
+
+**排查過程**：檢視 `main.py` 的 `_check_todo_pushes()`，確認 `/healthz` 每次觸發（約 10 分鐘一次）都會依序呼叫 `todo.mark_overdue_as_expired(db)` → `todo.check_and_push_reminders(db, ...)` → `todo.check_and_push_daily_digest(db, ...)`。`mark_overdue_as_expired()` 的邏輯是「`status='pending' AND due_at < now` 就轉成 `expired`」，不分現在是幾點；而 `check_and_push_daily_digest()`（`src/bot/todo.py`）只在台灣時間 08 點這個小時執行，且查詢條件寫死只認 `status = 'pending'`。這筆待辦 `due_at` 是當天 07:30，在 08:00 那次 `/healthz` 呼叫之前，07:30～07:40 左右那次 `/healthz` 呼叫時 `mark_overdue_as_expired()` 就已經把它從 `pending` 轉成 `expired` 了；等到 08:00 那次 `check_and_push_daily_digest()` 執行時，這筆早就不是 `pending`，直接被排除，永遠不會出現在早上摘要——這是「今天到期＝要推播」跟「已經過期＝自動轉態」兩個各自獨立合理的邏輯，時間交互沒被考慮到，跟 2026-08-24 那兩筆 Mobile App「逾期待辦」bug 是同一個根因模式（只是這次發生在 Telegram 推播而非 Mobile 顯示）。
+
+**根因**：`check_and_push_daily_digest()` 的查詢條件只接受 `status = 'pending'`，但只要待辦的預定時間（`due_at`／`start_at`）早於 08:00，`mark_overdue_as_expired()` 一定會搶先在 08:00 摘要執行前的某次 `/healthz`（間隔最長 10 分鐘）把它轉成 `expired`，導致「今天到期但時間早於 08:00」這一整類待辦事項永遠不會被摘要推播看到。
+
+**修復方式**：`src/bot/todo.py` 的 `check_and_push_daily_digest()` 查詢條件從 `status = %s`（只認 `pending`）改成 `status IN (%s, %s)`（同時接受 `pending`／`expired`），`params` 對應多帶一個 `"expired"`；`due_at`／`start_at` 落在今天區間的篩選不變，不會誤含前幾天才過期的舊資料，`completed`／`cancelled` 不在這兩個狀態內，維持排除。同步更新 `tests/bot/conftest.py` 的 `FakeCloudSQLClient._matches()` 比對新的 SQL 字串與 `params` 索引。
+
+**驗證方式**：新增 `tests/bot/test_todo.py::test_check_and_push_daily_digest_includes_item_already_auto_expired_earlier_today`（驗證預定時間早於 08:00、已被自動轉成 `expired` 的待辦仍會出現在摘要並標記 `daily_pushed_on`）與 `test_check_and_push_daily_digest_still_excludes_completed_and_cancelled`（驗證使用者主動 `completed`／`cancelled` 的待辦不受這次修改影響、仍不會被誤推）。於 Cowork 沙盒執行 `pytest tests/bot/test_todo.py -q`，29 個測試全數通過；全專案 `pytest tests/bot -q` 1146 個測試中 1142 passed（另有 4 項既有 `test_job_search.py` 失敗，屬雲端沙盒暫存快取版本較舊，與本次改動無關，非回歸範圍，詳見 `docs/specs/PROGRESS.md` 既有備註）；`ruff check` 對本次異動三個檔案全過。待 Robin push 後在正式環境觀察下一筆預定時間早於 08:00 的待辦是否能正常收到 08:00 摘要推播。

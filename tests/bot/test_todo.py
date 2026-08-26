@@ -183,6 +183,40 @@ def test_check_and_push_daily_digest_skips_user_without_telegram_id(fake_db):
     telegram_client.send_text.assert_not_called()
 
 
+def test_check_and_push_daily_digest_includes_item_already_auto_expired_earlier_today(fake_db):
+    """2026-08-26（Robin 回報：預定時間早於 08:00 的待辦完全沒收到早上摘要）：`mark_overdue_as_expired()`
+    在 08:00 這次 `/healthz` 之前的某次呼叫就已經把它轉成 `expired`，摘要查詢若只認 `pending` 會
+    永遠漏推——見 `src/bot/todo.py` `check_and_push_daily_digest()` docstring 對應日期條目。"""
+    fake_db.insert("users", {"telegram_user_id": 555, "role": "Robin", "is_owner": True})
+    now = _utc(2026, 8, 2, 0, 5)  # 台灣時間 08:05
+    early_due_id = todo.create_todo(fake_db, 1, "07:30 前的事", _utc(2026, 8, 1, 23, 30), False)  # 台灣時間 08/02 07:30
+    todo.mark_status(fake_db, early_due_id, "expired")
+    telegram_client = MagicMock()
+
+    todo.check_and_push_daily_digest(fake_db, telegram_client, now=now)
+
+    telegram_client.send_text.assert_called_once()
+    assert "07:30 前的事" in telegram_client.send_text.call_args.kwargs["text"]
+    row = fake_db.select("todos", where="id = %s", params=(early_due_id,), fetch_one=True)
+    assert row["daily_pushed_on"] == datetime(2026, 8, 2, tzinfo=_TAIWAN_TZ).date()
+
+
+def test_check_and_push_daily_digest_still_excludes_completed_and_cancelled(fake_db):
+    """已由使用者主動完成/取消的待辦不該被誤推——只有自動過期（expired）才要補推，
+    使用者明確結案（completed／cancelled）的不算「今天還沒告知過」。"""
+    fake_db.insert("users", {"telegram_user_id": 555, "role": "Robin", "is_owner": True})
+    now = _utc(2026, 8, 2, 0, 5)  # 台灣時間 08:05
+    completed_id = todo.create_todo(fake_db, 1, "已完成的事", _utc(2026, 8, 2, 6, 0), False)
+    todo.mark_status(fake_db, completed_id, "completed")
+    cancelled_id = todo.create_todo(fake_db, 1, "已取消的事", _utc(2026, 8, 2, 6, 0), False)
+    todo.mark_status(fake_db, cancelled_id, "cancelled")
+    telegram_client = MagicMock()
+
+    todo.check_and_push_daily_digest(fake_db, telegram_client, now=now)
+
+    telegram_client.send_text.assert_not_called()
+
+
 def test_check_and_push_daily_digest_noop_when_nothing_due_today(fake_db):
     fake_db.insert("users", {"telegram_user_id": 555, "role": "Robin", "is_owner": True})
     now = _utc(2026, 8, 2, 0, 5)
