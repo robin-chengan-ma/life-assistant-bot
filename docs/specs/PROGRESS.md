@@ -309,6 +309,9 @@ updated: 2026-09-05
 
 | 日期 | 版本 / commit | 異動摘要 | 開發者 |
 | --- | --- | --- | --- |
+| 2026-09-05 | `e6a9fff` | 補記 Render 方向 A 被推翻，改採升級付費方案（方向 C） | Claude |
+| 2026-09-01 | `18bac52` | 補記 Render 不休眠與不超額互斥、定案接受方向 A | Claude |
+| 2026-09-01 | `88c31a4` | 補記 Render instance hours 逼近上限與 cronjob 自動停用事件 | Claude |
 | 2026-08-24 | `b51c71d` | Mobile App 逾期待辦補抓已自動過期事項 | Claude |
 | 2026-08-24 | `965755f` | Mobile App 逾期待辦日期判斷遺漏＋按鈕觸控熱區修正 | Claude |
 | 2026-08-25 | `387eb66` | TOEIC 聽力題目庫改版——解答照片統一驅動、cutoff 切割、聽力題禁止顯示文字 | Claude |
