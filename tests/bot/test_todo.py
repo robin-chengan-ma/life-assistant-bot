@@ -269,7 +269,7 @@ def test_check_and_push_reminders_range_todo_anchors_on_start_at(fake_db):
     telegram_client.send_text.assert_called_once()
     text = telegram_client.send_text.call_args.kwargs["text"]
     assert "出差" in text
-    assert "再過 30 分鐘就要開始囉" in text
+    assert "再過 20 分鐘就要開始囉" in text
 
 
 def test_check_and_push_reminders_range_todo_ignores_due_at_within_window(fake_db):

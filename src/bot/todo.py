@@ -5,7 +5,8 @@
 保持這個模組是純粹的資料操作，方便獨立測試。
 
 FR-32 推播時機有三種：①使用者主動查詢 → 直接呼叫 `list_pending_todos()`，由呼叫端（`commands.py`）
-組成清單文字；②每日 08:00 固定推播；③預定時間前 30 分鐘提醒。②③兩種主動推播沒有獨立的排程系統，
+組成清單文字；②每日 08:00 固定推播；③預定時間前 `_REMINDER_WINDOW` 內提醒（2026-09-05 起為
+40 分鐘，原為 30 分鐘，放寬理由見下方常數定義處與 `docs/ADR/discuss/infra.md`）。②③兩種主動推播沒有獨立的排程系統，
 比照 Step 1.6 `monitoring.NeonCapacityMonitor` 的做法，借用 `/healthz` 既有的 10 分鐘 cron 頻率，
 由 `main.py` 在每次 `/healthz` 被呼叫時觸發 `check_and_push_reminders()`／`check_and_push_daily_digest()`。
 
@@ -34,7 +35,10 @@ from zoneinfo import ZoneInfo
 from submodules.cloudsql.client import CloudSQLClient
 
 _TAIWAN_TZ = ZoneInfo("Asia/Taipei")
-_REMINDER_WINDOW = timedelta(minutes=30)
+# 2026-09-05：由 30 分鐘放寬為 40 分鐘，換取 10 分鐘容錯緩衝，避免 /healthz（每 30
+# 分鐘觸發一次）觸發時間飄移時，視窗與觸發頻率零緩衝而導致提醒被跳過。
+# 詳見 docs/ADR/discuss/infra.md 2026-09-05 條目。
+_REMINDER_WINDOW = timedelta(minutes=40)
 
 
 def create_todo(
@@ -117,11 +121,12 @@ def mark_overdue_as_expired(db: CloudSQLClient, now: datetime | None = None) -> 
 
 
 def check_and_push_reminders(db: CloudSQLClient, telegram_client, now: datetime | None = None) -> None:
-    """FR-32：預定時間前 30 分鐘提醒。
+    """FR-32：預定時間前 `_REMINDER_WINDOW`（40 分鐘）內提醒。
 
-    找出「使用者記錄當下選擇要提醒、還沒推播過、且提醒基準時間落在未來 30 分鐘內」的待辦逐一推播，
-    推播後立刻標記 `reminded_30min_sent_at`，避免下一次 `/healthz`（10 分鐘後）被重複推播。找不到
-    對應 `telegram_user_id`（理論上不該發生，防禦性處理）的直接跳過，不中斷其餘待辦的推播。
+    找出「使用者記錄當下選擇要提醒、還沒推播過、且提醒基準時間落在未來 `_REMINDER_WINDOW` 內」的
+    待辦逐一推播，推播後立刻標記 `reminded_30min_sent_at`，避免下一次 `/healthz`（30 分鐘後）被
+    重複推播。找不到對應 `telegram_user_id`（理論上不該發生，防禦性處理）的直接跳過，不中斷其餘
+    待辦的推播。
 
     提醒基準時間（FR-31b）：區間待辦（`start_at` 非 NULL）以 `start_at` 為準（提醒「準備要開始
     了」），單一時間點待辦仍以 `due_at` 為準，語意不變。
@@ -145,12 +150,14 @@ def check_and_push_reminders(db: CloudSQLClient, telegram_client, now: datetime 
             continue
         start_at = item.get("start_at")
         due_local = item["due_at"].astimezone(_TAIWAN_TZ)
+        anchor_at = start_at if start_at is not None else item["due_at"]
+        minutes_left = max(0, round((anchor_at - now).total_seconds() / 60))
         if start_at is None:
-            text = f"⏰ 提醒你，{due_local:%H:%M} 要「{item['content']}」囉，30 分鐘後就到時間了！"
+            text = f"⏰ 提醒你，{due_local:%H:%M} 要「{item['content']}」囉，{minutes_left} 分鐘後就到時間了！"
         else:
             start_local = start_at.astimezone(_TAIWAN_TZ)
             text = (
-                f"⏰ 提醒你，「{item['content']}」再過 30 分鐘就要開始囉"
+                f"⏰ 提醒你，「{item['content']}」再過 {minutes_left} 分鐘就要開始囉"
                 f"（{start_local:%m/%d %H:%M} ～ {due_local:%m/%d %H:%M}）"
             )
         telegram_client.send_text(chat_id=user["telegram_user_id"], text=text)
