@@ -80,3 +80,21 @@ NameError: name '_parse_date_description' is not defined
 **部署驗證**：Robin push `07e986a` 與文件 commit `b67cce0` 後，Render 於 2026-08-18 12:25 依序記錄 0084～0094 共 11 筆 migration 全數完成，接著 Flask 服務正常啟動並通過平台的根路徑 HEAD 檢查。這證明 0084 不再因重複欄位中斷，0085 的 `module_goals` 與 0094 的取消功能資料表清理均已執行。
 
 **未驗證範圍**：尚未另外執行資料庫查詢逐表核對 schema，也尚未觀察下一輪 `/healthz` 背景檢查紀錄；若後續仍出現資料表不存在或 migration 錯誤，需另案排查。
+
+## 2026-09-06 `93ed786` 誤刪聽力題文字隱藏邏輯，聽力題會顯示文字題目導致洩題
+
+**現象**：Robin 反映「開始作答」實機驗收時完全沒看到聽力題，Claude 排查過程中一開始誤判為 ADR-32（聽力題目庫改版：`_cutoff` 切割、解答照片統一驅動、聽力題禁止顯示文字）三項功能都沒有實作完成，原因是分析時用的是雲端工作區裡過期的檔案快照，沒有重新從 Robin 電腦拉取最新版本。Robin 多次追問下，Claude 改用 `device_bash` 直接查詢電腦上 repo 的實際 HEAD 狀態，確認 `_cutoff` 檔名解析、`_process_listen_questions()`（解答照片一次性建題）皆已存在且邏輯正確，先前的「未實作」結論是誤判。
+
+Robin 進一步追問「你確定現在的程式碼可以處理這些情境嗎」，促使 Claude 重新從電腦拉取 `src/bot/certificate_answer.py` 與對應測試 `tests/bot/test_certificate_answer.py` 到雲端沙箱執行 `pytest`，結果 2 項失敗：`test_build_question_view_hides_question_text_and_options_for_listen_question`、`test_build_question_view_shows_image_but_not_text_for_listen_question_with_photo`。
+
+**排查過程**：`git log -p -- src/bot/certificate_answer.py` 逐次比對，發現 ADR-32 對應 commit `387eb66` 原本有正確寫入「`question_type == "listen"` 時 `prompt_lines = []`（完全不顯示文字題目/選項），否則才組文字」這段分流；但本次 session 稍早的 commit `93ed786`（「開始作答」入口修正，新增 `format_question_prompt()` 的 `exam_type` 標示）在改動 `_build_certificate_question_view()` 時，把這段分流誤刪、退化成不分 `question_type` 一律組文字題目/選項。`93ed786` 當時只執行了 `pytest tests/bot/test_router.py tests/bot/test_certificate_answer_commands.py`，沒有跑到直接測試這支函式的 `tests/bot/test_certificate_answer.py`，所以這個迴歸沒被抓到，也沒有寫進當時的 commit 摘要或 PROGRESS.md。
+
+**根因**：Claude 在 `93ed786` 修改 `certificate_answer.py` 時，只關注自己這次要新增的 `exam_type` 參數，直接複製/簡化了整個函式本體，沒有注意到原本已有的 `question_type` 分流邏輯，且提交前的測試範圍選得太窄（只選了看起來與本次改動直接相關的測試檔案），沒有跑到同一模組的既有單元測試，才讓迴歸漏網。
+
+**修復方式**：`src/bot/certificate_answer.py` 的 `_build_certificate_question_view()` restore `question_type == "listen"` 時 `prompt_lines = []`、否則才顯示 `question_text`／`options_text` 的分流，並補回原本被砍掉的函式說明註解，額外註明這次迴歸與修正的來龍去脈。
+
+**驗證方式**：`pytest tests/bot/test_toeic.py tests/bot/test_certificate_answer.py tests/bot/test_certificate_answer_commands.py tests/bot/test_router.py -q` 210 passed；`pytest tests/bot -q` 全量 1143 passed、4 項既有已知環境問題失敗（`test_job_search.py`，與本次異動無關，詳見本檔案先前條目）；`ruff check src/bot/certificate_answer.py` 通過。
+
+**未驗證範圍**：Robin 上傳的 `monster01` 聽力題（Part 1 六題有圖＋Part 2 靠解答照片建題）尚未確認今晚（2026-09-06 週日 22:00 台灣時間）的 `run_weekly_pipeline()` 排程實際跑過並成功建題；待 Robin 隔天查詢 `users.toeic_pipeline_last_run_on` 是否推進到 `2026-09-06`，以及 `certificate_questions` 是否出現 `question_type='listen'` 的資料列。若當晚仍未成功（例如 Google/Gemini/Voice API 金鑰過期），需另案排查，不在本次修復範圍內。
+
+**經驗教訓**：往後涉及「重新確認某段既有邏輯是否還在」的問題時，必須優先用 `device_bash` 直接查詢 Robin 電腦上的真實檔案／`git log`，不能依賴雲端工作區裡可能過期的快照下結論；修改既有函式時，即使只是新增一個參數，也要完整跑過同一模組的既有單元測試，不能只挑跟本次改動「表面相關」的測試檔案。

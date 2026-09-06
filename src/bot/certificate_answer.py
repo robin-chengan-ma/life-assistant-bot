@@ -87,13 +87,25 @@ def _extract_answer_letter(correct_answer: str) -> str | None:
 
 
 def _build_certificate_question_view(question: dict) -> dict | None:
+    """2026-08-24（Robin 確認：聽力題只能用聽的作答，不能顯示文字題目/選項，否則失去聽力測驗的
+    意義，見 `docs/ADR/discuss/skill-growth.md` 對應日期條目）：`question_type == "listen"` 時
+    完全不顯示 `question_text`／`options` 文字，只顯示題目圖片（有的話，例如 Part 1）與聽力音檔
+    連結；文字題目/選項只存在資料庫，給事後對答案／看詳解使用。`question_type == "write"`（閱讀）
+    維持原行為，照樣顯示文字題目＋選項。
+
+    2026-09-06 修正：這段分流邏輯在 `93ed786`（「開始作答」入口修正那次 commit）被誤刪、退化成
+    一律顯示文字，當時只跑了 router／commands 的測試，沒跑到這支模組自己的單元測試，沒被抓到。
+    """
     letter = _extract_answer_letter(question.get("correct_answer") or "")
     if letter is None:
         return None
 
-    options = question.get("options") or []
-    options_text = "\n".join(options) if isinstance(options, list) else str(options)
-    prompt_lines = [question["question_text"], options_text]
+    if question["question_type"] == "listen":
+        prompt_lines = []
+    else:
+        options = question.get("options") or []
+        options_text = "\n".join(options) if isinstance(options, list) else str(options)
+        prompt_lines = [question["question_text"], options_text]
     if question.get("image_gdrive_url"):
         prompt_lines.append(f"🖼️ 題目圖片：{question['image_gdrive_url']}")
     if question.get("audio_gdrive_url"):
