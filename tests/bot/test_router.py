@@ -1,5 +1,6 @@
 from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
+from unittest.mock import MagicMock
 
 from PIL import Image
 
@@ -1558,16 +1559,21 @@ def test_quiz_answer_text_trigger_presents_question_and_sets_state(fake_db, monk
 
 
 def test_pending_quiz_answer_flow_dispatches_through_router(fake_db, monkeypatch):
+    # 2026-09-06：批改結果改用 telegram_client 立刻單獨送出一則，見
+    # docs/ADR/discuss/robinson.md 對應日期條目。
     monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
     owner_row = fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
     qid = _seed_certificate_question_for_router(fake_db)
     _seed_certificate_assignment_for_router(fake_db, owner_row, certificate_question_id=qid)
     store = ConversationStateStore()
     router.handle_callback_query(fake_db, store, ROBIN_ID, "menu:quiz")
+    telegram_client = MagicMock()
 
-    reply = router.handle_message(fake_db, store, ROBIN_ID, "A")
+    reply = router.handle_message(fake_db, store, ROBIN_ID, "A", telegram_client=telegram_client)
 
-    assert "✅ 答對了" in reply
+    telegram_client.send_text.assert_called_once()
+    assert "✅ 答對了" in telegram_client.send_text.call_args.kwargs["text"]
+    assert reply == commands.certificate_answer.ALL_DONE_MESSAGE
     assert store.get(ROBIN_ID) is None
 
 

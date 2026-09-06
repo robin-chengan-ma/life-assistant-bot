@@ -1613,7 +1613,7 @@ def _dispatch_active_flow(
     # 2026-08-08（Step 3.3，見 robinson SPEC.md FR-27、FR-26 決策 5、6）：證照題庫作答（一次一題）
     # 與彈性排程調整（選 exam_type → 自由描述 → LLM 分類語意 → SPREAD 需額外確認提案）。
     if flow == "pending_quiz_answer":
-        return commands.handle_quiz_answer_step(db, state_store, telegram_user_id, text)
+        return commands.handle_quiz_answer_step(db, telegram_client, state_store, telegram_user_id, text)
     if flow == "pending_quiz_schedule_exam_type_choice":
         return commands.handle_quiz_schedule_exam_type_choice_step(state_store, telegram_user_id, text)
     if flow == "pending_quiz_schedule_intent":

@@ -2,6 +2,7 @@
 （對應 robinson SPEC.md FR-27、FR-26 決策 5、6，Step 3.3）。
 """
 from datetime import date, datetime
+from unittest.mock import MagicMock
 
 from src.bot import commands
 from src.bot.state import ConversationStateStore
@@ -85,23 +86,31 @@ def test_handle_quiz_answer_step_invalid_letter_reprompts(fake_db):
     state_store = ConversationStateStore()
     commands.start_quiz_answer(fake_db, state_store, 999, 1)
 
-    reply = commands.handle_quiz_answer_step(fake_db, state_store, 999, "隨便")
+    telegram_client = MagicMock()
+    reply = commands.handle_quiz_answer_step(fake_db, telegram_client, state_store, 999, "隨便")
 
     assert reply == commands._QUIZ_ANSWER_FORMAT_REPROMPT
     assert state_store.get(999)["position"] == 0
+    telegram_client.send_text.assert_not_called()
 
 
 def test_handle_quiz_answer_step_correct_answer_shows_feedback_and_finishes(fake_db):
+    # 2026-09-06：批改結果改用 telegram_client 立刻單獨送出一則，函式回傳值只剩下一題/完成訊息，
+    # 見 docs/ADR/discuss/robinson.md 對應日期條目。
     qid = _seed_certificate_question(fake_db)
     _seed_assignment(fake_db, certificate_question_id=qid)
     state_store = ConversationStateStore()
     commands.start_quiz_answer(fake_db, state_store, 999, 1)
+    telegram_client = MagicMock()
 
-    reply = commands.handle_quiz_answer_step(fake_db, state_store, 999, "a")
+    reply = commands.handle_quiz_answer_step(fake_db, telegram_client, state_store, 999, "a")
 
-    assert "✅ 答對了" in reply
-    assert "巴黎是法國首都" in reply
-    assert commands.certificate_answer.ALL_DONE_MESSAGE in reply
+    telegram_client.send_text.assert_called_once()
+    feedback_text = telegram_client.send_text.call_args.kwargs["text"]
+    assert telegram_client.send_text.call_args.kwargs["chat_id"] == 999
+    assert "✅ 答對了" in feedback_text
+    assert "巴黎是法國首都" in feedback_text
+    assert reply == commands.certificate_answer.ALL_DONE_MESSAGE
     assert state_store.get(999) is None
     logs = fake_db.select("answer_logs")
     assert len(logs) == 1
@@ -113,10 +122,12 @@ def test_handle_quiz_answer_step_wrong_answer_shows_feedback(fake_db):
     _seed_assignment(fake_db, certificate_question_id=qid)
     state_store = ConversationStateStore()
     commands.start_quiz_answer(fake_db, state_store, 999, 1)
+    telegram_client = MagicMock()
 
-    reply = commands.handle_quiz_answer_step(fake_db, state_store, 999, "B")
+    commands.handle_quiz_answer_step(fake_db, telegram_client, state_store, 999, "B")
 
-    assert "❌ 答錯了" in reply
+    feedback_text = telegram_client.send_text.call_args.kwargs["text"]
+    assert "❌ 答錯了" in feedback_text
     logs = fake_db.select("answer_logs")
     assert logs[0]["is_correct"] is False
 
@@ -128,11 +139,14 @@ def test_handle_quiz_answer_step_moves_to_next_question(fake_db):
     _seed_assignment(fake_db, certificate_question_id=qid2)
     state_store = ConversationStateStore()
     commands.start_quiz_answer(fake_db, state_store, 999, 1)
+    telegram_client = MagicMock()
 
-    reply = commands.handle_quiz_answer_step(fake_db, state_store, 999, "A")
+    reply = commands.handle_quiz_answer_step(fake_db, telegram_client, state_store, 999, "A")
 
+    # 批改結果已經透過 telegram_client 單獨送出，這裡的回傳值只剩下一題內容。
     assert "第 2/2 題" in reply
     assert "Q2" in reply
+    assert "✅ 答對了" not in reply
     state = state_store.get(999)
     assert state["position"] == 1
 
@@ -161,9 +175,11 @@ def test_handle_quiz_answer_step_recomputes_view_when_not_cached(fake_db):
     state["current_view"] = None
     state_store.set(999, state)
 
-    reply = commands.handle_quiz_answer_step(fake_db, state_store, 999, "A")
+    telegram_client = MagicMock()
+    commands.handle_quiz_answer_step(fake_db, telegram_client, state_store, 999, "A")
 
-    assert "✅ 答對了" in reply
+    telegram_client.send_text.assert_called_once()
+    assert "✅ 答對了" in telegram_client.send_text.call_args.kwargs["text"]
 
 
 def test_handle_quiz_answer_step_skips_deleted_assignment(fake_db):
@@ -173,12 +189,17 @@ def test_handle_quiz_answer_step_skips_deleted_assignment(fake_db):
     a2 = _seed_assignment(fake_db, certificate_question_id=qid2)
     state_store = ConversationStateStore()
     commands.start_quiz_answer(fake_db, state_store, 999, 1)
+    telegram_client = MagicMock()
 
     fake_db.delete("certificate_daily_assignments", where="id = %s", params=(a2,))
-    reply = commands.handle_quiz_answer_step(fake_db, state_store, 999, "A")
+    reply = commands.handle_quiz_answer_step(fake_db, telegram_client, state_store, 999, "A")
 
-    assert reply.endswith(commands.certificate_answer.ALL_DONE_MESSAGE)
+    assert reply == commands.certificate_answer.ALL_DONE_MESSAGE
     assert state_store.get(999) is None
+    # 第一題（qid1）是正常作答，批改結果照常送出；第二題（a2）在作答前被刪除，直接跳過，
+    # 不算一次批改，不會再送出第二則批改結果。
+    telegram_client.send_text.assert_called_once()
+    assert "✅ 答對了" in telegram_client.send_text.call_args.kwargs["text"]
 
 
 def test_handle_quiz_answer_step_skips_when_current_assignment_deleted_before_answering(fake_db):
@@ -190,9 +211,10 @@ def test_handle_quiz_answer_step_skips_when_current_assignment_deleted_before_an
     _seed_assignment(fake_db, certificate_question_id=qid2)
     state_store = ConversationStateStore()
     commands.start_quiz_answer(fake_db, state_store, 999, 1)
+    telegram_client = MagicMock()
 
     fake_db.delete("certificate_daily_assignments", where="id = %s", params=(a1,))
-    reply = commands.handle_quiz_answer_step(fake_db, state_store, 999, "A")
+    reply = commands.handle_quiz_answer_step(fake_db, telegram_client, state_store, 999, "A")
 
     assert "Q2" in reply
     state = state_store.get(999)

@@ -3221,9 +3221,18 @@ def start_quiz_answer(db: CloudSQLClient, state_store: ConversationStateStore, t
     return _present_current_quiz_question(db, state_store, telegram_user_id)
 
 
-def handle_quiz_answer_step(db: CloudSQLClient, state_store: ConversationStateStore, telegram_user_id: int, text: str) -> str:
+def handle_quiz_answer_step(
+    db: CloudSQLClient, telegram_client, state_store: ConversationStateStore, telegram_user_id: int, text: str
+) -> str:
     """處理 `pending_quiz_answer` 狀態下使用者的作答回覆；只接受 A/B/C/D，格式不符原地反問，
-    不清除狀態、也不算跳題（ADR-20 決策 3）。"""
+    不清除狀態、也不算跳題（ADR-20 決策 3）。
+
+    2026-09-06（見 docs/ADR/discuss/robinson.md 對應日期條目）：Robin 反饋「批改結果」與
+    「下一題／全部完成」原本擠在同一則訊息裡（用 `\\n\\n` 接在一起），畫面上看起來像同一題的
+    延伸，容易誤會。改成批改結果透過 `telegram_client` 立刻單獨送出一則，函式本身只回傳
+    下一題（或全部完成訊息），交給呼叫端（`router.py`／`webhook.py`）當成第二則訊息送出，
+    兩則訊息之間會有自然的推送間隔，讀起來更像「先看結果、再看下一題」兩個獨立步驟。
+    """
     state = state_store.get(telegram_user_id)
     letter = _parse_answer_letter(text)
     if letter is None:
@@ -3251,8 +3260,8 @@ def handle_quiz_answer_step(db: CloudSQLClient, state_store: ConversationStateSt
 
     state["position"] = position + 1
     state_store.set(telegram_user_id, state)
-    next_prompt = _present_current_quiz_question(db, state_store, telegram_user_id)
-    return f"{feedback}\n\n{next_prompt}"
+    telegram_client.send_text(chat_id=telegram_user_id, text=feedback)
+    return _present_current_quiz_question(db, state_store, telegram_user_id)
 
 
 # --- 彈性排程調整 ---

@@ -1199,3 +1199,15 @@ YouTube 主題訂閱設定子選單結構；`router.py` 移除 `/my_youtube_topi
 **替代方案**：只修文字回覆路由、按鈕維持原位不動（已否決，Robin 認為按鈕位置本身也不合理，會持續讓人找不到或誤解）；作答流程改成先選證照、只作答該證照的題目（已否決，會是更大的邏輯改動，且跟「一次清完當天所有待答題目」的既有設計精神衝突，非本次要處理的範圍）。
 
 **後果**：不需要 Migration。`src/bot/menu.py`（新增 `quiz` MAIN_MENU_ITEMS 項目）、`src/bot/router.py`（新增 `menu:quiz` 分派、`_QUIZ_ANSWER_TRIGGERS` 文字觸發、移除 `certificate_settings:quiz:start` 分支）、`src/bot/certificate_settings.py`（`daily_summary()` 移除「▶️ 開始作答」按鈕）、`src/bot/certificate_answer.py`（`format_question_prompt()` 新增 `exam_type` 參數）、`src/bot/commands.py`（`_present_current_quiz_question()` 傳入 `assignment["exam_type"]`）已異動。`tests/bot/test_router.py` 更新／新增對應測試（`menu:quiz` callback、文字觸發詞各一項），`pytest tests/bot -q` 1136 passed（另有 4 項既有 `test_job_search.py` 失敗屬雲端沙盒暫存快取版本較舊，與本次改動無關，非回歸範圍），`ruff check` 對本次異動檔案全過。`docs/specs/SPEC.md` FR-27 同步更新。舊訊息裡殘留的「▶️ 開始作答」按鈕（部署前已推播的歷史訊息）點擊後會落入 `certificate_settings.start_menu()` 的預設分支，優雅降級不會出錯。
+
+### 2026-09-06 續：實機驗收發現「批改結果」與「下一題／完成訊息」擠在同一則訊息裡，應拆成兩則推播
+
+**狀態**：accepted
+
+**背景**：Robin 完成上述改版後實機測試「開始作答」，回報三個問題：①今天的 5 題全是單字題（vocab），沒看到聽力題；②每次作答後，「❌／✅ 批改結果＋詳解」跟「下一題題目」被塞進同一則訊息一起推送；③答完最後一題後，「🎉 今天的題目都作答完了，辛苦啦！」也黏在最後一題的批改結果訊息底下。查證 `handle_quiz_answer_step()` 原本用 `f"{feedback}\n\n{next_prompt}"` 把兩者接在同一個字串裡再一次回傳、一次送出，是問題②③共同的根因。問題①（沒有聽力題）跟本次選單/訊息拆分無關，是 `certificate_quiz._pick_track_questions()` 依 `toeic_listen_count`／`toeic_write_count`／`toeic_vocab_count`（或舊比例）分軌選題時，聽力軌沒有選到任何題目——可能是「聽力題數設定為 0」或「題庫裡聽力題（`question_type='listen'` 且 `correct_answer` 已解析出正解）數量不足／掛零」，Claude 沒有資料庫存取權限無法直接查證，這部分留給 Robin 自行確認：可以到「考試設定→每日題數設定→TOEIC」查看目前「聽力／讀寫／單字」的題數設定是否把聽力設成 0，或確認題庫裡聽力題是否都已經拍過 `_ans` 答案照解析出正解（`correct_answer` 為 NULL 的聽力題不會被選入候選池，見 `_candidate_certificate_questions()`）。
+
+**決策**：問題②③一併修正——`handle_quiz_answer_step()` 新增 `telegram_client` 參數，批改結果訊息改為函式內直接呼叫 `telegram_client.send_text()` 立刻單獨送出，函式本身只回傳「下一題」或「全部完成」訊息，交給 `router.py`／`webhook.py` 既有的單則訊息機制當成第二則訊息送出；`router.py` 的 `pending_quiz_answer` 分派同步補上 `telegram_client` 參數（原本就有在 `_dispatch_active_flow()` 的參數列表裡，只是這條分支沒有用到）。問題①不在本次程式碼修正範圍，待 Robin 確認題庫或設定資料後再決定是否需要程式碼調整。
+
+**理由**：批改結果與下一題本質上是兩個獨立事件（先看這題對不對，再看下一題），擠在同一則訊息裡容易讓使用者誤以為是同一題延伸內容，拆成兩則推播符合實際的使用者心智模型，也是 Telegram 一般問答機器人常見的呈現方式。
+
+**後果**：不需要 Migration。`src/bot/commands.py`（`handle_quiz_answer_step()` 簽名新增 `telegram_client`，批改結果改用 `telegram_client.send_text()` 直接送出）、`src/bot/router.py`（`pending_quiz_answer` 分派補上 `telegram_client`）已異動。`tests/bot/test_certificate_answer_commands.py`、`tests/bot/test_router.py` 同步更新（改用 `MagicMock` 驗證批改結果透過 `telegram_client` 單獨送出、回傳值只剩下一題／完成訊息）。`pytest tests/bot -q` 1136 passed（另有 4 項既有 `test_job_search.py` 失敗屬雲端沙盒暫存快取版本較舊，與本次改動無關），`ruff check` 全過。問題①（聽力題缺席）待 Robin 確認題庫／設定資料後續追蹤，若確認是資料問題（題數設定或正解未解析）則不需要程式碼異動，若確認是選題邏輯本身有缺陷則需另外排查 `_pick_track_questions()`。
