@@ -428,6 +428,29 @@ def test_sync_splits_whole_audio_respects_cutoff_seconds(fake_db):
     assert rows[0]["question_number"] == 1
 
 
+def test_split_whole_audio_transcribes_trimmed_bytes_not_the_full_file_when_cutoff_set():
+    # 2026-09-06 新增（見 docs/ADR/debug/robinson.md 對應日期條目）：修正前是先把「整份沒剪過」
+    # 的音檔送去 Groq 轉錄、事後才裁切，Robin 上傳的整份長錄音因此被 Groq 以 413 Payload Too
+    # Large 拒絕，cutoff 完全沒發揮效果。這裡鎖定「有 cutoff_seconds 時，送進
+    # transcribe_with_segments() 的音檔必須已經是剪過、比原始檔案小很多的那份」。
+    whole_audio_bytes = _make_silent_mp3_bytes(6000)
+    gdrive_client = MagicMock()
+    gdrive_client.download_file.return_value = whole_audio_bytes
+    voice_client = MagicMock()
+    voice_client.transcribe_with_segments.return_value = [{"start": 0.0, "end": 1.0, "text": "Question one."}]
+
+    toeic._split_whole_audio(
+        gdrive_client,
+        voice_client,
+        {"id": "audio", "name": "toeic_0003_listen_cutoff3.mp3"},
+        question_numbers=[1],
+        cutoff_seconds=3,
+    )
+
+    sent_bytes = voice_client.transcribe_with_segments.call_args[0][0]
+    assert len(sent_bytes) < len(whole_audio_bytes)
+
+
 def test_sync_skips_split_batch_when_whisper_fails(fake_db):
     files = [
         {"id": "ans1", "name": "toeic_0002_listen_1_ans.png", "mimeType": "image/png", "webViewLink": "ans-url-1"},

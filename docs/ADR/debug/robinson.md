@@ -98,3 +98,24 @@ Robin 進一步追問「你確定現在的程式碼可以處理這些情境嗎�
 **未驗證範圍**：Robin 上傳的 `monster01` 聽力題（Part 1 六題有圖＋Part 2 靠解答照片建題）尚未確認今晚（2026-09-06 週日 22:00 台灣時間）的 `run_weekly_pipeline()` 排程實際跑過並成功建題；待 Robin 隔天查詢 `users.toeic_pipeline_last_run_on` 是否推進到 `2026-09-06`，以及 `certificate_questions` 是否出現 `question_type='listen'` 的資料列。若當晚仍未成功（例如 Google/Gemini/Voice API 金鑰過期），需另案排查，不在本次修復範圍內。
 
 **經驗教訓**：往後涉及「重新確認某段既有邏輯是否還在」的問題時，必須優先用 `device_bash` 直接查詢 Robin 電腦上的真實檔案／`git log`，不能依賴雲端工作區裡可能過期的快照下結論；修改既有函式時，即使只是新增一個參數，也要完整跑過同一模組的既有單元測試，不能只挑跟本次改動「表面相關」的測試檔案。
+
+## 2026-09-06 續：週日排程真的觸發了，但整包音檔在裁切前就先被送去 Groq 轉錄，超大檔案被 413 拒絕
+
+**現象**：上一條目修復並 commit 後，Robin 沒有再追查排程有沒有跑成功，而是直接拿到 Render 正式環境的錯誤 log 貼過來：
+
+```
+ERROR src.bot.toeic: 整包 MP3 切割失敗（exam_type=toeic, test_id=monster01），這批聽力題暫緩處理，下次排程重試
+requests.exceptions.HTTPError: 413 Client Error: Payload Too Large for url: https://api.groq.com/openai/v1/audio/transcriptions
+```
+
+這證實了兩件事：①今晚（2026-09-06 週日 22:00 台灣時間）`run_weekly_pipeline()` 確實有觸發、且掃描到了 `monster01` 這批檔案，先前對「Render 睡眠導致排程沒跑到」的猜測不成立（或者已經因為升級 Starter 方案解決）；②真正卡住的地方是另一個獨立的 bug，出在 `_split_whole_audio()`。
+
+**排查過程**：對照 `src/bot/toeic.py` 的 `_split_whole_audio()`，發現執行順序是「先呼叫 `voice_client.transcribe_with_segments(audio_bytes, ...)` 把 `gdrive_client.download_file()` 下載回來、完全沒剪過的整份原始音檔送去 Groq 轉錄，成功拿到逐句時間軸之後，才用 `cutoff_seconds` 裁切音檔本身跟過濾時間軸」。`cutoff_seconds` 這個欄位當初（ADR-32）設計的本意就是「Robin 想直接丟整份 ~45 分鐘錄音，只自動處理前面 Part 1+2 那段，忽略後面用不到的 Part 3/4」，但因為裁切是在「送出去之後」才做，實際送去 Groq 轉錄 API 的仍然是完整未裁切的整份錄音——Robin 的錄音檔案大小超過 Groq API 的上傳限制，一開始的 HTTP 請求就直接被拒絕（`413 Payload Too Large`），裁切邏輯完全沒有機會執行到，跟 `cutoff_seconds` 設定多少完全無關。
+
+**根因**：ADR-32 實作時，`cutoff_seconds` 的用途被誤解成「只是拿來事後過濾 Whisper 回傳的逐句時間軸」，忽略了它同時也應該用來限制「送出去給第三方 API 的檔案大小」——這是實作當時就寫錯順序，不是後續哪次改動造成的迴歸。
+
+**修復方式**：`_split_whole_audio()` 改成有 `cutoff_seconds` 時，先用 `pydub` 把音檔裁到指定秒數，只把裁過、小很多的那段位元組送去 `voice_client.transcribe_with_segments()`；沒有 `cutoff_seconds`（`None`）維持原行為，整支都送去轉錄。新增 `tests/bot/test_toeic.py::test_split_whole_audio_transcribes_trimmed_bytes_not_the_full_file_when_cutoff_set`，直接斷言「有 cutoff 時，送進 `transcribe_with_segments()` 的位元組長度必須小於原始整份音檔」，鎖定這個順序不會再退化回去。
+
+**驗證方式**：`pytest tests/bot/test_toeic.py -q` 60 passed（含新增 1 項）；全專案 `pytest tests/bot -q` 1144 passed（另有 4 項既有 `test_job_search.py` 失敗屬雲端沙盒暫存快取版本較舊，與本次改動無關）；`ruff check src/bot/toeic.py tests/bot/test_toeic.py` 通過。
+
+**未驗證範圍**：Groq API 對單一檔案的確切大小上限（依帳號方案可能不同）沒有查證，這裡只確認「裁切後檔案明顯變小」，沒有針對「裁切後仍可能超過上限」這種極端情況（例如 `cutoff_seconds` 設定得太大）額外處理，屆時應該還是會拿到同樣的 413 錯誤，只是機率大幅降低。`monster01` 這批題目要等下週日（2026-09-13）22:00 排程再次自動觸發才會重新嘗試，或由 Robin 自行找方式提前觸發；待 Robin 屆時再次確認 `certificate_questions` 是否成功出現 `question_type='listen'` 的資料列。

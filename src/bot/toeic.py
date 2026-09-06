@@ -456,17 +456,24 @@ def _split_whole_audio(
     """`cutoff_seconds`（2026-08-24 新增）：只保留音檔前 N 秒再送進切割演算法，`None` 代表整支
     都要處理（維持原行為）。裁切同時套用在音檔本身跟逐句時間軸，避免 cutoff 之後的內容（例如同一
     支錄音裡的其他 Part）被誤算進切割範圍。
+
+    2026-09-06 修正（見 `docs/ADR/debug/robinson.md` 對應日期條目）：原本先把「整份沒剪過」的
+    音檔送去 Groq 轉錄、事後才裁切，完全沒發揮 `cutoff_seconds` 該有的效果——Robin 上傳的整份
+    ~45 分鐘錄音直接被 Groq API 以 `413 Payload Too Large` 拒絕，裁切邏輯根本沒機會執行到。
+    改成有 `cutoff_seconds` 時先用 `pydub` 剪好，只把剪過、小很多的那段送去轉錄；沒有
+    `cutoff_seconds`（`None`）維持原行為，整支都送去轉錄。
     """
     audio_bytes = gdrive_client.download_file(whole_audio_file["id"])
-    segments = voice_client.transcribe_with_segments(
-        audio_bytes, filename=whole_audio_file["name"], mime_type="audio/mpeg"
-    )
     if cutoff_seconds is not None:
         audio = AudioSegment.from_file(io.BytesIO(audio_bytes))
         cutoff_ms = cutoff_seconds * 1000
         trimmed_buffer = io.BytesIO()
         audio[:cutoff_ms].export(trimmed_buffer, format="mp3")
         audio_bytes = trimmed_buffer.getvalue()
+    segments = voice_client.transcribe_with_segments(
+        audio_bytes, filename=whole_audio_file["name"], mime_type="audio/mpeg"
+    )
+    if cutoff_seconds is not None:
         segments = [seg for seg in segments if seg["start"] < cutoff_seconds]
     return split_audio_by_question_count(audio_bytes, question_numbers, segments)
 
