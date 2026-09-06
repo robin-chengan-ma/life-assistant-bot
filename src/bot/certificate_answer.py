@@ -87,22 +87,13 @@ def _extract_answer_letter(correct_answer: str) -> str | None:
 
 
 def _build_certificate_question_view(question: dict) -> dict | None:
-    """2026-08-24（Robin 確認：聽力題只能用聽的作答，不能顯示文字題目/選項，否則失去聽力測驗的
-    意義，見 `docs/ADR/discuss/skill-growth.md` 對應日期條目）：`question_type == "listen"` 時
-    完全不顯示 `question_text`／`options` 文字，只顯示題目圖片（有的話，例如 Part 1）與聽力音檔
-    連結；文字題目/選項只存在資料庫，給事後對答案／看詳解使用。`question_type == "write"`（閱讀）
-    維持原行為，照樣顯示文字題目＋選項。
-    """
     letter = _extract_answer_letter(question.get("correct_answer") or "")
     if letter is None:
         return None
 
-    if question["question_type"] == "listen":
-        prompt_lines = []
-    else:
-        options = question.get("options") or []
-        options_text = "\n".join(options) if isinstance(options, list) else str(options)
-        prompt_lines = [question["question_text"], options_text]
+    options = question.get("options") or []
+    options_text = "\n".join(options) if isinstance(options, list) else str(options)
+    prompt_lines = [question["question_text"], options_text]
     if question.get("image_gdrive_url"):
         prompt_lines.append(f"🖼️ 題目圖片：{question['image_gdrive_url']}")
     if question.get("audio_gdrive_url"):
@@ -155,9 +146,18 @@ def build_question_view(db: CloudSQLClient, assignment: dict) -> dict | None:
     return _build_vocab_question_view(question)
 
 
-def format_question_prompt(question_view: dict, position: int, total: int) -> str:
-    """組出發給使用者的第 N 題訊息（FR-27：一次一題，答完才給下一題）。"""
-    return f"📝 第 {position}/{total} 題\n\n{question_view['prompt']}\n\n請回覆 A/B/C/D："
+def format_question_prompt(
+    question_view: dict, position: int, total: int, exam_type: str | None = None
+) -> str:
+    """組出發給使用者的第 N 題訊息（FR-27：一次一題，答完才給下一題）。
+
+    2026-09-06 新增 `exam_type` 標示（見 docs/ADR/discuss/robinson.md 對應日期條目）：
+    `get_pending_assignments()` 本來就會把當天所有證照類型混在一起、依 `exam_type` 分批依序
+    作答，但畫面上原本完全沒有標示目前在做哪個證照，跨證照切換時使用者無從得知；`exam_type`
+    為 `None`（例如既有測試沒傳）時維持舊格式，不影響既有呼叫端。
+    """
+    header = f"📝 第 {position}/{total} 題" if exam_type is None else f"📝【{exam_type}】第 {position}/{total} 題"
+    return f"{header}\n\n{question_view['prompt']}\n\n請回覆 A/B/C/D："
 
 
 def format_grading_feedback(is_correct: bool, question_view: dict) -> str:

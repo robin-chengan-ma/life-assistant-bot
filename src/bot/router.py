@@ -52,6 +52,11 @@ _START_TRIGGERS = {"/start"}
 # 2026-08-08（Step 3.5，見 robinson SPEC.md FR-51、FR-52、ADR-22）：好友模式陪伴聊天，`friend_mode`
 # 開關 owner_only=False，所有使用者皆可用，放在共用觸發詞區塊；單輪生成完整回覆，不需要對話狀態機。
 _FRIEND_CHAT_TRIGGERS = {"陪我聊聊"}
+# 2026-09-06（見 docs/ADR/discuss/robinson.md 對應日期條目）：每日 08:00 證照題庫推播訊息
+# （`certificate_quiz._format_push_message()`）承諾「回覆『開始作答』開始吧」，但這句純文字
+# 原本完全沒有對應的路由，會掉進一般聊天（bug）；補上文字觸發詞，行為等同主選單「▶️ 開始作答」
+# 與已移除的 `certificate_settings:quiz:start` 按鈕，一律呼叫 `commands.start_quiz_answer()`。
+_QUIZ_ANSWER_TRIGGERS = {"開始作答"}
 # 2026-08-18（批次5）：記帳全面改選單觸發，舊文字觸發詞（/set_budget、/add_transaction、
 # /backfill_transaction、/my_transactions、/my_finance_summary、/finance_goal、
 # /my_finance_goals 等）已移除，不提供舊指令相容期，入口改為「📝 日常紀錄」→「💰 記帳」子選單，
@@ -251,6 +256,10 @@ def handle_message(
         # 2026-08-08（Step 3.5，見 robinson SPEC.md FR-51、FR-52、ADR-22）：好友模式陪伴聊天，
         # 單次生成完整回覆，不需要對話狀態機。
         return commands.start_friend_chat(db, llm_client, user_id)
+    if is_owner and text in _QUIZ_ANSWER_TRIGGERS:
+        if not toggles.is_feature_enabled(db, user_id, "certificate"):
+            return schedule_settings.feature_disabled_reply("certificate")
+        return commands.start_quiz_answer(db, state_store, telegram_user_id, user_id)
     entry = feature_entry.detect(text, is_owner=is_owner)
     if entry is not None:
         return feature_entry.confirmation(entry)
@@ -449,6 +458,17 @@ def handle_callback_query(
             if not toggles.is_feature_enabled(db, user["id"], key):
                 return schedule_settings.feature_disabled_reply(key)
             return job_settings.start_menu()
+        if key == "quiz":
+            # 2026-09-06（見 docs/ADR/discuss/robinson.md 對應日期條目）：「開始作答」升格為主選單
+            # 獨立項目，取代原本藏在「考試設定→每日題數設定→選證照」裡的按鈕；沿用 certificate
+            # 功能開關（跟「考試設定」共用同一個開關，沒有獨立的 quiz 開關）。
+            state_store.clear(telegram_user_id)
+            user = _get_identified_user(db, telegram_user_id)
+            if user is None:
+                return _PERMISSION_DENIED_REPLY, menu.back_to_main_menu_keyboard()
+            if not toggles.is_feature_enabled(db, user["id"], "certificate"):
+                return schedule_settings.feature_disabled_reply("certificate")
+            return commands.start_quiz_answer(db, state_store, telegram_user_id, user["id"]), None
         if key == "certificate":
             state_store.clear(telegram_user_id)
             user = _get_identified_user(db, telegram_user_id)
@@ -834,8 +854,6 @@ def handle_callback_query(
             return (certificate_settings.start_goal_set(state_store, telegram_user_id, user["id"], profile), None) if profile else certificate_settings.start_goals(db, user["id"])
         if action == "daily":
             return certificate_settings.start_daily(db, user["id"])
-        if action == "quiz:start":
-            return commands.start_quiz_answer(db, state_store, telegram_user_id, user["id"]), None
         if action == "daily:confirm":
             return certificate_settings.confirm_daily(db, state_store, telegram_user_id)
         if action.startswith("daily:set:"):

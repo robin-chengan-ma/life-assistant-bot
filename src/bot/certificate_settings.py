@@ -294,9 +294,11 @@ def daily_summary(db, user_id, profile):
         detail = f"聽力 {settings['toeic_listen_count']}／讀寫 {settings['toeic_write_count']}／單字 {settings['toeic_vocab_count']}"
     else:
         detail = f"每日 {settings.get('daily_question_count', 6) if settings else 6} 題"
+    # 2026-09-06（見 docs/ADR/discuss/robinson.md 對應日期條目）：「▶️ 開始作答」已移到主選單
+    # 獨立項目（見 menu.py `quiz` key），這裡不再重複提供入口——原本這顆按鈕點下去其實不分證照、
+    # 一次抓出所有證照當天待答的題目，放在單一證照的頁面底下反而讓人誤以為只會作答這個證照。
     return f"{profile['display_name']} 每日題數：{detail}", _keyboard(
         [
-            ("▶️ 開始作答", "certificate_settings:quiz:start"),
             ("✏️ 設定", f"certificate_settings:daily:set:{profile['id']}"),
             ("📅 日期區間設定", f"certificate_settings:range:{profile['id']}"),
             ("🔙 返回考試設定", "certificate_settings:menu"),

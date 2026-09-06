@@ -1185,3 +1185,17 @@ YouTube 主題訂閱設定子選單結構；`router.py` 移除 `/my_youtube_topi
 **替代方案**：三種 `goal_type` 全部改成綜合三項資料（已否決，Robin 提出質疑後認為只有體重目標真正需要跨資料佐證，運動／飲食目標看自己資料已足夠，全部綜合只會讓摘要內容失焦）。
 
 **後果**：不需要新增 Migration。`src/services/goal_summary_job.py`（`_gather_body_activity_text()` 依 `goal_type` 分流出 `_weight_text()`／`_exercise_text()`／`_diet_text()` 三個獨立撈資料函式，`weight` 型目標組合三者，其餘維持單一）已異動；`tests/services/test_goal_summary_job.py` 新增 3 項測試分別驗證三種 `goal_type` 各自撈到的資料範圍正確。詳見 `docs/specs/SPEC.md` FR-45a 補充。
+
+## 2026-09-06 [標籤：使用者] 「開始作答」入口修正：推播承諾的文字回覆沒有路由、按鈕藏得太深，且跨證照切換沒有標示
+
+**狀態**：accepted
+
+**背景**：Robin 回報每日 08:00 的證照題庫推播訊息（`📚 主任，今天的「toeic」複習來囉！...回覆「開始作答」開始吧！`）回覆「開始作答」四個字後，Robinson 沒有進入作答流程，反而回了一段通用的自我介紹。排查發現這是純粹的路由缺口：`router.py::handle_message()` 處理一般文字訊息的分支（`/start`、好友模式觸發詞、既有對話狀態、自然語言功能偵測）完全沒有涵蓋「開始作答」這個字串，文字訊息因此一路落到 `chat.handle_chat_message()` 變成一般聊天。改用按鈕操作時進一步發現「▶️ 開始作答」這顆按鈕本來就藏得很深，路徑是「主選單→考試設定→每日題數設定→選一個證照」才看得到，且只有該證照目前有題庫（`has_questions`）才會顯示，不是直覺會想到的位置。追問這顆按鈕如何判斷「現在要作答哪個證照」時，查證 `commands.start_quiz_answer()` 呼叫的 `certificate_answer.get_pending_assignments()` 其實**不分證照類型**，一次抓出當天所有證照待作答的題目、依 `exam_type`、`id` 排序依序作答（分批做完一個證照再做下一個，不是隨機混雜），代表按鈕點下去的行為跟「你點的是哪個證照的頁面」完全無關——這進一步暴露把按鈕放在單一證照頁面底下本身就是誤導；同時發現作答畫面（`format_question_prompt()`）只顯示「第 N/總題數 題」，完全沒有標示目前是哪個證照，跨證照批次切換時使用者無從得知。
+
+**決策**：三項一併修正：①在主選單新增獨立項目「▶️ 開始作答」（`menu.py` `MAIN_MENU_ITEMS` 新增 `quiz` key，沿用「考試設定」既有的 `certificate` 功能開關，不建立獨立開關），並移除原本「每日題數設定→選證照」頁面裡的同名按鈕（`certificate_settings.daily_summary()`）與其對應的 `certificate_settings:quiz:start` callback 路由，避免同一功能有兩個入口、其中一個還會誤導使用者以為只作答單一證照。②補上文字觸發詞「開始作答」（`router.py` `_QUIZ_ANSWER_TRIGGERS`），行為與主選單按鈕完全相同，滿足每日推播訊息原本的承諾。③`format_question_prompt()` 新增 `exam_type` 參數，題目呈現改為「📝【證照類型】第 N/總題數 題」，讓跨證照切換時看得出目前作答的科目。
+
+**理由**：「開始作答」是每日都會用到的高頻操作，藏在四層選單底下、又只在特定證照有題庫時才顯示，不合理；文字回覆是推播訊息唯一提供的操作方式，訊息承諾了卻沒有對應邏輯，是應該修正的缺陷而非設計取捨；作答邏輯本來就跨證照混合處理，繼續放在單一證照頁面底下只會持續誤導使用者，移到主選單獨立項目更符合實際行為，同時補上證照類型標示解決「換證照了不知道」的體驗缺口。
+
+**替代方案**：只修文字回覆路由、按鈕維持原位不動（已否決，Robin 認為按鈕位置本身也不合理，會持續讓人找不到或誤解）；作答流程改成先選證照、只作答該證照的題目（已否決，會是更大的邏輯改動，且跟「一次清完當天所有待答題目」的既有設計精神衝突，非本次要處理的範圍）。
+
+**後果**：不需要 Migration。`src/bot/menu.py`（新增 `quiz` MAIN_MENU_ITEMS 項目）、`src/bot/router.py`（新增 `menu:quiz` 分派、`_QUIZ_ANSWER_TRIGGERS` 文字觸發、移除 `certificate_settings:quiz:start` 分支）、`src/bot/certificate_settings.py`（`daily_summary()` 移除「▶️ 開始作答」按鈕）、`src/bot/certificate_answer.py`（`format_question_prompt()` 新增 `exam_type` 參數）、`src/bot/commands.py`（`_present_current_quiz_question()` 傳入 `assignment["exam_type"]`）已異動。`tests/bot/test_router.py` 更新／新增對應測試（`menu:quiz` callback、文字觸發詞各一項），`pytest tests/bot -q` 1136 passed（另有 4 項既有 `test_job_search.py` 失敗屬雲端沙盒暫存快取版本較舊，與本次改動無關，非回歸範圍），`ruff check` 對本次異動檔案全過。`docs/specs/SPEC.md` FR-27 同步更新。舊訊息裡殘留的「▶️ 開始作答」按鈕（部署前已推播的歷史訊息）點擊後會落入 `certificate_settings.start_menu()` 的預設分支，優雅降級不會出錯。

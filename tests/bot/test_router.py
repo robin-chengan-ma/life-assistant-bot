@@ -1526,18 +1526,34 @@ def _seed_certificate_assignment_for_router(fake_db, user_id, **overrides):
     return fake_db.insert("certificate_daily_assignments", row)
 
 
-def test_certificate_settings_quiz_button_presents_question_and_sets_state(fake_db, monkeypatch):
+def test_main_menu_quiz_button_presents_question_and_sets_state(fake_db, monkeypatch):
+    # 2026-09-06：「▶️ 開始作答」從「考試設定→每日題數設定→選證照」深處移到主選單獨立項目
+    # （`menu:quiz`），取代已移除的 `certificate_settings:quiz:start` callback，見
+    # docs/ADR/discuss/robinson.md 對應日期條目。
     monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
     owner_row = fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
     qid = _seed_certificate_question_for_router(fake_db)
     _seed_certificate_assignment_for_router(fake_db, owner_row, certificate_question_id=qid)
     store = ConversationStateStore()
 
-    reply, _keyboard = router.handle_callback_query(
-        fake_db, store, ROBIN_ID, "certificate_settings:quiz:start"
-    )
+    reply, _keyboard = router.handle_callback_query(fake_db, store, ROBIN_ID, "menu:quiz")
 
-    assert "第 1/1 題" in reply
+    assert "【ielts】第 1/1 題" in reply
+    assert store.get(ROBIN_ID)["flow"] == "pending_quiz_answer"
+
+
+def test_quiz_answer_text_trigger_presents_question_and_sets_state(fake_db, monkeypatch):
+    # 2026-09-06：修正每日 08:00 推播訊息承諾「回覆『開始作答』開始吧」卻沒有對應文字路由的 bug
+    # （原本會掉進一般聊天），見 docs/ADR/discuss/robinson.md 對應日期條目。
+    monkeypatch.setenv("ROBIN_TELEGRAM_TOKEN", str(ROBIN_ID))
+    owner_row = fake_db.insert("users", {"telegram_user_id": ROBIN_ID, "role": "Robin", "is_owner": True})
+    qid = _seed_certificate_question_for_router(fake_db)
+    _seed_certificate_assignment_for_router(fake_db, owner_row, certificate_question_id=qid)
+    store = ConversationStateStore()
+
+    reply = router.handle_message(fake_db, store, ROBIN_ID, "開始作答")
+
+    assert "【ielts】第 1/1 題" in reply
     assert store.get(ROBIN_ID)["flow"] == "pending_quiz_answer"
 
 
@@ -1547,7 +1563,7 @@ def test_pending_quiz_answer_flow_dispatches_through_router(fake_db, monkeypatch
     qid = _seed_certificate_question_for_router(fake_db)
     _seed_certificate_assignment_for_router(fake_db, owner_row, certificate_question_id=qid)
     store = ConversationStateStore()
-    router.handle_callback_query(fake_db, store, ROBIN_ID, "certificate_settings:quiz:start")
+    router.handle_callback_query(fake_db, store, ROBIN_ID, "menu:quiz")
 
     reply = router.handle_message(fake_db, store, ROBIN_ID, "A")
 

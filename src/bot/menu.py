@@ -76,6 +76,12 @@ FR-9d）：`query`（🔍 資料查詢）接上真正邏輯，從 `_NOT_YET_IMPL
 （`finance:budget_confirm_save`／`finance:budget_override_confirm_save`），舊有文字觸發詞
 （「我要記帳」「設定記帳預算」等）全數移除，只留 `router.py` 既有的 `finance:goal:*` 目標子
 流程不動。
+2026-09-06（見 docs/ADR/discuss/robinson.md 對應日期條目）：新增 `quiz`（▶️ 開始作答）為主選單
+獨立項目，直接呼叫既有 `commands.start_quiz_answer()`（跟 `certificate_settings:quiz:start`
+callback 呼叫的是同一個函式，行為完全不變：一次抓出所有證照當天待作答的題目，依 `exam_type`
+分批依序作答）。原本這顆按鈕只藏在「考試設定→每日題數設定→選證照」這個很深的路徑底下，且推播
+訊息叫使用者回覆的純文字「開始作答」完全沒有對應的文字路由，兩者皆已移除／補上，見
+`router.py` `_QUIZ_ANSWER_TRIGGERS` 與 `certificate_settings.daily_summary()`。
 """
 
 # key、label 依 FR-6e 定案順序；owner_only 決定這個項目是否只有 Owner 看得到。
@@ -92,6 +98,7 @@ MAIN_MENU_ITEMS = [
     {"key": "permission", "label": "🔑 權限管理", "owner_only": True},
     {"key": "tech_intel", "label": "💡 Youtube 技術分享設定", "owner_only": True},
     {"key": "job_search", "label": "💼 求職設定", "owner_only": True},
+    {"key": "quiz", "label": "▶️ 開始作答", "owner_only": True},
     {"key": "certificate", "label": "📖 考試設定", "owner_only": True},
     {"key": "system_errors", "label": "🚨 系統錯誤管理", "owner_only": True},
     {"key": "recovered", "label": "📢 發送康復通知", "owner_only": True},
