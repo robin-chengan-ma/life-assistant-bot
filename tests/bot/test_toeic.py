@@ -387,8 +387,8 @@ def test_sync_splits_whole_audio_and_processes_listen_questions(fake_db):
     ]
     voice_client = MagicMock()
     voice_client.transcribe_with_segments.return_value = [
-        {"start": 0.0, "end": 1.0, "text": "Question one."},
-        {"start": 4.5, "end": 5.5, "text": "Question two."},
+        {"start": 0.0, "end": 1.0, "text": "Number 1."},
+        {"start": 4.5, "end": 5.5, "text": "Number 2."},
     ]
 
     toeic.sync_track1_from_drive(fake_db, gdrive_client, image_llm_clients, voice_client)
@@ -417,7 +417,7 @@ def test_sync_splits_whole_audio_respects_cutoff_seconds(fake_db):
     image_llm_clients[0].generate_with_image.return_value = _listen_answer_vision_reply("聽力第一題")
     voice_client = MagicMock()
     voice_client.transcribe_with_segments.return_value = [
-        {"start": 0.0, "end": 1.0, "text": "Question one."},
+        {"start": 0.0, "end": 1.0, "text": "Number 1."},
         {"start": 4.5, "end": 5.5, "text": "Later part, should be ignored."},
     ]
 
@@ -426,6 +426,90 @@ def test_sync_splits_whole_audio_respects_cutoff_seconds(fake_db):
     rows = fake_db.select("certificate_questions")
     assert len(rows) == 1
     assert rows[0]["question_number"] == 1
+
+
+def test_sync_records_failure_and_does_not_retry_question_with_missing_marker(fake_db):
+    # 2026-09-13 新增（Robin 明確要求，見 docs/ADR/discuss/robinson.md 對應日期條目）：某一題
+    # 找不到 100% 確定的切割邊界時，這次先跳過、記錄成放棄，「不是」下次排程自動重試——因為
+    # 同一份錄音的轉錄結果基本上是固定的，重跑注定還是失敗，純粹浪費時間與 API 額度。
+    whole_audio_bytes = _make_silent_mp3_bytes(6000)
+    files = [
+        {"id": "ans1", "name": "toeic_0004_listen_1_ans.png", "mimeType": "image/png", "webViewLink": "ans-url-1"},
+        {"id": "ans2", "name": "toeic_0004_listen_2_ans.png", "mimeType": "image/png", "webViewLink": "ans-url-2"},
+        {"id": "audio", "name": "toeic_0004_listen.mp3", "mimeType": "audio/mpeg", "webViewLink": "whole-url"},
+    ]
+    downloads = {"ans1": b"answer-bytes-1", "ans2": b"answer-bytes-2", "audio": whole_audio_bytes}
+    gdrive_client = _make_gdrive_client(files, downloads)
+    image_llm_clients = [MagicMock()]
+    image_llm_clients[0].generate_with_image.return_value = _listen_answer_vision_reply("聽力第一題")
+    voice_client = MagicMock()
+    # 第 2 題的「Number 2.」標記完全沒有念出來／沒被 Whisper 辨識到，第 1 題(本批最後一個有標記的
+    # 題號之前那題)因為抓不到「下一題」的標記，結束邊界也不確定，兩題本次都應該被跳過。
+    voice_client.transcribe_with_segments.return_value = [{"start": 0.0, "end": 1.0, "text": "Number 1."}]
+
+    toeic.sync_track1_from_drive(fake_db, gdrive_client, image_llm_clients, voice_client)
+
+    assert fake_db.select("certificate_questions") == []
+    failures = fake_db.select("certificate_listen_split_failures")
+    assert {(row["exam_type"], row["test_id"], row["question_number"]) for row in failures} == {
+        ("toeic", "0004", 1),
+        ("toeic", "0004", 2),
+    }
+
+    # 重新同步一次（模擬下週日排程再跑一次）：已經記錄放棄的題目不應該再被嘗試切割。
+    voice_client.transcribe_with_segments.reset_mock()
+    toeic.sync_track1_from_drive(fake_db, gdrive_client, image_llm_clients, voice_client)
+
+    voice_client.transcribe_with_segments.assert_not_called()
+    assert fake_db.select("certificate_questions") == []
+    assert len(fake_db.select("certificate_listen_split_failures")) == 2  # 沒有重複寫入
+
+
+def test_sync_recovers_from_transient_download_failure_on_one_answer_photo(fake_db):
+    # 2026-09-14 新增（見 docs/ADR/debug/robinson.md 對應日期條目）：Robin 本機重跑測試時，第 1~3
+    # 題完全「憑空消失」——兩張表都查不到，排查發現是下載解答照片時遇到暫時性網路中斷
+    # （`IncompleteRead`），這行原本沒有包 try/except，例外會直接把整個 `sync_track1_from_drive()`
+    # 中斷掉，讓「明明已經確定切出音檔」的題目連寫進資料庫或記錄失敗的機會都沒有。這裡驗證：
+    # 其中一題下載解答照片失敗，不會拖累同一批次裡的其他題目，而且失敗的那題因為沒有寫入
+    # `source_image_filename`，下次同步（不再模擬下載失敗）會自動重試成功。
+    whole_audio_bytes = _make_silent_mp3_bytes(6000)
+    files = [
+        {"id": "ans1", "name": "toeic_0005_listen_1_ans.png", "mimeType": "image/png", "webViewLink": "ans-url-1"},
+        {"id": "ans2", "name": "toeic_0005_listen_2_ans.png", "mimeType": "image/png", "webViewLink": "ans-url-2"},
+        {"id": "audio", "name": "toeic_0005_listen.mp3", "mimeType": "audio/mpeg", "webViewLink": "whole-url"},
+    ]
+    downloads = {"ans1": b"answer-bytes-1", "ans2": b"answer-bytes-2", "audio": whole_audio_bytes}
+    gdrive_client = _make_gdrive_client(files, downloads)
+
+    def flaky_download(file_id):
+        if file_id == "ans1":
+            raise ConnectionError("IncompleteRead：模擬網路中斷")
+        return downloads[file_id]
+
+    gdrive_client.download_file.side_effect = flaky_download
+    image_llm_clients = [MagicMock()]
+    image_llm_clients[0].generate_with_image.return_value = _listen_answer_vision_reply("聽力第二題")
+    voice_client = MagicMock()
+    voice_client.transcribe_with_segments.return_value = [
+        {"start": 0.0, "end": 1.0, "text": "Number 1."},
+        {"start": 4.5, "end": 5.5, "text": "Number 2."},
+    ]
+
+    toeic.sync_track1_from_drive(fake_db, gdrive_client, image_llm_clients, voice_client)
+
+    # 第 1 題下載失敗，這次先跳過；第 2 題不受影響，正常寫入。兩張表都不該有第 1 題的紀錄——
+    # 這是單純下載失敗，不是「切不出邊界」，不屬於永久放棄，應該保持可以自動重試的狀態。
+    rows = fake_db.select("certificate_questions")
+    assert {r["question_number"] for r in rows} == {2}
+    failures = fake_db.select("certificate_listen_split_failures")
+    assert failures == []
+
+    # 下次同步（網路恢復正常）：第 1 題會自動重試成功。
+    gdrive_client.download_file.side_effect = lambda file_id: downloads[file_id]
+    toeic.sync_track1_from_drive(fake_db, gdrive_client, image_llm_clients, voice_client)
+
+    rows = fake_db.select("certificate_questions")
+    assert {r["question_number"] for r in rows} == {1, 2}
 
 
 def test_split_whole_audio_transcribes_trimmed_bytes_not_the_full_file_when_cutoff_set():
@@ -437,7 +521,7 @@ def test_split_whole_audio_transcribes_trimmed_bytes_not_the_full_file_when_cuto
     gdrive_client = MagicMock()
     gdrive_client.download_file.return_value = whole_audio_bytes
     voice_client = MagicMock()
-    voice_client.transcribe_with_segments.return_value = [{"start": 0.0, "end": 1.0, "text": "Question one."}]
+    voice_client.transcribe_with_segments.return_value = [{"start": 0.0, "end": 1.0, "text": "Number 1."}]
 
     toeic._split_whole_audio(
         gdrive_client,
@@ -614,93 +698,108 @@ def test_sync_treats_unrecognized_answer_as_unresolved(fake_db):
     assert row["correct_answer"] is None
 
 
-# --- _segment_length_variance / _split_points_for_target_length ---
+# --- _find_number_marker_starts ---
 
 
-def test_segment_length_variance_is_zero_for_perfectly_even_segments():
-    variance = toeic._segment_length_variance(0.0, [10.0, 20.0], 30.0)
-    assert variance == 0.0
-
-
-def test_segment_length_variance_is_higher_for_uneven_segments():
-    even = toeic._segment_length_variance(0.0, [10.0, 20.0], 30.0)
-    uneven = toeic._segment_length_variance(0.0, [2.0, 4.0], 30.0)
-    assert uneven > even
-
-
-def test_segment_length_variance_returns_infinity_for_non_positive_length():
-    assert toeic._segment_length_variance(0.0, [5.0, 5.0], 5.0) == float("inf")
-
-
-def test_split_points_for_target_length_picks_nearest_candidates():
-    points = toeic._split_points_for_target_length([13.2, 29.5], 2, 0.0, 15.0)
-    assert points == [13.2, 29.5]
-
-
-def test_split_points_for_target_length_falls_back_to_ideal_position_when_no_candidates():
-    points = toeic._split_points_for_target_length([], 2, 0.0, 10.0)
-    assert points == [10.0, 20.0]
-
-
-def test_split_points_for_target_length_does_not_reuse_same_candidate():
-    points = toeic._split_points_for_target_length([15.0], 2, 0.0, 10.0)
-    assert points[0] == 15.0
-    assert points[1] != 15.0  # 第二個切割點的候選點已被用掉，應該退回理想位置
-
-
-# --- _find_split_plan ---
-
-
-def test_find_split_plan_evenly_divides_when_no_intro_detected():
-    # 3 題，題目之間有明顯大停頓（6s），題目內部只有小停頓（0.3s）雜訊，且不像有說明語音
+def test_find_number_marker_starts_uses_spoken_digit_markers():
+    # 2026-09-07 新增：Robin 提出聽力錄音本來就會念題號（「Number 1」「Number 2」...），比停頓
+    # 長度猜測可靠，優先掃描轉錄文字裡的題號標記直接切割。
     segments = [
-        {"start": 0.0, "end": 5.0, "text": "q1a"},
-        {"start": 5.3, "end": 10.0, "text": "q1b"},
-        {"start": 16.0, "end": 21.0, "text": "q2a"},
-        {"start": 21.3, "end": 26.0, "text": "q2b"},
-        {"start": 32.0, "end": 37.0, "text": "q3a"},
-        {"start": 37.3, "end": 42.0, "text": "q3b"},
+        {"start": 0.0, "end": 1.0, "text": "Number 1."},
+        {"start": 1.2, "end": 5.0, "text": "Look at the picture."},
+        {"start": 9.0, "end": 10.0, "text": "Number 2."},
+        {"start": 10.2, "end": 14.0, "text": "Look at the picture again."},
+        {"start": 18.0, "end": 19.0, "text": "Number 3."},
+        {"start": 19.2, "end": 23.0, "text": "One more picture."},
     ]
 
-    start_offset, points = toeic._find_split_plan(segments, 3, 42.0)
+    starts = toeic._find_number_marker_starts(segments, [1, 2, 3])
 
-    assert start_offset == 0.0
-    assert points == [13.0, 29.0]
+    assert starts == {1: 0.0, 2: 9.0, 3: 18.0}
 
 
-def test_find_split_plan_detects_leading_instructions_and_excludes_them():
-    # 模擬「開頭有一段作答說明語音」的情境：說明語音本身內部只有小停頓（不該被誤判成題目邊界），
-    # 說明語音結尾與 3 題題目之間的停頓（6s）明顯比說明語音內部的停頓（0.3s）長很多
+def test_find_number_marker_starts_uses_spelled_out_words():
     segments = [
-        {"start": 0.0, "end": 5.0, "text": "intro-a"},
-        {"start": 5.3, "end": 10.0, "text": "intro-b"},
-        {"start": 10.3, "end": 15.0, "text": "intro-c"},  # 說明語音結束於 15.0
-        {"start": 21.0, "end": 26.0, "text": "q1"},  # 說明語音 -> 第一題，停頓 6s
-        {"start": 32.0, "end": 37.0, "text": "q2"},  # 第一題 -> 第二題，停頓 6s
-        {"start": 43.0, "end": 48.0, "text": "q3"},  # 第二題 -> 第三題，停頓 6s
+        {"start": 0.0, "end": 1.0, "text": "Number One."},
+        {"start": 8.0, "end": 9.0, "text": "Number Two."},
     ]
-    total_duration = 53.0
 
-    start_offset, points = toeic._find_split_plan(segments, 3, total_duration)
+    starts = toeic._find_number_marker_starts(segments, [1, 2])
 
-    assert start_offset == 18.0  # (15.0 + 21.0) / 2，說明語音結尾與第一題之間的停頓中點
-    assert points == [29.0, 40.0]
+    assert starts == {1: 0.0, 2: 8.0}
 
 
-def test_find_split_plan_returns_empty_when_only_one_question():
-    segments = [{"start": 0.0, "end": 1.0, "text": "a"}, {"start": 2.0, "end": 3.0, "text": "b"}]
+def test_find_number_marker_starts_ignores_number_mentioned_early_in_content():
+    # 2026-09-07 新增（Robin 提出疑慮）：內容裡提前出現「Number 2」字樣（例如題目內容剛好提到
+    # 這個詞，或還沒輪到的題號被誤唸/誤辨識），但真正的第 2 題標記在後面才出現；依序往後掃描
+    # 只會採用「輪到它時」找到的那次，不會被提前出現的誤判影響。
+    segments = [
+        {"start": 0.0, "end": 1.0, "text": "Number 1."},
+        {"start": 1.2, "end": 5.0, "text": "The flight departs, gate number 2, in ten minutes."},
+        {"start": 9.0, "end": 10.0, "text": "Number 2."},
+        {"start": 10.2, "end": 14.0, "text": "Look at the picture."},
+    ]
 
-    start_offset, points = toeic._find_split_plan(segments, 1, 3.0)
+    starts = toeic._find_number_marker_starts(segments, [1, 2])
 
-    assert start_offset == 0.0
-    assert points == []
+    assert starts == {1: 0.0, 2: 9.0}
+
+
+def test_find_number_marker_starts_handles_repeated_announcement_of_same_number():
+    # 同一個題號被念了兩次（例如重複播報一次），採用第一次符合順序的那次，不會出錯。
+    segments = [
+        {"start": 0.0, "end": 1.0, "text": "Number 1."},
+        {"start": 1.2, "end": 2.0, "text": "Number 1, listen again."},
+        {"start": 5.0, "end": 9.0, "text": "Look at the picture."},
+        {"start": 15.0, "end": 16.0, "text": "Number 2."},
+    ]
+
+    starts = toeic._find_number_marker_starts(segments, [1, 2])
+
+    assert starts == {1: 0.0, 2: 15.0}
+
+
+def test_find_number_marker_starts_omits_missing_marker_instead_of_failing_whole_batch():
+    # 2026-09-13 修改：只找到第 1、3 題的標記，第 2 題完全沒念出來（聽錯／口誤），不再是「整批
+    # 放棄」，而是回傳部分結果——只有找得到標記的題號才會出現在回傳的 dict 裡。
+    segments = [
+        {"start": 0.0, "end": 1.0, "text": "Number 1."},
+        {"start": 18.0, "end": 19.0, "text": "Number 3."},
+    ]
+
+    starts = toeic._find_number_marker_starts(segments, [1, 2, 3])
+
+    assert starts == {1: 0.0, 3: 18.0}
+    assert 2 not in starts
+
+
+# --- split_audio_by_question_count ---
+
+
+def test_split_audio_by_question_count_uses_number_markers():
+    audio_bytes = _make_silent_mp3_bytes(12000)
+    transcript_segments = [
+        {"start": 0.0, "end": 1.0, "text": "Number 1."},
+        {"start": 1.2, "end": 1.5, "text": "short question, tiny pause next"},
+        {"start": 1.6, "end": 9.0, "text": "Number 2."},
+        {"start": 9.2, "end": 11.9, "text": "a much longer second question"},
+    ]
+
+    result = toeic.split_audio_by_question_count(audio_bytes, [1, 2], transcript_segments)
+
+    assert set(result.keys()) == {1, 2}
+    q1 = AudioSegment.from_file(io.BytesIO(result[1]))
+    q2 = AudioSegment.from_file(io.BytesIO(result[2]))
+    # 第 1 題邊界＝自己的標記(0.0s)到下一題標記(1.6s)；第 2 題是它自己的標記(1.6s)到音檔結尾(12s)。
+    assert abs(len(q1) - 1600) < 300
+    assert abs(len(q2) - 10400) < 300
 
 
 def test_split_audio_by_question_count_returns_correct_number_of_segments():
     audio_bytes = _make_silent_mp3_bytes(6000)
     transcript_segments = [
-        {"start": 0.0, "end": 1.0, "text": "Question one."},
-        {"start": 4.5, "end": 5.5, "text": "Question two."},
+        {"start": 0.0, "end": 1.0, "text": "Number 1."},
+        {"start": 4.5, "end": 5.5, "text": "Number 2."},
     ]
 
     result = toeic.split_audio_by_question_count(audio_bytes, [2, 1], transcript_segments)
@@ -714,43 +813,42 @@ def test_split_audio_by_question_count_returns_correct_number_of_segments():
         assert len(decoded) > 0
 
 
-def test_split_audio_by_question_count_excludes_leading_instructions_regression():
-    """迴歸測試：2026-08-07 用 Robin 提供的真實錄音 Test01_Part1.mp3 實測時發現，音檔開頭若有
-    一段作答說明語音，早期版本的切割邏輯會把整段說明語音併入第一題（導致第一段長度是其他題目
-    的 5 倍以上）；這裡用合成音檔重現同樣的「開頭有一段明顯比題目間停頓更長的說明語音」結構，
-    確保修正後的邏輯會正確排除說明語音、6 段長度彼此相近。
-    """
-    intro_ms = 15000
-    gap_ms = 3000
-    question_ms = 5000
-    segments_meta = []
-    # 說明語音本身在時間軸上不需要精確模擬語句，只要整體時長跟後面題目的停頓比起來夠長即可
-    audio = Sine(220).to_audio_segment(duration=intro_ms).apply_gain(-20)
-    cursor = intro_ms
+def test_split_audio_by_question_count_accepts_last_question_with_audio_end_boundary():
+    # 最後一題只要找得到自己的開頭標記，結尾直接用音檔結尾即可，不需要「下一題」的標記。
+    audio_bytes = _make_silent_mp3_bytes(6000)
+    transcript_segments = [
+        {"start": 0.0, "end": 1.0, "text": "Number 1."},
+        {"start": 4.5, "end": 5.5, "text": "Number 2."},
+    ]
 
-    for _ in range(6):
-        audio += AudioSegment.silent(duration=gap_ms)
-        question_start = cursor + gap_ms
-        audio += Sine(440).to_audio_segment(duration=question_ms).apply_gain(-20)
-        segments_meta.append((question_start / 1000, (question_start + question_ms) / 1000))
-        cursor = question_start + question_ms
+    result = toeic.split_audio_by_question_count(audio_bytes, [1, 2], transcript_segments)
 
-    buffer = io.BytesIO()
-    audio.export(buffer, format="mp3")
-    audio_bytes = buffer.getvalue()
+    assert set(result.keys()) == {1, 2}
+    q2 = AudioSegment.from_file(io.BytesIO(result[2]))
+    assert abs(len(q2) - 1500) < 300  # 4.5s ~ 6.0s（音檔結尾）
 
-    # 模擬 Whisper 回傳的逐句 timestamp：說明語音當一個大區塊，後面 6 題各自獨立一段
-    transcript_segments = [{"start": 0.0, "end": intro_ms / 1000, "text": "intro"}]
-    transcript_segments += [{"start": s, "end": e, "text": "q"} for s, e in segments_meta]
 
-    result = toeic.split_audio_by_question_count(audio_bytes, [1, 2, 3, 4, 5, 6], transcript_segments)
+def test_split_audio_by_question_count_skips_question_missing_its_own_marker():
+    # 2026-09-13 新增（Robin 明確要求「沒把握的題目就跳過，不要用猜的」）：第 2 題自己的標記
+    # 完全找不到，不能用任何猜測法補上，這一題應該整個不出現在結果裡；第 1、3 題邊界仍然明確
+    # （第 1 題：自己 -> 下一個找得到的標記其實是第 3 題？不行，因為 _find_number_marker_starts
+    # 是依序掃描，找不到第 2 題不影響第 1 題「自己」的邊界判定，但第 1 題的「下一題」在
+    # split_audio_by_question_count 是看 sorted_numbers 裡緊接著的題號（2），標記缺席時第 1
+    # 題的結束邊界也無法確定，因此第 1 題也會被跳過；只有第 3 題（本批最後一題，只需要自己的
+    # 標記）能確定。
+    audio_bytes = _make_silent_mp3_bytes(18000)
+    transcript_segments = [
+        {"start": 0.0, "end": 1.0, "text": "Number 1."},
+        {"start": 1.2, "end": 5.0, "text": "Look at the picture."},
+        # 第 2 題的 "Number 2." 標記完全沒有念出來 / 沒被 Whisper 辨識到
+        {"start": 14.0, "end": 15.0, "text": "Number 3."},
+    ]
 
-    assert set(result.keys()) == {1, 2, 3, 4, 5, 6}
-    lengths_ms = [len(AudioSegment.from_file(io.BytesIO(result[q]))) for q in range(1, 7)]
-    # 說明語音（15 秒）應該被排除，不應該有任何一段長度接近或超過說明語音本身
-    assert max(lengths_ms) < intro_ms
-    # 6 段長度應該彼此相近（允許誤差），不應該出現某一段特別長/特別短的離群值
-    assert max(lengths_ms) - min(lengths_ms) < question_ms
+    result = toeic.split_audio_by_question_count(audio_bytes, [1, 2, 3], transcript_segments)
+
+    assert 2 not in result
+    assert 1 not in result  # 第 1 題找不到「下一題（第 2 題）」的標記，結束邊界不確定，一併跳過
+    assert set(result.keys()) == {3}  # 只有最後一題，靠自己的標記＋音檔結尾，能 100% 確定
 
 
 # --- generate_track2_vocab_questions ---

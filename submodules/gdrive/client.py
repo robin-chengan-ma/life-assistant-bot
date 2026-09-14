@@ -90,14 +90,35 @@ class GDriveClient:
 
         `name_contains`：可選的檔名關鍵字過濾（Drive API 查詢語法只支援 `contains`，沒有原生
         「starts with」），縮小範圍用；呼叫端若需要精確的前綴/樣式比對，仍需自行對回傳結果再過濾一次。
+
+        **2026-09-14 修正（見 `docs/ADR/debug/robinson.md` 對應日期條目）**：原本只呼叫一次
+        `files().list()`、完全沒有處理分頁——Drive API 單次呼叫預設最多只回傳 100 筆結果，
+        資料夾內檔案數一旦超過這個數字，排在後面幾頁的檔案會被整個漏掉、呼叫端完全不知道它們
+        存在（不是抓到、處理失敗，是連列表都沒列出來）。Robin 的證照題庫資料夾實測已經超過
+        100 個檔案，這正是「聽力題第 1～3 題怎麼重跑都抓不到、也不記錄任何失敗」的根因。改成
+        用 `nextPageToken` 迴圈抓完所有分頁，`pageSize` 明確設為 API 上限 1000（減少來回呼叫
+        次數），直到某一頁沒有回傳 `nextPageToken` 才停止。
         """
         query = f"'{self._folder_id}' in parents and trashed = false"
         if name_contains:
             escaped = name_contains.replace("'", "\\'")
             query += f" and name contains '{escaped}'"
-        request = self._service.files().list(q=query, fields="files(id, name, mimeType, webViewLink)")
-        response = call_with_retry(request.execute, is_retryable=_is_retryable_google_api_error)
-        return response.get("files", [])
+
+        files: list[dict] = []
+        page_token: str | None = None
+        while True:
+            request = self._service.files().list(
+                q=query,
+                fields="nextPageToken, files(id, name, mimeType, webViewLink)",
+                pageSize=1000,
+                pageToken=page_token,
+            )
+            response = call_with_retry(request.execute, is_retryable=_is_retryable_google_api_error)
+            files.extend(response.get("files", []))
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                break
+        return files
 
     def download_file(self, file_id: str) -> bytes:
         """下載指定檔案的原始內容（bytes）。"""

@@ -38,12 +38,18 @@ class _FakeFilesCreateRequest:
 
 
 class _FakeFiles:
-    def __init__(self, response, execute_side_effects=None):
+    def __init__(self, response, execute_side_effects=None, list_responses=None):
         self._response = response
         self._execute_side_effects = execute_side_effects
+        # 2026-09-14 新增（見 docs/ADR/debug/robinson.md 對應日期條目）：`list_responses`
+        # （可選）讓分頁測試依序回傳多個不同的 response，模擬多次 `list()` 呼叫各自拿到
+        # 「不同一頁」的結果；沒有提供時維持原本「每次都回傳同一個 response」的行為，不影響
+        # 既有測試。
+        self._list_responses = list(list_responses) if list_responses is not None else None
         self.last_create_call = None
         self.last_request = None
         self.last_list_call = None
+        self.list_calls: list[dict] = []
         self.last_get_media_call = None
 
     def create(self, body, media_body, fields):
@@ -51,9 +57,11 @@ class _FakeFiles:
         self.last_request = _FakeFilesCreateRequest(self._response, self._execute_side_effects)
         return self.last_request
 
-    def list(self, q, fields):
-        self.last_list_call = {"q": q, "fields": fields}
-        self.last_request = _FakeFilesCreateRequest(self._response, self._execute_side_effects)
+    def list(self, q, fields, pageSize=None, pageToken=None):
+        self.last_list_call = {"q": q, "fields": fields, "pageSize": pageSize, "pageToken": pageToken}
+        self.list_calls.append(self.last_list_call)
+        response = self._list_responses.pop(0) if self._list_responses is not None else self._response
+        self.last_request = _FakeFilesCreateRequest(response, self._execute_side_effects)
         return self.last_request
 
     def get_media(self, fileId):
@@ -63,8 +71,8 @@ class _FakeFiles:
 
 
 class _FakeDriveService:
-    def __init__(self, response, execute_side_effects=None):
-        self._files = _FakeFiles(response, execute_side_effects)
+    def __init__(self, response, execute_side_effects=None, list_responses=None):
+        self._files = _FakeFiles(response, execute_side_effects, list_responses)
 
     def files(self):
         return self._files
@@ -78,9 +86,10 @@ def _make_client(
     client_secret="fake-client-secret",
     folder_id="fake-folder",
     execute_side_effects=None,
+    list_responses=None,
 ):
     response = response or {"id": "abc123", "webViewLink": "https://drive.google.com/file/d/abc123/view"}
-    fake_service = _FakeDriveService(response, execute_side_effects)
+    fake_service = _FakeDriveService(response, execute_side_effects, list_responses)
 
     captured_credentials_kwargs = {}
 
@@ -244,7 +253,9 @@ def test_list_files_sends_correct_query_and_fields(monkeypatch):
 
     call = fake_service.files().last_list_call
     assert call["q"] == "'my-folder-id' in parents and trashed = false and name contains 'toeic'"
-    assert call["fields"] == "files(id, name, mimeType, webViewLink)"
+    assert call["fields"] == "nextPageToken, files(id, name, mimeType, webViewLink)"
+    assert call["pageSize"] == 1000
+    assert call["pageToken"] is None
 
 
 def test_list_files_without_name_filter_omits_name_clause(monkeypatch):
@@ -276,6 +287,39 @@ def test_download_file_sends_correct_file_id(monkeypatch):
     gdrive_client.download_file("target-file-id")
 
     assert fake_service.files().last_get_media_call == {"fileId": "target-file-id"}
+
+
+def test_list_files_follows_pagination_until_no_next_page_token(monkeypatch):
+    """2026-09-14 新增（見 docs/ADR/debug/robinson.md 對應日期條目）：`list_files()` 原本只呼叫一次
+    `files().list()`，資料夾檔案數超過單頁上限時，後面幾頁的檔案會整個漏掉、完全不會出現在回傳結果
+    裡，也不會有任何錯誤或記錄——這正是 Robin 實際踩到的根因（聽力題第 1～3 題永遠抓不到）。
+    這裡模擬兩頁：第一頁回傳 `nextPageToken` 與 2 個檔案，第二頁沒有 `nextPageToken` 與 1 個檔案，
+    驗證 `list_files()` 會把兩頁串起來回傳、而且第二次呼叫有把第一頁拿到的 `nextPageToken` 當作
+    `pageToken` 傳進去，直到某一頁沒有 `nextPageToken` 才停止（不會多打一次無意義的第三次請求）。
+    """
+    page_1 = {
+        "nextPageToken": "page-2-token",
+        "files": [{"id": "f1", "name": "a.jpeg", "mimeType": "image/jpeg"}],
+    }
+    page_2 = {
+        "files": [
+            {"id": "f2", "name": "b.jpeg", "mimeType": "image/jpeg"},
+            {"id": "f3", "name": "c.jpeg", "mimeType": "image/jpeg"},
+        ]
+    }
+    gdrive_client, fake_service, _ = _make_client(monkeypatch, list_responses=[page_1, page_2])
+
+    files = gdrive_client.list_files()
+
+    assert files == [
+        {"id": "f1", "name": "a.jpeg", "mimeType": "image/jpeg"},
+        {"id": "f2", "name": "b.jpeg", "mimeType": "image/jpeg"},
+        {"id": "f3", "name": "c.jpeg", "mimeType": "image/jpeg"},
+    ]
+    list_calls = fake_service.files().list_calls
+    assert len(list_calls) == 2
+    assert list_calls[0]["pageToken"] is None
+    assert list_calls[1]["pageToken"] == "page-2-token"
 
 
 def test_list_files_retries_on_5xx_then_succeeds(monkeypatch):

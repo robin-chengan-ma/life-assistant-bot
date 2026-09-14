@@ -1211,3 +1211,50 @@ YouTube 主題訂閱設定子選單結構；`router.py` 移除 `/my_youtube_topi
 **理由**：批改結果與下一題本質上是兩個獨立事件（先看這題對不對，再看下一題），擠在同一則訊息裡容易讓使用者誤以為是同一題延伸內容，拆成兩則推播符合實際的使用者心智模型，也是 Telegram 一般問答機器人常見的呈現方式。
 
 **後果**：不需要 Migration。`src/bot/commands.py`（`handle_quiz_answer_step()` 簽名新增 `telegram_client`，批改結果改用 `telegram_client.send_text()` 直接送出）、`src/bot/router.py`（`pending_quiz_answer` 分派補上 `telegram_client`）已異動。`tests/bot/test_certificate_answer_commands.py`、`tests/bot/test_router.py` 同步更新（改用 `MagicMock` 驗證批改結果透過 `telegram_client` 單獨送出、回傳值只剩下一題／完成訊息）。`pytest tests/bot -q` 1136 passed（另有 4 項既有 `test_job_search.py` 失敗屬雲端沙盒暫存快取版本較舊，與本次改動無關），`ruff check` 全過。問題①（聽力題缺席）待 Robin 確認題庫／設定資料後續追蹤，若確認是資料問題（題數設定或正解未解析）則不需要程式碼異動，若確認是選題邏輯本身有缺陷則需另外排查 `_pick_track_questions()`。
+
+### 2026-09-06／07 續：聽力題排查全紀錄——過期快照誤判、洩題迴歸、cutoff 順序寫反、記憶體爆掉，最後改用「Number N」題號標記切割
+
+**狀態**：accepted
+
+**背景**：問題①（沒看到聽力題）後續一路排查下來，牽出一連串各自獨立的問題，依實際發生順序記錄：
+
+1. Claude 一開始分析用的是雲端工作區裡過期的檔案快照，誤判 ADR-32（聽力題目庫改版）三項功能都沒實作完成；Robin 追問「你確定現在的程式碼可以處理這些情境嗎」後，Claude 改用 `device_bash` 重新拉最新程式碼與測試，才發現實作其實都在。
+2. 但同一次重新測試發現真的有一個迴歸：`93ed786`（開始作答入口修正）改動 `_build_certificate_question_view()` 時誤刪了聽力題「不顯示文字題目/選項」的分流邏輯，退化成洩題，且該次 commit 測試範圍選太窄沒跑到這支模組的既有測試。已修復（commit `abc4356`）。
+3. Robin 貼出 Render 正式環境 `413 Payload Too Large` log，證實排程確實有觸發並掃到 `monster01` 這批聽力檔案，但排查發現 `_split_whole_audio()` 執行順序寫反——先把整份未裁切的原始音檔送去 Groq 轉錄，`cutoff_seconds` 裁切要等轉錄成功才執行，完全沒發揮限制檔案大小的效果，是 ADR-32 實作當時順序就寫錯，不是後續迴歸。已修復（commit `7e343e7`）。
+4. Robin 要求立刻重跑驗證、不要等下週日；Claude 一開始叫 Robin 在 Render Web Shell 執行手動同步，結果把正式 Web Service 的記憶體吃爆，觸發 Render 自動重啟（服務短暫斷線）——原因是 `_split_whole_audio()` 下載整份錄音後，`pydub` 需要把它完整解碼成原始音訊放進記憶體，一支 45 分鐘的錄音解碼後可能就逼近甚至超過 Starter 方案 512MB 的上限，跟「送不送去 Groq」無關，任何在同一個 512MB process 裡執行的地方都有一樣風險（含正式排程本身）。Robin 進一步要求不要在 Render 上跑，改在本機執行（本機記憶體遠大於 512MB，且接的是同一個 Neon 正式資料庫，效果相同）。
+5. 一開始新增了 `scripts/manual_run_toeic_sync.py` 作為手動觸發用的一次性工具腳本，Robin 認為這種東西不該留在正式程式碼庫、要求 clean code，隨即移除（commit `8d72d60`），改為純粹在對話中提供一次性指令，不留任何新增檔案在 repo 裡。
+6. 本機執行時一度遇到 Google Drive 下載中斷（`IncompleteRead`）疊加 Neon 連線逾時，重跑一次後成功執行完成，但 Robin 回報「他亂切」——6 段聽力題音檔全部對不上內容，代表 `_find_split_plan()` 這個「停頓長度」啟發式猜測法（模組 docstring 早已註明是 Robin 2026-08-07 已知情接受的風險項）在這份真實錄音上完全失準，不是猜錯一兩題，是全部錯。
+
+**決策**：Robin 提出「聽力錄音本來就會念題號（Number 1、Number 2...），可以直接辨識這段文字去切」——這是比停頓長度猜測可靠得多的真實依據，因為 TOEIC Part 1/2 聽力錄音固定會口頭念出題號，Whisper 轉錄本來就會把這段話轉成文字。新增 `_find_number_marker_split_plan()`：掃描 `voice_client.transcribe_with_segments()` 回傳的逐句文字，比對「Number N」（支援阿拉伯數字與英文拼字 one～twenty）標記，找到題號對應的實際起始時間直接切割；`split_audio_by_question_count()` 改為優先呼叫這支函式，只有在轉錄文字裡找不到完整、由小到大排列的一組題號標記時（例如聽錯、口誤、或這份錄音根本沒有念題號），才退回原本的 `_find_split_plan()` 停頓長度猜測法當備援，不影響既有已通過的測試與行為。
+
+**2026-09-07 續：Robin 追問「如果同一個數字出現兩次怎麼辦」，補上兩層防護**：初版寫法是「整份轉錄文字裡，隨便哪裡先出現這個數字就採用」，Robin 指出這樣如果題目內容本身剛好也提到某個數字（例如「gate number 5」「room number 12」），或還沒輪到的題號提前被提到，會誤判成題號標記。改成兩層防護：①`_NUMBER_MARKER_PATTERN` 從「文字裡任何地方出現『number N』就算」收緊為「整句轉錄文字幾乎只有『Number N』本身」（正則整句錨定 `^...$`，只容許結尾一個標點），排除掉內容裡順帶提到數字、但整句話不是題號播報的情況；②依題號順序、依序往後掃描，找到第 N 題的標記後，找第 N+1 題只會從第 N 題標記之後的內容繼續找，不回頭比對已用過的範圍，確保就算真的有兩句都符合「整句就是 Number N」（例如同一題重複播報兩次），也是採用照順序第一次遇到的那次。新增 2 項測試涵蓋這兩種情境。
+
+**理由**：停頓長度只是「猜」題目邊界的間接依據，錄音裡實際念出的題號才是直接依據，理論上準確率天花板遠高於任何啟發式猜測；保留舊邏輯當備援是因為不是所有聽力素材都保證有念題號（例如 Part 3/4 共用一段對話音檔可能不會每題都報號），退回猜測法至少維持「不會完全沒有切割結果」的既有行為，不會讓沒有題號標記的素材直接卡死。
+
+**替代方案**：完全捨棄停頓長度猜測法、只用題號標記，找不到標記直接失敗要求 Robin 手動處理（已否決，會讓沒念題號的素材完全無法自動處理，備援退回現有邏輯風險更低）；用 Gemini Vision／LLM 額外呼叫一次「請幫我判斷這是第幾題」語意理解（已否決，多一次外部 API 呼叫成本與延遲，題號標記本身已經是文字裡的明確資訊，不需要額外語意推論）。
+
+**後果**：不需要 Migration。`src/bot/toeic.py`（新增 `_NUMBER_WORDS`、`_NUMBER_MARKER_PATTERN`（整句錨定）、`_find_number_marker_split_plan()`（依題號順序依序往後掃描），`split_audio_by_question_count()` 改為優先呼叫）已異動。新增 `tests/bot/test_toeic.py` 6 項測試（阿拉伯數字標記、英文拼字標記、標記不完整時回退 `None`、整合驗證「有標記時結果照標記走、不是照停頓猜」、內容提前提到數字不誤判、同一題重複播報不出錯）。`pytest tests/bot/test_toeic.py -q` 66 passed；全專案 `pytest tests/bot -q` 1150 passed（4 項既有 `test_job_search.py` 失敗與本次無關）；`ruff check` 通過。`monster01` 這批聽力題實際切割結果是否正確，待 Robin 下次重跑（本機或等下週日排程）後在 Telegram 實機驗收確認。
+
+**2026-09-13 續：Robin 明確要求「不確定的題目直接跳過，不要用猜的」，移除停頓長度猜測備援**：上面 2026-09-07 的設計仍保留 `_find_split_plan()`（停頓長度啟發式）當備援——找不到完整題號標記時退回去猜。Robin 明確反對這個設計：「我覺得是這樣啦，如果是沒有把握的題目，就跳過吧，也不要用猜的，沒意義啊，所以說儲存到資料庫的只能是 100% 確定的題目」。同時 Robin 追問「目前要怎麼分辨這批是之前跑過的，這批是新的」——答案是既有的 `_is_already_processed(db, source_image_filename)` 去重機制（聽力題存的是解答照片的檔名），只要這題沒有真的成功寫進資料庫，下次同步掃到同一批素材時會自動再試一次，剛好天生適合拿來承接「這次先跳過、下次自動重試」的行為，不需要額外的重試追蹤機制。
+
+**決策**：
+1. 把 `_find_number_marker_split_plan()`（全有全無：只要有一個題號標記找不到就整批回傳 `None`）改寫為 `_find_number_marker_starts()`，回傳「有找到標記的題號 -> 起始秒數」的部分結果（`dict[int, float]`），找不到標記的題號單純不會出現在結果裡，不影響其他題號繼續往後掃描。
+2. `split_audio_by_question_count()` 逐題判斷「起始邊界」與「結束邊界」是否都 100% 確定才切出該題：起始邊界＝自己的題號標記；結束邊界＝下一題（依題號排序）的標記，或者這一題是本批最後一題時直接用音檔（或 cutoff）結尾。任一邊界不確定就整題跳過，不寫進回傳的 dict。
+3. 完全刪除 `_find_split_plan()`、`_segment_length_variance()`、`_split_points_for_target_length()` 這一整套停頓長度猜測邏輯與相關常數（`_INTRO_MAX_CANDIDATE_RATIO`、`_MIN_GAP_RATIO_OF_MAX`），不再是「找不到標記時的備援」，因為新設計下已經沒有任何呼叫路徑會用到它——這套邏輯本來就是模組 docstring 標註過的已知風險項，實測也證實會整批猜錯，繼續留著當死代碼不符合 clean code 原則。
+4. `_process_listen_questions()` 不需要修改：它原本就是逐題檢查 `segments_by_qnum.get(qnum)`，`None` 就 `continue`，天生就能正確處理「部分題號缺席」的回傳結果。
+
+**理由**：Robin 的判斷是對的——聽力題答錯或錯位比「這次沒有題目」影響更嚴重，因為讀者/使用者很難自己發現「這題音檔內容跟解答對不上」，但「這批這次沒有新題目、下次再試」是完全無感、可自我修復的行為。停頓長度啟發式在真實錄音上實測整批猜錯（monster01 的 6 題全部對不上），繼續保留它當備援只是「換一種方式製造錯誤資料」，不是真的降低風險。
+
+**替代方案**：保留停頓長度猜測法但加上信心分數、只在信心夠高時採用（已否決，「信心分數」本質上還是猜測的變形，沒有解決「猜錯了使用者很難發現」的根本問題，且徒增複雜度）；找不到標記時整批（而非逐題）放棄（已否決，會讓「6 題裡只有 1 題標記缺席」這種情況也連累其他 5 題明明可以 100% 確定切出來的題目一起被跳過，不必要地降低可用題數）。
+
+**後果**：不需要 Migration。`src/bot/toeic.py` 異動：新增 `_find_number_marker_starts()`（取代 `_find_number_marker_split_plan()`）、`split_audio_by_question_count()` 改為逐題判斷邊界確定性、完全刪除 `_find_split_plan()` 及其專屬輔助函式與常數；模組頂部 docstring 同步更新，不再提及停頓長度猜測法。`tests/bot/test_toeic.py` 異動：刪除 `_find_split_plan()`／`_segment_length_variance()`／`_split_points_for_target_length()` 的專屬測試（隨production代碼一起移除，不留死測試），`_find_number_marker_split_plan` 系列測試改寫為對應 `_find_number_marker_starts()`（含新增「標記缺席時回傳部分結果、不是整批失敗」的測試），`split_audio_by_question_count` 系列測試新增「只找得到自己標記、是最後一題時用音檔結尾當結束邊界」與「自己或下一題標記缺席時整題跳過」兩項測試，移除原本測「排除說明語音」的停頓法迴歸測試（該情境已不適用，沒有題號標記的素材現在會是「全部跳過、下次重試」而非嘗試猜測排除）。`python3 -m pytest tests/bot/test_toeic.py -q` 58 passed；全專案 `python3 -m pytest tests/bot -q` 1142 passed（4 項既有 `test_job_search.py` 失敗與本次無關，同前）；`ruff check src/bot/toeic.py tests/bot/test_toeic.py` 通過。`monster01` 這批聽力題實際切割結果（包含「哪些題目這次會被跳過、留給下次重試」）是否符合預期，待 Robin 下次重跑（本機或等下週日排程）後在 Telegram／資料庫實機驗收確認。
+
+**2026-09-13 再續：Robin 明確要求「切不出來的題目下次排程不要再重跑」，從「下次自動重試」改成「永久跳過」**：上面的設計是「這題沒寫進資料庫，下次排程自動重試」，靠既有的 `source_image_filename` 去重機制天生支援。Robin 指出這樣設計有浪費：「我希望就是說這批跑完發現沒辦法解析成題目的部分，下次排程啟動時就不要重跑，因為沒意義啊，又很浪費時間」——因為同一份錄音再轉錄一次，Whisper 的輸出基本上是固定的，轉錄結果裡沒有的「Number N」標記不會因為多跑幾次就自己冒出來，重試注定還是失敗，只是白白浪費 Groq API 額度跟排程執行時間。
+
+**決策**：新增 `certificate_listen_split_failures` 資料表（`src/migrations/0100_create_certificate_listen_split_failures_table.sql`），紀錄「這一題已經確認切不出 100% 確定的邊界、放棄」；`_process_listen_questions()` 掃描時新增 `_is_listen_split_already_failed()` 檢查，已經記錄過的題號直接跳過、完全不會再進入切割流程（不下載音檔、不呼叫 Groq 轉錄）；`split_audio_by_question_count()` 回傳的結果裡缺席的題號，透過新增的 `_record_listen_split_failure()` 寫入這張表。這是**永久跳過**，跟先前「沒寫進 `certificate_questions` 就會自動重試」的設計不同——曾詢問 Robin 「如果之後這份錄音本身被修正/重新上傳，要怎麼樣才會重新嘗試」，Robin 明確回答「反正就是失敗的就不必再跑了」，代表不需要額外設計「偵測素材是否已被修正」的機制，真要重試由 Robin 手動刪除這張表對應的紀錄即可。
+
+**理由**：「自動重試」隱含的假設是「這次失敗可能只是暫時的（網路問題、API 暫時抽風），下次可能會成功」，但這裡的失敗原因是「這份錄音的轉錄文字裡根本沒有找到題號標記」，是錄音本身內容決定的，不是暫時性因素，繼續重試不會有不同結果；Robin 的判斷完全正確，符合減少浪費、programmatic 的角度來看也更誠實地反映「這題目前處理不了」的狀態，而不是每週假裝「下次可能會不一樣」。
+
+**替代方案**：在 `certificate_questions` 或既有欄位加一個「已放棄」的旗標而非開新表（已否決，`certificate_questions` 語意是「已成功建立的題目」，混入「放棄的題目」會讓查詢與呈現邏輯都要多一層過濾，開新表語意更乾淨、也不需要動既有表結構）；記錄失敗次數、超過門檻才放棄（已否決，Robin 的判斷是「這種失敗本質上不會因為多試幾次就變好」，加上次數門檻只是拖延放棄的時間點，沒有實質效益，徒增複雜度）。
+
+**後果**：新增 Migration `src/migrations/0100_create_certificate_listen_split_failures_table.sql`（`certificate_listen_split_failures` 表，`UNIQUE (exam_type, test_id, question_number)`）。`src/bot/toeic.py` 異動：新增 `_is_listen_split_already_failed()`、`_record_listen_split_failure()`，`_process_listen_questions()` 掃描時新增去重檢查、切割後對缺席題號記錄失敗。`tests/bot/conftest.py` 新增 `certificate_listen_split_failures` 假資料表與對應查詢條件支援。`tests/bot/test_toeic.py` 新增 `test_sync_records_failure_and_does_not_retry_question_with_missing_marker`（驗證第一次失敗會記錄、第二次同步時不會再呼叫 `voice_client.transcribe_with_segments()`、也不會重複寫入失敗紀錄）。`python3 -m pytest tests/bot/test_toeic.py -q` 59 passed；全專案 `python3 -m pytest tests/bot -q` 1143 passed（4 項既有 `test_job_search.py` 失敗與本次無關）；`ruff check` 通過。已同步更新 `docs/specs/SPEC.md`（FR-25b）與 `docs/reference/db_schema.md`（新表結構與說明）。

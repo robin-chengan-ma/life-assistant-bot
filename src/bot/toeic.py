@@ -8,13 +8,13 @@
 兩條軌道：
 - **軌道一**（`sync_track1_from_drive()`）：掃描 Google Drive 資料夾內 Robin 手動上傳的題目
   照片/音檔，依檔名比對成一題一題，呼叫 Gemini Vision 解析文字與選項，寫入 `certificate_
-  questions`。聽力題若只有整包 MP3、還沒切成單題小檔，先用 Groq Whisper 依語句停頓自動切割
-  （見 `_find_split_plan()`：**啟發式邏輯，是 Robin 2026-08-07 已知情並選擇這次一起做的風險
-  項**。同日用 Robin 提供的真實錄音 `Test01_Part1.mp3` 實測，發現有些音檔開頭會有一段作答
-  說明語音（例如 TOEIC Part 1 開考前的固定口頭指示），若直接照「取最大的幾個停頓」切割，說明
-  語音會被併進第一題、導致第一段長度異常；改為「無說明語音／有說明語音」兩種假設各切一次、
-  比較每段長度變異數，自動選出較合理的一組，說明語音若被判定存在會直接捨棄不計入任何題目。
-  之後可能仍需依更多真實素材微調）。**2026-08-07 追加（Robin 提出未來要擴充 GCP／AWS 等其他
+  questions`。聽力題若只有整包 MP3、還沒切成單題小檔，先用 Groq Whisper 轉錄，掃描逐句轉錄
+  文字裡實際念出的「Number N」題號標記來切割（見 `_find_number_marker_starts()`）。**2026-09-13
+  修改（Robin 明確要求，見 `docs/ADR/discuss/robinson.md` 對應日期條目）**：早期版本用「語句
+  停頓長度」啟發式猜測切割位置，實測發現整批猜錯的狀況，Robin 要求「沒把握的題目就跳過，不要
+  用猜的，儲存到資料庫的只能是 100% 確定的題目」，因此改為只在能同時確定一題的起始與結束邊界
+  （都靠實際念出的題號標記，不是猜的）時才切出並存入該題，其餘題目直接跳過、留給下次排程依
+  既有檔名去重機制自動重試，完全不使用任何猜測性的退路邏輯。**2026-08-07 追加（Robin 提出未來要擴充 GCP／AWS 等其他
   證照）**：軌道一泛用化為支援任意證照類型（`exam_type` 是開放字串、不寫死清單，來源就是檔名
   第一段），新增證照類型完全不需要改程式碼，只要換檔名前綴即可；聽力/切割相關能力仍保留給任何
   可能有聽力的證照使用，但軌道二單字題生成刻意仍只服務 TOEIC（見下方）。
@@ -246,6 +246,23 @@ def classify_drive_files(files: list[dict]) -> dict:
 # --- 軌道一：Drive 掃描 + Gemini Vision 解析 ---
 
 
+def _download_file_or_none(gdrive_client, file_id: str, context: str) -> bytes | None:
+    """2026-09-14 新增（見 `docs/ADR/debug/robinson.md` 對應日期條目）：`gdrive_client.download_
+    file()` 原本在各處都是直接呼叫、沒有包 try/except，一旦下載途中網路抖動（例如 `IncompleteRead`，
+    Robin 本機重跑測試時實際遇到過），例外會直接往外傳、把整個 `sync_track1_from_drive()` 中斷掉，
+    連帶讓「本來已經確定要處理的其他題目」連進資料庫或記錄失敗的機會都沒有，憑空消失、兩張表都
+    查不到（Robin 回報 monster01 第 1~3 題就是這樣不見的）。改成下載失敗時記 log、回傳 `None`，
+    呼叫端跳過這一題即可，不影響同一批次裡其他題目，也不影響其他 exam_type/test_id；因為沒有寫入
+    `source_image_filename`／`answer_source_filename`，下次排程重新掃描時會自動重試（跟原本設計的
+    重試機制一致，這裡不是「切不出邊界」的永久放棄，只是單純下載失敗，值得重試）。
+    """
+    try:
+        return gdrive_client.download_file(file_id)
+    except Exception:
+        _logger.exception("下載 Google Drive 檔案失敗，這次先跳過（%s）", context)
+        return None
+
+
 def _is_already_processed(db: CloudSQLClient, source_image_filename: str) -> bool:
     return (
         db.select(
@@ -255,6 +272,41 @@ def _is_already_processed(db: CloudSQLClient, source_image_filename: str) -> boo
             fetch_one=True,
         )
         is not None
+    )
+
+
+def _is_listen_split_already_failed(db: CloudSQLClient, exam_type: str, test_id: str, qnum: int) -> bool:
+    """2026-09-13 新增（Robin 明確要求，見 `docs/ADR/discuss/robinson.md` 對應日期條目）：某一題
+    聽力題如果先前已經確認「切不出 100% 確定的邊界、放棄這一題」（`certificate_listen_split_
+    failures`，見 migration `0100`），就不要再嘗試下載/轉錄/切割——同一份錄音的轉錄結果基本上
+    是固定的，週週重試注定週週失敗，純粹浪費時間與 Groq API 額度。這是永久跳過，不是「下次自動
+    重試」；真的要重試（例如錄音已修正）需要手動刪除這張表對應的紀錄。
+    """
+    return (
+        db.select(
+            "certificate_listen_split_failures",
+            where="exam_type = %s AND test_id = %s AND question_number = %s",
+            params=(exam_type, test_id, qnum),
+            fetch_one=True,
+        )
+        is not None
+    )
+
+
+def _record_listen_split_failure(
+    db: CloudSQLClient, exam_type: str, test_id: str, qnum: int, source_image_filename: str
+) -> None:
+    """記錄某一題聽力題「確認切不出 100% 確定的邊界、放棄」，之後排程不會再重試（見
+    `_is_listen_split_already_failed()`）。
+    """
+    db.insert(
+        "certificate_listen_split_failures",
+        {
+            "exam_type": exam_type,
+            "test_id": test_id,
+            "question_number": qnum,
+            "source_image_filename": source_image_filename,
+        },
     )
 
 
@@ -319,130 +371,120 @@ def _process_write_questions(db: CloudSQLClient, gdrive_client, image_llm_client
     for (exam_type, test_id, qnum), image_file in classified["write_images"].items():
         if _is_already_processed(db, image_file["name"]):
             continue
-        image_bytes = gdrive_client.download_file(image_file["id"])
+        image_bytes = _download_file_or_none(
+            gdrive_client, image_file["id"], f"write 題目照片 exam_type={exam_type} test_id={test_id} qnum={qnum}"
+        )
+        if image_bytes is None:
+            continue
         parsed = _parse_question_image(image_bytes, image_llm_clients, exam_type)
         if parsed is None:
             continue
         _insert_question(db, exam_type, test_id, "write", qnum, parsed, image_file, audio_url=None)
 
 
-# 2026-08-07（Robin 實測 Test01_Part1.mp3 後追加）：有些整包音檔開頭會有一段作答說明語音
-# （例如 TOEIC Part 1 開考前的固定口頭指示），有些則沒有——無法事先知道是哪一種，見下方
-# `_find_split_plan()` 用「有無說明語音、說明語音在哪裡結束」多種假設各切一次、比較結果哪個
-# 更合理來自動判斷。
-_INTRO_MAX_CANDIDATE_RATIO = 0.6  # 說明語音只會出現在開頭，只在音檔前 60% 範圍內找它的結尾候選點
-_MIN_GAP_RATIO_OF_MAX = 0.5  # 候選切割點的停頓長度至少要達到全音檔最大停頓的一半，排除句子內部的小停頓雜訊
+_NUMBER_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
+    "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13,
+    "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
+    "nineteen": 19, "twenty": 20,
+}
+_NUMBER_MARKER_PATTERN = re.compile(r"(?i)^\s*number\s+(\d+|[a-z]+)[.,!?]?\s*$")
 
 
-def _segment_length_variance(start_offset: float, split_points: list[float], total_duration: float) -> float:
-    """評估一組切割方案「每段音檔長度是否夠平均」的變異數，數值越小代表切割結果越合理。
+def _find_number_marker_starts(segments: list[dict], question_numbers: list[int]) -> dict[int, float]:
+    """掃描 Whisper 逐句轉錄文字裡的「Number N」標記，找出每一題實際念出題號的起始時間。
 
-    TOEIC 每一題的音檔長度通常彼此相近；若某一段明顯比其他段長很多（例如混進了說明語音或其他
-    非題目內容），變異數會被拉高，藉此讓 `_find_split_plan()` 判斷出「這組切法比較不合理」。
+    2026-09-07（Robin 提出，見 `docs/ADR/discuss/robinson.md` 對應日期條目）：TOEIC 聽力錄音
+    本來就會口頭念出題號（「Number 1」「Number 2」...），這是比 `_find_split_plan()` 用停頓長度
+    猜邊界可靠得多的真實依據。
+
+    **2026-09-07（Robin 提出疑慮：內容裡剛好也提到某個數字怎麼辦）**：兩層防護，缺一不可——
+    ①`_NUMBER_MARKER_PATTERN` 要求整句轉錄文字幾乎只有「Number N」本身（`^...$` 整句錨定，
+    容許結尾一個標點），不是「文字裡任何地方出現這個詞」都算數，排除掉「gate number 5」「room
+    number 12」這種內容裡順帶提到數字、但整句話不是題號播報的情況；②依題號順序、依序往後掃描
+    （找到第 N 題的標記後，找第 N+1 題只會從第 N 題標記之後的內容繼續找，不回頭比對已用過的
+    範圍），確保就算真的有兩句都符合「整句就是 Number N」（例如同一題重複播報兩次），也是採用
+    照順序第一次遇到的那次，不會被之後不相關的重複或提前出現的數字打亂。
+
+    數字辨識同時支援阿拉伯數字（Whisper 常見輸出，如「Number 1」）與英文拼字（如「Number One」），
+    拼字對照表只到 20——TOEIC 單一 Part 的題號通常不會超過這個範圍，超過就直接視為找不到，不會
+    嘗試更大的數字拼字表。
+
+    2026-09-13 修改（Robin 提出，見 `docs/ADR/discuss/robinson.md` 對應日期條目）：原本是「找不到
+    任一個題號的標記，整批直接放棄、回傳 `None` 給呼叫端去猜」的全有全無設計。Robin 明確要求「沒
+    把握的題目就跳過，不要用猜的」，所以改成回傳「有找到標記的題號 -> 起始時間」的部分結果（可能
+    比 `question_numbers` 少），找不到的題號單純不會出現在回傳的 dict 裡，由呼叫端（`split_audio_
+    by_question_count()`）判斷每一題是否有足夠把握切出音檔，而不是在這裡就整批放棄或整批用猜的。
     """
-    boundaries = [start_offset] + split_points + [total_duration]
-    lengths = [boundaries[i + 1] - boundaries[i] for i in range(len(boundaries) - 1)]
-    if not lengths or any(length <= 0 for length in lengths):
-        return float("inf")
-    mean_length = sum(lengths) / len(lengths)
-    return sum((length - mean_length) ** 2 for length in lengths) / len(lengths)
+    sorted_numbers = sorted(question_numbers)
+    starts: dict[int, float] = {}
+    cursor_index = 0
+    for expected in sorted_numbers:
+        found_index = None
+        for i in range(cursor_index, len(segments)):
+            match = _NUMBER_MARKER_PATTERN.match(segments[i]["text"])
+            if match is None:
+                continue
+            token = match.group(1).lower()
+            value = int(token) if token.isdigit() else _NUMBER_WORDS.get(token)
+            if value == expected:
+                found_index = i
+                break
+        if found_index is None:
+            # 找不到就跳過這一題，不影響後面題號繼續掃描（cursor 不前進，下一題從同一個位置開始找）。
+            continue
+        starts[expected] = segments[found_index]["start"]
+        cursor_index = found_index + 1
 
-
-def _split_points_for_target_length(
-    candidates: list[float], num_splits: int, start_offset: float, target_length: float
-) -> list[float]:
-    """依「每題預期長度」（`target_length`）找出最接近理想切割位置的自然停頓點；找不到候選點
-    （或已被前一個切割點用掉）時，直接退回理想位置本身，確保一定會回傳 `num_splits` 個切割點。
-    """
-    used: set[float] = set()
-    points: list[float] = []
-    for k in range(1, num_splits + 1):
-        target = start_offset + k * target_length
-        remaining = [c for c in candidates if c not in used]
-        nearest = min(remaining, key=lambda c: abs(c - target)) if remaining else None
-        if nearest is None:
-            points.append(target)
-        else:
-            used.add(nearest)
-            points.append(nearest)
-    return sorted(points)
-
-
-def _find_split_plan(segments: list[dict], num_questions: int, total_duration: float) -> tuple[float, list[float]]:
-    """決定切割方案，回傳 `(題目起始秒數, 題目之間的切割點列表)`。
-
-    做法：候選切割點先篩選成「停頓長度至少達到全音檔最大停頓一半」的那些（`_MIN_GAP_RATIO_OF_
-    MAX`），排除句子/說明語音內部無意義的小停頓雜訊——題目與題目之間的停頓通常明顯比句子內部的
-    停頓長很多、彼此長度也相近，用比例篩選比單純取「最大的 N 個」更能過濾掉雜訊。接著把「完全
-    沒有說明語音」（題目起始秒數＝0）以及「篩選後音檔前 60% 範圍內的每一個候選停頓都當作一次
-    可能的說明語音結尾」逐一當作假設，各自把剩餘時間平分成 `num_questions` 題並計算
-    `_segment_length_variance()`，最後選變異數最小（也就是每題長度最平均）的那組。
-
-    **2026-08-07 修正**：原本只挑「前 60% 範圍內最大的那個停頓」當說明語音結尾、候選點也只是
-    單純取「最大的 N 個」，但實測 Robin 提供的真實錄音 `Test01_Part1.mp3` 發現兩個問題：
-    ① 說明語音結尾之後的題目間停頓，也有好幾個一樣落在前 60% 範圍內、量級相近，只取「最大」
-    那個容易誤判成別的題目邊界，改為每個候選點都各自試切一次、實際比較結果優劣
-    ② 候選點若只取「最大的 N 個」，當 N 訂得夠大時會混入大量句子內部的小停頓，這些小停頓剛好
-    離某個理想切割位置很近時會被誤選中，讓「沒有說明語音」的假設看起來變異數異常地低（因為到處
-    都找得到差不多近的小停頓去湊數，不代表真的是題目邊界）；改為依「停頓長度佔全音檔最大停頓的
-    比例」篩選，只留下真正夠長、夠可能是題目邊界的候選點。**啟發式邏輯**，見模組 docstring 已知
-    風險，之後可能仍需依更多真實素材調整。
-    """
-    if num_questions <= 1 or len(segments) < 2:
-        return 0.0, []
-
-    gaps = []
-    for i in range(len(segments) - 1):
-        gap_duration = segments[i + 1]["start"] - segments[i]["end"]
-        midpoint = (segments[i]["end"] + segments[i + 1]["start"]) / 2
-        gaps.append((gap_duration, midpoint))
-    gaps.sort(key=lambda g: g[0], reverse=True)
-
-    max_gap_duration = gaps[0][0]
-    candidates = [midpoint for duration, midpoint in gaps if duration >= max_gap_duration * _MIN_GAP_RATIO_OF_MAX]
-    # 篩選後的候選點若不夠湊出所需的切割數，代表比例門檻篩太嚴，放寬回取最大的 (num_questions - 1) 個，
-    # 確保至少有足夠候選點可以組出一組切法（見 `_split_points_for_target_length` 的 fallback 保底）。
-    if len(candidates) < num_questions - 1:
-        candidates = [midpoint for _, midpoint in gaps[: num_questions - 1]]
-
-    intro_hypotheses = [0.0] + sorted(c for c in candidates if c <= total_duration * _INTRO_MAX_CANDIDATE_RATIO)
-
-    best_start_offset = 0.0
-    best_points: list[float] = []
-    best_variance = float("inf")
-    for start_offset in intro_hypotheses:
-        remaining_candidates = [c for c in candidates if c > start_offset]
-        target_length = (total_duration - start_offset) / num_questions
-        points = _split_points_for_target_length(remaining_candidates, num_questions - 1, start_offset, target_length)
-        variance = _segment_length_variance(start_offset, points, total_duration)
-        if variance < best_variance:
-            best_variance = variance
-            best_start_offset = start_offset
-            best_points = points
-
-    return best_start_offset, best_points
+    return starts
 
 
 def split_audio_by_question_count(
     audio_bytes: bytes, question_numbers: list[int], transcript_segments: list[dict]
 ) -> dict[int, bytes]:
-    """把整包音檔依 `_find_split_plan()` 決定的方案切成 `len(question_numbers)` 段，依序對應到
-    由小到大排序的 `question_numbers`；若判斷開頭有說明語音，該段會被捨棄、不計入任何題目。
+    """把整包音檔切成音檔片段，依實際念出的「Number N」題號標記（`_find_number_marker_starts()`）
+    決定每一題的邊界；回傳的 dict 只包含「100% 確定切對」的題號，可能比 `question_numbers` 少。
+
+    2026-09-13 修改（Robin 明確要求，見 `docs/ADR/discuss/robinson.md` 對應日期條目）：「如果是
+    沒有把握的題目，就跳過吧，也不要用猜的，沒意義啊，所以說儲存到資料庫的只能是 100% 確定的
+    題目」。原本找不到完整標記時會退回 `_find_split_plan()` 的停頓長度啟發式猜測整批切法，一旦
+    猜錯（實測發生過整批 6 題全部猜錯的狀況），寫進資料庫的題目就是錯的、而且很難事後發現。
+    現在完全移除這個猜測退路，改成逐題判斷「有沒有 100% 把握」：
+
+    - 一題的「起始邊界」100% 確定，若且唯若找得到它自己的「Number N」標記。
+    - 一題的「結束邊界」100% 確定，若且唯若：
+      (a) 找得到下一題（依題號排序）的「Number N」標記，結束邊界就是下一題的起始；或
+      (b) 這一題是這一批要處理的題號中最後一題，結束邊界直接用音檔（或 cutoff）結尾——頂多尾巴
+          多幾秒安靜，不影響內容正確性，可以接受。
+    - 只要起始或結束任一邊界不確定，這一題就整個跳過、不寫進回傳的 dict，交由呼叫端不寫入資料庫。
+      因為 `certificate_questions.source_image_filename`（存的是解答照片檔名）沒有這一題的
+      紀錄，下次排程重新掃到同一批素材時會自動再嘗試切割一次，不需要額外的重試機制。
+
     需要系統安裝 `ffmpeg`（`pydub` 依賴，見 Dockerfile）。
     """
     sorted_numbers = sorted(question_numbers)
     audio = AudioSegment.from_file(io.BytesIO(audio_bytes))
-    total_duration = len(audio) / 1000
-
-    start_offset, split_points_sec = _find_split_plan(transcript_segments, len(sorted_numbers), total_duration)
-
     total_ms = len(audio)
-    boundaries_ms = (
-        [int(start_offset * 1000)] + [int(point * 1000) for point in split_points_sec] + [total_ms]
-    )
+
+    starts = _find_number_marker_starts(transcript_segments, sorted_numbers)
 
     result: dict[int, bytes] = {}
-    for qnum, start_ms, end_ms in zip(sorted_numbers, boundaries_ms[:-1], boundaries_ms[1:]):
+    for i, qnum in enumerate(sorted_numbers):
+        start_sec = starts.get(qnum)
+        if start_sec is None:
+            continue
+
+        is_last = i == len(sorted_numbers) - 1
+        if is_last:
+            end_ms = total_ms
+        else:
+            next_qnum = sorted_numbers[i + 1]
+            next_start_sec = starts.get(next_qnum)
+            if next_start_sec is None:
+                continue
+            end_ms = int(next_start_sec * 1000)
+
+        start_ms = int(start_sec * 1000)
         segment = audio[start_ms:end_ms]
         buffer = io.BytesIO()
         segment.export(buffer, format="mp3")
@@ -572,6 +614,8 @@ def _process_listen_questions(
             continue
         if _is_already_processed(db, answer_file["name"]):
             continue
+        if _is_listen_split_already_failed(db, exam_type, test_id, qnum):
+            continue
         answer_key_by_qnum[(exam_type, test_id, qnum)] = answer_file
         if (exam_type, test_id, qnum) in classified["listen_audio_segments"]:
             continue
@@ -583,7 +627,11 @@ def _process_listen_questions(
         audio_file = classified["listen_audio_segments"].get((exam_type, test_id, qnum))
         if audio_file is None:
             continue
-        answer_bytes = gdrive_client.download_file(answer_file["id"])
+        answer_bytes = _download_file_or_none(
+            gdrive_client, answer_file["id"], f"聽力解答照片 exam_type={exam_type} test_id={test_id} qnum={qnum}"
+        )
+        if answer_bytes is None:
+            continue
         parsed = _parse_listen_answer_image(answer_bytes, image_llm_clients, exam_type)
         if parsed is None:
             continue
@@ -611,10 +659,13 @@ def _process_listen_questions(
             continue
 
         for qnum in question_numbers:
+            answer_file = answer_key_by_qnum[(exam_type, test_id, qnum)]
             segment_bytes = segments_by_qnum.get(qnum)
             if segment_bytes is None:
+                # 2026-09-13（Robin 明確要求）：這一題這次沒辦法 100% 確定切割邊界，記錄放棄，
+                # 之後排程不會再重試（見 `_is_listen_split_already_failed()`）。
+                _record_listen_split_failure(db, exam_type, test_id, qnum, answer_file["name"])
                 continue
-            answer_file = answer_key_by_qnum[(exam_type, test_id, qnum)]
             try:
                 segment_filename = f"{exam_type}_{test_id}_listen_{qnum}.mp3"
                 audio_url = gdrive_client.upload_file(segment_filename, segment_bytes, mime_type="audio/mpeg")
@@ -624,7 +675,11 @@ def _process_listen_questions(
                 )
                 continue
 
-            answer_bytes = gdrive_client.download_file(answer_file["id"])
+            answer_bytes = _download_file_or_none(
+                gdrive_client, answer_file["id"], f"聽力解答照片 exam_type={exam_type} test_id={test_id} qnum={qnum}"
+            )
+            if answer_bytes is None:
+                continue
             parsed = _parse_listen_answer_image(answer_bytes, image_llm_clients, exam_type)
             if parsed is None:
                 continue
@@ -713,7 +768,11 @@ def _process_answer_keys(db: CloudSQLClient, gdrive_client, image_llm_clients: l
             )
             continue
 
-        image_bytes = gdrive_client.download_file(answer_file["id"])
+        image_bytes = _download_file_or_none(
+            gdrive_client, answer_file["id"], f"write 答案照片 exam_type={exam_type} test_id={test_id} qnum={qnum}"
+        )
+        if image_bytes is None:
+            continue
         parsed = _parse_answer_image(image_bytes, image_llm_clients, exam_type)
         if parsed is None:
             continue

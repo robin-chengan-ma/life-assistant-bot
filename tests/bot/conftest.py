@@ -29,6 +29,7 @@ class FakeCloudSQLClient:
             "important_notifications_log": [],
             "skill_growth_digests": [],
             "certificate_questions": [],
+            "certificate_listen_split_failures": [],
             "toeic_vocab_questions": [],
             "answer_logs": [],
             "certificate_goals": [],
@@ -379,6 +380,14 @@ class FakeCloudSQLClient:
                 row.get("goal_source") == params[0]
                 and row.get("goal_id") == params[1]
                 and row.get("generated_on") == params[2]
+            )
+        # 2026-09-13（見 src/bot/toeic.py _is_listen_split_already_failed()）：查詢某一題聽力題
+        # 是否已經確認放棄切割，不必再重試。
+        if where == "exam_type = %s AND test_id = %s AND question_number = %s":
+            return (
+                row.get("exam_type") == params[0]
+                and row.get("test_id") == params[1]
+                and row.get("question_number") == params[2]
             )
 
         raise NotImplementedError(f"FakeCloudSQLClient 尚未支援這個 where 條件：{where}")

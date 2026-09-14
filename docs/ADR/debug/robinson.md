@@ -119,3 +119,35 @@ requests.exceptions.HTTPError: 413 Client Error: Payload Too Large for url: http
 **驗證方式**：`pytest tests/bot/test_toeic.py -q` 60 passed（含新增 1 項）；全專案 `pytest tests/bot -q` 1144 passed（另有 4 項既有 `test_job_search.py` 失敗屬雲端沙盒暫存快取版本較舊，與本次改動無關）；`ruff check src/bot/toeic.py tests/bot/test_toeic.py` 通過。
 
 **未驗證範圍**：Groq API 對單一檔案的確切大小上限（依帳號方案可能不同）沒有查證，這裡只確認「裁切後檔案明顯變小」，沒有針對「裁切後仍可能超過上限」這種極端情況（例如 `cutoff_seconds` 設定得太大）額外處理，屆時應該還是會拿到同樣的 413 錯誤，只是機率大幅降低。`monster01` 這批題目要等下週日（2026-09-13）22:00 排程再次自動觸發才會重新嘗試，或由 Robin 自行找方式提前觸發；待 Robin 屆時再次確認 `certificate_questions` 是否成功出現 `question_type='listen'` 的資料列。
+
+## 2026-09-14：`monster01` 第 1~3 題「憑空消失」——下載解答照片沒包 try/except，一遇網路抖動就把整批同步中斷掉
+
+**現象**：Robin 用新版「Number N 標記＋不確定就跳過」邏輯在本機重跑 `monster01` 後，第一次執行途中遇到 `IncompleteRead`（下載 Google Drive 檔案時網路中斷）整個腳本掛掉，Robin 直接重跑第二次，這次順利跑完。查詢 `certificate_questions` 發現第 4～31 題（扣掉 11、12、21、22 這 4 題）都正確建立，但第 1～3 題完全不見——不只沒進 `certificate_questions`，連新增的 `certificate_listen_split_failures`（記錄「切不出邊界、放棄」）裡也找不到，兩張表都查無資料，跟 11、12、21、22（有明確記錄「找不到標記」）性質不同。**Robin 事後補充：Google Drive 上也沒有這 3 題切割後的小段音檔**（`toeic_monster01_listen_1.mp3`～`_3.mp3` 都不存在），這點修正了原本的排查方向（見下方根因說明）。
+
+**重現方式**：模擬 `gdrive_client.download_file()` 在下載某一題解答照片時拋出例外（`ConnectionError`／`IncompleteRead` 這類暫時性網路錯誤），觀察 `sync_track1_from_drive()` 的行為。
+
+**排查過程**：檢查 `_process_listen_questions()`（以及同模式的 `_process_write_questions()`、`_process_answer_keys()`）逐一比對每一行下載呼叫，發現 `gdrive_client.download_file(answer_file["id"])`（下載解答／題目照片那一行）從最初實作以來就完全沒有包 try/except，跟緊接在它前面的「上傳切割後聽力小檔」那段（`upload_file`，有 try/except、失敗會記 log 後 `continue`）待遇不一致。一旦這裡拋出例外，會直接往外傳穿過整個函式、穿過 `sync_track1_from_drive()`，讓當次呼叫直接中止——**不是「這一題失敗、跳過繼續處理下一題」，而是「從這一題開始，後面所有還沒處理到的題目，這次呼叫完全不會被碰到」**，而且因為程式在寫入資料庫或記錄失敗之前就已經中斷，這些題目不會出現在 `certificate_questions`，也不會出現在任何失敗記錄表裡，等於「什麼紀錄都沒有、憑空消失」。比對 Robin 第一次執行時的 traceback，錯誤就是發生在下載解答照片這一行，一開始判斷時間點與「後續第 1～3 題完全查不到」吻合。
+
+**追加排查（Drive 上也沒有切割後的小段音檔）**：這點很關鍵——`gdrive_client.upload_file()`（上傳切割後小段音檔）發生在下載解答照片**之前**（見 `_process_listen_questions()` 逐題迴圈順序：先切好的音檔上傳、再下載解答照片解析）。如果單純是「下載解答照片時崩潰」，這 3 題的切割音檔應該已經成功上傳到 Drive 才對；但 Drive 上也沒有，代表這 3 題極可能連上傳這一步都沒有走完，或者上傳當時就已經失敗。`upload_file` 這段呼叫本身**早就有** try/except（失敗記 log、`continue`，不會讓例外往外傳），所以如果失敗點真的在這裡，並不會讓整個同步流程中斷——這跟 Robin 第一次執行時「整個腳本真的掛掉」的觀察還是對得上：比較合理的推測是，第一次執行時，這 3 題當中有一題確實在下載解答照片這一步（走到這裡代表它自己的上傳已經成功）遇到 `IncompleteRead` 而讓整批中斷；但另外一兩題則是在各自嘗試上傳音檔時就先遇到暫時性網路問題、被既有的 try/except 悄悄接住記了一行 log、`continue` 掉，沒有留下任何資料庫或失敗表的紀錄（這是既有設計本來就如此：上傳失敗只留 log、不特別記錄，因為判斷屬於可重試的暫時性問題）。也就是說，這 3 題很可能是「兩種既有的沒有紀錄的失敗路徑（上傳失敗被吞掉、下載失敗把整批打斷）」混在同一次執行裡同時發生，不是單一原因。**根因未完全確認**——由於當時沒有保留完整的執行 log（腳本只印設計好的摘要行，沒有把 log 等級調到能完整顯示 `_logger.exception`／`_logger.warning` 的輸出），沒辦法回頭精確判斷這 3 題各自實際卡在哪一步，這裡的說明是根據程式碼行為與時間線做的合理推斷，不是百分之百還原的事實。
+
+**根因**：`_process_write_questions()`／`_process_listen_questions()`（兩處）／`_process_answer_keys()` 這四個下載呼叫點，只有「上傳切割後音檔」那個步驟有做例外處理，下載步驟從一開始就沒有——這是既有設計的疏漏，不是本次「Number N 標記」或「切割失敗永久放棄」改動造成的迴歸，只是這次測試時剛好用網路不穩定的環境跑，才把這個原本潛藏的問題暴露出來。這個疏漏至少造成一次整批同步中斷，是確定發生過的事實；但它是否是這 3 題「兩種都沒紀錄」的唯一原因，如上一段所述並不是 100% 確定（也可能是既有的上傳失敗吞噬路徑同時發生），修復下載這一段本身仍然是正確且必要的，只是這裡誠實記錄根因判斷的不確定性，避免把推測寫成確定結論。
+
+**修復方式**：新增共用小函式 `_download_file_or_none(gdrive_client, file_id, context)`，把 `gdrive_client.download_file()` 包一層 try/except，下載失敗記 log（含用途、`exam_type`/`test_id`/`qnum` 等上下文方便排查）並回傳 `None`，呼叫端跳過這一題即可，不影響同一批次裡的其他題目。四個呼叫點（`_process_write_questions()` 1 處、`_process_listen_questions()` 2 處、`_process_answer_keys()` 1 處）全部改用這支共用函式。這種失敗刻意**不**記錄進 `certificate_listen_split_failures`（那張表是給「切不出音檔邊界」這種確定性失敗用的）——單純下載失敗多半是暫時性網路問題，沒有寫入 `source_image_filename`／`answer_source_filename`，下次排程掃描時會自動重試，這跟原本既有的重試設計一致，值得繼續自動重試。
+
+**驗證方式**：新增 `tests/bot/test_toeic.py::test_sync_recovers_from_transient_download_failure_on_one_answer_photo`，模擬其中一題下載解答照片拋出例外，斷言：①同一批次裡其他題目不受影響、正常寫入；②失敗的那題兩張表都沒有紀錄；③下次同步（網路恢復）該題自動重試成功。`pytest tests/bot/test_toeic.py -q` 60 passed；全專案 `pytest tests/bot -q` 1144 passed（4 項既有 `test_job_search.py` 失敗與本次無關）；`ruff check src/bot/toeic.py tests/bot/test_toeic.py` 通過。
+
+**未驗證範圍**：這次只補強了 `src/bot/toeic.py` 裡的下載呼叫，沒有排查專案其他模組是否有類似「下載/外部 API 呼叫沒包例外處理」的模式；`gdrive_client.upload_file()`／`voice_client.transcribe_with_segments()` 等其他外部呼叫本身各自已有既有的 try/except 或由呼叫端整批捕捉，這次沒有重新檢視。Robin 的 `monster01` 第 1～3 題實際上仍需要重新排程／手動重跑一次才會補上（这次修復只是讓「以後再遇到同樣網路問題」不會再憑空消失，不會自動回填這次已經漏掉的 3 題），待 Robin 重跑後確認。
+
+**續（同日）：真正的根因確認——`GDriveClient.list_files()` 沒有處理 Google Drive API 分頁**
+
+上面的修復（下載例外處理）是真實存在、確定發生過的 bug，值得修，但後續驗證發現它**不是**第 1～3 題消失的完整解釋。Robin 套用上述修復後重跑同步指令，結果是「新增題目數：0，本次新記錄為『放棄不重試』的題目數：0」——代表第 1、2、3 題根本**沒有被嘗試處理過**，不是「處理途中失敗」。這點推翻了上面「兩種既有沒有紀錄的失敗路徑混在一起」的推測。
+
+**排查過程**：先請 Robin 用截圖確認第 1～3 題在 Google Drive 上的來源檔案（`toeic_monster01_listen_1.jpeg`／`_1_ans.jpeg`／`_2.jpeg`／`_2_ans.jpeg`／`_3.jpeg`／`_3_ans.jpeg`）是否在先前手動清理壞掉的切割音檔時被誤刪——screenshot 確認 6 個檔案都還在，排除誤刪的可能。接著檢查 `submodules/gdrive/client.py` 的 `list_files()`：這支方法只呼叫一次 `self._service.files().list(q=query, fields="files(id, name, mimeType, webViewLink)")`，完全沒有處理 Google Drive API v3 回應裡的 `nextPageToken`。Drive API 單次呼叫預設最多回傳約 100 筆結果，超過這個數量的檔案會落在「下一頁」，但因為程式碼從未檢查、也從未請求下一頁，這些檔案對呼叫端來說**連出現在列表裡都沒有**——不是抓到了處理失敗，而是根本不知道它們存在。透過 AskUserQuestion 向 Robin 確認資料夾內檔案總數，Robin 回覆「超過 100 個」，這就是第 1～3 題（依檔名排序可能剛好落在第一頁之外，或受 Drive API 回傳順序影響落在後面幾頁）100% 每次重跑都抓不到、也不會留下任何失敗記錄的確定性根因——這不是機率性的網路問題，是結構性、每次都會重現的分頁遺漏。
+
+**根因（已確認，取代上面「未完全確認」的推斷）**：`GDriveClient.list_files()` 缺少分頁處理，資料夾內檔案數超過 API 單頁上限時，後面幾頁的檔案完全不會出現在回傳結果中。這是比「下載例外處理」更根本的問題：即使下載邏輯完全正確，只要 `list_files()` 從一開始就沒把該檔案列出來，後面的處理迴圈永遠不會嘗試碰它，自然也就不會留下任何成功或失敗的紀錄。這能完整解釋「新增 0、放棄不重試 0」——因為第 1～3 題的來源檔案根本不在 `classify_drive_files()` 拿到的清單裡。上面的「追加排查」段落中「上傳失敗被吞掉、下載失敗把整批打斷混在一起」的推測，現在看來並不是主要原因（那次的 `IncompleteRead` 是另一次真實發生但性質不同的暫時性網路問題），這裡予以修正：第 1～3 題消失的主因是分頁遺漏，下載例外處理的修復本身仍然正確且必要，但兩者是各自獨立的缺陷，不是同一個根因的兩種說法。
+
+**修復方式**：`GDriveClient.list_files()` 改成用 `while` 迴圈搭配 `nextPageToken`／`pageToken` 抓完所有分頁，`pageSize` 明確設為 API 上限 1000（減少來回呼叫次數），直到某一頁的回應沒有 `nextPageToken` 才停止，回傳所有分頁 `files` 陣列串接後的結果。`fields` 參數同步加上 `nextPageToken`（原本只有 `files(...)`）。
+
+**驗證方式**：新增 `tests/submodules/gdrive/test_client.py::test_list_files_follows_pagination_until_no_next_page_token`，模擬兩頁回應（第一頁有 `nextPageToken` 與 1 個檔案，第二頁沒有 `nextPageToken` 與 2 個檔案），斷言回傳結果是兩頁串接、且第二次呼叫確實把第一頁拿到的 `nextPageToken` 當作 `pageToken` 傳入；同步更新既有的 `test_list_files_sends_correct_query_and_fields` 斷言新的 `fields`/`pageSize`/`pageToken` 內容。`pytest tests/submodules/gdrive/test_client.py -q` 21 passed；全專案 `pytest tests/bot tests/submodules -q` 1321 passed（13 項失敗均為既有、與本次無關：4 項 `test_job_search.py` 與 9 項 `tests/submodules/email/test_client.py`，後者是既有程式碼缺少 `smtplib` import 屬性導致，與本次 Drive 分頁改動無關）；`ruff check submodules/gdrive/client.py tests/submodules/gdrive/test_client.py` 通過。已確認全專案只有 `src/bot/commands.py`（2 處）與 `src/bot/toeic.py`（1 處）呼叫 `list_files()`，這次的 `fields` 變更是純粹疊加（多要一個欄位），不影響既有呼叫端的行為。
+
+**未驗證範圍**：Robin 尚未在本機重新套用這個修復並重跑同步指令，第 1、2、3 題最終是否被正確切割（或正確判定為放棄不重試）仍待 Robin 實際重跑後用聽力內容驗證確認。另外，`src/bot/commands.py` 的兩處 `list_files()` 呼叫用途是搜尋特定檔名（`name_contains=filename`），理論上也曾受同一個分頁 bug 影響（如果目標檔案恰好落在第一頁之外），但這次沒有額外測試這兩個呼叫點的實際案例，只是確認修復後的分頁邏輯對它們同樣適用（`name_contains` 篩選後理論上結果集通常很小，命中分頁問題的機率遠低於掃描整個資料夾的 `toeic.py` 用法，但沒有到 100% 排除）。

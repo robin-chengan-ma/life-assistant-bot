@@ -515,6 +515,7 @@ CREATE TABLE important_notifications_log (
 | --- | --- | --- | --- |
 | `skill_growth_digests` | 已建立 | FR-22、FR-23 | 每日技術摘要收集與推播狀態；2026-08-09 改為「一天多筆、一筆一來源管道」正規化設計（見 `docs/ADR/discuss/skill-growth.md` ADR-25） |
 | `certificate_questions`（原 `toeic_questions`） | 已建立 | FR-25a～FR-25c | 證照題庫軌道一（照片/音檔上傳建題），2026-08-07 泛用化支援任意證照類型 |
+| `certificate_listen_split_failures` | 已建立 | FR-25b | 2026-09-13 新增：記錄整包聽力音檔切割時「確認放棄、不再重試」的題目 |
 | `toeic_vocab_questions` | 已建立 | FR-25d、FR-25e | TOEIC 題庫軌道二（Gemini 即時生成單字題），刻意維持 TOEIC 專用不隨軌道一泛用化 |
 | `answer_logs` | 已建立 | FR-27、FR-29 | 作答紀錄，跨軌道一/二共用一表；`assignment_id`（2026-08-08 追加）精準對應「今天這一批」 |
 | `certificate_profiles` | 已套用 | FR-30a | Owner 證照名冊；TOEIC 為內建項目，自訂證照以停用保留歷史資料 |
@@ -587,6 +588,22 @@ CREATE INDEX idx_certificate_questions_exam_type ON certificate_questions (exam_
 
 - `source_image_filename UNIQUE` 做去重（取代原「檔名日期」方案）；`exam_type` 刻意不加 CHECK 清單，未來新增證照類型只需換檔名前綴；正解改為 Robin 拍照上傳答案照解析，非 AI 推論，見 `docs/ADR/discuss/skill-growth.md`
 - `image_gdrive_url` 自 `0099` 起改為 nullable：2026-08-25 聽力題目庫改版後，聽力題內容改由「解答照片」統一驅動（見 `docs/ADR/discuss/skill-growth.md`），Part 2 沒有題目照片可拍，`image_gdrive_url` 會是 `NULL`；呈現邏輯（`src/bot/certificate_answer.py`）沒有圖片就不顯示圖片區塊
+
+```sql
+CREATE TABLE certificate_listen_split_failures (
+    id BIGSERIAL PRIMARY KEY,
+    exam_type TEXT NOT NULL,
+    test_id TEXT NOT NULL,
+    question_number INT NOT NULL,
+    source_image_filename TEXT NOT NULL,
+    failed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (exam_type, test_id, question_number)
+);
+```
+`src/migrations/0100_create_certificate_listen_split_failures_table.sql`
+
+- 2026-09-13 新增（見 `docs/ADR/discuss/robinson.md` 對應日期條目）：整包聽力音檔依「Number N」題號標記切割時，某一題若無法 100% 確定切割邊界，會記錄在這張表，之後排程掃描到同一題會直接略過、不再嘗試下載/轉錄/切割——這是**永久跳過**，不是「下次自動重試」，因為同一份錄音的轉錄結果基本上固定，重試注定還是失敗；真的要重試（例如錄音已重新上傳/修正）需要手動刪除這張表對應的紀錄，程式不會自動判斷素材是否已被修正
+- `UNIQUE (exam_type, test_id, question_number)` 防止同一題重複記錄；`source_image_filename` 只是留作排查依據，不是去重比對的主鍵
 
 ```sql
 CREATE TABLE toeic_vocab_questions (
