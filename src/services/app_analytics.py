@@ -75,22 +75,6 @@ def parse_date_range(start: str, end: str, *, today: date | None = None) -> Anal
     return selected
 
 
-def parse_todo_date_range(start: str, end: str) -> AnalyticsDateRange:
-    """解析待辦事項任意日期區間；單次最少 1 天、最多 7 天，未來日期不設上限。"""
-    try:
-        start_date = date.fromisoformat(start)
-        end_date = date.fromisoformat(end)
-    except (TypeError, ValueError) as exc:
-        raise DateRangeError("日期格式必須為 YYYY-MM-DD") from exc
-
-    selected = AnalyticsDateRange(start=start_date, end=end_date)
-    if start_date > end_date:
-        raise DateRangeError("開始日期不可晚於結束日期")
-    if selected.days < 1 or selected.days > 7:
-        raise DateRangeError("日期區間必須介於 1 到 7 天")
-    return selected
-
-
 def parse_calendar_month(value: str) -> AnalyticsDateRange:
     """解析待辦月曆目前顯示月份，回傳該月完整起迄日。"""
     try:
@@ -237,8 +221,8 @@ class AppAnalyticsService:
             """
             /* app_analytics:dashboard */
             SELECT
-              (SELECT COUNT(*) FROM todos WHERE user_id = %s AND status = 'pending'
-                AND DATE(due_at AT TIME ZONE 'Asia/Taipei') = %s) AS todo_count,
+              (SELECT COUNT(*) FROM todos WHERE user_id = %s
+                AND DATE(remind_at AT TIME ZONE 'Asia/Taipei') = %s) AS todo_count,
               (SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE user_id = %s
                 AND type = 'expense' AND transaction_date = %s) AS expense_today,
               (SELECT COUNT(*) FROM transactions WHERE user_id = %s

@@ -9,7 +9,6 @@ from src.services.app_analytics import (
     parse_calendar_month,
     parse_date_range,
     parse_single_date,
-    parse_todo_date_range,
 )
 from src.services.app_auth import AuthenticatedUser
 
@@ -71,29 +70,6 @@ def test_date_range_accepts_arbitrary_historical_one_to_thirty_day_window():
     assert selected.start == date(2026, 6, 11)
     assert selected.end == date(2026, 6, 17)
     assert selected.days == 7
-
-
-@pytest.mark.parametrize(
-    ("start", "end", "expected_days"),
-    [
-        ("2026-08-05", "2026-08-05", 1),
-        ("2026-08-11", "2026-08-17", 7),
-        ("2027-01-01", "2027-01-03", 3),
-    ],
-)
-def test_todo_date_range_accepts_one_to_seven_days_including_future(start, end, expected_days):
-    selected = parse_todo_date_range(start, end)
-
-    assert selected.days == expected_days
-
-
-@pytest.mark.parametrize(
-    ("start", "end"),
-    [("2026-08-01", "2026-08-08"), ("2026-08-02", "2026-08-01"), ("invalid", "2026-08-01")],
-)
-def test_todo_date_range_rejects_long_reversed_or_invalid_ranges(start, end):
-    with pytest.raises(DateRangeError):
-        parse_todo_date_range(start, end)
 
 
 def test_calendar_month_returns_complete_visible_month():
