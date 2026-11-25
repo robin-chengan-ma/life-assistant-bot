@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -87,7 +87,7 @@ def test_create_user_and_invite_creates_user_and_pending_invite(fake_db):
                              params=(result["user_id"],), fetch_one=True)
     assert invite["code"] == result["passcode"]
     assert invite["is_used"] is False
-    assert invite["expires_at"] > datetime.now(timezone.utc)
+    assert invite["expires_at"] > datetime.now(UTC)
 
 
 def test_create_user_and_invite_returns_mobile_user_id_from_users_id(fake_db):
@@ -188,7 +188,7 @@ def test_try_bind_invite_code_fails_when_race_lost_between_select_and_update(fak
 # --- try_bind_invite_code：FR-4b 到期檢查 ---
 
 def test_try_bind_invite_code_fails_when_code_expired(fake_db):
-    expired_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    expired_at = datetime.now(UTC) - timedelta(minutes=1)
     _seed_pending_invite(fake_db, code="secret123", expires_at=expired_at)
 
     result = auth.try_bind_invite_code(fake_db, telegram_user_id=555, code="secret123")
@@ -198,7 +198,7 @@ def test_try_bind_invite_code_fails_when_code_expired(fake_db):
 
 
 def test_try_bind_invite_code_succeeds_when_not_yet_expired(fake_db):
-    not_yet_expired = datetime.now(timezone.utc) + timedelta(hours=1)
+    not_yet_expired = datetime.now(UTC) + timedelta(hours=1)
     _seed_pending_invite(fake_db, code="secret123", expires_at=not_yet_expired)
 
     result = auth.try_bind_invite_code(fake_db, telegram_user_id=555, code="secret123")
@@ -258,7 +258,7 @@ def test_try_bind_invite_code_success_resets_failed_attempts(fake_db):
 
 def test_try_bind_invite_code_expired_code_does_not_count_as_failed_attempt(fake_db):
     """密碼本身過期不算「猜錯」，不應該推進鎖定計數。"""
-    expired_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    expired_at = datetime.now(UTC) - timedelta(minutes=1)
     _seed_pending_invite(fake_db, code="expired-code", expires_at=expired_at)
 
     for _ in range(5):
@@ -276,7 +276,7 @@ def test_set_user_active_false_disables_user_and_revokes_refresh_token(fake_db):
         "is_owner": False,
         "is_active": True,
         "refresh_token_hash": "some-hash",
-        "refresh_token_expires_at": datetime.now(timezone.utc) + timedelta(days=30),
+        "refresh_token_expires_at": datetime.now(UTC) + timedelta(days=30),
     })
 
     auth.set_user_active(fake_db, user_id, active=False)
@@ -299,3 +299,36 @@ def test_set_user_active_true_restores_without_touching_refresh_token_fields(fak
 
     user = fake_db.select("users", where="id = %s", params=(user_id,), fetch_one=True)
     assert user["is_active"] is True
+
+
+def test_list_mobile_login_locked_users_sorted_by_locked_time(fake_db):
+    fake_db.insert(
+        "users",
+        {"id": 2, "is_owner": False, "role": "家人", "nickname": "後鎖", "mobile_login_locked_at": datetime(2026, 8, 20, tzinfo=UTC)},
+    )
+    fake_db.insert(
+        "users",
+        {"id": 3, "is_owner": False, "role": "家人", "nickname": "先鎖", "mobile_login_locked_at": datetime(2026, 8, 18, tzinfo=UTC)},
+    )
+
+    locked_users = auth.list_mobile_login_locked_users(fake_db)
+
+    assert [u["id"] for u in locked_users] == [3, 2]
+
+
+def test_unlock_mobile_login_clears_lock_and_resets_attempts(fake_db):
+    user_id = fake_db.insert(
+        "users",
+        {
+            "is_owner": False,
+            "role": "家人",
+            "mobile_login_failed_attempts": 2,
+            "mobile_login_locked_at": datetime.now(UTC),
+        },
+    )
+
+    auth.unlock_mobile_login(fake_db, user_id)
+
+    user = fake_db.select("users", where="id = %s", params=(user_id,), fetch_one=True)
+    assert user["mobile_login_locked_at"] is None
+    assert user["mobile_login_failed_attempts"] == 0

@@ -14,20 +14,13 @@ import { useAppPreferences } from "@/context/AppPreferencesContext";
 import type { AnalyticsModule } from "@/services/analyticsApi";
 
 const MODULE_ICONS: Record<AnalyticsModule, keyof typeof MaterialCommunityIcons.glyphMap> = {
-  todos: "calendar-check-outline",
   body: "heart-pulse",
   finance: "wallet-outline",
-  mood: "emoticon-happy-outline",
-  jobs: "briefcase-outline",
-  exams: "certificate-outline",
-  skills: "lightbulb-on-outline",
 };
-const COMMON_MODULES: AnalyticsModule[] = ["todos", "body", "finance", "mood"];
-const OWNER_MODULES: AnalyticsModule[] = ["skills", "jobs", "exams"];
-const LIFESTYLE_LINKS: Array<{ href: string; icon: keyof typeof MaterialCommunityIcons.glyphMap; label: string; color: string }> = [
-  { href: "/collections", icon: "bookmark-multiple-outline", label: "收藏清單", color: "#D39719" },
-  { href: "/exploration", icon: "map-marker-radius-outline", label: "探索地圖", color: "#278DA8" },
-  { href: "/achievements", icon: "trophy-outline", label: "成果展示", color: "#A56CC1" },
+const COMMON_MODULES: AnalyticsModule[] = ["body", "finance"];
+const CORE_LINKS: Array<{ href: string; icon: keyof typeof MaterialCommunityIcons.glyphMap; label: string; color: string }> = [
+  { href: "/todo", icon: "calendar-check-outline", label: "待辦事項", color: "#3B82F6" },
+  { href: "/important-days", icon: "cake-variant-outline", label: "生日設定", color: "#D39719" },
 ];
 
 export function AppShell({ children, scrollViewRef, title }: PropsWithChildren<{ scrollViewRef?: RefObject<ScrollView | null>; title: string }>) {
@@ -106,10 +99,6 @@ export function AppShell({ children, scrollViewRef, title }: PropsWithChildren<{
             <MaterialCommunityIcons color={colors.primary} name="account-details-outline" size={22} />
             <Text style={styles.profileMenuButtonText}>個人基本資訊</Text>
           </Pressable>
-          <Pressable onPress={() => { setProfileOpen(false); router.push("/settings/important-days"); }} style={styles.profileMenuButton}>
-            <MaterialCommunityIcons color={colors.primary} name="calendar-star" size={22} />
-            <Text style={styles.profileMenuButtonText}>重要日子設定</Text>
-          </Pressable>
           <Pressable onPress={() => { setProfileOpen(false); router.push("/settings/preferences"); }} style={styles.profileMenuButton}>
             <MaterialCommunityIcons color={colors.primary} name="cog-outline" size={22} />
             <Text style={styles.profileMenuButtonText}>APP 設定</Text>
@@ -129,14 +118,8 @@ export function AppShell({ children, scrollViewRef, title }: PropsWithChildren<{
             <Pressable onPress={() => { setDrawerOpen(false); router.replace("/home"); }} style={styles.drawerItem}>
               <MaterialCommunityIcons color={colors.primary} name="view-dashboard-outline" size={22} /><Text style={styles.drawerText}>首頁</Text>
             </Pressable>
+            {CORE_LINKS.map((item) => <Pressable key={item.label} onPress={() => { setDrawerOpen(false); router.push(item.href as Href); }} style={styles.drawerItem}><MaterialCommunityIcons color={item.color} name={item.icon} size={22} /><Text style={styles.drawerText}>{item.label}</Text></Pressable>)}
             {COMMON_MODULES.map((key) => { const item = data?.navigation[key]; return item ? (
-              <Pressable key={key} onPress={() => openModule(key, item.is_enabled)} style={[styles.drawerItem, !item.is_enabled && styles.drawerItemDisabled]}>
-                <MaterialCommunityIcons color={item.is_enabled ? item.color : colors.textMuted} name={MODULE_ICONS[key]} size={22} />
-                <Text style={[styles.drawerText, !item.is_enabled && styles.disabledText]}>{item.label}</Text>
-              </Pressable>
-            ) : null; })}
-            {LIFESTYLE_LINKS.map((item) => <Pressable key={item.label} onPress={() => { setDrawerOpen(false); router.push(item.href as Href); }} style={styles.drawerItem}><MaterialCommunityIcons color={item.color} name={item.icon} size={22} /><Text style={styles.drawerText}>{item.label}</Text></Pressable>)}
-            {OWNER_MODULES.map((key) => { const item = data?.navigation[key]; return item ? (
               <Pressable key={key} onPress={() => openModule(key, item.is_enabled)} style={[styles.drawerItem, !item.is_enabled && styles.drawerItemDisabled]}>
                 <MaterialCommunityIcons color={item.is_enabled ? item.color : colors.textMuted} name={MODULE_ICONS[key]} size={22} />
                 <Text style={[styles.drawerText, !item.is_enabled && styles.disabledText]}>{item.label}</Text>

@@ -1,5 +1,3 @@
-from datetime import date
-
 import pytest
 
 from src.services.app_important_days import (
@@ -13,8 +11,6 @@ class FakeDatabase:
     def __init__(self):
         self.tables = {
             "important_days": [],
-            "important_day_recipients": [],
-            "important_day_occurrences": [],
             "users": [
                 {"id": 1, "role": "Robin"},
                 {"id": 10, "role": "爸爸"},
@@ -25,14 +21,16 @@ class FakeDatabase:
     def select(self, table, columns=("*",), where=None, params=None, fetch_one=False):
         rows = list(self.tables[table])
         if table == "important_days" and where:
-            rows = [row for row in rows if row["id"] == params[0] and row["owner_user_id"] == params[1]]
+            if "user_id = %s" in where and len(params) == 1:
+                rows = [row for row in rows if row["user_id"] == params[0]]
+            else:
+                rows = [row for row in rows if row["id"] == params[0] and row["user_id"] == params[1]]
         return (rows[0] if rows else None) if fetch_one else rows
 
     def insert(self, table, data, returning="id"):
         row = dict(data)
-        if table == "important_days":
-            row["id"] = self.next_id
-            self.next_id += 1
+        row["id"] = self.next_id
+        self.next_id += 1
         self.tables[table].append(row)
         return row.get(returning)
 
@@ -43,101 +41,69 @@ class FakeDatabase:
         return len(rows)
 
     def delete(self, table, where, params):
-        key = "id" if table == "important_days" else "important_day_id"
         before = len(self.tables[table])
-        self.tables[table] = [row for row in self.tables[table] if row[key] != params[0]]
+        self.tables[table] = [row for row in self.tables[table] if row["id"] != params[0]]
         return before - len(self.tables[table])
 
-    def execute_query(self, query, params=None):
-        return []
+
+@pytest.fixture()
+def service():
+    return AppImportantDayService(FakeDatabase())
 
 
-def payload(**overrides):
-    value = {
-        "title": "同學婚禮",
-        "recurrence_type": "one_time",
-        "event_date": "2026-12-20",
-        "event_time": "18:00",
-        "is_all_day": False,
-        "reminder_days_before": 7,
-        "notes": "台北",
-        "audience_mode": "self",
-        "recipient_ids": [],
-        "show_on_todo_calendar": True,
-        "is_active": True,
-    }
-    value.update(overrides)
-    return value
+def test_create_requires_name(service):
+    with pytest.raises(ImportantDayValidationError):
+        service.create(1, {"birth_month": 5, "birth_day": 1})
 
 
-def test_create_self_event_only_assigns_owner_as_recipient():
-    db = FakeDatabase()
+def test_create_requires_valid_month_and_day(service):
+    with pytest.raises(ImportantDayValidationError):
+        service.create(1, {"name": "媽媽", "birth_month": 13, "birth_day": 1})
+    with pytest.raises(ImportantDayValidationError):
+        service.create(1, {"name": "媽媽", "birth_month": 5, "birth_day": 32})
 
-    result = AppImportantDayService(db).create(1, payload())
 
+def test_create_and_list_round_trip(service):
+    result = service.create(1, {"name": "媽媽", "birth_month": 5, "birth_day": 20})
     assert result["id"] == 1
-    assert db.tables["important_days"][0]["audience_mode"] == "self"
-    assert db.tables["important_day_recipients"] == [{"important_day_id": 1, "user_id": 1}]
+
+    items = service.list_for_user(1)
+    assert len(items) == 1
+    assert items[0]["name"] == "媽媽"
+    assert items[0]["birth_month"] == 5
+    assert items[0]["birth_day"] == 20
+    assert items[0]["owner_user_id"] == 1
+    assert items[0]["can_edit"] is True
 
 
-def test_family_users_derives_app_user_id_from_database_id():
-    users = AppImportantDayService(FakeDatabase()).family_users()
+def test_list_only_returns_own_birthdays(service):
+    service.create(1, {"name": "媽媽", "birth_month": 5, "birth_day": 20})
+    service.create(10, {"name": "爸爸的朋友", "birth_month": 1, "birth_day": 1})
 
-    assert users == [
-        {"id": 1, "role": "Robin", "user_id": "user01"},
-        {"id": 10, "role": "爸爸", "user_id": "user10"},
-    ]
-
-
-def test_specific_audience_requires_at_least_one_recipient():
-    with pytest.raises(ImportantDayValidationError, match="至少選擇一位"):
-        AppImportantDayService(FakeDatabase()).create(1, payload(audience_mode="specific"))
+    items = service.list_for_user(1)
+    assert [item["name"] for item in items] == ["媽媽"]
 
 
-def test_flexible_annual_event_stores_current_year_occurrence():
-    db = FakeDatabase()
+def test_update_changes_fields(service):
+    created = service.create(1, {"name": "媽媽", "birth_month": 5, "birth_day": 20})
+    service.update(created["id"], 1, {"name": "媽咪", "birth_month": 6, "birth_day": 1})
 
-    AppImportantDayService(db).create(1, payload(
-        recurrence_type="flexible_annual",
-        event_date=None,
-        occurrence_date="2026-04-03",
-    ))
-
-    assert db.tables["important_day_occurrences"][0]["occurrence_year"] == 2026
-    assert db.tables["important_day_occurrences"][0]["occurrence_date"] == date(2026, 4, 3)
+    items = service.list_for_user(1)
+    assert items[0]["name"] == "媽咪"
+    assert items[0]["birth_month"] == 6
+    assert items[0]["birth_day"] == 1
 
 
-def test_one_time_range_expands_every_calendar_day():
-    db = FakeDatabase()
-    service = AppImportantDayService(db)
-    service.create(1, payload(event_date="2026-12-20", event_end_date="2026-12-22"))
-    row = db.tables["important_days"][0]
-    row.update(recipient_ids=[1], current_year_date=None, current_year_end_date=None)
-    service.list_for_user = lambda user_id, today=None: [service._serialize(row, user_id, today or date(2026, 12, 1))]
-
-    events = service.calendar_events(1, date(2026, 12, 19), date(2026, 12, 23))
-
-    assert set(events) == {"2026-12-20", "2026-12-21", "2026-12-22"}
-
-
-def test_fixed_annual_range_cannot_cross_year():
-    with pytest.raises(ImportantDayValidationError, match="不可跨年"):
-        AppImportantDayService(FakeDatabase()).create(
-            1,
-            payload(
-                recurrence_type="fixed_annual",
-                event_date="2026-12-30",
-                event_end_date="2027-01-02",
-            ),
-        )
-
-
-def test_other_user_cannot_update_or_delete_event():
-    db = FakeDatabase()
-    service = AppImportantDayService(db)
-    event_id = service.create(1, payload())["id"]
+def test_other_user_cannot_update_or_delete(service):
+    created = service.create(1, {"name": "媽媽", "birth_month": 5, "birth_day": 20})
 
     with pytest.raises(ImportantDayNotFoundError):
-        service.update(event_id, 2, payload(title="不是我的事件"))
+        service.update(created["id"], 10, {"name": "x", "birth_month": 1, "birth_day": 1})
     with pytest.raises(ImportantDayNotFoundError):
-        service.delete(event_id, 2)
+        service.delete(created["id"], 10)
+
+
+def test_delete_removes_row(service):
+    created = service.create(1, {"name": "媽媽", "birth_month": 5, "birth_day": 20})
+    service.delete(created["id"], 1)
+    assert service.list_for_user(1) == []

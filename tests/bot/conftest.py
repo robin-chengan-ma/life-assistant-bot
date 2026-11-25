@@ -1,9 +1,17 @@
 """共用測試替身（Test Double），模擬 submodules.cloudsql.client.CloudSQLClient 的介面，
 不需要真的連線 Neon，讓 src/bot/ 底下的單元測試可以純函式方式驗證邏輯。
 """
+import datetime as _datetime_module
 import itertools
 
 import pytest
+
+# 這個 sandbox 的系統 Python 是 3.10（沒有 datetime.UTC，3.11 才新增的別名），
+# 但 repo 其餘程式碼／ruff 設定都假設正式環境是 3.11+，一律用 `datetime.UTC`。
+# 補一個相容 shim，讓測試在這個 sandbox 也能正常 import／執行，不影響正式環境行為
+# （正式環境本來就有 `datetime.UTC`，這行只是 no-op）。
+if not hasattr(_datetime_module, "UTC"):
+    _datetime_module.UTC = _datetime_module.timezone.utc  # noqa: UP017
 
 
 class FakeCloudSQLClient:
@@ -389,6 +397,12 @@ class FakeCloudSQLClient:
                 and row.get("test_id") == params[1]
                 and row.get("question_number") == params[2]
             )
+        # 2026-11（功能大幅精簡）：待辦事項改為單純一次性提醒（見 src/bot/todo.py）。
+        if where == "reminded_sent_at IS NULL AND remind_at <= %s":
+            return row.get("reminded_sent_at") is None and row.get("remind_at") <= params[0]
+        # 2026-11（功能大幅精簡）：重要日子改為「生日設定」（見 src/bot/important_days.py）。
+        if where == "birth_month = %s AND birth_day = %s":
+            return row.get("birth_month") == params[0] and row.get("birth_day") == params[1]
 
         raise NotImplementedError(f"FakeCloudSQLClient 尚未支援這個 where 條件：{where}")
 

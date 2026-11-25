@@ -6,9 +6,30 @@ import base64
 import binascii
 import json
 import re
+from io import BytesIO
 from typing import Any
 
-from src.bot import body, image, privacy
+from PIL import Image
+
+from src.bot import body, privacy
+
+_MAX_DIMENSION = 1024
+_JPEG_QUALITY = 80
+
+
+def _compress_image(image_bytes: bytes) -> bytes:
+    """依 ADR-13：縮放至 1024×1024 以下、轉存 JPEG 品質 80，降低送給 Gemini 的 Payload。
+
+    2026-11（功能大幅精簡）：原本共用 `src/bot/image.py` 的 Telegram 一般影像辨識功能已整個
+    移除，這支函式搬進來自己留一份（飲食照片辨識仍是保留功能），避免依賴已刪除的模組。
+    """
+    image = Image.open(BytesIO(image_bytes))
+    if image.mode != "RGB":
+        image = image.convert("RGB")
+    image.thumbnail((_MAX_DIMENSION, _MAX_DIMENSION))
+    buffer = BytesIO()
+    image.save(buffer, format="JPEG", quality=_JPEG_QUALITY)
+    return buffer.getvalue()
 
 _ALLOWED_MIME_TYPES = {"image/jpeg", "image/png", "image/webp"}
 _MAX_IMAGE_BYTES = 8 * 1024 * 1024
@@ -31,7 +52,7 @@ def _decode_image(image_base64: Any, mime_type: Any) -> bytes:
     if not raw or len(raw) > _MAX_IMAGE_BYTES:
         raise DietPhotoError("圖片大小不可超過 8 MB")
     try:
-        return image.compress_image(raw)
+        return _compress_image(raw)
     except Exception as exc:
         raise DietPhotoError("無法讀取這張圖片，請改用 JPG 或 PNG") from exc
 

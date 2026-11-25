@@ -9,15 +9,10 @@ from decimal import Decimal
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
-from src.bot.notifications import FIXED_NOTIFICATIONS
 from src.services.app_auth import AuthenticatedUser
 from src.services.app_important_days import AppImportantDayService
-from src.services.taiwan_calendar import TaiwanCalendarService
 
 _TAIWAN_TZ = ZoneInfo("Asia/Taipei")
-# 2026-08-24（見 docs/ADR/debug/job-search.md「推薦職缺不分青紅皂白」條目）：`jobs()` 推薦職缺
-# 門檻，沿用既有 high/medium 分界（60 分）。
-_RECOMMENDATION_MIN_SCORE = 60
 
 
 class AnalyticsDatabase(Protocol):
@@ -124,14 +119,15 @@ def parse_single_date(value: str, *, today: date | None = None) -> AnalyticsDate
     return AnalyticsDateRange(start=selected_date, end=selected_date)
 
 
+# 2026-11（功能大幅精簡，見 ADR-33）：心情小記／技術分享／求職分析／考試成績隨對應功能整批
+# 移除，分析頁現在只剩待辦事項／體態／記帳三項，全部開放給所有使用者（不再有 owner_only 的
+# 功能開關頁面，`feature_toggles` 表本身也已隨之刪除，見 migration 0101）。
+# 2026-11（功能大幅精簡，見 ADR-33）：待辦事項改成純一次性提醒（migration 0102），
+# Mobile App 改直接呼叫 `src/services/app_todo.py`（`/api/app/todos`），不再透過這支分析服務的
+# `todos()`／`_calendar_days_for_user()`，兩者已隨之移除；分析頁現在只剩體態／記帳。
 _MODULES: dict[str, dict[str, Any]] = {
-    "todos": {"label": "待辦事項", "feature_key": "todo", "owner_only": False, "color": "#3B82F6"},
-    "body": {"label": "體態分析", "feature_key": "body", "owner_only": False, "color": "#2E9D74"},
-    "finance": {"label": "記帳分析", "feature_key": "budget", "owner_only": False, "color": "#EB9741"},
-    "mood": {"label": "心情小記", "feature_key": "mood_journal", "owner_only": False, "color": "#A56CC1"},
-    "skills": {"label": "技術分享", "feature_key": "tech_intel", "owner_only": True, "color": "#D9544D"},
-    "jobs": {"label": "求職分析", "feature_key": "job_search", "owner_only": True, "color": "#7656C9"},
-    "exams": {"label": "考試成績", "feature_key": "certificate", "owner_only": True, "color": "#D89B20"},
+    "body": {"label": "體態分析", "color": "#2E9D74"},
+    "finance": {"label": "記帳分析", "color": "#EB9741"},
 }
 
 
@@ -156,9 +152,8 @@ def _matches_calendar_name(day: dict[str, Any], label: str) -> bool:
 
 
 class AppAnalyticsService:
-    def __init__(self, db: AnalyticsDatabase, *, sync_calendar: bool = False, today: date | None = None):
+    def __init__(self, db: AnalyticsDatabase, *, today: date | None = None):
         self._db = db
-        self._calendar = TaiwanCalendarService(db, sync_missing=sync_calendar)
         self._today = today or datetime.now(_TAIWAN_TZ).date()
 
     def _normalized_goal(self, row: dict[str, Any]) -> dict[str, Any]:
@@ -214,32 +209,14 @@ class AppAnalyticsService:
         return candidates[0]
 
     def navigation(self, user: AuthenticatedUser) -> dict[str, dict[str, Any]]:
-        rows = self._db.select(
-            "feature_toggles",
-            columns=("feature_key", "is_enabled"),
-            where="user_id = %s",
-            params=(user.database_id,),
-        )
-        toggle_values = {row["feature_key"]: bool(row["is_enabled"]) for row in rows}
-        navigation: dict[str, dict[str, Any]] = {}
-        for module_key, config in _MODULES.items():
-            if config["owner_only"] and not user.is_owner:
-                continue
-            feature_key = config["feature_key"]
-            navigation[module_key] = {
-                "label": config["label"],
-                "color": config["color"],
-                "is_enabled": toggle_values.get(feature_key, True) if config["owner_only"] else True,
-            }
-        return navigation
+        return {
+            module_key: {"label": config["label"], "color": config["color"], "is_enabled": True}
+            for module_key, config in _MODULES.items()
+        }
 
     def _authorize(self, user: AuthenticatedUser, module_key: str) -> None:
-        config = _MODULES[module_key]
-        if config["owner_only"] and not user.is_owner:
+        if module_key not in _MODULES:
             raise ForbiddenModuleError("您沒有權限查看此頁面")
-        item = self.navigation(user).get(module_key)
-        if item is not None and not item["is_enabled"]:
-            raise FeatureDisabledError("請先把功能打開才能使用喔")
 
     def _has_user_data(self, table: str, user_id: int) -> bool:
         return self._db.select(
@@ -280,13 +257,11 @@ class AppAnalyticsService:
               (SELECT COUNT(*) FROM exercise_logs WHERE user_id = %s AND entry_date = %s) AS exercise_count,
               (SELECT STRING_AGG(DISTINCT activity, '、') FROM exercise_logs WHERE user_id = %s AND entry_date = %s) AS activities,
               (SELECT weight_kg FROM body_weight_logs WHERE user_id = %s ORDER BY entry_date DESC, created_at DESC LIMIT 1) AS latest_weight,
-              (SELECT CASE WHEN EXISTS (SELECT 1 FROM body_weight_logs WHERE user_id = %s AND entry_date = %s) THEN 1 ELSE 0 END) AS weight_count,
-              (SELECT mood_category FROM mood_journals WHERE user_id = %s AND entry_date = %s ORDER BY created_at DESC, id DESC LIMIT 1) AS latest_mood_category,
-              (SELECT CASE WHEN EXISTS (SELECT 1 FROM mood_journals WHERE user_id = %s AND entry_date = %s) THEN 1 ELSE 0 END) AS mood_count
+              (SELECT CASE WHEN EXISTS (SELECT 1 FROM body_weight_logs WHERE user_id = %s AND entry_date = %s) THEN 1 ELSE 0 END) AS weight_count
             """,
             (user.database_id, target_date) * 14
             + (user.database_id,)
-            + (user.database_id, target_date) * 3,
+            + (user.database_id, target_date),
         )
         summary = _json_row(rows[0]) if rows else {}
         return {
@@ -297,24 +272,26 @@ class AppAnalyticsService:
             "summary": summary,
         }
 
-    def _important_day_summaries(self, user: AuthenticatedUser, target_date: date) -> list[str]:
-        """回傳首頁使用的精簡重要日子列表，不沿用 Telegram 推播長文案。"""
-        dated: list[tuple[date, str]] = []
-        for item in AppImportantDayService(self._db).list_for_user(user.database_id, today=target_date):
-            if not item["is_active"]:
-                continue
-            next_occurrence = item["next_occurrence"]
-            if next_occurrence:
-                dated.append((date.fromisoformat(next_occurrence), item["title"]))
+    @staticmethod
+    def _next_occurrence(month: int, day: int, target_date: date) -> date:
+        try:
+            event_date = date(target_date.year, month, day)
+        except ValueError:
+            event_date = date(target_date.year, 2, 28)
+        if event_date < target_date:
+            try:
+                event_date = date(target_date.year + 1, month, day)
+            except ValueError:
+                event_date = date(target_date.year + 1, 2, 28)
+        return event_date
 
-        for entry in FIXED_NOTIFICATIONS:
-            allowed_roles = entry["allowed_roles"]
-            if allowed_roles is not None and user.role not in allowed_roles:
-                continue
-            event_date = entry["compute_date"](target_date.year)
-            if event_date < target_date:
-                event_date = entry["compute_date"](target_date.year + 1)
-            dated.append((event_date, entry["calendar_summary"]))
+    def _important_day_summaries(self, user: AuthenticatedUser, target_date: date) -> list[str]:
+        """回傳首頁使用的精簡重要日子列表（2026-11 精簡後只剩生日設定），不沿用 Telegram
+        推播長文案。"""
+        dated: list[tuple[date, str]] = []
+        for item in AppImportantDayService(self._db).list_for_user(user.database_id):
+            event_date = self._next_occurrence(item["birth_month"], item["birth_day"], target_date)
+            dated.append((event_date, item["name"]))
 
         users = self._db.select(
             "users",
@@ -325,17 +302,8 @@ class AppAnalyticsService:
             birthday = row.get("birthday")
             if not isinstance(birthday, date):
                 continue
-            try:
-                event_date = birthday.replace(year=target_date.year)
-            except ValueError:
-                event_date = date(target_date.year, 2, 28)
-            if event_date < target_date:
-                try:
-                    event_date = birthday.replace(year=target_date.year + 1)
-                except ValueError:
-                    event_date = date(target_date.year + 1, 2, 28)
             title = "我的生日" if row["id"] == user.database_id else f"{row['role']}生日"
-            dated.append((event_date, title))
+            dated.append((self._next_occurrence(birthday.month, birthday.day, target_date), title))
 
         messages: list[str] = []
         seen: set[tuple[date | None, str]] = set()
@@ -362,17 +330,6 @@ class AppAnalyticsService:
         )
         sent_keys = {row["notification_key"] for row in sent_rows}
         messages: list[str] = []
-        for entry in FIXED_NOTIFICATIONS:
-            if entry["key"] not in sent_keys:
-                continue
-            allowed_roles = entry["allowed_roles"]
-            if allowed_roles is not None and user.role not in allowed_roles:
-                continue
-            messages.append(
-                entry["subject_message"]
-                if entry["subject_role"] == user.role and entry["subject_message"]
-                else entry["message"]
-            )
         birthday_keys = [key for key in sent_keys if key.startswith("birthday_")]
         if birthday_keys:
             users = self._db.select("users", columns=("id", "role"), where="birthday IS NOT NULL")
@@ -384,141 +341,6 @@ class AppAnalyticsService:
                 elif key in roles:
                     messages.append(f"🎂 提醒你，今天是 {roles[key]} 的生日，記得跟他/她說聲生日快樂！")
         return messages
-
-    def _calendar_days_for_user(
-        self,
-        user: AuthenticatedUser,
-        start: date,
-        end: date,
-    ) -> dict[str, dict[str, Any]]:
-        """合併政府行事曆與使用者可見的重要通知日期。"""
-        calendar_days = self._calendar.days(start, end)
-        for year in range(start.year, end.year + 1):
-            for entry in FIXED_NOTIFICATIONS:
-                allowed_roles = entry["allowed_roles"]
-                if allowed_roles is not None and user.role not in allowed_roles:
-                    continue
-                notification_date = entry["compute_date"](year)
-                if start <= notification_date <= end:
-                    day = calendar_days.setdefault(
-                        notification_date.isoformat(),
-                        {
-                            "name": None,
-                            "is_holiday": False,
-                            "holiday_category": None,
-                            "description": None,
-                        },
-                    )
-                    notifications = day.setdefault("important_notifications", [])
-                    summary = entry["calendar_summary"]
-                    if summary not in notifications and not _matches_calendar_name(day, summary):
-                        notifications.append(summary)
-
-        users = self._db.select(
-            "users",
-            columns=("id", "role", "birthday"),
-            where="birthday IS NOT NULL",
-        )
-        for row in users:
-            birthday = row.get("birthday")
-            if not isinstance(birthday, date):
-                continue
-            for year in range(start.year, end.year + 1):
-                try:
-                    notification_date = birthday.replace(year=year)
-                except ValueError:
-                    continue
-                if start <= notification_date <= end:
-                    day = calendar_days.setdefault(
-                        notification_date.isoformat(),
-                        {
-                            "name": None,
-                            "is_holiday": False,
-                            "holiday_category": None,
-                            "description": None,
-                        },
-                    )
-                    notifications = day.setdefault("important_notifications", [])
-                    summary = "我的生日" if row["id"] == user.database_id else f"{row['role']}生日"
-                    if summary not in notifications and not _matches_calendar_name(day, summary):
-                        notifications.append(summary)
-        custom_events = AppImportantDayService(self._db).calendar_events(user.database_id, start, end)
-        for event_date, titles in custom_events.items():
-            day = calendar_days.setdefault(
-                event_date,
-                {
-                    "name": None,
-                    "is_holiday": False,
-                    "holiday_category": None,
-                    "description": None,
-                },
-            )
-            notifications = day.setdefault("important_notifications", [])
-            for title in titles:
-                if title not in notifications and not _matches_calendar_name(day, title):
-                    notifications.append(title)
-        return calendar_days
-
-    def todos(
-        self,
-        user: AuthenticatedUser,
-        start: date,
-        end: date,
-        *,
-        calendar_start: date,
-        calendar_end: date,
-    ) -> dict[str, Any]:
-        self._authorize(user, "todos")
-        rows = self._db.execute_query(
-            """/* app_analytics:todos */ SELECT id, content, due_at, start_at, status, created_at
-            FROM todos WHERE user_id = %s
-              AND status = 'pending'
-              AND DATE(due_at AT TIME ZONE 'Asia/Taipei') >= %s
-              AND DATE(COALESCE(start_at, due_at) AT TIME ZONE 'Asia/Taipei') <= %s
-              AND DATE(due_at AT TIME ZONE 'Asia/Taipei') >= %s
-            ORDER BY due_at""",
-            (user.database_id, self._today, end, start),
-        )
-        # 2026-08-24（Robin 反饋「代辦事項過期後 Mobile App 逾期待辦看不到」，後續實機測試發現
-        # 「到期日是今天、但時間已過」的項目仍然看不到）：`mark_overdue_as_expired()`
-        # （src/bot/todo.py）約每 10 分鐘就會把過期的 `pending` 轉成 `expired`，不論到期日是
-        # 今天還是更早。若這裡的逾期判斷仍額外要求「到期日 < 今天」，一筆到期日是「今天」但已經
-        # 被轉成 `expired` 的待辦，就會同時被「即將到期」（只看 pending）與「逾期待辦」（只看
-        # 日期早於今天）排除，掉進兩邊都撈不到的空隙。改成：只要 status 已經是 `expired` 就算
-        # 逾期（不論到期日是不是今天）；`pending` 則維持用日期判斷，作為 cron 尚未來得及轉態時
-        # 的緩衝。
-        overdue_rows = self._db.execute_query(
-            """/* app_analytics:todos_overdue */ SELECT id, content, due_at, start_at, status, created_at
-            FROM todos WHERE user_id = %s
-              AND (status = 'expired' OR (status = 'pending' AND DATE(due_at AT TIME ZONE 'Asia/Taipei') < %s))
-            ORDER BY due_at DESC, created_at DESC, id DESC""",
-            (user.database_id, self._today),
-        )
-        count_rows = self._db.execute_query(
-            """/* app_analytics:todo_calendar_counts */
-            SELECT day::date AS day, COUNT(*) AS count
-            FROM todos t
-            CROSS JOIN LATERAL GENERATE_SERIES(
-              DATE(COALESCE(t.start_at, t.due_at) AT TIME ZONE 'Asia/Taipei'),
-              DATE(t.due_at AT TIME ZONE 'Asia/Taipei'), INTERVAL '1 day'
-            ) AS day
-            WHERE t.user_id = %s AND t.status IN ('pending', 'expired') AND day::date BETWEEN %s AND %s
-            GROUP BY day::date ORDER BY day::date""",
-            (user.database_id, calendar_start, calendar_end),
-        )
-        calendar_counts = {str(_json_value(row["day"])): int(row["count"]) for row in count_rows}
-        return {
-            "has_any_data": self._has_user_data("todos", user.database_id),
-            "items": [{**_json_row(row), "can_edit": True} for row in rows],
-            "overdue_items": [{**_json_row(row), "can_edit": True} for row in overdue_rows],
-            "overdue_count": len(overdue_rows),
-            "calendar_counts": calendar_counts,
-            "calendar_days": self._calendar_days_for_user(
-                user,
-                min(start, calendar_start),
-                max(end, calendar_end),
-            ),
-        }
 
     def finance(self, user: AuthenticatedUser, start: date, end: date) -> dict[str, Any]:
         self._authorize(user, "finance")
@@ -553,21 +375,7 @@ class AppAnalyticsService:
             WHERE user_id = %s ORDER BY transaction_date DESC, created_at DESC, id DESC LIMIT 1""",
             (user.database_id,),
         )
-        goal_rows = self._db.execute_query(
-            """/* app_analytics:finance_goals */ SELECT g.id, g.module_key, g.target_description,
-            g.target_value, g.target_unit, g.baseline_value, g.target_date, g.status,
-            g.created_at, g.updated_at, g.completed_at,
-            CASE WHEN g.target_value IS NULL THEN NULL ELSE COALESCE((
-              SELECT SUM(CASE WHEN t.type = 'income' THEN t.amount ELSE -t.amount END)
-              FROM transactions t WHERE t.user_id = g.user_id
-                AND t.transaction_date >= DATE(g.created_at AT TIME ZONE 'Asia/Taipei')
-            ), 0) END AS current_value
-            FROM module_goals g WHERE g.user_id = %s AND g.module_key = 'finance'
-            ORDER BY g.updated_at DESC, g.id DESC""",
-            (user.database_id,),
-        )
         daily = list(by_day.values())
-        goals = [self._normalized_goal(row) for row in goal_rows]
         latest_record = None
         if latest_rows:
             latest_record = {
@@ -582,8 +390,6 @@ class AppAnalyticsService:
             "income_total": sum(point["income"] for point in daily),
             "records": [{**_json_row(row), "can_edit": row["date"] == self._today} for row in records],
             "latest_record": latest_record,
-            "goals": goals,
-            "goal_summary": self._goal_summary(goals),
         }
 
     def body(self, user: AuthenticatedUser, start: date, end: date) -> dict[str, Any]:
@@ -767,183 +573,3 @@ class AppAnalyticsService:
             }
             for row in rows
         ]
-
-    def mood(self, user: AuthenticatedUser, start: date, end: date) -> dict[str, Any]:
-        self._authorize(user, "mood")
-        rows = self._db.execute_query(
-            """/* app_analytics:mood */ SELECT DISTINCT ON (entry_date) id, entry_date AS date, mood_category, content, achievement_note, created_at
-            FROM mood_journals WHERE user_id = %s AND entry_date BETWEEN %s AND %s
-            ORDER BY entry_date DESC, created_at DESC, id DESC""",
-            (user.database_id, start, end),
-        )
-        latest_rows = self._db.execute_query(
-            """/* app_analytics:mood_latest */ SELECT id, entry_date AS date, mood_category,
-            content, achievement_note, created_at FROM mood_journals WHERE user_id = %s
-            ORDER BY entry_date DESC, created_at DESC, id DESC LIMIT 1""",
-            (user.database_id,),
-        )
-        latest_record = None
-        if latest_rows:
-            latest_record = {
-                **_json_row(latest_rows[0]),
-                "can_edit": latest_rows[0]["date"] == self._today,
-            }
-        return {
-            "has_any_data": self._has_user_data("mood_journals", user.database_id),
-            "items": [{**_json_row(row), "can_edit": row["date"] == self._today} for row in rows],
-            "latest_record": latest_record,
-        }
-
-    def jobs(self, user: AuthenticatedUser, start: date, end: date) -> dict[str, Any]:
-        self._authorize(user, "jobs")
-        postings = self._db.execute_query(
-            """/* app_analytics:jobs_postings */ SELECT p.job_id_104, p.title,
-            c.company_name, p.region, p.source, p.url, p.score AS match_score,
-            p.recommend_reason, p.skill_gap_note, p.first_seen_at, p.is_closed
-            FROM job_postings p JOIN job_companies c ON c.company_id_104 = p.company_id_104
-            WHERE DATE(p.first_seen_at AT TIME ZONE 'Asia/Taipei') BETWEEN %s AND %s
-            ORDER BY match_score DESC NULLS LAST""",
-            (start, end),
-        )
-        timeline = self._db.execute_query(
-            """/* app_analytics:jobs_timeline */ SELECT a.job_id_104, p.title, a.status, a.created_at
-            FROM job_applications a JOIN job_postings p ON p.job_id_104 = a.job_id_104
-            WHERE DATE(a.created_at AT TIME ZONE 'Asia/Taipei') BETWEEN %s AND %s ORDER BY a.created_at DESC""",
-            (start, end),
-        )
-        latest_status: dict[str, str] = {}
-        for row in timeline:
-            latest_status[row["job_id_104"]] = row["status"]
-        funnel = {key: 0 for key in ("applied", "interview", "offer", "rejected")}
-        for status in latest_status.values():
-            if status in funnel:
-                funnel[status] += 1
-        distribution = {"high": 0, "medium": 0, "low": 0}
-        for row in postings:
-            score = float(row["match_score"]) if row.get("match_score") is not None else None
-            if score is None:
-                continue
-            distribution["high" if score >= 80 else "medium" if score >= 60 else "low"] += 1
-        open_postings = [row for row in postings if not row.get("is_closed", False)]
-        # 2026-08-24（見 docs/ADR/debug/job-search.md「推薦職缺不分青紅皂白」條目）：契合度
-        # 評分尚未執行時 `match_score` 為 NULL，過去沒有門檻，未評分／低分職缺也會被硬塞進推薦
-        # 清單。只有真正評過分、且分數達到 `_RECOMMENDATION_MIN_SCORE`（沿用上方 medium/high
-        # 分界＝60）的職缺才算「推薦」；找不到合適職缺時回傳空陣列，由前端顯示對應文案。
-        recommended_postings = [
-            row for row in open_postings
-            if row.get("match_score") is not None and float(row["match_score"]) >= _RECOMMENDATION_MIN_SCORE
-        ]
-        return {
-            "has_any_data": self._has_data("job_postings"),
-            "funnel": funnel,
-            "score_distribution": distribution,
-            "recommendations": [_json_row(row) for row in recommended_postings[:10]],
-            "timeline": [_json_row(row) for row in timeline],
-        }
-
-    def exams(self, user: AuthenticatedUser, start: date, end: date) -> dict[str, Any]:
-        self._authorize(user, "exams")
-        profiles = self._db.execute_query(
-            """/* app_analytics:exam_profiles */ SELECT certificate_key, display_name, is_active
-            FROM certificate_profiles WHERE user_id = %s AND is_active = TRUE
-            ORDER BY is_builtin DESC, display_name""",
-            (user.database_id,),
-        )
-        question_types = self._db.execute_query(
-            """/* app_analytics:exam_question_types */ SELECT DISTINCT lower(exam_type) AS exam_type
-            FROM certificate_questions"""
-        )
-        goals = self._db.execute_query(
-            """/* app_analytics:exam_goals */ SELECT id, exam_type, target_date, target_score,
-            status, completed_at, updated_at
-            FROM certificate_goals WHERE user_id = %s ORDER BY exam_type""",
-            (user.database_id,),
-        )
-        best_scores = self._db.execute_query(
-            """/* app_analytics:exam_best_scores */ SELECT exam_type, score
-            FROM exam_official_scores WHERE user_id = %s ORDER BY exam_date DESC, created_at DESC""",
-            (user.database_id,),
-        )
-        scores = self._db.execute_query(
-            """/* app_analytics:exam_scores */ SELECT exam_type, exam_date, score, note
-            FROM exam_official_scores WHERE user_id = %s AND exam_date BETWEEN %s AND %s
-            ORDER BY exam_date DESC, created_at DESC""",
-            (user.database_id, start, end),
-        )
-        practice = self._db.execute_query(
-            """/* app_analytics:exam_practice */ SELECT answered_on AS date, exam_type, question_type,
-            COUNT(*) AS total, SUM(CASE WHEN is_correct THEN 1 ELSE 0 END) AS correct
-            FROM answer_logs WHERE user_id = %s AND answered_on BETWEEN %s AND %s
-            GROUP BY answered_on, exam_type, question_type ORDER BY answered_on DESC""",
-            (user.database_id, start, end),
-        )
-        question_bank_types = {str(row["exam_type"]).strip().lower() for row in question_types}
-        certificates = [
-            {
-                "key": str(row["certificate_key"]).strip().lower(),
-                "display_name": row["display_name"],
-                "has_question_bank": str(row["certificate_key"]).strip().lower() in question_bank_types,
-            }
-            for row in profiles
-        ]
-        current_scores: dict[str, float] = {}
-        for row in best_scores:
-            key = str(row["exam_type"]).strip().lower()
-            try:
-                score = float(str(row["score"]).strip())
-            except (TypeError, ValueError):
-                continue
-            current_scores[key] = max(current_scores.get(key, score), score)
-        normalized_goals = []
-        for row in goals:
-            key = str(row["exam_type"]).strip().lower()
-            try:
-                target = float(str(row["target_score"]).strip())
-            except (TypeError, ValueError):
-                target = None
-            normalized_goals.append(self._normalized_goal({
-                **row,
-                "goal_type": key,
-                "target_description": f"{row['exam_type']} 目標 {row.get('target_score') or '未設定'}",
-                "target_value": target,
-                "current_value": current_scores.get(key),
-                "target_unit": "分" if target is not None else None,
-                "progress_mode": "cumulative",
-            }))
-        goal_summaries = {
-            certificate["key"]: self._goal_summary([
-                goal for goal in normalized_goals if str(goal["goal_type"]).lower() == certificate["key"]
-            ])
-            for certificate in certificates
-        }
-        return {
-            "has_any_data": any(
-                self._has_user_data(table, user.database_id)
-                for table in ("certificate_goals", "exam_official_scores", "answer_logs")
-            ),
-            "certificates": certificates,
-            "goals": normalized_goals,
-            "goal_summaries": goal_summaries,
-            "official_scores": [_json_row(row) for row in scores],
-            "practice": [_json_row(row) for row in practice],
-        }
-
-    def skills(self, user: AuthenticatedUser, start: date, end: date) -> dict[str, Any]:
-        self._authorize(user, "skills")
-        digests = self._db.execute_query(
-            """/* app_analytics:skill_digests */ SELECT digest_date, source, summary_text
-            FROM skill_growth_digests WHERE digest_date BETWEEN %s AND %s ORDER BY digest_date DESC, source""",
-            (start, end),
-        )
-        videos = self._db.execute_query(
-            """/* app_analytics:skill_videos */ SELECT pushed_on, topic, title, recommend_reason
-            FROM youtube_pushed_videos WHERE user_id = %s AND pushed_on BETWEEN %s AND %s
-            ORDER BY pushed_on DESC""",
-            (user.database_id, start, end),
-        )
-        return {
-            "has_any_data": self._has_data("skill_growth_digests")
-            or self._has_user_data("youtube_pushed_videos", user.database_id),
-            "digests": [_json_row(row) for row in digests],
-            "videos": [_json_row(row) for row in videos],
-        }

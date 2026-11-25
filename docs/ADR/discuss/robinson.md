@@ -2,6 +2,33 @@
 
 > 本檔案收錄 robinson 母 spec 中，屬於全專案基礎架構與治理層級、不專屬任何單一功能模組的 ADR（ADR-1、ADR-4、ADR-10、ADR-11）。與特定功能相關的 ADR 已分別遷移至對應功能的 discuss 檔案（見新版 `docs/specs/SPEC.md` 各功能區塊的討論紀錄連結）。
 
+## 2026-11-25 [標籤：產品方向] ADR-33：砍到陽春版——移除低使用率功能，只留每天會用的核心
+
+**狀態**：accepted
+
+**背景**：本專案於 2026-08 完成第一輪全功能開發（含證照考試題庫、求職搜尋、YouTube 技術分享、TLDR 每日技術摘要、收藏與旅遊、成果展示、目標追蹤、系統錯誤管理等十餘項子功能），但到 2026-11 底，Robin 回報「這段期間完全沒有打開 Telegram 跟 App 在使用」。
+
+**討論內容**：Robin 自我診斷根因——功能做得太雜，SPEC.md 累積近 50 個 FR，選單層級深、要做的事情太多，導致連「每天該回來記錄」的核心習慣都養不起來，跟功能品質無關，是選擇太多造成使用摩擦（Claude 提出「菜單太長、每天不知道要點什麼」的類比）。Claude 進一步提出三種可能病因（UX 摩擦／需求判斷錯誤／純粹沒養成習慣）供 Robin 判斷，Robin 的結論是直接砍到最小核心，只留「自己真的會每天用」的功能，養成使用習慣、確定好用之後，再依實際需求慢慢加回來。
+
+Robin 明確列出保留範圍：日常記錄（運動／飲食／體態／記帳）、資料查詢（限保留的四個模組）、待辦事項、重要日子、權限管理。其餘全部砍掉，且明確要求是**硬刪**（程式碼＋資料庫資料表＋Mobile App 對應頁面），不是功能開關關閉這種軟性下架；即使多益證照模組（`src/bot/toeic.py` 及 `certificate_*.py` 系列）才剛在本次 session 修完三個真實 bug（聽力切割邏輯、永久跳過不重試、Drive API 分頁遺漏），Robin 確認仍要一併砍掉。
+
+過程中發現兩個 Robin 原本沒列到、但實際上牽涉到保留/砍除交界的項目，皆逐一向 Robin 確認：
+- 「系統錯誤管理」是否連 `webhook._notify_robin_of_error()` 這個「出錯私訊 Robin＋附 log」的基礎告警機制也一併移除——Robin 確認**全部砍掉，連私訊告警都不要**。
+- 「好友模式」（`src/bot/friend_chat.py`，觸發詞「陪我聊聊」）因為同時讀取待辦/體態/記帳（保留）跟心情/證照（砍除）的資料，Robin 原本的清單沒提到——Robin 確認**一起砍掉**。
+
+**決策**：保留範圍收斂為：
+- 日常記錄：運動／飲食／體態（`src/bot/body.py`，含其自有的 `body_goals` 目標設定）、記帳（`src/bot/finance.py`）
+- 資料查詢（`src/bot/query.py`，範圍縮小為只剩運動／飲食／體態／記帳）
+- 待辦事項（`src/bot/todo.py`）
+- 重要日子（`src/bot/important_days.py`）
+- 權限管理（`src/bot/auth.py`，屬核心基礎設施，非可關閉功能）
+
+全數砍除（程式碼＋資料表＋Mobile 頁面）：心情（`mood.py`）、收藏與旅遊（`collections.py`／`trips.py`）、成果展示（`achievements.py`）、跨模組目標追蹤（`goals.py`，不含 body.py 自己的運動/飲食/體態目標）、功能開關與排程設定／使用規則（`toggles.py`／`schedule_settings.py`／`scheduled_notifications.py`）、YouTube 技術分享設定（`youtube.py`）、求職設定（`job_search.py`／`job_settings.py`）、多益／證照作答與考試設定（`toeic.py`、`certificate_*.py` 全系列）、TLDR 技術電子報摘要（`skill_growth.py`）、系統錯誤管理與告警（`system_error_management.py`／`system_errors.py`／`monitoring.py`／`webhook.py` 內錯誤通知邏輯）、備援／康復通知（`recovery_notifications.py`）、好友模式（`friend_chat.py`）。
+
+**理由**：與其讓一堆沒在用的功能持續佔用維護與認知成本，不如先驗證「陽春版」能不能真正養成每天使用的習慣；之後若有實際需求，重新加回來的成本遠低於讓整個專案因為太雜而被放棄使用的成本。
+
+**影響範圍**：對應資料表（`mood_journals`、`trips`、`trip_itinerary_items`、`collection_items`、`achievements`、`module_goals`、`goal_summaries`、`feature_toggles`、`youtube_topics`、`youtube_pushed_videos`、`job_search_criteria`、`toeic_questions`、`toeic_vocab_questions`、`certificate_questions`、`certificate_goals`、`certificate_daily_settings`、`certificate_daily_schedule_overrides`、`certificate_daily_assignments`、`certificate_listen_split_failures`、`skill_growth_digests` 系列、`system_error_reports`）將透過新 migration 整批移除，`transactions.trip_id`、`important_days` 上連到 trips/goals 的外鍵欄位需先行拆除才能刪除對應表；`users` 表上只服務被砍功能的欄位一併清除。`docs/specs/SPEC.md`／`docs/specs/DRAFT.md`／`docs/reference/db_schema.md` 同步更新，執行細節見 `docs/specs/PROGRESS.md` 對應紀錄。
+
 ## 2026-07-29 [標籤：AI] ADR-1：三層式架構（前台 / 資料層 / 後台）
 
 **狀態**：accepted（後台選型「Notion」的部分 superseded by mobile-app 討論紀錄 2026-08-04 條目，改採 Mobile App；Telegram 前台與 Neon/GDrive 資料層的決策維持不變）

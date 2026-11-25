@@ -16,10 +16,7 @@ from src.services.app_analytics import (
     DateRangeError,
     FeatureDisabledError,
     ForbiddenModuleError,
-    parse_calendar_month,
     parse_date_range,
-    parse_single_date,
-    parse_todo_date_range,
 )
 from src.services.app_diet_photo import (
     DietPhotoError,
@@ -40,13 +37,8 @@ app_analytics_bp = Blueprint("app_analytics", __name__, url_prefix="/api/app")
 _logger = logging.getLogger(__name__)
 _TAIWAN_TZ = ZoneInfo("Asia/Taipei")
 _ANALYTICS_METHODS = {
-    "todos": "todos",
     "body": "body",
     "finance": "finance",
-    "mood": "mood",
-    "jobs": "jobs",
-    "exams": "exams",
-    "skills": "skills",
 }
 
 
@@ -67,7 +59,7 @@ def add_cors_headers(response: Response) -> Response:
 
 
 def _build_analytics(db: CloudSQLClient) -> AppAnalyticsService:
-    return AppAnalyticsService(db, sync_calendar=True)
+    return AppAnalyticsService(db)
 
 
 def _unexpected_error(feature: str, db=None) -> tuple[Response, int]:
@@ -110,23 +102,11 @@ def analytics(module_key: str):
         return jsonify({"message": "找不到指定頁面"}), 404
 
     try:
-        if module_key == "skills":
-            selected = parse_single_date(
-                request.args.get("date", ""),
-                today=datetime.now(_TAIWAN_TZ).date(),
-            )
-        elif module_key == "todos":
-            selected = parse_todo_date_range(
-                request.args.get("start", ""),
-                request.args.get("end", ""),
-            )
-            calendar_range = parse_calendar_month(request.args.get("calendar_month", ""))
-        else:
-            selected = parse_date_range(
-                request.args.get("start", ""),
-                request.args.get("end", ""),
-                today=datetime.now(_TAIWAN_TZ).date(),
-            )
+        selected = parse_date_range(
+            request.args.get("start", ""),
+            request.args.get("end", ""),
+            today=datetime.now(_TAIWAN_TZ).date(),
+        )
     except DateRangeError as exc:
         return jsonify({"message": str(exc)}), 400
 
@@ -134,16 +114,7 @@ def analytics(module_key: str):
     try:
         db = CloudSQLClient()
         service = _build_analytics(db)
-        if module_key == "todos":
-            payload = service.todos(
-                g.app_user,
-                selected.start,
-                selected.end,
-                calendar_start=calendar_range.start,
-                calendar_end=calendar_range.end,
-            )
-        else:
-            payload = getattr(service, method_name)(g.app_user, selected.start, selected.end)
+        payload = getattr(service, method_name)(g.app_user, selected.start, selected.end)
         return jsonify({"range": {"start": selected.start.isoformat(), "end": selected.end.isoformat()}, **payload}), 200
     except FeatureDisabledError as exc:
         return jsonify({"message": str(exc)}), 409

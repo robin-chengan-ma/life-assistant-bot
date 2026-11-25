@@ -420,9 +420,6 @@ def check_and_push_budget_alerts(db: CloudSQLClient, telegram_client, now: datet
     for user, budget in _users_with_effective_budget(db, today_local.year, today_local.month):
         if user.get("telegram_user_id") is None:
             continue
-        from src.bot.schedule_settings import is_notification_enabled
-        if not is_notification_enabled(db, user["id"], "budget_alert"):
-            continue
         if budget <= 0:
             continue
 
@@ -497,9 +494,6 @@ def check_and_push_monthly_report(db: CloudSQLClient, telegram_client, now: date
 
     for user in _users_with_finance_activity(db, today_local.year, today_local.month):
         if user.get("telegram_user_id") is None:
-            continue
-        from src.bot.schedule_settings import is_notification_enabled
-        if not is_notification_enabled(db, user["id"], "monthly_report"):
             continue
         if user.get("finance_monthly_report_sent_month") == month_start:
             continue

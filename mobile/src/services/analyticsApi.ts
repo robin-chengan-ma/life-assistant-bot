@@ -1,13 +1,4 @@
-import type { AppUser } from "@/services/authApi";
-
-export type AnalyticsModule =
-  | "todos"
-  | "body"
-  | "finance"
-  | "mood"
-  | "jobs"
-  | "exams"
-  | "skills";
+export type AnalyticsModule = "body" | "finance";
 
 export type NavigationItem = {
   label: string;
@@ -39,41 +30,30 @@ export type DashboardResponse = {
     activities?: string | null;
     latest_weight?: number | null;
     weight_count?: number;
-    latest_mood_category?: string | null;
-    mood_count?: number;
   };
 };
 
 export type DateRange = { start: string; end: string };
 export type AuthRequest = <T>(path: string, options?: RequestInit) => Promise<T>;
 
-export type ImportantDay = {
+// 待辦事項：純粹的一次性提醒，只有日期與文字內容，沒有狀態／完成概念。
+export type TodoItem = {
   id: number;
   owner_user_id: number;
-  title: string;
-  recurrence_type: "fixed_annual" | "flexible_annual" | "one_time";
-  event_date: string | null;
-  event_end_date: string | null;
-  event_month: number | null;
-  event_day: number | null;
-  event_end_month: number | null;
-  event_end_day: number | null;
-  event_time: string | null;
-  current_year_date: string | null;
-  current_year_end_date: string | null;
-  current_year: number;
-  next_occurrence: string | null;
-  is_all_day: boolean;
-  reminder_days_before: number;
-  notes: string | null;
-  audience_mode: "self" | "specific" | "all";
-  recipient_ids: number[];
-  show_on_todo_calendar: boolean;
-  is_active: boolean;
+  content: string;
+  remind_date: string;
   can_edit: boolean;
 };
 
-export type ImportantDayUser = { id: number; role: string; user_id: string };
+// 生日設定：僅支援每年循環的生日提醒（姓名＋月/日）。
+export type Birthday = {
+  id: number;
+  owner_user_id: number;
+  name: string;
+  birth_month: number;
+  birth_day: number;
+  can_edit: boolean;
+};
 
 export type FinanceAnalytics = {
   has_any_data: boolean;
@@ -104,7 +84,7 @@ export type GoalItem = {
   completed_at: string | null;
 };
 
-export type RecordKind = "todo" | "finance" | "diet" | "exercise" | "weight" | "mood";
+export type RecordKind = "finance" | "diet" | "exercise" | "weight";
 export type RecordItem = Record<string, string | number | boolean | null> & { id: number; can_edit: boolean };
 export type DietNutrition = {
   estimated_calories: number | null;
@@ -153,93 +133,9 @@ export type BodyAnalytics = {
   exercise_records: Array<RecordItem>;
 };
 
-export type TodoAnalytics = {
-  has_any_data: boolean;
-  calendar_counts: Record<string, number>;
-  calendar_days: Record<string, {
-    name: string | null;
-    is_holiday: boolean;
-    holiday_category: string | null;
-    description: string | null;
-    important_notifications?: string[];
-  }>;
-  items: Array<{
-    id: number;
-    content: string;
-    due_at: string;
-    start_at: string | null;
-    status: string;
-    created_at: string;
-    can_edit: boolean;
-  }>;
-  overdue_count: number;
-  overdue_items: Array<{
-    id: number;
-    content: string;
-    due_at: string;
-    start_at: string | null;
-    status: string;
-    created_at: string;
-    can_edit: boolean;
-  }>;
-};
-
-export type MoodAnalytics = {
-  has_any_data: boolean;
-  items: Array<{
-    id: number;
-    date: string;
-    mood_category: string;
-    content: string;
-    achievement_note: string | null;
-    created_at: string;
-    can_edit: boolean;
-  }>;
-  latest_record: RecordItem | null;
-};
-
-export type JobsAnalytics = {
-  has_any_data: boolean;
-  funnel: Record<string, number>;
-  score_distribution: Record<string, number>;
-  recommendations: Array<Record<string, string | number | null>>;
-  timeline: Array<Record<string, string | number | null>>;
-};
-
-export type ExamCertificate = {
-  key: string;
-  display_name: string;
-  has_question_bank: boolean;
-};
-
-export type ExamsAnalytics = {
-  has_any_data: boolean;
-  certificates: ExamCertificate[];
-  goals: GoalItem[];
-  goal_summaries: Record<string, GoalItem | null>;
-  official_scores: Array<Record<string, string | number | null>>;
-  practice: Array<Record<string, string | number | null>>;
-};
-
-export type SkillsAnalytics = {
-  has_any_data: boolean;
-  digests: Array<{ digest_date: string; source: string | null; summary_text: string | null }>;
-  videos: Array<{
-    pushed_on: string;
-    topic: string | null;
-    title: string | null;
-    recommend_reason: string | null;
-  }>;
-};
-
 export type AnalyticsResponseMap = {
-  todos: TodoAnalytics;
   body: BodyAnalytics;
   finance: FinanceAnalytics;
-  mood: MoodAnalytics;
-  jobs: JobsAnalytics;
-  exams: ExamsAnalytics;
-  skills: SkillsAnalytics;
 };
 
 export function getDashboard(request: AuthRequest): Promise<DashboardResponse> {
@@ -250,18 +146,10 @@ export function getAnalytics<M extends AnalyticsModule>(
   request: AuthRequest,
   module: M,
   range: DateRange,
-  options?: { calendarMonth?: string },
 ): Promise<AnalyticsResponseMap[M]> {
   const queryParams = new URLSearchParams();
-  if (module === "skills") {
-    queryParams.set("date", range.start);
-  } else {
-    queryParams.set("start", range.start);
-    queryParams.set("end", range.end);
-  }
-  if (module === "todos" && options?.calendarMonth) {
-    queryParams.set("calendar_month", options.calendarMonth);
-  }
+  queryParams.set("start", range.start);
+  queryParams.set("end", range.end);
   const query = queryParams.toString();
   return request<AnalyticsResponseMap[M]>(`/api/app/analytics/${module}?${query}`);
 }
@@ -321,22 +209,38 @@ export function getExerciseCategories(request: AuthRequest): Promise<{ categorie
   return request("/api/app/exercise-categories");
 }
 
-export function getImportantDays(request: AuthRequest): Promise<{ items: ImportantDay[]; users: ImportantDayUser[] }> {
+// 待辦事項：純通知用途，無狀態概念。後端端點目前尚未建立（沿用既有 REST 慣例推測路徑），
+// 需要後端補上 /api/app/todos 的 CRUD 實作。
+export function getTodos(request: AuthRequest): Promise<{ items: TodoItem[] }> {
+  return request("/api/app/todos");
+}
+
+export function createTodo(request: AuthRequest, payload: { content: string; remind_date: string }): Promise<{ id: number; message: string }> {
+  return request("/api/app/todos", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function updateTodo(request: AuthRequest, id: number, payload: { content: string; remind_date: string }): Promise<{ id: number; message: string }> {
+  return request(`/api/app/todos/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
+}
+
+export function deleteTodo(request: AuthRequest, id: number): Promise<{ message: string }> {
+  return request(`/api/app/todos/${id}`, { method: "DELETE" });
+}
+
+// 生日設定：僅支援每年循環的生日（姓名＋月/日）。沿用既有 important-days 端點，
+// 但 payload 已簡化為只有 name/birth_month/birth_day。
+export function getBirthdays(request: AuthRequest): Promise<{ items: Birthday[] }> {
   return request("/api/app/important-days");
 }
 
-export function createImportantDay(request: AuthRequest, payload: Record<string, unknown>): Promise<{ id: number; message: string }> {
+export function createBirthday(request: AuthRequest, payload: { name: string; birth_month: number; birth_day: number }): Promise<{ id: number; message: string }> {
   return request("/api/app/important-days", { method: "POST", body: JSON.stringify(payload) });
 }
 
-export function updateImportantDay(request: AuthRequest, id: number, payload: Record<string, unknown>): Promise<{ id: number; message: string }> {
+export function updateBirthday(request: AuthRequest, id: number, payload: { name: string; birth_month: number; birth_day: number }): Promise<{ id: number; message: string }> {
   return request(`/api/app/important-days/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
 }
 
-export function deleteImportantDay(request: AuthRequest, id: number): Promise<{ message: string }> {
+export function deleteBirthday(request: AuthRequest, id: number): Promise<{ message: string }> {
   return request(`/api/app/important-days/${id}`, { method: "DELETE" });
-}
-
-export function canAccessModule(user: AppUser, module: AnalyticsModule): boolean {
-  return !["jobs", "exams", "skills"].includes(module) || user.is_owner;
 }

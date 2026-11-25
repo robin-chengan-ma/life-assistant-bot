@@ -1,6 +1,6 @@
 ---
 title: Robinson — Robin 與家人們的生活小助手
-updated: 2026-08-24
+updated: 2026-11-25
 owner: Robin
 ---
 
@@ -15,38 +15,25 @@ owner: Robin
 
 ## 產品背景
 
-Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 負責自然語言互動、跨日期補登與完整資料管理；Mobile App「羅賓森」提供分析圖表、個人／APP 設定、今日生活紀錄，以及待辦事項、重要日子與收藏清單等不限今日的管理入口。Robin 是產品負責人兼管理者，家人透過通關密碼取得使用權限。核心理念是「越少 UI 設定越好」，所有服務一律使用免費方案，AI 能力統一由 Gemini API 依用途分流多把 Key 提供。
+Robinson 是一個雙前台架構的家庭生活小助手。2026-11-25（ADR-33）大幅精簡後：Telegram Bot 只負責 Owner 權限管理與待辦事項／生日的單向推播提醒；Mobile App「羅賓森」是運動／飲食／體態、記帳等日常紀錄與查詢，以及待辦事項、生日設定的唯一互動入口。Robin 是產品負責人兼管理者，家人透過通關密碼取得使用權限。核心理念是「越少 UI 設定越好」，所有服務一律使用免費方案，AI 能力由 Gemini API 提供。
 
 ## 技術棧與平台策略
 
 | 層級 | 技術/工具/API | 版本 | 狀態 | 備註 |
 | --- | --- | --- | --- | --- |
 | 後端語言／Runtime | Python | 3.11 | 使用中 | Render 使用 `python:3.11-slim` Docker Image 執行 Flask、Telegram Bot 與背景排程 |
-| 對話前台（完整輸入＋CRUD） | Telegram Bot API | — | 使用中 | 提供文字／語音／圖片輸入、跨日期補登與完整資料管理；`python-telegram-bot` 已移除，改用原生 JSON dict 解析 |
+| Telegram 前台（權限管理＋推播） | Telegram Bot API | — | 使用中 | 2026-11 功能大幅精簡：只剩 Owner 權限管理對話流程與待辦事項／生日的單向推播提醒，不再提供選單、一般對話或文字／語音／圖片輸入；`python-telegram-bot` 已移除，改用原生 JSON dict 解析 |
 | Mobile 語言／UI Framework | TypeScript + React + React Native + Expo | TypeScript 6／React 19／React Native 0.86／Expo 57 | 使用中（2026-08-12 正式上線） | Mobile App「羅賓森」共用 Web／iOS／Android 程式架構；目前正式交付版本為 Expo Web |
 | Mobile Web／路由 | React Native Web + Expo Router | React Native Web 0.21／Expo Router 57 | 使用中 | SPA 頁面、登入導向與各分析／設定頁路由 |
-| Mobile 日期／圖片輸入 | `react-native-calendars` + DateTimePicker + `expo-image-picker` | — | 使用中 | 待辦、日期區間、重要日子、時間選擇，以及飲食拍照／相簿選擇 |
-| Mobile 探索地圖 | Leaflet + OpenStreetMap | Leaflet 1.9.4 | 使用中 | Expo Web 顯示探索地圖、已具經緯度的造訪標記與同座標聚合；保留 OpenStreetMap 著作權署名，不採 Expo Maps |
-| 地址轉座標／重新定位 | OpenStreetMap Nominatim | Search API | 已部署／實機驗收 | 後端代理明確觸發的地址搜尋與探索重新定位；具識別 User-Agent、全應用程序每秒最多一次及 PostgreSQL 快取，不提供即時自動完成 |
+| Mobile 日期輸入 | `react-native-calendars` + DateTimePicker | — | 使用中 | 待辦、生日設定、時間選擇；`expo-image-picker`（飲食拍照／相簿選擇）已隨影像辨識移除一併停用 |
 | Web 框架 | Flask | — | 使用中 | 同步架構，webhook 單一進入點 |
 | 資料庫 | Neon PostgreSQL（psycopg2 + ThreadedConnectionPool） | — | 使用中 | 不用 ORM；連線池上限低（預設 1～5）配合免費額度 |
 | 資料庫 Migration | `src/migrations/` + 開機自動套用 | — | 使用中 | 取代人工貼 SQL；`schema_migrations` 追蹤表 |
 | App 登入認證 | bcrypt + PyJWT + Expo SecureStore | — | 使用中 | bcrypt 保存密碼雜湊、JWT Access Token、rolling Refresh Token；原生裝置以 SecureStore 保存 Refresh Token |
-| 檔案儲存 | Google Drive（OAuth 2.0，真人帳號身分） | — | 使用中 | 取代原 Service Account（無 Drive 儲存額度問題） |
-| AI 對話/生成 | Gemini API（`gemini-3.5-flash-lite`） | — | 使用中 | 依用途拆多把 Key，見下方「AI 模型金鑰分流」 |
-| AI 語音轉文字 | Groq Whisper（OpenAI 相容 REST API） | — | 使用中 | 取代原規劃「語音一律用 Gemini」；`requests` 直打，不裝官方 `groq` SDK |
-| 家庭行事曆 | Google Calendar API v3（OAuth 2.0，獨立憑證，`calendar.events` scope） | — | 使用中 | 單一共用行事曆，僅 Robin 授權，家人訂閱瀏覽 |
-| 政府辦公日曆資料 | 中華民國政府行政機關辦公日曆 CSV（政府資料開放平臺） | — | 使用中 | 由 `TaiwanCalendarService` 按年度取得並快取至 `taiwan_calendar_days`，供休假日、補班日與節日顯示 |
-| 備援通知 | SendGrid HTTPS API（寄信）＋ Gmail IMAP（`imaplib`，標準函式庫，讀信） | — | 使用中 | Telegram 故障備援 + TLDR 電子報讀取；2026-08-24 起寄信改走 SendGrid API，取代原本 `smtplib` 直連 Gmail SMTP，因 Render 免費方案封鎖對外 SMTP 埠（見 `docs/ADR/discuss/submodules-core.md` 對應日期條目） |
-| RSS 擷取 | 標準函式庫 `xml.etree.ElementTree` + `requests` | — | 使用中 | 不裝 `feedparser` |
-| 網頁正文擷取 | `beautifulsoup4` | — | 使用中 | 技術新聞全文摘要用 |
-| 求職資料 | 104 前端 AJAX/JSON API（直接呼叫，非爬蟲工具） | — | 使用中 | 不用 Playwright/Selenium |
-| 影片情報 | YouTube Data API v3 | — | 使用中 | 只取中繼資料，不下載影音 |
-| Excel/CSV | `openpyxl`、標準函式庫 `csv` | — | 使用中 | 求職推薦報表、公司背景協作 |
-| 音訊處理 | `pydub`（依賴系統 `ffmpeg`） | — | 使用中 | 整包聽力 MP3 切割 |
-| 圖片壓縮 | `Pillow` | — | 使用中 | 上傳圖片先壓縮至 1024×1024／JPEG 80% 再送 AI |
-| 農曆計算 | `lunarcalendar` | — | 使用中 | 純 Python、免網路，即時計算節日西曆日期 |
-| 後端容器 | Docker（`python:3.11-slim` + ffmpeg） | — | 使用中 | 安裝正式 Python 依賴並以 `python main.py` 啟動 Flask 服務 |
+| AI 對話/生成 | Gemini API（`gemini-3.5-flash-lite`） | — | 使用中 | 運動熱量估算、飲食營養素拆算等文字生成用途沿用 `GEMINI_API_BOT_KEY`，見下方「AI 模型金鑰分流」 |
+| 政府辦公日曆資料 | 中華民國政府行政機關辦公日曆 CSV（政府資料開放平臺） | — | 使用中 | 由 `TaiwanCalendarService` 按年度取得並快取至 `taiwan_calendar_days`，供休假日、補班日顯示 |
+| 備援通知 | SendGrid HTTPS API（寄信） | — | 使用中 | 僅供 Telegram 故障備援；2026-08-24 起寄信改走 SendGrid API，取代原本 `smtplib` 直連 Gmail SMTP，因 Render 免費方案封鎖對外 SMTP 埠（見 `docs/ADR/discuss/submodules-core.md` 對應日期條目）。2026-11 功能精簡後，Gmail IMAP 讀信（原供 TLDR 電子報摘要使用）已隨該功能一併移除 |
+| 後端容器 | Docker（`python:3.11-slim`） | — | 使用中 | 安裝正式 Python 依賴並以 `python main.py` 啟動 Flask 服務 |
 | 後端部署 | Render（免費方案） | — | 使用中 | Git push to main 自動部署 Docker 容器 |
 | Mobile Web 部署 | Vercel | — | 使用中 | 託管 Expo Web SPA，並將同源 `/api/*` Proxy 至 Render Flask API |
 | Keep-alive | cron-job.org（每 10 分鐘打 `/healthz`） | — | 使用中 | 同時借用頻率跑十餘個排程檢查（背景 daemon thread） |
@@ -61,17 +48,17 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 負責�
 | Gemma 4 / Gemini 付費 Tier | — | — | 決定不用（暫緩） | `gemini-3.5-flash-lite` 免費額度已夠用，留待額度不足時再評估，見 submodules-core 討論紀錄 ADR-6 |
 | Yoda1 藍牙體重計被動廣播（Web/PWA） | — | — | 決定不用 | 實機驗證 PWA/Bluefy 相容性不穩定，全面移除藍牙功能，改為手動輸入，見 mobile-app SPEC.md |
 
-**AI 模型金鑰分流**（見 submodules-core 討論紀錄 2026-07-30 條目）：`GEMINI_API_BOT_KEY`（一般問答）、`GEMINI_API_IMAGE_KEY1`/`KEY2`（影像辨識，隨機擇一）、`GEMINI_API_TEXT_KEY`（長文生成/長記憶摘要）、`GEMINI_API_PRIVACY_KEY`（個資語意偵測）、`GEMINI_API_SKILL_GROWTH_KEY`（技術摘要）、`GEMINI_API_JOB_SEARCH_KEY`（契合度評分）、`VOICE_API_KEY`（Groq Whisper）——每種用途各自一把 Key，額度互相隔離。
+**AI 模型金鑰分流**（見 submodules-core 討論紀錄 2026-07-30 條目）：`GEMINI_API_BOT_KEY`（運動熱量估算、飲食營養素拆算等文字生成用途）、`GEMINI_API_PRIVACY_KEY`（個資語意偵測）——每種用途各自一把 Key，額度互相隔離。2026-11 功能精簡後，`GEMINI_API_IMAGE_KEY1`/`KEY2`（影像辨識）、`GEMINI_API_TEXT_KEY`（長文生成/長記憶摘要）、`GEMINI_API_SKILL_GROWTH_KEY`（技術摘要）、`GEMINI_API_JOB_SEARCH_KEY`（契合度評分）、`VOICE_API_KEY`（Groq Whisper）已隨對應功能一併移除。
 
 ## 產品藍圖與功能規格
 
-### 平台核心入口（通關密碼驗證／Owner 權限管理／使用規則選單）
+### 平台核心入口（通關密碼驗證／Owner 權限管理）
 
 **狀態**：active
-**討論紀錄**：`docs/ADR/discuss/platform-auth.md`、`docs/ADR/discuss/robinson.md`（2026-08-15 Telegram 重構子決策）
+**討論紀錄**：`docs/ADR/discuss/platform-auth.md`、`docs/ADR/discuss/robinson.md`（2026-08-15 Telegram 重構子決策；2026-11-25 ADR-33「砍到陽春版」）
 **來源說明**：原記錄於 platform-auth 規格，已於 2026-08-13 併入本文件（原 robinson spec ADR-3、ADR-8 已併入本討論紀錄，內容已被本區塊取代）。
 
-**概要**：所有使用者第一次接觸 Bot 時用到的基礎機制：Telegram Webhook 入口、通關密碼驗證與綁定、Owner 專屬權限管理、綁定成功歡迎訊息，以及不經 LLM 的「使用規則」固定模板選單。功能探索統一由 Telegram 可見選單負責，不再提供 `/function` 功能總覽。
+**概要**（2026-11 大幅精簡，見 ADR-33）：Telegram 不再提供任何可見選單或一般對話功能，只剩兩件事：①`/start` 首次通關密碼驗證與綁定；②Owner 專屬「權限管理」（獨立 `/permission` 指令觸發，取代舊版選單按鈕入口）。日常紀錄、資料查詢、待辦事項、生日設定等其餘所有互動全部改由 Mobile App 操作；Telegram 對這些模組只負責待辦事項與生日的單向推播提醒，不經過對話分派。「使用規則」固定模板選單、功能模式切換與草稿保護機制隨選單系統一併移除。
 
 **功能性需求**
 - FR-1：`POST /telegram/webhook` 依身分與內容路由到對應處理邏輯
@@ -82,20 +69,9 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 負責�
 - FR-4c：通關密碼連續錯誤 5 次鎖定 30 分鐘，Owner 重發後舊密碼立即失效；已綁定使用者再次 `/start` 只重新顯示主選單。更換 Telegram 帳號須由 Owner 解除舊綁定後重新驗證
 - FR-4d：權限管理提供停用／恢復使用者但不提供刪除帳號；停用時撤銷 Mobile Refresh Token 並阻止 Telegram／Mobile 存取，恢復後仍須重新登入或重新綁定
 - FR-4a：使用者資料分開保存暱稱、家庭稱謂與授權身分；實際管理權限以 `is_owner` 判斷，Mobile App 顯示角色依其呈現「管理者／使用者」，不得以家庭稱謂承擔授權角色
-- FR-5：「使用規則」選單回傳固定模板，不呼叫 LLM、不切換功能對話模式。2026-08-18 Robin 於對話中直接核准最終逐字版本（`src/bot/templates.py` `APPENDIX_A_TEXT`，見 `docs/ADR/discuss/robinson.md` 2026-08-18 條目），改為「功能說明」（3 點）＋「使用限制與規範」（5 點）＋「隱私承諾」三段落，移除舊版「服務使用須知」段落與完整「貼心小撇步」；隱私承諾沿用「聊天記錄」→「日常紀錄」的措辭。這份文字現為已套用版本，不再是待定案的差異說明。新版模板同時作為首次綁定成功時主動傳送的使用規則
-- FR-6（取消）：移除 `/function`、中文觸發詞「我要看所有功能」及功能總覽／細節追問流程；功能探索由 Telegram 可見選單取代
-- FR-6a：`/start` 是唯一保留的 Telegram Slash Command，用於 START 首次驗證及重新顯示主選單；其他一般使用者與 Owner Slash Commands 全面移除且不保留相容期，所有操作改由權限化選單、Callback 與引導式對話完成
-- FR-6b：舊 Slash Command 不得再執行原功能；自然語言或語音提到正式功能名稱時，仍須先詢問是否進入該功能，明確確認後才切換
-- FR-6c：每位使用者同時只能有一個功能模式；10 分鐘無互動後於下一則 Update 惰性切回一般對話，未送出草稿另保留 30 分鐘，期間仍可進行一般聊天。只有已輸入資料但尚未送出的新增／編輯流程屬於草稿；主選單、唯讀查詢、通關密碼及語音確認等暫存狀態不保留為草稿。每位使用者可同時保留不同功能的草稿，但每個功能最多一份，並依各草稿最後操作時間獨立計算 30 分鐘。切換功能時若有草稿，必須提供「保留草稿並切換／放棄草稿／繼續編輯」；再次進入仍有有效草稿的功能時，先顯示草稿摘要，再提供「繼續編輯／放棄草稿」，不得直接覆蓋。內容明確無關才建議切換，語意不確定時先反問，禁止 LLM 單方面丟棄草稿。自然語言入口採固定功能名稱與別名比對；明確命中時先詢問並引導至對應選單，未命中或無法確定時請使用者從主選單選擇，不得由 LLM 猜測功能或直接新增、修改、刪除正式資料。所有選單、Callback、名稱／別名偵測與模式切換均須重新驗證權限
-- FR-6d：會異動正式資料的選單統一採「進入功能、收集資料、驗證、摘要、二次確認、寫入與結果回覆」，並提供返回上一步、取消、回主選單、查看目前輸入及重新填寫
-- FR-6e：一般使用者主選單提供日常紀錄、資料查詢、待辦事項、重要日子、收藏與旅遊、成果展示、目標追蹤、「⏰ 功能開關與排程設定」、使用規則；Owner 另顯示權限管理、「💡 Youtube 技術分享設定」、「💼 求職設定」、「📖 考試設定」、發送康復通知。日常紀錄第二層包含飲食、運動、體態、心情、記帳；收藏與旅遊第二層包含收藏與行程操作，探索地圖維持 Mobile App 專用視覺入口
-- FR-6e 決策更新（2026-08-18，Youtube 技術分享設定選單化）：`tech_intel` 主選單項目已接上真正邏輯（不再是「功能開發中」），子選單（`youtube_settings:*`）比照 `collections.py`／`achievements.py` 的單層選單＋按鈕式二次確認刪除模式：總覽列出目前主題並提供「➕ 新增主題」（達 `youtube.MAX_TOPICS`＝5 個上限時隱藏，仍保留伺服器端擋下訊息「已達上限 5 個主題」雙重保護）／「➖ 移除主題」（無主題時隱藏）；新增為單輪自由文字輸入；移除改為「選主題→✅ 確認移除／❌ 取消」二次確認畫面，才會真正呼叫刪除，不再是打編號直接刪除。舊文字觸發詞（`/my_youtube_topics`、`/add_youtube_topic`、`/remove_youtube_topic` 及對應中文別名）與其處理函式已全數移除，全面改選單觸發
-- FR-6f：「功能開關與排程設定」依角色分流：一般使用者只顯示「我的排程」；Owner 額外顯示「功能開關」與唯讀「系統工作」。我的排程可開關待辦、重要日子（含目標與旅遊日期）、月底記帳月報、預算 50%／80% 警示；Owner 另可開關技術摘要、Youtube、求職與考試通知。關閉通知只停止發送，來源功能、資料處理與背景工作照常執行
-- FR-6g：一般使用者只能調整自己的接收設定；重要日子建立者可設定通知對象。系統工作只供 Owner 查看名稱與固定時間，不提供 Cron 表達式或任意頻率修改。所有有明確日期的體態、運動、飲食、記帳、收藏及考試目標，以及選擇同步的旅遊行程，都以 `important_days` 為唯一日期提醒來源；關閉提醒不得刪除來源資料
-- FR-6h：Telegram 生活紀錄支援新增、修改、刪除及歷史回補；Mobile App 的飲食、運動、體態、心情與記帳仍只允許異動今日紀錄，待辦、重要日子、收藏、旅遊、探索與成果依各自正式規格管理不同日期。探索沒有獨立新增入口，仍由收藏標記已造訪或完成行程產生。兩端共用相同欄位、必填、數值範圍、驗證與讀取結果，不共用歷史生活紀錄寫入權限
-- FR-7（安全網）：`telegram_webhook()` 用 `try/except` 涵蓋 DB/LLM Client 建立到 `handle_message()` 整段流程，任何未預期例外一律 log + 回覆安全用語，仍回傳 HTTP 200，避免 Telegram 重試風暴燒額度
+- FR-6a（2026-11 更新）：`/start`（一般使用者首次通關密碼驗證；已綁定者直接視為登入，Owner 免密碼）與 `/permission`（Owner 專屬「權限管理」引導式流程，取代舊版選單按鈕入口）是僅存的兩個 Telegram Slash Command；其餘一般使用者與 Owner Slash Commands、可見選單、Callback 與引導式對話全數移除
+- FR-7（安全網）：`telegram_webhook()` 用 `try/except` 涵蓋 DB Client 建立到 `handle_message()` 整段流程，任何未預期例外一律 log + 回覆安全用語，仍回傳 HTTP 200，避免 Telegram 重試風暴燒額度
 - FR-7a：`update_id` 去重（LRU 上限 1000 筆）
-- FR-7b：本地端節流保護（見 submodules-core 區塊）
 
 **非功能性需求**
 - NFR-1：安全 — 通關密碼比對與綁定操作用「原子性條件 UPDATE」避免 race condition
@@ -105,71 +81,30 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 負責�
 **實作階段**（對應 PROGRESS.md）
 - Phase 1 Step 1.1：全數完成，49 個測試全過、覆蓋率 100%
 
-### 功能開關系統
-
-**狀態**：active
-**討論紀錄**：`docs/ADR/discuss/feature-toggles.md`、`docs/ADR/discuss/robinson.md`（2026-08-15「特殊功能改為 Robin 專屬」）
-**來源說明**：原記錄於 feature-toggles 規格，已於 2026-08-13 併入本文件。
-
-**概要**：一般生活功能對所有已綁定使用者全面開放，不提供功能開關；「技術分享」、「求職設定」、「考試設定」永久限定 Robin／Owner 使用，並由「功能開關與排程設定」管理。
-
-**功能性需求**
-- FR-1：功能開關只限 `tech_intel`（畫面顯示「技術分享」，同時控制每日技術摘要與 Youtube 推薦）、`job_search`（求職設定）及 `certificate`（考試設定），且只控制 Robin 自己的爬蟲、內容產生與推播
-- FR-2：三項特殊功能以 `is_owner` 限定 Robin；一般使用者不顯示入口，Owner 也不能替一般使用者授權。偽造 Callback、舊指令或 API 存取必須拒絕
-- FR-3：待辦、記帳、體態、飲食、運動、心情、重要日子、收藏、旅遊、探索、成果等一般功能，對所有已綁定使用者直接開放；無紀錄時只顯示空資料狀態。Telegram 與 Mobile 均不得再依 `feature_toggles` 中的一般功能歷史資料隱藏或拒絕這些模組
-- FR-4：三項特殊功能只支援 Robin 自己的啟用狀態與推播時間；關閉時不得執行對應爬蟲、內容產生或固定推播
-- FR-4a：三項功能關閉後主選單入口仍顯示，點擊只提示「若要使用 XX 功能，請至功能開關與排程設定打開！」；功能通知另可獨立關閉，僅停止送達，不停止功能背景工作
-
-**非功能性需求**
-- NFR-1：可維護性 — 沿用既有 `ConversationStateStore`，新增 `flow` 欄位區分對話流
-- NFR-2：安全 — 所有特殊功能與排程的讀寫及執行均須在後端重新驗證 `is_owner`，不以選單隱藏取代授權
-
-**實作階段**
-- Phase 1 Step 1.2：全數完成，78 個測試全過、覆蓋率 100%
-
 ### Gemini 對話核心
 
-**狀態**：active
-**討論紀錄**：`docs/ADR/discuss/chat-core.md`
-**來源說明**：原記錄於 chat-core 規格，已於 2026-08-13 併入本文件。
+**狀態**：removed（2026-11-25，見 ADR-33）
+**討論紀錄**：`docs/ADR/discuss/chat-core.md`；移除決策見 `docs/ADR/discuss/robinson.md` 2026-11-25 ADR-33 條目
 
-**概要**：一般對話只負責個人結構化資料的彈性查詢、使用者提供內容的整理／分析，以及不確定需求的功能導引。Robinson 人格改用程式內靜態 System Prompt；家庭／個人知識庫、持久化逐則對話與長記憶摘要停止讀寫，只保留記憶體內 10 分鐘短期上下文。舊 `/function` 總覽與細節追問已移除，功能探索改由 Telegram 可見選單負責。
-
-**功能性需求**
-- FR-1：路由層最終 fallback 呼叫對話核心
-- FR-2：一般對話僅處理個人結構化資料的彈性查詢、使用者提供內容的解釋／摘要／改寫／分析，以及不確定需求的功能導引。圖片未附說明時預設辨識內容並整理重點；有附說明時依說明處理
-- FR-3：System Prompt 使用程式內固定人格與安全規則；只根據當次內容、短期上下文及正式結構化資料回答，缺乏資料時誠實回報無法確認
-- FR-8：保留不落地資料庫的 10 分鐘短期對話上下文，逾時或切換選單功能時清除
-- FR-9a：一般對話不得直接新增、更新或刪除正式資料；資料異動必須切換到對應選單並完成驗證與確認
-- FR-9b：一般對話不提供即時網路查詢；無資料來源時明確回報無法確認，不得虛構新聞、天氣、路況、價格或營業資訊
-- FR-9c：資料查詢只允許目前使用者自己的結構化資料；使用者以行事曆或自然語言選擇最終日期，系統自動往前推 6 天，形成含首尾且最多 7 個曆日的區間，不提供 30 天或任何超過 7 天的選項。最終日期可位於未來，一次可查多個模組；不得顯示密碼、Token、內部識別值、執行任意 SQL、直接異動或大量匯出資料
-- FR-9d：Telegram 查詢結果沿用帳號層的 Mobile App 隱私數字遮罩偏好；設定由後端保存並供雙端共用，不得只依賴單一手機本機狀態
-- FR-13：一般對話接受對話框文字、Telegram 長按語音、圖片及上傳音檔；影片、Video Note、PDF、Office 文件、壓縮檔及其他格式一律不處理，固定回覆「我只能處理對話框文字、語音、圖片和音檔喔！」
-
-**非功能性需求**
-- NFR-1：範圍界線——本階段不做外部 API 重試/降級
-- NFR-2：安全——查詢一律帶 `user_id` 條件
-- NFR-3/NFR-4：成本——對話視窗固定 10 則、摘要 backlog 累積到門檻才觸發
+**概要**：2026-11 大幅精簡後，Telegram 已不再提供任何一般自由對話入口——`src/bot/chat.py`／`voice.py`／`image.py`／`menu.py`／`query.py` 等對話核心、語音、圖片與功能選單相關模組已全數刪除。Telegram 現在只剩兩件事：①`auth.py` 的通關密碼綁定與 Owner 權限管理（新增／停用／啟用／重發通關密碼）；②`todo.py`／`important_days.py` 的單向推播（待辦提醒、生日提醒）。使用者不會再對 Telegram 打字詢問一般問題、傳語音或傳圖片給 AI 處理；所有日常紀錄的新增／查詢改到 Mobile App 進行。本節保留僅供歷史對照，原 FR-1～FR-13 等條目描述的彈性查詢、短期對話上下文、語音/圖片輸入等能力已不存在。
 
 **實作階段**
-- Phase 1 Step 1.3／1.3a：全數完成，全專案測試隨版本推進累積（見 PROGRESS.md）
+- Phase 1 Step 1.3／1.3a：原始對話核心設計全數完成並運作至 2026-11
+- 2026-11-25（ADR-33）：對話核心、語音與圖片輸入整批移除，Telegram 收斂為「權限管理＋推播」
 
 ### 個資偵測與遮蔽機制
 
-**狀態**：active
+**狀態**：active（2026-11-25 範圍限縮，見 ADR-33）
 **討論紀錄**：`docs/ADR/discuss/privacy-masking.md`
 **來源說明**：原記錄於 privacy-masking 規格，已於 2026-08-13 併入本文件（原 robinson spec ADR-5 個資部分已併入本討論紀錄）。
 
-**概要**：使用者傳送的文字（打字或語音轉出文字）如含台灣常見個資格式，在寫入 log 或送外部 API 之前一律先遮蔽，並提醒使用者到 Telegram 對話中自行刪除原始訊息。採「Regex 硬規則＋LLM 語意辨識」雙層防線。
+**概要**：2026-11 隨對話核心整批移除後，`src/bot/privacy.py` 的 Regex／LLM 遮蔽邏輯不再用於「傳給 LLM 前遮蔽 Telegram 聊天內容」（該用途已不存在），改為供 `src/services/app_records.py`／`app_diet_photo.py` 在使用者透過 Mobile App 填寫記帳備註、運動／飲食補充內容等文字欄位時，寫入資料庫前先遮蔽可能含有的台灣常見個資格式。採「Regex 硬規則＋LLM 語意辨識」雙層防線不變。
 
 **功能性需求**
 - FR-1：`mask_regex()`——涵蓋 8 類台灣個資格式（身分證/手機/市話/銀行帳戶/信用卡/健保卡/地址/車牌），統一替換為 `[已遮蔽個資]`
 - FR-2：`mask_with_llm()`——補足 Regex 抓不到的變形寫法，排除生日與 LINE ID
 - FR-3：`mask_text()` 統一入口，先跑 Regex 再跑 LLM
-- FR-4：一般聊天在組 Prompt、寫入對話紀錄前先遮蔽，`detected=True` 附加提醒文案
-- FR-5：圖片說明文字同樣先過 `mask_text()`
-- FR-6：語音轉出文字天然涵蓋（統一經過 `handle_message()`）
-- FR-7（刻意排除）：`/clean-target-dialog` 的 `topic` 不套用遮蔽（否則刪除功能失效）；通關密碼、編號選擇等純控制流程文字同樣不套用
+- FR-4：Mobile App 寫入記帳備註、運動/飲食補充內容等自由文字欄位前，`app_records.py`／`app_diet_photo.py` 一律先呼叫 `mask_text()` 才落地資料庫
 
 **非功能性需求**
 - NFR-1：額度隔離——語意層用獨立 `GEMINI_API_PRIVACY_KEY`
@@ -177,44 +112,7 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 負責�
 
 **實作階段**
 - Phase 1 Step 1.5：全數完成，326 個測試全過、覆蓋率 100%
-
-### 語音訊息安全機制
-
-**狀態**：active
-**討論紀錄**：`docs/ADR/discuss/voice-safety.md`（最終執行確認 FR-16a 的討論紀錄見 `docs/ADR/discuss/chat-core.md` ADR-9）
-**來源說明**：原記錄於 robinson 母 spec 的 FR-14／FR-15／FR-16／FR-16a／FR-18，已於 2026-08-13 併入本文件（其他 6 份 spec 皆未涵蓋）。
-
-**概要**：語音轉文字若無限制易消耗大量 Token，且辨識誤差需要使用者確認。本區塊涵蓋 Telegram 長按語音時長上限、超時鎖定，以及語音與音檔共用的轉錄確認流程。
-
-**功能性需求**
-- FR-14：Telegram 長按語音超過 10 分鐘強制中斷處理並提醒（用 Telegram 訊息本身的 `duration` 秒數判斷，不需先下載）
-  - 規則 1：單次 Telegram 長按語音本身超過 10 分鐘時，語音功能整體鎖定 5 分鐘；所有超時與鎖定提示文案均顯示 5 分鐘
-- FR-18：不接受用於錄製會議或長篇演講的長語音
-- FR-16b（2026-08-16 新增、2026-08-18 擴充，見 `docs/ADR/discuss/voice-safety.md`）：全站語音與音檔轉文字確認機制——Telegram 長按語音或上傳音檔轉錄成功後不直接當成輸入內容，一律先貼出轉錄文字＋「✅ 正確，繼續」按鈕請使用者確認；使用者按下按鈕才用轉錄文字接回原本卡在的流程（含自由聊天），也可直接打字修正或立即重新傳送語音。上傳音檔不套用 FR-14 的 10 分鐘上限與 5 分鐘鎖定；其餘轉錄確認與個資防護規則相同
-
-**非功能性需求**
-- NFR-7：Token 節流——語音上限 10 分鐘
-
-**實作階段**
-- Phase 1 Step 1.4（FR-14，2026-08-01～08-02 完成；2026-08-18 鎖定時間調整為 5 分鐘）
-- Phase 6 第二批 2g（FR-16b，2026-08-16；2026-08-18 擴充音檔分流並取消修正窗口）：全站語音／音檔確認機制，見 `src/bot/router.py` 的 `handle_voice_message()`／`voice_confirm:accept`／`pending_voice_confirm`
-
-### 影像辨識
-
-**狀態**：active
-**討論紀錄**：無獨立 ADR；上傳/壓縮/命名/入庫流程設計見 `docs/ADR/discuss/submodules-core.md`（2026-07-31 條目）
-**來源說明**：原記錄於 robinson 母 spec 的 FR-17／FR-17a～c，已於 2026-08-13 併入本文件（其他 6 份 spec 皆未涵蓋）。
-
-**概要**：開放接受一般圖片供 Robinson 辨識（不限證照題目），並接受上傳音檔轉文字；其他檔案與影片格式明確拒絕。
-
-**功能性需求**
-- FR-17：圖片先上傳 Google Drive、`Pillow` 壓縮至 1024×1024 內／JPEG 80%、影像雙 Key 隨機辨識；未附說明時預設辨識內容並整理重點，有附說明時依說明處理。上傳音檔須轉文字並經 FR-16b 確認；影片與非圖片／音檔格式固定回覆「我只能處理對話框文字、語音、圖片和音檔喔！」
-  - FR-17a：上傳前提示個資影像警語
-  - FR-17b：不確定內容須詢問使用者（`[NEED_CONFIRM]` 標記慣例，`pending_image_confirm` 流程接住澄清後重新分析）
-  - FR-17c：飲食分析誤差聲明——只要是飲食成分分析一律告知存在誤差
-
-**實作階段**
-- Phase 1 Step 1.3b：全數完成，179 個測試全過、覆蓋率 100%
+- 2026-11-25（ADR-33）：原「一般聊天組 Prompt 前遮蔽」用途隨對話核心移除而不再適用，遮蔽邏輯保留並持續供 Mobile App 寫入路徑使用
 
 ### Submodules 共用子模組基礎骨架
 
@@ -228,10 +126,6 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 負責�
 - `cloudsql`：連線池管理與泛用 CRUD（select/insert/update/delete），一律參數化查詢
 - `telegram`：Bot HTTP Client（文字/圖片/typing 狀態），純文字傳送（不預設 Markdown）
 - `llm`：文字/圖文生成呼叫，本地端節流保護（同一 `api_key` 60 秒超過 8 次直接擋下）
-- `voice`：語音轉文字（Groq Whisper REST API），支援逐句時間軸切割
-- `gdrive`：OAuth 2.0 上傳/列表/下載，`Pillow` 壓縮流程
-- `email`：SendGrid HTTPS API 寄信、`imaplib` 讀信（備援通知＋TLDR 電子報；2026-08-24 起寄信改走 SendGrid API，取代原本直連 Gmail SMTP，見 `docs/ADR/discuss/submodules-core.md` 對應日期條目）
-- `calendar`：Google Calendar 事件建立/更新/刪除，獨立憑證
 - `retry`：`call_with_retry()` 共用重試迴圈（只重試暫時性錯誤，是子模組互相獨立原則的刻意例外）
 - `newsfeed`：RSS Feed 抓取＋全文擷取
 
@@ -250,7 +144,9 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 負責�
 **討論紀錄**：`docs/ADR/discuss/mobile-app.md`
 **來源說明**：原記錄於 mobile-app 規格，已於 2026-08-13 併入本文件（原 robinson spec ADR-14、ADR-28 已併入本討論紀錄）。
 
-**概要**：App 定位「分析頁面＋個人資訊／APP 設定＋生活紀錄」的視覺化入口，取代原規劃的 Notion 後台與唯讀 BI Dashboard。目標、功能開關與排程仍由既有 Telegram 流程處理。細節規劃（首頁卡片、各模組頁面呈現、全域 UX 規則、視覺風格）見 `docs/reference/mobile-app-ux.md`，本區塊僅列架構層決策摘要。登入/選單/個人資訊/APP設定/唯讀分析/體態飲食記錄已於 2026-08-12 正式上線部署（後端 Render＋前端 Vercel），完整路由清單見 `docs/reference/api_schema.md`「羅賓森 Mobile App」區塊。
+**概要**：App 定位「分析頁面＋個人資訊／APP 設定＋生活紀錄」的視覺化入口，取代原規劃的 Notion 後台與唯讀 BI Dashboard。細節規劃（首頁卡片、各模組頁面呈現、全域 UX 規則、視覺風格）見 `docs/reference/mobile-app-ux.md`，本區塊僅列架構層決策摘要。登入/選單/個人資訊/APP設定/唯讀分析/體態飲食記錄已於 2026-08-12 正式上線部署（後端 Render＋前端 Vercel），完整路由清單見 `docs/reference/api_schema.md`「羅賓森 Mobile App」區塊。
+
+**2026-11 大幅精簡後的範圍**（見 ADR-33）：App 是待辦事項、生日設定、運動／飲食／體態與記帳四項日常紀錄＋查詢的唯一互動入口（Telegram 不再提供對應選單，只負責待辦與生日的單向推播）；收藏與旅遊、探索地圖、成果展示、跨模組目標追蹤、求職分析、考試成績等頁面與路由已隨對應功能整批移除。待辦事項與生日設定從「唯讀、只能到 Telegram 操作」改為 App 內可直接新增／編輯／刪除的一般頁面，待辦不再有逾期／完成狀態管理（純一次性日期＋文字提醒），生日設定只保留「每年固定（國曆）月/日重複一次」一種形式。下方 FR-64 系列條目中涉及已移除功能（求職、考試、收藏、探索、成果、跨模組目標、心情圖表、飲食拍照模式）的敘述僅供歷史對照，不代表目前實際畫面；現行畫面請以 `mobile/app/` 實際路由與元件為準。
 
 **功能性需求**
 - FR-64：分析頁面（記帳、體態等模組圖表）＋生活紀錄與 APP 設定；寫入一律複用既有 service 層函式——已實作
@@ -285,87 +181,20 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 負責�
 - Phase 4 Step 4.1～4.3（求職模組）：全數完成
 - Phase 4 Step 4.4／4.5（App 本體）：FR-64／FR-64a／FR-65／FR-67／FR-68／FR-72 已完成並於 2026-08-12 正式上線部署（後端 Render＋前端 Vercel）
 
-### Mobile App 生活探索與成果
-
-**狀態**：active
-**討論紀錄**：`docs/ADR/discuss/mobile-app.md` 2026-08-12～2026-08-14「收藏清單／旅遊行程／探索地圖／成果展示」系列條目；Telegram 端實作見 `docs/ADR/discuss/robinson.md` 2026-08-16「Phase 6 第二批 2e」
-
-**概要**：以「收藏候選 → 組成行程 → 確認造訪 → 地圖回顧」串接收藏清單、旅遊行程與探索地圖；成果展示則提供手動新增與系統候選確認兩種來源。四項功能皆為個人資料，不受 Mobile App 僅能異動今日資料的限制；第一階段不做家庭共同編輯、多幣別換算或逐日逐時旅遊排程。
-
-**功能性需求**
-- FR-73 收藏清單：記錄想去地點或想執行活動；保留名稱、類型、國家、區域／城市、選填地址、參考網址、預估費用與備註，移除優先程度、縣市與想去日期。名稱、類型、國家及區域／城市必填，地址一律明確標示為選填；未填地址仍可建立收藏並以國家及區域／城市執行區域定位。定位表單須提示目前以行政區／鄉鎮市區為主，可能無法精確辨識門牌或街道。國家與區域／城市採可搜尋、可選既有值且允許自訂新值的組合式下拉選單。狀態依行程關聯與造訪紀錄自動推導；同一收藏可加入多個行程。收藏支援編輯、刪除、二次確認、5 秒復原與防連點；已有探索歷史時刪除原收藏仍保留歷史快照。
-- FR-74 旅遊行程：由收藏組成當天或幾天幾夜的輕量行程，不提供第幾天、幾點去哪裡的細部排程。單一行程只允許一個國家及一個區域／城市；國家、城市採組合式下拉選單，收藏項目只列出相同目的地的收藏並以可捲動下拉選單選擇。保存行程名稱、選填起訖日期、國家、區域／城市、收藏項目及顯示順序、預估支出與備註；規劃中可不填日期，確認或完成前必填。行程行事曆同步顯示中華民國休假日、節日與既有重要日子。狀態依操作流轉為規劃中、已確認、已完成、已取消；完成時由使用者勾選實際造訪項目，未勾選收藏繼續保留。
-- FR-74b 行程重要日子同步：新增／編輯行程提供「同步至重要日子」且預設開啟；有起訖日期時建立與行程名稱、日期連動的一次性重要日子。預設提前 1 天、通知自己、顯示於待辦行事曆，使用者可自行調整；Telegram 依重要日子設定推播，不另發建立／更新／刪除行程成功通知。後續修改行程保留提醒設定並同步名稱／日期；關閉同步、取消或刪除行程時停用連動事件，恢復有效行程時依同步設定重新啟用。
-- FR-74a 行程記帳整合：預估支出支援交通、住宿、飲食、門票、購物與其他分類，也允許只填總額；全部使用新台幣。實際支出仍以既有記帳為唯一來源，記帳可選填關聯行程且不限制交易日期；行程彙總預估、實際、差額及各記帳類別。取消行程不刪除收藏或記帳，保留支出關聯與取消標示。
-- FR-75 探索地圖：不提供獨立新增入口，探索紀錄只能由收藏標記已造訪或完成行程時產生。依國家及區域／城市的可搜尋下拉選單篩選；同一地點只顯示一個 Leaflet／OpenStreetMap 標記，點開列出各次獨立造訪。頁面明示定位以行政區／鄉鎮市區為主，可能無法精確辨識門牌或街道。每次造訪保存名稱、類型、國家、區域／城市、地址、經緯度、備註、造訪日期及行程快照，可個別編輯或刪除。收藏表單由使用者明確按下「定位地址／定位區域」後才呼叫 Nominatim；有地址時依精確門牌、道路、城市逐級放寬，無地址時直接以國家及區域／城市定位。定位結果必須顯示精確地址、道路近似位置或城市近似位置；所有層級失敗仍可保存並列入「無法定位」。探索紀錄修改地址時立即清除舊座標，使用者可選擇重新定位，不得沿用失效座標。
-- FR-76 成果展示：首頁提供手動新增成果與待確認成果提示；系統只能根據體態達標、考試達標、運動累積、探索地點／國家數、行程完成及待辦里程碑提出候選，不經 LLM 且不得自行建立。候選採被動掃描：使用者開啟成果展示清單（Mobile 首頁或 Telegram「查看成果」）時，系統才重新掃描並以「加入成果展示／略過」按鈕列出，不於候選產生的當下主動推播（2026-08-16 決策，見 `docs/ADR/discuss/robinson.md` 2026-08-16「Phase 6 第二批 2e」）。任一端接受或拒絕後須同步更新；同一候選只詢問一次，拒絕後不重複提示，不以飲食或心情自動判斷。成果必填名稱、完成日期及類別，選填說明、照片及關聯紀錄，保存 `manual`／`suggested` 來源。成果支援刪除與防連點；Mobile App 刪除另有二次確認與 5 秒復原，Telegram 端刪除為直接執行，不提供二次確認與復原（2026-08-16 決策，同上 ADR）。刪除成果不影響原始紀錄。
-- FR-76a 導覽入口：首頁收藏清單提供「新增收藏」；旅遊行程從收藏清單進入建立／管理；探索地圖只提供查看；成果展示提供「新增成果」與待確認提示。左側選單保留收藏清單、探索地圖與成果展示，作為查看、篩選與分析入口。
-- FR-73a（2026-08-17 新增，批次3；2026-08-17 補充 Calendar 同步，見下方「2026-08-17 補做」條目）：收藏清單目標——「清單完成度目標」，Telegram 入口為「🧭 收藏與旅遊」子選單新增的「🎯 目標」按鈕（`collections:goal:*`，分「➕ 新增／📋 查看清單」兩層，比照 FR-45 支援多筆並存與按鈕式編輯/刪除）；目標值透過方案A解析「新完成收藏項目數」，`baseline_value` 為設定當下已 `visited` 的項目數；達成判斷：收藏項目被標記已造訪（`collections:visit:*`）後，檢查「目前 `visited` 數 － `baseline_value`」是否 ≥ `target_value`，達成時回覆恭喜文字；抽不出結構化數值時退化為純文字目標。新增流程且有期限時，比照 FR-45（體態目標）多問一輪「要不要同步到 Google 家庭行事曆」（`pending_module_goal_calendar_sync`），確認後在 `<module_key>:goal:confirm_save` 建立 Calendar 事件並存回 `google_calendar_event_id`；編輯不重問，維持原同步設定。資料表為 FR-41b 同一張新表 `module_goals`（`module_key='collections'`，`sync_to_calendar`／`google_calendar_event_id` 欄位見 migration 0088）
-- FR-76b（2026-08-18 定案）：成果展示預設依完成日期、建立時間由新到舊；手動與系統建議成果均可置頂。置頂項目優先並依最後置頂時間由新到舊；取消置頂後回到未置頂區的正確日期位置。Telegram 與 Mobile 共用置頂狀態且兩端均可操作；資料結構以新的向前 Migration 保存可排序置頂時間，SQL 須另行審核核准
-
-**非功能性需求**
-- NFR-14：資料隔離 — 收藏、行程、探索與成果皆依 `user_id` 隔離，使用者只能管理自己的資料，Robin 不代改家人資料。
-- NFR-15：地圖合規 — Leaflet 地圖必須顯示 OpenStreetMap 著作權；Nominatim 只能由使用者明確觸發搜尋，不做即時自動完成，以可識別應用程式與聯絡方式的 User-Agent 呼叫，全應用程序每秒最多一次並將成功結果保存至 PostgreSQL 快取。
-- NFR-16：歷史完整性 — 探索快照、實際記帳與產生成果的原始紀錄，不得因刪除收藏、行程或成果卡片而被連帶刪除。
-- NFR-17：長清單操作 — 收藏、旅遊行程、探索紀錄與成果展示等累積型卡片清單最高 `60vh`，超出後於清單區內垂直捲動；組合式下拉選單最高 240px。Web 顯示捲軸，iOS／Android 依系統行為顯示捲動指示器。
-
-**實作階段**
-- Phase 5 Step 5.1：修正新增收藏 Modal 手機版跑版，依 FR-73 精簡收藏欄位並校正既有 Schema／API／UI／測試。
-- Phase 5 Step 5.2：完成 FR-74／FR-74a 旅遊行程、收藏關聯、預估支出與記帳整合。
-- Phase 5 Step 5.3：完成 FR-75 造訪確認、探索快照、地圖聚合、定位失敗清單、收藏地址轉座標與探索地址重新定位；已完成部署環境設定與實機驗收。
-- Phase 5 Step 5.4：完成 FR-76／FR-76a 手動成果、成果候選、刪除復原與首頁／選單入口（Mobile App）。
-- Phase 5 Step 5.5：整合測試、Mobile 實機窄螢幕驗收、文件與部署驗證。
-- Phase 6 第二批 2e（2026-08-16）：Telegram 端接上 FR-76／FR-76a 成果展示選單（`src/bot/achievements.py`），直接複用既有 `AppLifeExplorationService`；候選機制維持被動掃描，刪除採直接執行、不提供二次確認與復原（與 Mobile App 差異見 FR-45、FR-76 條文），見 `docs/ADR/discuss/robinson.md` 2026-08-16「Phase 6 第二批 2e」。
-
-### 服務健康與治理
-
-**狀態**：active
-**討論紀錄**：`docs/ADR/discuss/service-resilience.md`（重試機制／Email 備援子模組實作細節見 `docs/ADR/discuss/submodules-core.md` ADR-11／ADR-13）
-**來源說明**：原記錄於 robinson 母 spec 的 FR-19～FR-21，已於 2026-08-13 併入本文件（其他 6 份 spec 皆未涵蓋）。
-
-**概要**：服務發生例外或錯誤時，對外一律回覆「生病了」等安全用語，不揭露技術細節；Robin 則透過私訊＋Google Drive log 連結取得完整診斷資訊。依「LLM 是否還能正常推送訊息」分兩級降級。原規劃的 AI 自主診斷＋GitHub PR 自動化機制已取消（見討論紀錄）。
-
-**功能性需求**
-- FR-19a：捕獲異常與 Log，私訊 Robin 完整 Traceback＋觸發功能＋使用者輸入摘要；空回覆同樣視為需要防呆的情境（`_EMPTY_REPLY_FALLBACK`）
-- FR-19b：完整錯誤 log 上傳 Google Drive＋私訊 Robin 專屬連結（其他使用者行為完全不變，只收到「生病了」）
-- FR-19f：一般感冒級——LLM 正常、其他元件異常，私訊完整錯誤詳情給 Robin，使用者收到固定感冒語句
-- FR-19g：重大疾病級——LLM 本身崩潰，完全繞過 LLM，寫死範本廣播 Robin 最高等級告警＋所有家人
-- FR-19h：決策執行狀態閉環回饋——同步資料異動成功只在原 App 畫面或 Telegram 對話內明確回覆，不額外推播；失敗須保留未送出輸入、回覆安全訊息並提供重試。背景工作只有產物需要送達時才推播成功；零星可重試錯誤只記 Log，嚴重、持續或影響使用者的錯誤才通知 Owner
-- FR-19i：外部 API 呼叫重試機制（Max 3 次＋Exponential Backoff 1/2/4 秒），實作見 submodules-core `retry` 子模組
-- FR-19j：系統錯誤記錄持久化＋解法追蹤（`system_error_reports` 表）；移除 Telegram 固定文字指令，改由 Owner 專屬 Telegram 錯誤處理選單更新解法。Mobile App 只是事故來源，不提供錯誤清單或結案介面
-- FR-19k：Owner 錯誤通知保存最後通知方式 `telegram`／`email`／`undelivered` 與最後通知時間；系統錯誤管理顯示「Telegram 已送達／Email 備援已送達／未送達」。Email 成功後不得重複通知或在 Telegram 康復後補發；兩種管道都失敗時保留錯誤紀錄與 Log，不建立第三種備援
-- FR-19l：Mobile API 的未預期 5xx 例外必須進入與 Telegram Bot 共用的錯誤紀錄、Owner Telegram→Email 備援通知與系統錯誤管理；預期 4xx 不建立事故。一般使用者當下只看到不含技術細節的 Mobile 安全錯誤文案，不另外收到 Telegram 異常推播。錯誤紀錄要區分來源平台並在可辨識時關聯受影響使用者；登入階段未驗證身分時記為「未知使用者」，不保存帳號、密碼或其他登入輸入。同一平台、功能與安全錯誤摘要在 10 分鐘內重複時合併為同一事故、累計次數且不重複通知 Owner。新 Schema 的舊資料回填規則為：來源平台設為 `telegram`；已有處理說明者以 Owner 及原 `updated_at` 回填處理人／處理時間；無法判定的受影響使用者保持 `NULL`
-- FR-20：問題修復後由 Owner 專屬「發送康復通知」選單處理；先選擇尚未完成康復通知的 Telegram Bot 或 Mobile App 事故。Telegram Bot 事故的候選收件人為該次實際成功收到事故通知的家人；Mobile App 事故優先列出可辨識的受影響使用者，無法辨識時列出所有已綁定 Telegram 的家人。預設全選且 Owner 可自行取消勾選，預覽收件名單與對應平台文案後必須二次確認才逐一以 Telegram 發送。單一失敗不影響其他收件人，部分失敗的事故保留於清單供重試；不自動發送康復通知，舊 `/recovered` 入口移除
-- FR-20a：待辦、重要日子、目標、旅遊及其他模組只產生領域事件，由統一通知服務負責通知規則、去重、Telegram 發送及 Robin 系統錯誤的 Email fallback；通知紀錄保存類型、接收者、預計／實際發送時間、管道與結果，不保存敏感原始錯誤
-- FR-21：Neon 儲存空間監控（免費額度 0.5GB，達 80% 告警，借用 `/healthz` 頻率）；只涵蓋儲存空間，不涵蓋 Neon compute CU-hours（另一項獨立的免費額度上限，官方無查詢即時用量的 API，暫緩監控，見 `docs/specs/DRAFT.md` 待討論）；Gemini 免費額度用量監控同樣刻意暫緩（官方無查詢即時用量的 API）
-- FR-21a（2026-08-24）：`/healthz` 每 10 分鐘被 cron-job.org 觸發一次，`_run_background_checks()` 改成統一建立一個共用的 `CloudSQLClient()`，傳給全部 14 個 `_check_*()` 排程檢查共用，跑完才在最外層 統一關閉；不再讓每個檢查各自建立並關閉獨立連線（原本一天累積 2016 次連線 churn，改為 144 次），疑似是 Neon compute CU-hours 額度快速消耗的主因，詳見 `docs/ADR/debug/infra.md`
-
-**非功能性需求**
-- NFR-6：可維護性——錯誤訊息一律去技術化
-- NFR-8：安全——Robinson 對正式環境程式碼不具備任何自動修改或部署能力
-- NFR-9：韌性——所有外部 API 呼叫具備重試機制
-- NFR-10：一致性——所有寫入類操作不允許靜默失敗
-- NFR-11：通知邊界——Email 備援只適用 Robin 專屬系統錯誤，不作為一般使用者 Telegram 推播失敗的替代管道
-
-**實作階段**
-- Phase 1 Step 1.6（基礎捕獲+Log+通知）、Phase 2 Step 2.4～2.6（log 雲端連結、重試機制、分級降級）全數完成；Step 2.4 曾規劃 AI 自主診斷＋GitHub PR 自動化並記錄於 ADR-7，後於 Step 2.4 開工前正式取消（見討論紀錄）
-
 ### 待辦事項
 
-**狀態**：active
-**討論紀錄**：無獨立 ADR，設計決策已於下方需求段落內註明
-**來源說明**：原記錄於 robinson 母 spec 的 FR-31／FR-31a／FR-31b／FR-32，已於 2026-08-13 併入本文件（其他 6 份 spec 皆未涵蓋）。
+**狀態**：active（2026-11-25 大幅精簡，見 ADR-33）
+**討論紀錄**：無獨立 ADR，設計決策已於下方需求段落內註明；精簡決策見 `docs/ADR/discuss/robinson.md` 2026-11-25 ADR-33 條目
+**來源說明**：原記錄於 robinson 母 spec 的 FR-31／FR-31a／FR-31b／FR-32，已於 2026-08-13 併入本文件；2026-11-25 依 Robin 明確決策「待辦事項只是純粹去做通知而已，不需要確認動作，不想增加使用者負擔」全面改版，移除狀態管理、時間區間與 Google 行事曆同步。
 
-**概要**：使用者以自然語言描述「什麼時候要做什麼事」，Robinson 三輪反問（要不要記錄→什麼時候→要不要提前提醒）後記錄，支援單一時間點與時間區間兩種形式，並可選擇同步到 Google 行事曆。
+**概要**：純一次性「日期＋文字」提醒，不分狀態、不提供確認或完成動作。新增、編輯、刪除全部在 Mobile App 完成；Telegram 不提供任何待辦相關選單或對話流程，只負責讀取並單向推播提醒。
 
 **功能性需求**
-- FR-31：自然語言新增，模組歸屬歧義需反問（跨模組歧義判斷 Phase 1 暫不實作，待其他模組上線後回頭補上）
-- FR-31a：逾期自動標記 `expired`；完成/取消由查詢清單選定編號後 LLM 判斷標記
-- FR-31b：支援時間區間（`start_at` 可選欄位），前 40 分鐘內提醒以區間起點為基準，每日摘要在開始日/結束日各出現一次
-- FR-32：主動查詢（`/my_todos`）、每日 08:00 固定推播、前 40 分鐘內提醒（借用 `/healthz` 頻率，去重狀態存在資料列本身；2026-09-05 起提醒視窗由 30 分鐘放寬為 40 分鐘，換取 10 分鐘容錯緩衝以避免 `/healthz` 觸發時間飄移導致漏推，詳見 `docs/ADR/discuss/infra.md`）
+- FR-31：Mobile App 新增／編輯／刪除待辦，每筆只有 `content`（文字）與 `remind_at`（提醒時間點）兩個必要欄位；不提供 `pending`／`completed`／`expired` 等狀態欄位，也不支援時間區間或 Google Calendar 同步
+- FR-32：Telegram 單向推播——提醒時間已到且尚未推播過時即時推播（借用 `/healthz` 既有排程頻率，去重記號 `reminded_sent_at` 落地於資料列本身以撐過服務重啟）；不再提供每日固定摘要、前置提醒視窗或 `/my_todos` 查詢，查詢改到 Mobile App 進行
 
 **實作階段**
-- Phase 1 Step 1.7：全數完成，391 個測試全過、覆蓋率 100%；Google Calendar 同步見下方獨立區塊
+- Phase 1 Step 1.7：舊版「自然語言三輪反問＋狀態管理＋Google Calendar 同步」設計已完成並運作至 2026-11；2026-11-25（migration `0102`）：改版為純一次性提醒，既有資料已清空重來，詳見 `docs/reference/db_schema.md`「待辦事項」
 
 ### 記帳
 
@@ -374,6 +203,8 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 負責�
 **來源說明**：原記錄於 robinson 母 spec 的 FR-41～FR-44a，已於 2026-08-13 併入本文件（其他 6 份 spec 皆未涵蓋）。
 
 **概要**：每月支出預算上限（非儲蓄目標）＋每日記帳（含補登/修正/刪除完整 CRUD）＋門檻預警＋月報推播。
+
+**2026-11-25 更新（見 ADR-33）**：Telegram 選單與按鈕入口已隨平台核心入口整批移除，下方 FR-41～FR-44a 描述的 `finance:*` Telegram 選單流程為歷史設計，新增／補記／查詢／編輯／刪除現全部改到 Mobile App 操作；FR-41b「儲蓄／淨結餘目標」依附的跨模組 `module_goals` 表已隨目標追蹤功能整批移除（見 `docs/reference/db_schema.md`），記帳目標功能本身也隨之下架，不再提供。
 
 **功能性需求**
 - FR-41／FR-41a：「💰 設定預算」（`finance:budget`）設定全局預設；`budget_overrides` 支援特殊月份覆蓋，改動已有值時先反問確認。2026-08-18（批次5）決定：覆蓋確認改成 ✅ 確認覆蓋／❌ 取消按鈕（`finance:budget_confirm_save`／`finance:budget_override_confirm_save`），不再是自由文字 LLM CONFIRM/CANCEL；套用範圍（全部月份／某幾個月）與月份清單本身仍是自由文字輸入
@@ -416,141 +247,21 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 負責�
 - 批次2（運動紀錄改版，FR-47a，2026-08-17）：新增 `exercise_categories` 全域類別表（migration 0084，同批清空舊 `exercise_logs` 資料並改結構）；`body.py` 新增 `list_exercise_categories()`／`find_or_create_exercise_category()`（兩段式同義詞合併）並改寫 `create_exercise_log()`／`update_exercise_log()`／`format_exercise_log_list()`；Telegram 流程改為選類別→時長→心率（可跳過）→補充內容（可跳過）→AI／人工熱量二選一→摘要確認；`app_records.py` 同步改寫 exercise 驗證邏輯並新增 `GET /api/app/exercise-categories`；Mobile `RecordModal.tsx` 改用 `SearchableSelect` 動態載入類別、移除雙頁籤與重訓特殊分支；1844 個測試全過（新增 2 個），`ruff check .`／`tsc --noEmit` 皆通過，詳見 `docs/ADR/discuss/robinson.md` 2026-08-17「運動紀錄改版（批次2）實作完成」
 - 批次3（六模組目標泛化＋🎯 目標追蹤新選單，FR-45a／FR-48 方案A，2026-08-17）：新增 `body_goals.target_unit` 欄位（migration 0087）供飲食目標存結構化單位；新增 `src/services/goal_parser.py`（LLM 輔助解析目標值/單位，方案A）；`body.py` 的 `create_goal()`／`update_goal()` 支援 `target_unit`；飲食目標新增流程（`handle_goal_diet_description_step()`）改呼叫 `goal_parser.parse_goal_input()`。1878 個測試全過（新增 34 個），`ruff check .` 通過，詳見 `docs/ADR/discuss/robinson.md` 2026-08-17「批次3：六模組目標泛化＋🎯 目標追蹤新選單 實作完成」與 `docs/reference/db_schema.md`
 
-### 心情小記
+### 生日設定
 
-**狀態**：active
-**討論紀錄**：`docs/ADR/discuss/robinson.md` 2026-08-16「Phase 6 第二批 2c（日常紀錄－心情、運動）實作計畫」
-**來源說明**：原記錄於 robinson 母 spec 的 FR-49／FR-50，已於 2026-08-13 併入本文件（其他 6 份 spec 皆未涵蓋）。
+**狀態**：active（2026-11-25 大幅精簡，原名「重要通知／重要日子」，見 ADR-33）
+**討論紀錄**：`docs/ADR/discuss/notifications.md`；精簡決策見 `docs/ADR/discuss/robinson.md` 2026-11-25 ADR-33 條目
+**來源說明**：原記錄於 robinson 母 spec 的 FR-53／FR-53f，已於 2026-08-13 併入本文件；2026-11-25 改版為純生日設定，移除固定節日（農曆）推播、單次事件、通知對象與行程／目標連動。
 
-**概要**：心情分類（固定 6 選一）→ 日記內容 → 個人成就三選一提示（可跳過），全程純字串比對不需 LLM。
-
-**功能性需求**
-- FR-49：Telegram 入口為「日常紀錄」子選單的「😊 心情」（Phase 6 第二批 2c 起改為選單按鈕觸發，取代原 `/mood_journal`／`/backfill_mood`／`/my_mood_journals`，不提供舊指令相容期）；日記內容套用個資遮蔽；輸入完內容後先組摘要文字＋「確認送出／取消」按鈕，確認才寫入；清單改按鈕式「編輯／刪除」，刪除需二次確認（僅按鈕，不再走自由文字 CONFIRM/CANCEL）
-- FR-50：個人成就三選一提示，可跳過不強迫回答
-
-**實作階段**
-- Phase 1 Step 1.8：全數完成，409 個測試全過、覆蓋率 100%；2026-08-02 補記/更新/刪除擴充後 465 個測試全過
-- Phase 6 第二批 2c（2026-08-16）：入口改選單按鈕並補上摘要→二次確認，移除 LLM 意圖分類，155 項測試全過（見 `docs/ADR/discuss/robinson.md` 2026-08-16「Phase 6 第二批 2c」）
-
-### 好友模式
-
-**狀態**：active
-**討論紀錄**：`docs/ADR/discuss/friend-mode.md`
-**來源說明**：原記錄於 robinson 母 spec 的 FR-51／FR-52，已於 2026-08-13 併入本文件（其他 6 份 spec 皆未涵蓋）。
-
-**概要**：使用者主動觸發「陪我聊聊」，Robinson 動態讀取該使用者已開啟且近期（7 天）有資料的所有功能模組，生成陪伴式對話回覆，自然涵蓋心情趨勢文字摘要。僅被動模式，不含主動關懷推播。
+**概要**：使用者在 Mobile App 設定家人生日（每年固定國曆月/日重複一次），Telegram 於台灣時間 08:00 單向推播生日提醒，不再推播元旦／除夕／掃墓／中秋／端午／父親節／母親節等固定節日。
 
 **功能性需求**
-- FR-51：心情趨勢改文字/emoji 摘要，不做圖片圖表（併入 FR-52 回覆呈現，不獨立成查詢指令）
-- FR-52：只接受自然語言「陪我聊聊」，`_DATA_PROVIDERS` 登記表涵蓋心情/待辦/體態/記帳/證照準備等既有模組的近期查詢；`/friend_chat` 已移除
+- FR-53：Mobile App 新增／編輯／刪除生日設定，每筆只保留姓名與國曆月/日（`birth_month`／`birth_day`），不支援農曆、單次事件、通知對象或備註
+- FR-53f：Telegram 端（`src/bot/important_days.py`）只負責讀取清單並依排程單向推播生日提醒；年度推播去重沿用既有 `important_notifications_log`（`notification_key` 改用 `birthday_important_day_{id}`）
 
 **實作階段**
-- Phase 3 Step 3.5：全數完成，新增 32 個測試，`friend_chat.py` 100% 覆蓋率，全專案 1294 個測試全過
-
-### 重要通知
-
-**狀態**：active
-**討論紀錄**：`docs/ADR/discuss/notifications.md`
-**來源說明**：原記錄於 robinson 母 spec 的 FR-53／FR-53f，已於 2026-08-13 併入本文件（其他 6 份 spec 皆未涵蓋）。
-
-**概要**：固定節日與家人生日於台灣時間 08:00 自動推播。生日/父親節/母親節全員皆收到，依身份給不同文案；掃墓提醒限固定名單（Robin/爸爸/媽媽/弟弟/弟媳/阿姨）。
-
-**功能性需求**
-- FR-53：固定節日清單（元旦、除夕/初一、掃墓、中秋、端午、父親節、母親節）＋家人生日比對；農曆節日用 `lunarcalendar` 即時計算；年度推播去重靠 `important_notifications_log`
-- FR-53f：主角/其他人文案差異化，掃墓收件對象改為固定名單
-
-**實作階段**
-- Phase 2 Step 2.3：全數完成，703 個測試全過，`notifications.py` 覆蓋率 100%；FR-53f 邏輯修正（2026-08-09）程式碼調整留待獨立 Step 展開
-
-### Google Calendar 整合
-
-**狀態**：active
-**討論紀錄**：`docs/ADR/discuss/google-calendar.md`
-**來源說明**：原記錄於 robinson 母 spec 的 FR-66，已於 2026-08-13 併入本文件（其他 6 份 spec 皆未涵蓋）。
-
-**概要**：建立獨立「Robinson 家庭行事曆」，僅 Robin OAuth 授權寫入，家人訂閱唯讀瀏覽。待辦事項、重要通知、體態目標期限單向同步寫入。
-
-**功能性需求**
-- FR-66a：待辦事項同步——建立流程新增一題「要不要同步」，每次明確詢問不預設；MVP 不支援事後補同步
-- FR-66b：重要通知同步——固定節日/生日全自動同步全天事件，不逐筆詢問
-- FR-66c：體態目標期限同步——比照待辦事項逐筆詢問
-- FR-66d（明確排除）：讀取行事曆做空檔查詢，非本次範圍
-
-**實作階段**
-- Phase 2 Step 2.7：全數完成，758 個測試全過，`submodules/calendar/client.py`／`body.py`／`notifications.py` 覆蓋率 100%
-
-### 個人技能成長：每日技術分享與 TOEIC 證照題庫（僅 Robin 可用）
-
-**狀態**：active（`language` 語言學習子開關暫時擱置，見下方討論紀錄）
-**討論紀錄**：`docs/ADR/discuss/skill-growth.md`
-**來源說明**：原記錄於 robinson 母 spec 的 FR-22～FR-30，已於 2026-08-13 併入本文件（其他 6 份 spec 皆未涵蓋）。
-
-**概要**：①每日技術分享——固定 23:00 收集 TLDR 電子報＋IThome／TechCrunch 當天新聞，各自獨立 Gemini 深入摘要，隔天 08:00 拆成三則獨立訊息推播 ②TOEIC 雙軌題庫——軌道一 Robin 拍照/音檔上傳建題庫，軌道二 Gemini 即時生成單字題；每日 08:00 推播出題、20:00 提醒、彈性排程調整；正解改用 Robin 拍照上傳的答案照，不用 AI 推論。
-
-**功能性需求**
-- FR-22／FR-23：`tech_intel` 開關；`skill_growth_digests` 一天最多三筆（一筆一來源），任一來源失敗只記 log；三個來源皆無內容才推播固定訊息
-- FR-24：`certificate` 開關；證照準備目標依證照各自設定考試日期與目標分數，並可依近 30 天成效與目標生成客製化建議
-- FR-24a（2026-08-17 新增，批次3；2026-08-17 補做自動達成判斷）：考試準備目標整合進🎯 目標追蹤主選單（FR-45a），沿用既有 `certificate_goals` 表不新建資料表；每日 01:00 排程（`goal_summary_job.py`）依 `certificate_stats.compute_daily_period_stats()` 統計近一週／一個月作答成效生成快取摘要，寫入 `goal_summaries`（`goal_source='certificate_goals'`）；自動達成判斷：使用者透過 `/record_official_score` 記錄「實際應考成績」（`handle_exam_score_value_step()`）後，立即呼叫 `certificate_goals.check_score_achievement()` 跟該 `exam_type` 設定的 `target_score` 做數字比對（兩者皆為 TEXT，只在都能抽出數字時比較，`分數 ≥ 目標分數` 視為達成），達標就在記錄成功的回覆後面附加一句恭喜；`target_score` 或成績本身不是數字（例如「通過／未通過」這類非量化證照）時優雅跳過，不誤判；跟 `/certificate_advice` 既有的即時方向建議並存，互不取代
-- FR-25：TOEIC 每次出題 1 聽力+2 填空+3 單字；軌道一檔名格式泛用化為 `{exam_type}_{test_id}_write/listen_{題號}.{ext}`（整包聽力音檔另支援選填 `_cutoff{秒數}` 後綴，見 FR-25b）；軌道二單字題即時生成入庫（2026-08-24 修正：`generate_track2_vocab_questions()` 遇到本地端節流保護觸發時改為等待後重試、不消耗嘗試次數，避免整批生成瞬間燒光所有嘗試機會，見 `docs/ADR/debug/skill-growth.md` 對應日期條目）
-- FR-26：每日出題數量、新題:複習題 7:3，彈性排程支援挪動/取消/區間覆蓋/平攤四種語意（平攤需提案確認才寫入）
-- FR-25b（2026-08-25 定案，見 `docs/ADR/discuss/skill-growth.md` 對應日期條目）：軌道一聽力題內容改由「解答照片」（`_ans`）統一驅動建題（題目文字、選項、正解、詳解皆來自解答照片的 Vision 解析），題目照片（`listen_images`）改為選填，只用於顯示（例如 Part 1 的照片題），不再是建立聽力題的必要條件（Part 2 無題目照片仍可建題）；整包聽力音檔檔名支援選填後綴 `_cutoff{秒數}`，只切割/處理指定秒數之前的內容，用於整份錄音只想自動切 Part 1+2、忽略 Part 3+4 的情境；`certificate_questions.image_gdrive_url` 因此改為 nullable（`src/migrations/0099_make_certificate_questions_image_nullable.sql`）。**2026-09-13 定案（見 `docs/ADR/discuss/robinson.md` 對應日期條目）**：整包聽力音檔切割改為掃描轉錄文字裡實際念出的「Number N」題號標記決定邊界，只有起始與結束邊界都 100% 確定時才會切出該題、寫入資料庫；無法確定邊界的題目「永久跳過、不自動重試」（記錄於 `certificate_listen_split_failures`，見 `src/migrations/0100_create_certificate_listen_split_failures_table.sql`），因為同一份錄音的轉錄結果基本上固定，重試注定還是失敗、純屬浪費時間與 API 額度；若之後真的要重試（例如重新上傳/修正過的錄音），需要手動刪除該題在這張表的紀錄
-- FR-27：作答只接受 A/B/C/D；正解來自 Robin 拍照上傳的 `_ans` 答案照（2026-08-25 修正，見 `docs/ADR/discuss/skill-growth.md` 對應日期條目）：`question_type = listen` 的題目呈現時完全不顯示題目文字與選項（只顯示題目圖片，有的話，與聽力音檔連結），必須用聽的作答，避免顯示文字失去聽力測驗的意義；`question_type = write`（閱讀）維持顯示文字題目＋選項。「開始作答」為主選單獨立項目（2026-09-06 起，見 `docs/ADR/discuss/robinson.md` 對應日期條目），不分證照類型，一次抓出當天所有證照待作答的題目、依 `exam_type` 分批依序作答；每題呈現時標示所屬證照類型（例如「【TOEIC】第 N/總題數 題」），跨證照切換時仍可辨識目前作答的科目；同時支援回覆純文字「開始作答」觸發（對應每日 08:00 推播訊息的文案）。批改結果（✅／❌＋詳解）與下一題（或全部完成訊息）拆成兩則獨立訊息推播，不擠在同一則裡
-- FR-28：未作答題目不主動催促；使用者仍可在下一批題目產生前跨日晚補答
-- FR-29：`/my_quiz_stats` 彈性自然語言問答（不做圖表），排除未作答日子並支援跨區間比較
-- FR-30：正式成績獨立建表，僅查詢不修改；每筆保留證照、應考日期、分數與選填補充內容，Mobile 考試成績頁須同步顯示補充內容
-- FR-30a（2026-08-18 定案，見 `docs/ADR/discuss/skill-growth.md` 對應日期條目）：Owner 主選單「📖 考試成績」改為「📖 考試設定」，改用 `certificate_settings:*` 權限化選單並取代既有文字／Slash Command 入口。子選單固定為「證照設定／目標／每日題數設定／實際考試紀錄」。證照設定使用 Owner 專屬名冊：TOEIC 預設存在；可新增其他證照、停用自訂證照，但不得實體刪除歷史資料。尚無題庫的自訂證照仍可設定目標與記錄正式成績；每日題數頁必須明示不會推播題目。所有資料寫入採摘要與按鈕式二次確認。
-- FR-30b（2026-08-18 定案）：每日題數設定依證照獨立保存。非 TOEIC 只可設定每日總題數；TOEIC 使用固定「聽力／讀寫／單字」題數，總題數自動加總。可建立、查看、編輯與刪除不重疊的日期區間覆蓋；題數為 0 表示該區間不出題，區間刪除必須二次確認。正式考試紀錄新增選填補充內容，但維持只新增與查詢、不提供修改或刪除。
-
-**實作階段**
-- Phase 3 Step 3.1（每日技術分享）、Step 3.2（TOEIC 建題庫）、Step 3.3（推播/作答/成效/正式成績）全數完成，Phase 3 主線於 1185 個測試時全過
-- `language`（語言學習）功能開關已建立但暫時擱置，不排入目前 Roadmap，見討論紀錄
-
-### YouTube 技術情報模組（個人技能成長子功能，僅 Robin 可用）
-
-**狀態**：active（共用 `tech_intel` 開關）
-**討論紀錄**：`docs/ADR/discuss/youtube-intel.md`
-**來源說明**：原記錄於 robinson 母 spec 的 FR-57～FR-59，已於 2026-08-13 併入本文件（其他 6 份 spec 皆未涵蓋）。
-
-**概要**：依多組主題設定，用 YouTube Data API 取得候選影片，LLM 判讀標題/說明欄/統計數字決定排序，每週四固定推播 Top 3，多主題採「保底＋輪替」公平曝光機制。
-
-**功能性需求**
-- FR-57／FR-57a：多主題設定（`youtube_topics`），`search.list`＋`videos.list` 補統計數字；上限 `youtube.MAX_TOPICS`＝5 組（2026-08-18 追加，見下方 FR-57a 決策更新）
-- FR-57a 決策更新（2026-08-18，Youtube 技術分享設定選單化）：主題管理入口從三個獨立文字觸發詞改為主選單「💡 Youtube 技術分享設定」子選單（`youtube_settings:*`），比照 `collections.py`／`achievements.py` 單層選單＋按鈕式二次確認刪除模式；新增達 5 組上限時擋下（隱藏按鈕＋伺服器端訊息雙重保護），移除改為「選主題→按鈕二次確認」才真正刪除，不再是打編號直接刪除；舊文字觸發詞全數移除，見 `docs/ADR/discuss/youtube-intel.md` 2026-08-18 條目
-- FR-58：LLM 語意判讀取代 Rule-based Weight；1 組主題全出自該組，2 組各保底 1、3 組以上優先選最久未推播的 3 組；30 天內已推播 `video_id` 過濾
-- FR-59：每週四 08:00 排程；配額估算遠低於每日上限；失敗走重試＋一般感冒級分級降級
-
-**實作階段**
-- Phase 3 Step 3.4：全數完成
-- 2026-08-18：主題設定入口全面選單化（`youtube_settings:*`），5 組上限、按鈕式二次確認刪除；程式碼、測試、push 與實機驗收均已完成，見 PROGRESS.md 2026-08-18 條目
-
-### 求職模組（僅 Robin 可用）
-
-**狀態**：active
-**討論紀錄**：`docs/ADR/discuss/job-search.md`
-**來源說明**：原記錄於 robinson 母 spec 的 FR-33～FR-40c，已於 2026-08-13 併入本文件（其他 6 份 spec 皆未涵蓋）。
-
-**概要**：每週爬取 104 職缺（直呼 AJAX API，非瀏覽器自動化）、公司背景採 Email＋CSV＋Drive 人力協作、Gemini 批次契合度評分與技能缺口分析、應徵成效追蹤（含 LinkedIn/Cake 等外部管道職缺）。
-
-**功能性需求**
-- FR-33／FR-34：多組搜尋條件；兩階段爬取（列表→詳情頁）；2～4 秒隨機延遲禁併發；ETL 去重（`upsert_job_posting()`）；`is_closed` 依 104 API 欄位自動判斷
-- FR-35：公司背景 Email 協作機制（CSV 寄送→Robin 查填→上傳回填）
-- FR-36：履歷/期望工作內容收集（含結構化年資、期望薪資），與搜尋條件同一輪對話
-- FR-37：Gemini 批次契合度評分，僅計算公司背景已回填的職缺
-- FR-38：技能缺口分析以 104 職缺 ID 為單位；雙重排名（全庫／本週新職缺）；Excel 三工作表寄送，Robin 標記喜好後回填 `is_unliked`
-- FR-39：應徵狀態 Telegram 語句記錄（任意狀態可直接設定，含「未錄取/已婉拒」）；獨立歷程表；`/my_applications` 查詢
-- FR-40：外部管道職缺共用同一張表（`source` 欄位區分），合成識別碼，一起參與每週評分排名
-- FR-41（2026-08-18 定案，見 `docs/ADR/discuss/job-search.md` 對應日期條目）：主選單「💼 求職分析」改名「💼 求職設定」，全面選單化（`job_search:*`），取代舊有文字觸發詞（`/set_job_search`、`ID=XXX 職缺已應徵`等），比照 `collections.py`／`achievements.py` 的單層子選單模式。子選單 10 項：我的履歷（可編輯／清空）、期望工作內容（可編輯／清空）、必要條件設定（年資／期望薪資上下限，原 FR-36 `save_profile()` 五欄位中拆出的三個結構化欄位，`users.years_of_experience`／`expected_salary_min`／`expected_salary_max`，獨立於履歷／期望工作內容之外）、職缺關鍵字設定（`job_search_criteria` 清單，可新增／個別刪除）、職缺清單（唯讀，依 `score` 排序，2026-08-24 起每頁固定 10 筆＋上一頁／下一頁分頁按鈕，見下方 FR-41d）、已應徵職缺設定／獲得面試職缺設定／拿到 offer 職缺設定（各自依 `job_applications` 最新狀態過濾，可改狀態）、職缺已關閉設定（可人工覆寫 `is_closed`）、其他平台職缺（沿用既有 `add_external_job()` 邏輯，改選單觸發）。履歷／期望工作內容／職缺關鍵字設定各自獨立清空或刪除，互不影響其餘欄位（不再是 FR-36 原本「一輪對話全部覆蓋」的設計）
-- FR-41a（2026-08-18 定案，見 `docs/ADR/discuss/job-search.md` 對應日期條目）：`job_postings` 新增 `is_closed_manual_override` 欄位，人工於「職缺已關閉設定」手動切換時寫入；旗標為 `TRUE` 時，每週爬蟲 `upsert_job_posting()` 的自動 `is_closed` 判斷須跳過該筆，避免蓋掉人工設定；人工再切回「開啟」時同步清回 `FALSE`
-- FR-41b（2026-08-18 定案）：Mobile「本期 Top 推薦」排除 `is_closed=TRUE` 的職缺，避免推薦無法應徵的工作；「契合度分布」仍統計本期所有已分析職缺，保留歷史分析全貌
-- FR-41c（2026-08-18 定案，見 `docs/ADR/discuss/job-search.md` 對應日期條目）：「職缺關鍵字設定」支援多地區（`job_search_criteria.region` 以逗號分隔存多個地區，比對邏輯改任一地區符合即算通過）；清單同時顯示關鍵字／地區／薪資範圍（`format_search_criteria()`）；新增「✏️ 編輯」操作，走跟新增相同的自然語言整段描述、整筆覆蓋
-- FR-41d（2026-08-24 定案，見 `docs/ADR/debug/job-search.md`「職缺清單訊息過長打不開」條目）：Telegram「職缺清單」改為每頁固定 10 筆＋上一頁／下一頁按鈕，避免職缺數量隨每週爬蟲持續累積後，單則訊息超過 Telegram 4096 字元上限導致送出失敗、使用者端完全沒有反應
-- FR-41g（2026-08-24 定案，Robin 要求加上縣市篩選）：點擊「職缺清單」先跳出縣市選單（台灣 22 縣市＋「不限」），依 `job_postings.region` 子字串比對篩選後才顯示清單，分頁按鈕帶著選定縣市維持篩選狀態；清單排版同時改為每筆用分隔線包起來，第一行「公司名稱 | 地區」（`job_companies.company_name`／`job_postings.region`）、第二行「職缺名稱（ID=...，分數：...）」
-- FR-41e（2026-08-24 定案，見 `docs/ADR/debug/job-search.md`「推薦職缺不分青紅皂白」條目）：Mobile App「推薦職缺」只顯示已完成契合度評分（`score` 非 NULL）且分數達到 60 分（沿用既有 high／medium 分界）的職缺；找不到符合門檻的職缺時，畫面顯示「目前沒有符合的推薦職缺」，不再無門檻硬塞未評分或低分職缺湊滿前 10 筆
-- FR-41f（2026-08-24 定案，見 `docs/ADR/debug/job-search.md`「週排程爬蟲遇 104 429 限流，整批中斷」條目）：每週爬蟲 `crawl_and_upsert_jobs()` 單筆職缺抓詳情（`fetch_job_detail()`）失敗（例如 104 限流回 429、重試 3 次仍失敗）只記 log 並略過該筆，繼續處理下一筆／下一組關鍵字，不讓一次限流中斷整批排程；回傳統計摘要新增 `skipped_job_count` 記錄略過筆數
-- FR-41／FR-41a 已完成選單化、人工關閉覆寫與實機驗收；FR-41b Mobile 顯示規則已由 commit `fb8c616` 完成並推送；FR-41c 已完成並 commit `07adf1f`
-
-**實作階段**
-- Phase 4 Step 4.1～4.3：全數完成
+- Phase 2 Step 2.3：原版固定節日＋生日推播設計全數完成並運作至 2026-11
+- 2026-11-25（migration `0103`）：改版為純生日設定，既有單次事件／農曆浮動節日資料視為「不是生日」予以捨棄，詳見 `docs/reference/db_schema.md`「生日設定」
 
 ### 平台架構與治理（系統架構總覽／MVP 分期／Schema 治理）
 
@@ -560,7 +271,7 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 負責�
 
 **概要**：Robinson 採 Telegram 與 Mobile 雙入口，由現有 `main.py`／`src/` 提供後端商業服務與資料收集流程，搭配 PostgreSQL／GDrive 資料層及 `submodules/` 外部服務 Client。MVP 依複雜度分 Phase 0～5 逐步交付，資料庫 Schema 一律「先審核後執行」並透過 Migration 檔案自動套用。
 
-**名詞定義**：Owner（Robin，唯一免通關密碼者）／使用者（家人，需通關密碼）／通關密碼（一次性，`is_used=1` 後失效）／功能開關（只保留 Robin 專屬技術分享、求職分析與考試成績的啟用控制）。
+**名詞定義**：Owner（Robin，唯一免通關密碼者）／使用者（家人，需通關密碼）／通關密碼（一次性，`is_used=1` 後失效）。2026-11-25（ADR-33）：技術分享、求職分析、考試成績三項功能已隨「功能開關系統」整批移除，「功能開關」一詞不再適用於本專案。
 
 **重要資產（不可刪除）**：`docs/profile/Robinson.png`（Robinson 大頭照，任何清理/重構操作都必須明確排除此路徑）。
 
@@ -595,20 +306,8 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 負責�
 | 通關密碼重複使用/race condition | 原子性條件 UPDATE（`WHERE is_used=FALSE`） | 第二個並行請求影響 0 筆，非誤判成功 |
 | 非 Robin 觸發 Owner 專屬指令 | `auth.is_owner()` 嚴格比對 `telegram_user_id` | 一律無效且不透露此指令存在 |
 | 個資輸入 | Regex + LLM 雙層偵測 | 一律遮蔽為 `[已遮蔽個資]`，附提醒文案；語意層失敗優雅降級為僅 Regex 層 |
-| Telegram 長按語音超過 10 分鐘 | `duration` 秒數預檢查，不需先下載 | 拒絕處理並整體鎖定語音功能 5 分鐘；上傳音檔不套用此限制 |
-| 收到影片或其他不支援檔案 | 只放行文字、Telegram 長按語音、圖片及上傳音檔 | 固定回覆「我只能處理對話框文字、語音、圖片和音檔喔！」 |
-| 語音誤聽導致高風險操作誤執行 | FR-16a 逐字打字最終確認關卡 | 語音一律視為未通過，且不清除待確認狀態 |
-| Gemini/Telegram 等外部 API 暫時性失敗 | `submodules/retry` 最多重試 3 次＋Exponential Backoff | 重試耗盡才判定失敗，依 LLM 是否為故障源分兩級（一般感冒級／重大疾病級） |
-| Telegram 送達失敗（含 Telegram 本身故障） | 兩段式 try/except，Telegram 失敗才觸發 Email 備援 | Email 也失敗則只記 log，不再疊加第三層備援 |
-| `handle_message()` 回傳空字串 | 獨立空字串防呆判斷 | 換成 `_EMPTY_REPLY_FALLBACK`，避免已讀不回 |
-| LLM 本身完全失敗（額度用盡/Key 失效） | `_is_llm_failure()` 例外型別判斷 | 完全繞過 LLM，寫死範本廣播 Robin＋所有家人 |
-| 資料異動寫入失敗 | 無 `except` 包住 DB 寫入呼叫，例外一路傳到單一進入點 | 被分級降級邏輯接住，絕不靜默 |
+| Gemini/Telegram 等外部 API 暫時性失敗 | `submodules/retry` 最多重試 3 次＋Exponential Backoff | 重試耗盡才判定失敗，向上拋出例外 |
 | 通關密碼設定流程重啟中斷 | 狀態存記憶體，刻意簡化 | Robin 重新輸入 `/set_invite_codes` 即可，不影響資料正確性 |
-| Neon 容量接近上限 | `NeonCapacityMonitor` 借用 `/healthz` 頻率 | 達 80% 私訊 Robin 告警，回落後重置避免重複轟炸 |
-| 影像/語音上傳需壓縮節省 Token | `Pillow` 強制縮放 1024×1024／JPEG 80% | 僅記憶體內即時處理，不落地存回 Drive |
-| 104/YouTube 等外部資料重複爬取 | ETL 去重（唯一 ID/URL 比對，`UPDATE` 取代重複 `INSERT`） | 已存在則更新既有紀錄，避免資料庫膨脹 |
-| IThome RSS `<pubDate>` 非標準格式 | `_parse_pub_date()` fallback 格式解析 | 解析失敗才真的視為無法解析（2026-08-09 修正 bug） |
-| `/clean-target-dialog`／彈性排程「平攤」等自動運算的高影響操作 | 一律先呈現運算結果／候選範圍給使用者確認 | 任何無法判斷為確定的回覆一律視為取消，保守優先 |
 
 ## 驗收矩陣與已測試情境
 
@@ -618,24 +317,9 @@ Robinson 是一個雙前台架構的家庭生活小助手：Telegram Bot 負責�
 | 重複使用同一組通關密碼 | 第二次應失敗 | 符合預期 | 通過 |
 | 家人偽造 Owner 專屬 Callback | 權限邊界拒絕 | 符合預期 | 通過 |
 | 身分證字號/手機號碼等 8 類個資格式輸入 | 正例遮蔽、生日/LINE ID 不誤判 | 符合預期 | 通過 |
-| Telegram 長按語音 9:59／10:00／10:01 邊界 | 未超過放行，超過拒絕並鎖定 5 分鐘 | 符合預期 | 通過 |
-| 上傳音檔超過 10 分鐘 | 不套用長按語音的時長上限與鎖定規則，完成轉錄後仍先確認文字 | 符合預期 | 通過 |
-| 圖片無說明／有說明 | 無說明時辨識並整理重點；有說明時依說明處理 | 符合預期 | 通過 |
-| 影片、Video Note 或其他檔案 | 不處理內容並回覆核准固定文案 | 符合預期 | 通過 |
 | 外部 API 前 2 次失敗、第 3 次成功 | 正常回傳，等待時間 1s/2s/4s | 符合預期 | 通過 |
 | 外部 API 3 次全部失敗 | 正確拋出原始例外，不包裝新型別 | 符合預期 | 通過 |
-| 點擊「使用規則」選單 | 不呼叫 LLM，回傳核准後的精簡固定模板 | 符合預期 | 通過 |
-| `/function` 或「我要看所有功能」 | 不再觸發功能總覽，功能探索改由選單提供 | 符合預期 | 通過 |
 | `/start` | 啟動首次通關密碼驗證，已綁定使用者則重新顯示主選單 | 符合預期 | 通過 |
-| 其他舊 Slash Command | 不執行原功能，所有功能改由選單操作 | 符合預期 | 通過 |
-| 服務模擬「一般感冒級」錯誤 | 使用者收到感冒語句，Robin 收到完整錯誤詳情，未額外呼叫 LLM | 符合預期 | 通過 |
-| 服務模擬「重大疾病級」錯誤 | 完全繞過 LLM，使用者與所有家人收到寫死廣播，Robin 收到最高等級告警 | 符合預期 | 通過 |
-| Google Drive log 上傳失敗 | 使用者仍正常收到「生病了」，Robin 仍正常收到私訊（缺連結欄位） | 符合預期（優雅降級） | 通過 |
-| 記帳/心情小記/體態新增後確認 | 成功時明確成功訊息，模擬 DB 逾時則收到感冒語句且未寫入 | 符合預期 | 通過 |
-| FR-16a 高風險操作語音最終確認 | 語音一律拒絕且不清除狀態；打字「確認執行」才執行 | 符合預期 | 通過 |
-| TOEIC 軌道一檔名比對＋整包 MP3 切割 | 正確整合題目、排除說明語音誤切 | 符合預期（經真實錄音實測修正） | 通過 |
-| TOEIC 軌道二單字題生成 | 8 欄位齊全寫入，重複執行不重複生成 | 符合預期 | 通過 |
-| 104 爬蟲分頁請求間隔 | 落在 2～4 秒，未使用瀏覽器自動化套件 | 符合預期 | 通過 |
-| 每週四 YouTube 排程 | Robin 收到 Top 3 Markdown 連結，不重複 30 天內已推播 | 符合預期 | 通過 |
+| 記帳/體態新增後確認 | 成功時明確成功訊息 | 符合預期 | 通過 |
 | Gemini 呼叫遇 429/404 等真實額度與世代下架問題 | 依序排查並正確判定根因（節流保護 vs 官方額度 vs 模型下架） | 符合預期（多次生產環境實測） | 通過 |
 | CloudSQLClient 對含 `%` 字元 SQL 執行 | `params is None` 時不帶第二參數，避免誤觸格式化解析 | 符合預期（2026-08-08 生產事故修復） | 通過 |

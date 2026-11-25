@@ -1,5 +1,5 @@
 """src/bot/body.py 的單元測試（對應 robinson SPEC.md FR-45～FR-48，Step 2.2）。"""
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from unittest.mock import Mock
 
 from src.bot import body
@@ -427,49 +427,14 @@ def test_update_goal_overwrites_fields_and_resets_deadline_reminder(fake_db):
     assert row["deadline_reminder_sent"] is False
 
 
-# --- Google Calendar 同步（FR-66c，2026-08-05，見 ADR-17） ---
+# 2026-11（功能大幅精簡）：Google Calendar 整合已整個移除，相關測試一併刪除；
+# `cancel_goal()` 不再接受 `calendar_client`／`google_calendar_event_id`。
 
 
-def test_create_goal_defaults_sync_to_calendar_false(fake_db):
-    goal_id = body.create_goal(fake_db, 1, "weight", "瘦到 60kg", target_value=60, baseline_value=75)
-    goal = fake_db.select("body_goals", where="id = %s", params=(goal_id,), fetch_one=True)
-    assert goal["sync_to_calendar"] is False
-
-
-def test_set_calendar_event_id_updates_row(fake_db):
+def test_cancel_goal_marks_cancelled(fake_db):
     goal_id = body.create_goal(fake_db, 1, "weight", "瘦到 60kg", target_value=60, baseline_value=75)
 
-    body.set_calendar_event_id(fake_db, goal_id, "event-abc123")
-
-    goal = fake_db.select("body_goals", where="id = %s", params=(goal_id,), fetch_one=True)
-    assert goal["google_calendar_event_id"] == "event-abc123"
-
-
-def test_cancel_goal_deletes_calendar_event_when_synced(fake_db):
-    goal_id = body.create_goal(fake_db, 1, "weight", "瘦到 60kg", target_value=60, baseline_value=75)
-    body.set_calendar_event_id(fake_db, goal_id, "event-abc123")
-    calendar_client = Mock()
-
-    body.cancel_goal(fake_db, goal_id, calendar_client=calendar_client, google_calendar_event_id="event-abc123")
-
-    calendar_client.delete_event.assert_called_once_with(event_id="event-abc123")
-
-
-def test_cancel_goal_skips_calendar_delete_when_not_synced(fake_db):
-    goal_id = body.create_goal(fake_db, 1, "weight", "瘦到 60kg", target_value=60, baseline_value=75)
-    calendar_client = Mock()
-
-    body.cancel_goal(fake_db, goal_id, calendar_client=calendar_client, google_calendar_event_id=None)
-
-    calendar_client.delete_event.assert_not_called()
-
-
-def test_cancel_goal_swallows_calendar_delete_exception(fake_db):
-    goal_id = body.create_goal(fake_db, 1, "weight", "瘦到 60kg", target_value=60, baseline_value=75)
-    calendar_client = Mock()
-    calendar_client.delete_event.side_effect = RuntimeError("boom")
-
-    body.cancel_goal(fake_db, goal_id, calendar_client=calendar_client, google_calendar_event_id="event-abc123")
+    body.cancel_goal(fake_db, goal_id)
 
     goal = fake_db.select("body_goals", where="id = %s", params=(goal_id,), fetch_one=True)
     assert goal["status"] == "cancelled"
@@ -485,17 +450,6 @@ def test_check_weight_goal_achieved_losing_weight(fake_db):
 
     goal = fake_db.select("body_goals", where="user_id = %s", params=(1,))[0]
     assert goal["status"] == "achieved"
-
-
-def test_check_weight_goal_achieved_deletes_calendar_event_when_synced(fake_db):
-    # 2026-08-05（FR-66c、ADR-17）：達成時如果有同步，要刪除對應的 Calendar 事件。
-    goal_id = body.create_goal(fake_db, 1, "weight", "瘦到 60kg", target_value=60, baseline_value=75)
-    body.set_calendar_event_id(fake_db, goal_id, "event-abc123")
-    calendar_client = Mock()
-
-    body.check_weight_goal_achieved(fake_db, 1, 59.0, calendar_client=calendar_client)
-
-    calendar_client.delete_event.assert_called_once_with(event_id="event-abc123")
 
 
 def test_check_weight_goal_achieved_gaining_weight(fake_db):
@@ -534,7 +488,7 @@ def test_check_and_push_exercise_goal_achievements_skips_unbound_user(fake_db):
 
 def test_check_and_push_exercise_goal_achievements(fake_db):
     user_id = fake_db.insert("users", {"telegram_user_id": 111, "role": "測試家人", "is_owner": False})
-    now = datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
     goal_id = body.create_goal(fake_db, user_id, "exercise", "這個月運動滿 60 分鐘", target_value=60)
     fake_db.update("body_goals", {"created_at": now}, where="id = %s", params=(goal_id,))
 
@@ -551,25 +505,10 @@ def test_check_and_push_exercise_goal_achievements(fake_db):
     assert goal["status"] == "achieved"
 
 
-def test_check_and_push_exercise_goal_achievements_deletes_calendar_event_when_synced(fake_db):
-    user_id = fake_db.insert("users", {"telegram_user_id": 111, "role": "測試家人", "is_owner": False})
-    now = datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc)
-    goal_id = body.create_goal(fake_db, user_id, "exercise", "這個月運動滿 60 分鐘", target_value=60)
-    fake_db.update("body_goals", {"created_at": now}, where="id = %s", params=(goal_id,))
-    body.set_calendar_event_id(fake_db, goal_id, "event-xyz")
-
-    body.create_exercise_log(fake_db, user_id, 1, "跑步", 60, None, None, "ai", None, date(2026, 8, 4))
-    telegram_client = Mock()
-    calendar_client = Mock()
-    body.check_and_push_exercise_goal_achievements(fake_db, telegram_client, now=now, calendar_client=calendar_client)
-
-    calendar_client.delete_event.assert_called_once_with(event_id="event-xyz")
-
-
 def test_check_and_push_diet_goal_achievements_min_direction(fake_db):
     """2026-08-17 補做（Robin 要求不得漏做）：MIN 方向（至少要達到）目標隨時可以判斷。"""
     user_id = fake_db.insert("users", {"telegram_user_id": 111, "role": "測試家人", "is_owner": False})
-    now = datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
     goal_id = body.create_goal(
         fake_db, user_id, "diet", "每週吃蔬菜5次", target_value=5, target_unit="次", target_direction="min"
     )
@@ -591,7 +530,7 @@ def test_check_and_push_diet_goal_achievements_max_direction_requires_deadline(f
     """2026-08-17 補做：MAX 方向（不能超過）目標沒有期限時無法判斷（數學上沒有結束邊界），
     有期限但還沒到期也先不判斷；到期後才依累計值決定是否達成。"""
     user_id = fake_db.insert("users", {"telegram_user_id": 222, "role": "測試家人", "is_owner": False})
-    now = datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
     goal_id = body.create_goal(
         fake_db, user_id, "diet", "這週熱量控制在1000大卡以內", target_value=1000,
         target_unit="大卡", target_direction="max",
@@ -607,7 +546,7 @@ def test_check_and_push_diet_goal_achievements_max_direction_requires_deadline(f
     body.check_and_push_diet_goal_achievements(fake_db, telegram_client, now=now)
     telegram_client.send_text.assert_not_called()  # 還沒到期限
 
-    later_now = datetime(2026, 8, 10, 12, 0, tzinfo=timezone.utc)
+    later_now = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
     body.check_and_push_diet_goal_achievements(fake_db, telegram_client, now=later_now)
     telegram_client.send_text.assert_called_once()
     assert fake_db.select("body_goals", where="id = %s", params=(goal_id,), fetch_one=True)["status"] == "achieved"
@@ -615,7 +554,7 @@ def test_check_and_push_diet_goal_achievements_max_direction_requires_deadline(f
 
 def test_check_and_push_diet_goal_achievements_max_direction_exceeded(fake_db):
     user_id = fake_db.insert("users", {"telegram_user_id": 333, "role": "測試家人", "is_owner": False})
-    now = datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
     goal_id = body.create_goal(
         fake_db, user_id, "diet", "這週熱量控制在1000大卡以內", target_value=1000,
         target_unit="大卡", target_direction="max", target_date=date(2026, 8, 10),
@@ -624,7 +563,7 @@ def test_check_and_push_diet_goal_achievements_max_direction_exceeded(fake_db):
     body.create_diet_log(fake_db, user_id, "food", "大餐", date(2026, 8, 4), macros={"estimated_calories": 1500})
 
     telegram_client = Mock()
-    later_now = datetime(2026, 8, 10, 12, 0, tzinfo=timezone.utc)
+    later_now = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
     body.check_and_push_diet_goal_achievements(fake_db, telegram_client, now=later_now)
     telegram_client.send_text.assert_not_called()  # 超標，沒有達成
 

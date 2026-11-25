@@ -7,7 +7,6 @@ from src.services.app_records import (
     AppRecordService,
     DuplicateRecordError,
     HistoricalRecordError,
-    RecordNotFoundError,
     RecordValidationError,
 )
 
@@ -81,43 +80,17 @@ def test_duplicate_within_ten_minutes_requires_explicit_override():
 
 
 def test_historical_non_todo_cannot_be_updated_or_deleted():
-    db = FakeDatabase({"mood_journals": [{"id": 7, "user_id": 1, "entry_date": date(2026, 8, 10)}]})
+    # 2026-11（功能大幅精簡，見 ADR-33）：待辦事項 CRUD 已整個搬到 `src/services/app_todo.py`
+    # （`AppTodoService`），`AppRecordService` 不再處理 `kind == "todo"`；心情小記（`mood`）隨
+    # 對應功能整批移除（`mood_journals` 表已刪除，見 migration 0101），這裡改用體重驗證同樣的
+    # 「歷史紀錄不可修改」規則。
+    db = FakeDatabase({"body_weight_logs": [{"id": 7, "user_id": 1, "entry_date": date(2026, 8, 10)}]})
     service = AppRecordService(db, now=NOW)
 
     with pytest.raises(HistoricalRecordError):
-        service.update("mood", 7, 1, {"mood_category": "neutral", "content": ""})
+        service.update("weight", 7, 1, {"weight_kg": 70})
     with pytest.raises(HistoricalRecordError):
-        service.delete("mood", 7, 1)
-
-
-def test_todo_can_edit_historical_date_but_cannot_access_another_user_record():
-    old_due = datetime(2026, 7, 1, 9, 0, tzinfo=TAIPEI)
-    db = FakeDatabase({"todos": [{"id": 3, "user_id": 1, "due_at": old_due, "created_at": NOW - timedelta(days=1)}]})
-    service = AppRecordService(db, now=NOW)
-
-    service.update("todo", 3, 1, {"content": "看醫生", "due_at": "2026-09-01T10:00:00+08:00", "status": "completed"})
-    assert db.updated[0][1]["content"] == "看醫生"
-    assert db.updated[0][1]["status"] == "completed"
-    with pytest.raises(RecordNotFoundError):
-        service.delete("todo", 3, 2)
-
-
-def test_todo_date_range_stores_start_and_end_with_shared_time():
-    db = FakeDatabase()
-
-    AppRecordService(db, now=NOW).create(
-        "todo",
-        1,
-        {
-            "content": "家族旅遊",
-            "start_at": "2026-08-20T09:00:00+08:00",
-            "due_at": "2026-08-23T09:00:00+08:00",
-            "status": "pending",
-        },
-    )
-
-    assert db.inserted[0][1]["start_at"].date() == date(2026, 8, 20)
-    assert db.inserted[0][1]["due_at"].date() == date(2026, 8, 23)
+        service.delete("weight", 7, 1)
 
 
 def test_update_duplicate_detection_excludes_the_record_being_edited():
@@ -138,7 +111,6 @@ def test_update_duplicate_detection_excludes_the_record_being_edited():
 @pytest.mark.parametrize("kind,table,payload", [
     ("diet", "diet_logs", {"description": "雞胸肉"}),
     ("weight", "body_weight_logs", {"weight_kg": 70}),
-    ("mood", "mood_journals", {"mood_category": "neutral", "content": ""}),
 ])
 def test_single_daily_records_must_update_latest_instead_of_creating(kind, table, payload):
     row = {"id": 8, "user_id": 1, "entry_date": date(2026, 8, 11)}

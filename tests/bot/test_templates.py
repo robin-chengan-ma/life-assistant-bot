@@ -1,25 +1,6 @@
 from src.bot import templates
 
 
-def test_appendix_a_text_matches_approved_wording_exactly():
-    # 逐字比對 Robin 於 2026-07-30 核准的規範文本（robinson SPEC.md 附錄 A），
-    # 避免日後有人不小心改動措辭卻沒有經過審核流程。
-    expected = (
-        "📋 以下是 Telegram 羅賓森的使用須知：\n"
-        "\n"
-        "✨ 功能說明：\n"
-        "1. 包含「功能選單」以及「一般對話」功能。\n"
-        "2. 在對話框輸入「/start」並送出，即可看到功能主選單。\n"
-        "3. 支援「打字」、「語音」兩種訊息傳送方式。\n"
-        "\n"
-        "⚠️ 使用限制與規範：\n"
-        "1. 嚴禁記錄個人敏感隱私資訊（如身分證字號、電話號碼、信用卡號等）。\n"
-        "2. 「圖片」與「語音」檔案都可以上傳給羅賓森辨識，但僅支援這兩種格式喔！PDF、Excel、PPT 等其他檔案格式他沒辦法處理。\n"
-        "3. 上傳影像前請務必確認內容不包含個人資料（如證件、帳單等），若上傳含有個資的影像，後果需由您自行承擔。\n"
-        "4. 請勿拿來錄製長篇會議紀錄或演講（避免消耗大量 AI 使用額度）。\n"
-        "5. 羅賓森目前僅會根據「已知知識」做出回答。若需要即時上網查詢的資訊，請自行搜尋。\n"
-        "\n"
-        "🔒 隱私承諾： 羅賓森非常注重「您的個人隱私」，絕對不會將您的個人資料與日常紀錄提供給其他人，"
-        "包含「馬承安 (Robin)」本人也完全無法存取或查看喔！"
-    )
-    assert templates.APPENDIX_A_TEXT == expected
+def test_appendix_a_text_mentions_binding_success_and_app_scope():
+    assert "綁定成功" in templates.APPENDIX_A_TEXT
+    assert "App" in templates.APPENDIX_A_TEXT

@@ -7,7 +7,15 @@ import { AppPressable as Pressable } from "@/components/AppPressable";
 import { AppText as Text } from "@/components/AppText";
 import { AppView as View } from "@/components/AppView";
 import { useAppPreferences } from "@/context/AppPreferencesContext";
-import type { DateRange, TodoAnalytics } from "@/services/analyticsApi";
+import type { DateRange } from "@/services/analyticsApi";
+
+type CalendarDays = Record<string, {
+  name: string | null;
+  is_holiday: boolean;
+  holiday_category: string | null;
+  description: string | null;
+  important_notifications?: string[];
+}>;
 import { calendarImportantDaySummary, IMPORTANT_DAY_COLOR } from "@/utils/calendarLabels";
 
 LocaleConfig.locales["zh-tw"] = {
@@ -91,8 +99,8 @@ const createCalendarTheme = (colors: ThemeColors, theme: AppTheme) => ({
 
 type RangeProps = {
   allowFuture?: boolean;
-  calendarCounts?: TodoAnalytics["calendar_counts"];
-  calendarDays?: TodoAnalytics["calendar_days"];
+  calendarCounts?: Record<string, number>;
+  calendarDays?: CalendarDays;
   holidayOnly?: boolean;
   hint?: string;
   maxDays?: number;
@@ -209,7 +217,7 @@ export function DateRangeFilter({ allowFuture = false, calendarCounts = {}, cale
 }
 
 type SingleProps = {
-  calendarDays?: TodoAnalytics["calendar_days"];
+  calendarDays?: CalendarDays;
   date: string;
   onCalendarMonthChange?: (month: string) => void;
   onApply: (date: string) => void;

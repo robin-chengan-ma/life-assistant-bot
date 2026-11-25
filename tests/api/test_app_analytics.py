@@ -76,48 +76,9 @@ def test_analytics_accepts_single_day_for_general_module(client, monkeypatch):
     assert response.status_code == 200
 
 
-def test_todo_analytics_accepts_single_future_date(client, monkeypatch):
-    test_client, module = client
-
-    class Service:
-        def todos(self, user, start, end, *, calendar_start, calendar_end):
-            assert start == end
-            assert calendar_start.isoformat() == "2027-01-01"
-            assert calendar_end.isoformat() == "2027-01-31"
-            return {"has_any_data": False, "items": [], "calendar_counts": {}}
-
-    monkeypatch.setattr(module, "_build_analytics", lambda db: Service())
-    response = test_client.get(
-        "/api/app/analytics/todos?start=2027-01-01&end=2027-01-01&calendar_month=2027-01",
-        headers=auth_headers(),
-    )
-
-    assert response.status_code == 200
-    assert response.get_json()["range"] == {"start": "2027-01-01", "end": "2027-01-01"}
-
-
-def test_todo_analytics_rejects_range_longer_than_seven_days(client):
-    test_client, _ = client
-
-    response = test_client.get(
-        "/api/app/analytics/todos?start=2026-08-01&end=2026-08-08",
-        headers=auth_headers(),
-    )
-
-    assert response.status_code == 400
-    assert response.get_json() == {"message": "日期區間必須介於 1 到 7 天"}
-
-
-def test_todo_analytics_requires_valid_calendar_month(client):
-    test_client, _ = client
-
-    response = test_client.get(
-        "/api/app/analytics/todos?start=2026-08-01&end=2026-08-01&calendar_month=invalid",
-        headers=auth_headers(),
-    )
-
-    assert response.status_code == 400
-    assert response.get_json() == {"message": "月份格式必須為 YYYY-MM"}
+# 2026-11（功能大幅精簡，見 ADR-33）：待辦事項改走 `src/services/app_todo.py`
+# （`/api/app/todos`），`/api/app/analytics/todos` 路由已隨 `AppAnalyticsService.todos()` 一併
+# 移除，上方三個測試隨之刪除。
 
 
 @pytest.mark.parametrize(
@@ -343,19 +304,5 @@ def test_analytics_success_and_unknown_module(client, monkeypatch):
     assert missing.status_code == 404
 
 
-def test_technical_sharing_uses_single_date_instead_of_range(client, monkeypatch):
-    test_client, module = client
-
-    class Service:
-        def skills(self, user, start, end):
-            assert start == end
-            return {"has_any_data": False, "digests": [], "videos": []}
-
-    monkeypatch.setattr(module, "_build_analytics", lambda db: Service())
-    response = test_client.get(
-        "/api/app/analytics/skills?date=2026-08-01",
-        headers=auth_headers(),
-    )
-
-    assert response.status_code == 200
-    assert response.get_json()["range"] == {"start": "2026-08-01", "end": "2026-08-01"}
+# 2026-11（功能大幅精簡，見 ADR-33）：技術分享頁面與 `.skills()` 隨對應功能整批移除，
+# `/api/app/analytics/skills` 路由已不存在，上方測試隨之刪除。

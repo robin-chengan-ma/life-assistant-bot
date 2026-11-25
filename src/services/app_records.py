@@ -8,13 +8,11 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
-from src.bot import body, finance, mood, privacy, todo
+from src.bot import body, finance, privacy
 
 _TAIWAN_TZ = ZoneInfo("Asia/Taipei")
 _DUPLICATE_WINDOW = timedelta(minutes=10)
-_MOOD_CODES = {code for code, _label in mood.MOOD_CATEGORIES}
-_TODO_STATUSES = {"pending", "completed", "cancelled"}
-_SINGLE_DAILY_KINDS = {"diet", "weight", "mood"}
+_SINGLE_DAILY_KINDS = {"diet", "weight"}
 
 
 class RecordsDatabase(Protocol):
@@ -109,18 +107,6 @@ def _diet_nutrition(value: Any, *, source: str) -> dict[str, float | int | None]
     return result
 
 
-def _parse_due_at(value: Any) -> datetime:
-    if not isinstance(value, str):
-        raise RecordValidationError("請選擇執行日期與時間")
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError as exc:
-        raise RecordValidationError("執行日期與時間格式不正確") from exc
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=_TAIWAN_TZ)
-    return parsed
-
-
 class AppRecordService:
     def __init__(self, db: RecordsDatabase, *, llm_client=None, now: datetime | None = None):
         self._db = db
@@ -170,10 +156,6 @@ class AppRecordService:
             height_cm = data.pop("height_cm", None)
             if height_cm is not None:
                 self._db.update("users", {"height_cm": height_cm}, where="id = %s", params=(user_id,))
-        if kind == "mood":
-            data.pop("achievement_note", None)
-        if kind == "todo":
-            data = {"content": data["content"], "start_at": data["start_at"], "due_at": data["due_at"], "status": data["status"]}
         self._db.update(table, data, where="id = %s AND user_id = %s", params=(record_id, user_id))
         if kind == "diet":
             self._sync_today_water(
@@ -202,8 +184,6 @@ class AppRecordService:
         return row, table
 
     def _ensure_editable(self, kind: str, row: dict, user_id: int, table: str) -> None:
-        if kind == "todo":
-            return
         field = "transaction_date" if kind == "finance" else "entry_date"
         record_date = row.get(field)
         if record_date != self._today:
@@ -214,16 +194,6 @@ class AppRecordService:
                 raise HistoricalRecordError("今日僅能異動最新一筆紀錄")
 
     def _validated(self, kind: str, payload: dict[str, Any], *, user_id: int) -> tuple[dict, str, tuple]:
-        if kind == "todo":
-            content = _required_text(payload.get("content"), "待辦內容")
-            due_at = _parse_due_at(payload.get("due_at"))
-            start_at = _parse_due_at(payload.get("start_at", payload.get("due_at")))
-            if start_at > due_at:
-                raise RecordValidationError("開始日期不可晚於結束日期")
-            status = payload.get("status", "pending")
-            if status not in _TODO_STATUSES:
-                raise RecordValidationError("請選擇正確的待辦狀態")
-            return {"content": content, "start_at": start_at, "due_at": due_at, "status": status}, "todos", (content, start_at, due_at)
         if kind == "finance":
             transaction_type = payload.get("type")
             if transaction_type not in {"expense", "income"}:
@@ -338,27 +308,9 @@ class AppRecordService:
                     raise RecordValidationError("腰圍僅能輸入 50.0 到 150.0 公分")
             return {"height_cm": height_cm, "weight_kg": rounded, "waist_cm": waist_cm, "entry_date": self._today,
                     "note": None}, "body_weight_logs", (rounded, waist_cm)
-        if kind == "mood":
-            category = payload.get("mood_category")
-            if category not in _MOOD_CODES:
-                raise RecordValidationError("請選擇心情類別")
-            content = payload.get("content", "")
-            if not isinstance(content, str) or len(content.strip()) > 2000:
-                raise RecordValidationError("分享內容不可超過 2000 個字元")
-            content, _detected = privacy.mask_text(content.strip())
-            return {"mood_category": category, "content": content, "achievement_note": None,
-                    "entry_date": self._today}, "mood_journals", (category, content)
         raise RecordValidationError("不支援的紀錄類型")
 
     def _insert(self, kind: str, table: str, user_id: int, data: dict) -> int:
-        if kind == "todo":
-            record_id = todo.create_todo(
-                self._db, user_id, data["content"], data["due_at"], False, start_at=data["start_at"]
-            )
-            if data["status"] != "pending":
-                self._db.update("todos", {"status": data["status"]}, where="id = %s AND user_id = %s",
-                                params=(record_id, user_id))
-            return record_id
         if kind == "finance":
             record_id = finance.create_transaction(
                 self._db, user_id, data["type"], data["category"], data["amount"],
@@ -375,8 +327,6 @@ class AppRecordService:
             if height_cm is not None:
                 self._db.update("users", {"height_cm": height_cm}, where="id = %s", params=(user_id,))
             return self._db.insert(table, {"user_id": user_id, **data})
-        if kind == "mood":
-            return mood.create_mood_journal(self._db, user_id, data["mood_category"], data["content"], data["entry_date"])
         return self._db.insert(table, {"user_id": user_id, **data})
 
     def _latest_today(self, table: str, user_id: int, *, kind: str | None = None) -> dict | None:
@@ -448,7 +398,6 @@ class AppRecordService:
 
     @staticmethod
     def _fingerprint(table: str, row: dict) -> tuple:
-        if table == "todos": return (row.get("content", "").strip(), row.get("start_at"), row.get("due_at"))
         if table == "transactions": return (row.get("type"), row.get("category"), int(Decimal(str(row.get("amount"))).quantize(Decimal(1), rounding=ROUND_HALF_UP)))
         if table == "diet_logs": return (row.get("description", "").strip(),)
         if table == "exercise_logs":
@@ -463,12 +412,12 @@ class AppRecordService:
         if table == "body_weight_logs":
             waist = row.get("waist_cm")
             return (float(row.get("weight_kg")), float(waist) if waist is not None else None)
-        return (row.get("mood_category"), row.get("content", "").strip())
+        return (row.get("content", "").strip(),)
 
     @staticmethod
     def _table(kind: str) -> str:
-        tables = {"todo": "todos", "finance": "transactions", "diet": "diet_logs", "exercise": "exercise_logs",
-                  "weight": "body_weight_logs", "mood": "mood_journals"}
+        tables = {"finance": "transactions", "diet": "diet_logs", "exercise": "exercise_logs",
+                  "weight": "body_weight_logs"}
         if kind not in tables:
             raise RecordValidationError("不支援的紀錄類型")
         return tables[kind]
