@@ -38,23 +38,6 @@ _PROCESSED_UPDATE_IDS_MAXLEN = 1000
 _processed_update_ids: "OrderedDict[int, None]" = OrderedDict()
 
 
-def _notify_owner_of_error(feature: str, telegram_user_id: int | None) -> None:
-    """未預期例外時，私訊 Robin 一句簡短通知（不含完整 Traceback 上傳／事故落地，那套機制
-    隨 `system_errors.py`／`system_error_management.py` 一併移除）；送不出去只記 log，不往外拋。
-    """
-    owner_chat_id = os.environ.get("ROBIN_TELEGRAM_TOKEN")
-    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    if not owner_chat_id or not bot_token:
-        return
-    try:
-        TelegramClient(bot_token).send_text(
-            chat_id=owner_chat_id,
-            text=f"🐛 Telegram 機器人處理「{feature}」時發生未預期例外（telegram_user_id={telegram_user_id}），請查看伺服器 log。",
-        )
-    except Exception:
-        _logger.exception("私訊 Robin 錯誤通知失敗")
-
-
 def _is_duplicate_update(update_id: int) -> bool:
     return update_id in _processed_update_ids
 
@@ -186,7 +169,6 @@ def telegram_webhook():
             telegram_user_id,
         )
         reply, reply_markup = _GENERAL_ERROR_REPLY, None
-        _notify_owner_of_error("text", telegram_user_id)
 
     if not reply or not reply.strip():
         _logger.warning(

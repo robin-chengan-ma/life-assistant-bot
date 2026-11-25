@@ -29,6 +29,18 @@ Robin 明確列出保留範圍：日常記錄（運動／飲食／體態／記�
 
 **影響範圍**：對應資料表（`mood_journals`、`trips`、`trip_itinerary_items`、`collection_items`、`achievements`、`module_goals`、`goal_summaries`、`feature_toggles`、`youtube_topics`、`youtube_pushed_videos`、`job_search_criteria`、`toeic_questions`、`toeic_vocab_questions`、`certificate_questions`、`certificate_goals`、`certificate_daily_settings`、`certificate_daily_schedule_overrides`、`certificate_daily_assignments`、`certificate_listen_split_failures`、`skill_growth_digests` 系列、`system_error_reports`）將透過新 migration 整批移除，`transactions.trip_id`、`important_days` 上連到 trips/goals 的外鍵欄位需先行拆除才能刪除對應表；`users` 表上只服務被砍功能的欄位一併清除。`docs/specs/SPEC.md`／`docs/specs/DRAFT.md`／`docs/reference/db_schema.md` 同步更新，執行細節見 `docs/specs/PROGRESS.md` 對應紀錄。
 
+## 2026-11-25（下午追加）ADR-33 修正：私訊告警機制其實沒砍乾淨，這次真正移除
+
+**狀態**：accepted（修正 ADR-33 當天稍早的執行落差）
+
+**背景**：ADR-33 執行時 Robin 已明確確認「系統錯誤管理全部砍掉，連私訊告警都不要」，但負責重寫的 subagent 實際上理解成「移除完整事故落地系統，但保留一個最陽春的私訊通知」——`src/bot/webhook.py` 仍留著 `_notify_owner_of_error()`，在 Telegram 文字訊息處理、Mobile App API 發生未預期例外時，會私訊一則簡短錯誤通知到 `ROBIN_TELEGRAM_TOKEN`（僅限 Robin 本人，不會發給其他使用者）。Robin 在部署後實際使用 Telegram 時發現這則通知還在，回頭確認後重申：**完全不需要任何私訊，有問題自己上後台看 log，或等使用者自己回報**。
+
+**決策**：`src/bot/webhook.py` 的 `_notify_owner_of_error()` 整個移除；`src/api/error_reporting.py` 的 `report_mobile_error()` 改為純粹記 log，不再呼叫任何 Telegram 發送邏輯。未預期例外發生時，Telegram／Mobile App 兩邊都只會留在伺服器 log，不會主動通知任何人（含 Robin 本人）。
+
+**理由**：Robin 自己會進後台看 log，不需要即時私訊；且這本來就是 ADR-33 原本要砍的範圍，這次只是把漏掉的部分補齊。
+
+**影響範圍**：`src/bot/webhook.py`（移除函式與呼叫點）、`src/api/error_reporting.py`（改為純 log）；`tests/api/test_error_reporting.py` 同步改寫（不再 monkeypatch `_notify_owner_of_error`，改驗證 log 內容）。注意：`src/api/app_auth.py` 的 `_notify_owner_account_locked()`（帳號因連續密碼錯誤被鎖定時私訊 Robin，FR-65a）是獨立的既定安全功能，非本次討論範圍，維持不變。
+
 ## 2026-07-29 [標籤：AI] ADR-1：三層式架構（前台 / 資料層 / 後台）
 
 **狀態**：accepted（後台選型「Notion」的部分 superseded by mobile-app 討論紀錄 2026-08-04 條目，改採 Mobile App；Telegram 前台與 Neon/GDrive 資料層的決策維持不變）

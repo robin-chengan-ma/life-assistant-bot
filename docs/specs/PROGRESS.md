@@ -325,6 +325,7 @@ updated: 2026-11-25
 | 2026-08-14 | FR-65 | Expo 本機預覽登入 API 路由修正 | Codex | 完成 | localhost 改用 `EXPO_PUBLIC_API_BASE_URL`，正式 Web 維持同網域 API；瀏覽器已驗證 `user01` 可完成身分辨識 |
 | 2026-08-12 | FR-65 | Web 預覽登入無法連線修正（API Base URL 改 `window.location.origin`、React Hook 順序、快取標頭） | Codex | 完成 | codex.md；除錯紀錄見 `docs/ADR/debug/mobile-app.md` |
 | 2026-11-25 | ADR-33 | Robin 回報「這段期間完全沒有打開 Telegram 跟 App 在使用」，自我診斷根因是功能做得太雜、選單層級深，決定砍到陽春版：只留日常記錄（運動／飲食／體態／記帳）、資料查詢（限上述四模組）、待辦事項（簡化為純一次性提醒）、生日設定（簡化為純週期性生日）、權限管理，其餘全數硬刪（程式碼＋資料表＋Mobile 頁面）；過程中額外確認系統錯誤私訊告警與好友模式（因跨讀保留/砍除資料）也一併砍除 | Claude | 完成（已 commit `a6d0577`，已 push） | 完整範圍、理由與交界項目確認過程見 `docs/ADR/discuss/robinson.md` 2026-11-25 ADR-33 條目；涵蓋 `src/bot/*.py` 全面重寫、新 migration `0101`～`0103`、`docs/reference/db_schema.md`、`mobile/`（重建）與 `docs/specs/SPEC.md` 同步改版。全專案 `pytest -q` 571 passed，`ruff check .` 乾淨，Mobile `tsc --noEmit` 零錯誤。 |
+| 2026-11-25 | ADR-33 修正 | Robin 部署後發現 Telegram 仍會私訊自己錯誤通知，與 ADR-33 當時「連私訊告警都不要」的確認不符，回頭移除 `webhook._notify_owner_of_error()`，`error_reporting.report_mobile_error()` 改純記 log | Claude | 完成（待 commit） | 詳見 `docs/ADR/discuss/robinson.md` 2026-11-25 下午追加條目；`pytest -q` 565 passed、`ruff check` 乾淨 |
 > 「開發者」欄固定填 `Claude`、`Codex` 或實際負責人姓名，方便回溯是哪個工具／人做的。
 
 ## Commit 紀錄
@@ -333,6 +334,7 @@ updated: 2026-11-25
 
 | 日期 | 版本 / commit | 異動摘要 | 開發者 |
 | --- | --- | --- | --- |
+| 2026-11-25 | （待補） | 移除 webhook 私訊 Robin 的簡化錯誤告警，改為純記 log（ADR-33 修正，詳見 robinson.md 2026-11-25 下午追加條目） | Claude |
 | 2026-11-25 | `c357337` | 修正 `app_analytics.dashboard()` 殘留舊版 `todos.status`／`due_at` 欄位導致 Mobile App 首頁無法載入的 production bug | Claude |
 | 2026-11-25 | `a6d0577` | 砍到陽春版：Telegram 只剩權限管理與待辦/生日推播，日常操作全移至 Mobile App（詳見 ADR-33） | Claude |
 | 2026-09-14 | `abc708b` | 修正聽力題切割邏輯、下載例外處理與 Drive 分頁遺漏（4 項合併：Number N 標記切割、永久跳過不重試、下載例外處理、`list_files()` 分頁修正） | Claude |
