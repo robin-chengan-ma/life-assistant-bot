@@ -75,6 +75,27 @@ def _check_birthdays(db) -> None:
         logger.exception("生日推播檢查失敗，不影響健康檢查端點本身")
 
 
+def _check_national_holidays(db) -> None:
+    """在 /healthz 被呼叫時順便檢查固定節日推播（2026-11-26，Robin 要求補回父親節／母親節／
+    中秋節／端午節提醒，見 src/bot/national_holidays.py 模組 docstring）。
+
+    跟其他檢查一樣包一層 try/except 且不需要 `ROBIN_TELEGRAM_TOKEN`（推播對象是全體已綁定的
+    使用者，這些是全家共用的固定節日，不是個人設定）。`db` 共用連線，見 `_run_background_checks()`。
+    """
+    if not os.environ.get("TELEGRAM_BOT_TOKEN"):
+        return
+
+    from src.bot import national_holidays
+    from submodules.telegram.client import TelegramClient
+
+    try:
+        telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
+        national_holidays.check_and_push_fixed_holidays(db, telegram_client)
+        national_holidays.check_and_push_lunar_holidays(db, telegram_client)
+    except Exception:
+        logger.exception("固定節日推播檢查失敗，不影響健康檢查端點本身")
+
+
 def _run_startup_migrations() -> None:
     """開機自動套用尚未執行過的 DB migration（ADR-11）。
 
@@ -133,6 +154,7 @@ def _run_background_checks() -> None:
     try:
         _check_todo_pushes(db)
         _check_birthdays(db)
+        _check_national_holidays(db)
     finally:
         db.close()
 

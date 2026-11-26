@@ -1324,3 +1324,17 @@ YouTube 主題訂閱設定子選單結構；`router.py` 移除 `/my_youtube_topi
 **替代方案**：保留 `budget_overrides`／`body_goals` 表與函式但standby不呼叫（已否決，Robin 傾向乾淨程式碼、且重新啟用時這些需求本來就該重新設計而非直接復用舊邏輯）；`users.birthday` 只修查詢條件（加上 `WHERE user_id = 本人`）不整欄刪除（已否決，欄位本身已無任何寫入路徑，留著只是混淆視聽，不如直接移除並改用已經正確隔離權限的 `important_days`）。
 
 **後果**：`src/migrations/0104_drop_dead_budget_and_body_goal_features.sql`／`0105_add_remind_offsets_to_important_days.sql`／`0106_todo_remind_date_range.sql` 三份新 Migration。程式碼異動詳見本次 commit 的完整檔案清單（`src/bot/finance.py`／`body.py`／`important_days.py`／`todo.py`、`src/services/app_analytics.py`／`app_important_days.py`／`app_todo.py`、新增 `src/api/app_calendar.py`、`main.py`，以及 Mobile App 對應檔案）。測試同步更新：`tests/bot/test_finance.py`／`test_body.py` 移除死碼對應測試、`tests/bot/test_todo.py` 改寫為對應新 schema、`tests/bot/test_important_days.py` 新增多選提前提醒測試、`tests/services/test_app_analytics.py`／`test_app_todo.py`／`test_app_important_days.py` 同步調整、`tests/test_main.py` 移除死碼排程測試、新增 `tests/api/test_app_calendar.py`。`python3 -m pytest -q` 501 passed；`python3 -m ruff check .`（含 `src/`／`tests/`／`main.py`）本次異動的所有檔案全過（既有 `src/services/app_auth.py`／`tests/api/test_app_auth.py`／`tests/submodules/newsfeed/test_client.py` 的既有 `UP017` 提示屬本次修改範圍外的既存程式碼，未異動）；Mobile App `npm run typecheck`（`tsc --noEmit`）零錯誤。`docs/reference/db_schema.md`／`docs/specs/PROGRESS.md` 同步更新。尚未 commit，等協調端確認。
+
+## 2026-11-26（同日追加）補回父親節／母親節／中秋／端午推播
+
+**背景**：Robin 確認待辦事項推播已經不再帶時分（上述第 6 點已處理，舊訊息是 push 前的舊碼殘留，不需額外修正），並提問母親節/父親節/中秋/端午目前是否還有推播——查證後確認「農曆節日推播」整個隨 2026-11 大瘦身移除，目前完全沒有任何節日提醒。
+
+**決策**：新增 `src/bot/national_holidays.py`，補回四個全家共用的固定節日推播（不像生日設定是每人各自建立，這裡是推播給全體已綁定使用者）：
+- 父親節（國曆 8/8，固定日期）、母親節（5 月第二個星期日，用日期運算直接算）：提前 7 天＋當天各推播一次，不需要使用者設定、不可自訂，邏輯固定。
+- 中秋節／端午節：只在當天推播（不提前），日期借用既有 `src/services/taiwan_calendar.py`（政府行政機關辦公日曆服務，`name` 欄位本來就含「中秋節」「端午節」等官方名稱）查當年實際國曆日期，不自己重算農曆。
+
+推播去重沿用既有 `important_notifications_log`（`notification_key` + `year` 唯一），key 格式 `holiday_{slug}_offset_{offset}`。`main.py` 新增 `_check_national_holidays()` 排程，跟其餘 `/healthz` 背景檢查同一模式（try/except 包住、不需要 `ROBIN_TELEGRAM_TOKEN`）。
+
+**理由**：Robin 實際使用後發現節日提醒完全消失，這四個是台灣家庭最常見、影響最大的提醒情境，且父親節/母親節/中秋/端午都是「全家共用」而非個人設定，邏輯固定、不需要額外 UI，值得直接補回而非等後續版本。
+
+**後果**：新增 `src/bot/national_holidays.py`、`tests/bot/test_national_holidays.py`（9 項測試，涵蓋日期計算、提前/當天推播、去重、農曆節日比對）；`main.py` 新增排程註冊。不需要新 migration（沿用既有 `important_notifications_log` 表，無 CHECK 約束限制 key 格式）。`python3 -m pytest -q` 510 passed；`ruff check` 乾淨。尚未 commit，等協調端確認。
