@@ -91,7 +91,7 @@ def _check_national_holidays(db) -> None:
     try:
         telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
         national_holidays.check_and_push_fixed_holidays(db, telegram_client)
-        national_holidays.check_and_push_lunar_holidays(db, telegram_client)
+        national_holidays.check_and_push_calendar_holidays(db, telegram_client)
     except Exception:
         logger.exception("固定節日推播檢查失敗，不影響健康檢查端點本身")
 

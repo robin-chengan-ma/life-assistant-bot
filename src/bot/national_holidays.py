@@ -7,12 +7,16 @@
 
 - 父親節：台灣習慣固定國曆 8/8，不需要計算。
 - 母親節：國際慣例 5 月第二個星期日，用日期運算直接算，不需要外部資料。
-- 中秋節／端午節：農曆換算成當年國曆日期不是能用公式簡單算出來的，直接借用既有
-  `src/services/taiwan_calendar.py`（政府行政機關辦公日曆，`name` 欄位本來就會標註「中秋節」
-  「端午節」等國定假日名稱）查當年日期，不自己重算農曆。
+- 其餘所有國定假日（中秋節、端午節、春節、清明節、國慶日、228 等）：日期由農曆或其他規則
+  換算成當年國曆日期不是能用公式簡單算出來的，直接借用既有 `src/services/taiwan_calendar.py`
+  （政府行政機關辦公日曆服務）查當年資料，只要該日 `is_holiday=True` 且 `holiday_category`
+  不是單純的「星期六、星期日」、`name` 有值，就視為一個有名稱的國定假日，當天推播一次（2026-11-26
+  追加：Robin 確認「行事曆上標注有名稱的國定假日都推播」，不只中秋/端午兩個），不做提前通知
+  （Robin 明確要求國定節日統一當天通知即可，不像父親節/母親節需要提前準備禮物）。
 
-推播去重沿用既有的 `important_notifications_log`（`notification_key` + `year` 唯一），
-`notification_key` 用 `holiday_{slug}_offset_{offset}` 這個格式，年份用節日當年。
+推播去重沿用既有的 `important_notifications_log`（`notification_key` + `year` 唯一）：
+父親節/母親節用 `holiday_{slug}_offset_{offset}` 格式；國定假日清單用 `holiday_calendar_{日期}`
+（日期本身已經唯一，不需要額外加節日名稱做 key，同一天同一個名稱不會重複推播）。
 """
 
 from __future__ import annotations
@@ -28,13 +32,6 @@ _TAIWAN_TZ = ZoneInfo("Asia/Taipei")
 
 # 提前幾天推播 + 當天推播，父親節／母親節共用同一組邏輯，所以寫成資料結構而不是各寫一次。
 _ADVANCE_OFFSETS = (7, 0)
-
-# 農曆節日：政府行事曆 name 欄位會出現的關鍵字，對應要推播的文案（slug、關鍵字、emoji、顯示名稱）。
-_LUNAR_HOLIDAYS = (
-    ("mid_autumn", "中秋", "🌕", "中秋節"),
-    ("dragon_boat", "端午", "🛶", "端午節"),
-)
-
 
 def _fathers_day(year: int) -> date:
     """台灣父親節：固定國曆 8/8。"""
@@ -117,9 +114,14 @@ def check_and_push_fixed_holidays(db: CloudSQLClient, telegram_client, now: date
     )
 
 
-def check_and_push_lunar_holidays(db: CloudSQLClient, telegram_client, now: datetime | None = None) -> None:
-    """每日排程：中秋節／端午節只在當天推播（不提前，農曆日期借用既有政府行事曆資料換算，
-    不自己重算農曆）。"""
+def check_and_push_calendar_holidays(db: CloudSQLClient, telegram_client, now: datetime | None = None) -> None:
+    """每日排程：政府行事曆上任何「有名稱、真正放假」的國定假日（中秋、端午、春節、清明、
+    國慶日……）都只在當天推播一次，不提前（Robin 2026-11-26 確認「行事曆上標注有名稱的國定
+    假日都推播」，且「國定節日統一當天通知即可」）。
+
+    `holiday_category == "星期六、星期日"` 代表這天只是單純的週末（`taiwan_calendar.py` 為了
+    方便行事曆顯示而補上的合成資料，不是政府資料本身標注的假日），排除掉避免每個週末都推播。
+    """
     now = now or datetime.now(tz=_TAIWAN_TZ)
     today_local = now.astimezone(_TAIWAN_TZ).date()
     year = today_local.year
@@ -127,20 +129,16 @@ def check_and_push_lunar_holidays(db: CloudSQLClient, telegram_client, now: date
     calendar_service = TaiwanCalendarService(db, sync_missing=True)
     days = calendar_service.days(date(year, 1, 1), date(year, 12, 31))
 
-    for slug, keyword, emoji, label in _LUNAR_HOLIDAYS:
-        matched_date: date | None = None
-        for iso_date, info in days.items():
-            name = info.get("name") or ""
-            if keyword in name:
-                matched_date = date.fromisoformat(iso_date)
-                break
-        if matched_date is None or matched_date != today_local:
-            continue
+    info = days.get(today_local.isoformat())
+    if info is None or not info.get("is_holiday") or not info.get("name"):
+        return
+    if info.get("holiday_category") == "星期六、星期日":
+        return
 
-        notification_key = _notification_key(slug, 0)
-        if _already_sent(db, notification_key, year):
-            continue
+    notification_key = f"holiday_calendar_{today_local.isoformat()}"
+    if _already_sent(db, notification_key, year):
+        return
 
-        text = f"{emoji} 今天是{label}，記得跟家人說聲節日快樂！"
-        _broadcast(db, telegram_client, text)
-        _mark_sent(db, notification_key, year)
+    text = f"🎉 今天是{info['name']}，記得好好休息、跟家人聚聚！"
+    _broadcast(db, telegram_client, text)
+    _mark_sent(db, notification_key, year)

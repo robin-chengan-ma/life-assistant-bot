@@ -1,4 +1,4 @@
-"""src/bot/national_holidays.py（父親節／母親節／中秋／端午推播）的單元測試。"""
+"""src/bot/national_holidays.py（父親節／母親節／政府行事曆國定假日推播）的單元測試。"""
 from datetime import datetime
 from unittest.mock import Mock, patch
 from zoneinfo import ZoneInfo
@@ -75,42 +75,81 @@ def test_mothers_day_pushes_on_the_day(fake_db):
     assert "母親節" in telegram_client.send_text.call_args.kwargs["text"]
 
 
-def test_lunar_holiday_pushes_on_matching_calendar_day(fake_db):
+def test_calendar_holiday_pushes_on_matching_named_holiday(fake_db):
     _bound_user(fake_db, 444)
     telegram_client = Mock()
     now = datetime(2026, 9, 25, 9, 0, tzinfo=_TAIWAN_TZ)
-    fake_days = {"2026-09-25": {"name": "中秋節", "is_holiday": True}}
+    fake_days = {
+        "2026-09-25": {"name": "中秋節", "is_holiday": True, "holiday_category": "放假之紀念日及節日"},
+    }
 
     with patch.object(national_holidays, "TaiwanCalendarService") as mock_service_cls:
         mock_service_cls.return_value.days.return_value = fake_days
-        national_holidays.check_and_push_lunar_holidays(fake_db, telegram_client, now=now)
+        national_holidays.check_and_push_calendar_holidays(fake_db, telegram_client, now=now)
 
     assert telegram_client.send_text.call_count == 1
     assert "中秋節" in telegram_client.send_text.call_args.kwargs["text"]
 
 
-def test_lunar_holiday_does_not_push_when_not_matching_day(fake_db):
-    _bound_user(fake_db, 444)
+def test_calendar_holiday_pushes_for_any_named_holiday_not_just_mid_autumn_or_dragon_boat(fake_db):
+    """2026-11-26 Robin 確認：不限中秋/端午，行事曆上標注有名稱的國定假日都要推播。"""
+    _bound_user(fake_db, 555)
     telegram_client = Mock()
-    now = datetime(2026, 9, 24, 9, 0, tzinfo=_TAIWAN_TZ)
-    fake_days = {"2026-09-25": {"name": "中秋節", "is_holiday": True}}
+    now = datetime(2026, 10, 10, 9, 0, tzinfo=_TAIWAN_TZ)
+    fake_days = {
+        "2026-10-10": {"name": "國慶日", "is_holiday": True, "holiday_category": "放假之紀念日及節日"},
+    }
 
     with patch.object(national_holidays, "TaiwanCalendarService") as mock_service_cls:
         mock_service_cls.return_value.days.return_value = fake_days
-        national_holidays.check_and_push_lunar_holidays(fake_db, telegram_client, now=now)
+        national_holidays.check_and_push_calendar_holidays(fake_db, telegram_client, now=now)
+
+    assert telegram_client.send_text.call_count == 1
+    assert "國慶日" in telegram_client.send_text.call_args.kwargs["text"]
+
+
+def test_calendar_holiday_does_not_push_on_plain_weekend(fake_db):
+    """單純週末（合成資料，非政府行事曆標注的假日）不應該推播，否則每個週末都會發訊息。"""
+    _bound_user(fake_db, 666)
+    telegram_client = Mock()
+    now = datetime(2026, 11, 28, 9, 0, tzinfo=_TAIWAN_TZ)
+    fake_days = {
+        "2026-11-28": {"name": None, "is_holiday": True, "holiday_category": "星期六、星期日"},
+    }
+
+    with patch.object(national_holidays, "TaiwanCalendarService") as mock_service_cls:
+        mock_service_cls.return_value.days.return_value = fake_days
+        national_holidays.check_and_push_calendar_holidays(fake_db, telegram_client, now=now)
 
     telegram_client.send_text.assert_not_called()
 
 
-def test_lunar_holiday_does_not_duplicate_within_same_year(fake_db):
+def test_calendar_holiday_does_not_push_when_not_a_holiday_day(fake_db):
     _bound_user(fake_db, 444)
     telegram_client = Mock()
-    now = datetime(2026, 6, 19, 9, 0, tzinfo=_TAIWAN_TZ)
-    fake_days = {"2026-06-19": {"name": "端午節", "is_holiday": True}}
+    now = datetime(2026, 9, 24, 9, 0, tzinfo=_TAIWAN_TZ)
+    fake_days = {
+        "2026-09-25": {"name": "中秋節", "is_holiday": True, "holiday_category": "放假之紀念日及節日"},
+    }
 
     with patch.object(national_holidays, "TaiwanCalendarService") as mock_service_cls:
         mock_service_cls.return_value.days.return_value = fake_days
-        national_holidays.check_and_push_lunar_holidays(fake_db, telegram_client, now=now)
-        national_holidays.check_and_push_lunar_holidays(fake_db, telegram_client, now=now)
+        national_holidays.check_and_push_calendar_holidays(fake_db, telegram_client, now=now)
+
+    telegram_client.send_text.assert_not_called()
+
+
+def test_calendar_holiday_does_not_duplicate_within_same_year(fake_db):
+    _bound_user(fake_db, 444)
+    telegram_client = Mock()
+    now = datetime(2026, 6, 19, 9, 0, tzinfo=_TAIWAN_TZ)
+    fake_days = {
+        "2026-06-19": {"name": "端午節", "is_holiday": True, "holiday_category": "放假之紀念日及節日"},
+    }
+
+    with patch.object(national_holidays, "TaiwanCalendarService") as mock_service_cls:
+        mock_service_cls.return_value.days.return_value = fake_days
+        national_holidays.check_and_push_calendar_holidays(fake_db, telegram_client, now=now)
+        national_holidays.check_and_push_calendar_holidays(fake_db, telegram_client, now=now)
 
     assert telegram_client.send_text.call_count == 1

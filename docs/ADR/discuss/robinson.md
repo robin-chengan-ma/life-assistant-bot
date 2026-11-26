@@ -1337,4 +1337,6 @@ YouTube 主題訂閱設定子選單結構；`router.py` 移除 `/my_youtube_topi
 
 **理由**：Robin 實際使用後發現節日提醒完全消失，這四個是台灣家庭最常見、影響最大的提醒情境，且父親節/母親節/中秋/端午都是「全家共用」而非個人設定，邏輯固定、不需要額外 UI，值得直接補回而非等後續版本。
 
-**後果**：新增 `src/bot/national_holidays.py`、`tests/bot/test_national_holidays.py`（9 項測試，涵蓋日期計算、提前/當天推播、去重、農曆節日比對）；`main.py` 新增排程註冊。不需要新 migration（沿用既有 `important_notifications_log` 表，無 CHECK 約束限制 key 格式）。`python3 -m pytest -q` 510 passed；`ruff check` 乾淨。尚未 commit，等協調端確認。
+**後果**：新增 `src/bot/national_holidays.py`、`tests/bot/test_national_holidays.py`（9 項測試，涵蓋日期計算、提前/當天推播、去重、農曆節日比對）；`main.py` 新增排程註冊。不需要新 migration（沿用既有 `important_notifications_log` 表，無 CHECK 約束限制 key 格式）。`python3 -m pytest -q` 510 passed；`ruff check` 乾淨。已 commit（詳見 PROGRESS.md）。
+
+**2026-11-26 再追加**：Robin 指出「行事曆如果有標注的節日，理論上都會推播吧」，發現上面的實作其實寫死只比對「中秋」「端午」兩個關鍵字，並沒有真的涵蓋政府行事曆上所有有名稱的國定假日（春節、清明、國慶日、228 等都不會推播）。確認 Robin 要「行事曆上標注有名稱的國定假日都推播」後，把 `check_and_push_lunar_holidays()` 改寫成 `check_and_push_calendar_holidays()`：不再寫死關鍵字清單，改成掃描當天行事曆資料，只要 `is_holiday=True`、`holiday_category` 不是單純的「星期六、星期日」（`taiwan_calendar.py` 為了行事曆顯示方便合成的週末資料，不是政府行事曆本身標注的假日）、且 `name` 有值，就當天推播一次；去重 key 改用 `holiday_calendar_{日期}`（日期本身已唯一，不需要額外帶節日名稱）。父親節／母親節仍維持固定日期＋提前 7 天的獨立邏輯不受影響。新增 2 項測試（任意命名國定假日都會推播、純週末不推播），`tests/bot/test_national_holidays.py` 共 11 項測試全過；`python3 -m pytest -q` 512 passed；`ruff check` 乾淨。
