@@ -154,7 +154,7 @@ CREATE INDEX idx_media_uploads_user_id ON media_uploads (user_id);
 
 | 資料表 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `todos` | 已套用（`0102` 精簡、`0106` 改日期區間） | — | 2026-11 精簡：純一次性日期（可為區間）＋文字提醒推播，拿掉 status／30 分鐘前提醒／每日摘要；既有資料已清空重來 |
+| `todos` | 已套用（`0102` 精簡、`0106` 改日期區間、`0109` 提前提醒） | — | 2026-11 精簡：純一次性日期（可為區間）＋文字提醒推播，拿掉 status／30 分鐘前提醒／每日摘要；既有資料已清空重來；2026-11-26 再追加可複選提前提醒天數 |
 
 <details>
 <summary>SQL 與設計理由</summary>
@@ -166,7 +166,8 @@ CREATE TABLE todos (
     content TEXT NOT NULL,
     remind_start_date DATE NOT NULL,
     remind_end_date DATE NOT NULL,
-    reminded_sent_at TIMESTAMPTZ,
+    remind_offsets INTEGER[] NOT NULL DEFAULT '{0}',
+    reminded_offsets_sent INTEGER[] NOT NULL DEFAULT '{}',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_todos_user_id ON todos (user_id);
@@ -177,12 +178,18 @@ CREATE INDEX idx_todos_remind_start_date ON todos (remind_start_date);
 `remind_at`、`reminded_30min_sent_at` 改名 `reminded_sent_at`，既有資料清空）、
 `0106_todo_remind_date_range.sql`（2026-11-26，單一 `remind_at`（固定 09:00 時間點）改成
 `remind_start_date`／`remind_end_date` 兩個日期，單日待辦＝兩者相同；推播固定改成「第一天台灣
-時間 08:30」，恢復行事曆 UI 選取區間，見 `docs/ADR/discuss/robinson.md`）
+時間 08:30」，恢復行事曆 UI 選取區間，見 `docs/ADR/discuss/robinson.md`）、
+`0109_todo_remind_offsets.sql`（2026-11-26 同日再追加，Robin 要求提前提醒邏輯比照生日設定：
+新增 `remind_offsets INTEGER[]`（可複選 `{0,3,7,14}` 天前推播）；待辦是一次性事件、不像生日
+每年重複，不能沿用生日那套以年份區分的 `important_notifications_log` 去重機制，改新增
+`reminded_offsets_sent INTEGER[]` 記錄「這筆待辦已推播過的 offset」，並移除舊的單一時間戳
+`reminded_sent_at`）
 
 - Robin 明確決策：「待辦事項只是純粹去做通知而已，不需要確認動作，不想增加使用者負擔」，新增/編輯/
   刪除全部改到 Mobile App 做，Telegram 端（`src/bot/todo.py`）只負責讀取與推播
-- `reminded_sent_at` 是去重記號，存在 DB（非記憶體）以撐過 Render 重啟；推播機制借用 `/healthz`
-  既有固定頻率 cron，由 `check_and_push_reminders()` 判斷「提醒時間已到、還沒推播過」
+- `reminded_offsets_sent` 是去重記號，存在 DB（非記憶體）以撐過 Render 重啟；推播機制借用
+  `/healthz` 既有固定頻率 cron，由 `check_and_push_reminders()` 針對每個 offset 判斷「提醒時間
+  已到、該 offset 還沒推播過」；待辦推播一律只送給建立者本人，不提供生日設定的推播對象選擇
 </details>
 
 ## 已取消功能資料表清理

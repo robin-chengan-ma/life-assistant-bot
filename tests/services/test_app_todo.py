@@ -71,6 +71,36 @@ def test_create_and_list_round_trip(service):
     assert items[0]["remind_end_date"] == "2026-12-25"
     assert items[0]["owner_user_id"] == 1
     assert items[0]["can_edit"] is True
+    assert items[0]["remind_offsets"] == [0]
+
+
+def test_create_with_remind_offsets(service):
+    service.create(
+        1,
+        {
+            "content": "繳帳單",
+            "remind_start_date": "2026-12-25",
+            "remind_offsets": [0, 3, 14],
+        },
+    )
+    items = service.list_for_user(1)
+    assert items[0]["remind_offsets"] == [14, 3, 0]
+
+
+def test_create_rejects_invalid_remind_offset(service):
+    with pytest.raises(TodoValidationError):
+        service.create(
+            1,
+            {"content": "買禮物", "remind_start_date": "2026-12-25", "remind_offsets": [5]},
+        )
+
+
+def test_create_rejects_empty_remind_offsets(service):
+    with pytest.raises(TodoValidationError):
+        service.create(
+            1,
+            {"content": "買禮物", "remind_start_date": "2026-12-25", "remind_offsets": []},
+        )
 
 
 def test_create_with_date_range(service):

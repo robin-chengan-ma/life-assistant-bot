@@ -306,8 +306,8 @@ payload、帳號、密碼或 Token。
 
 | 項目 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `GET /api/app/todos` | 已實作（`list_todos()`） | FR-31 | 查詢本人可見的待辦清單，欄位為 `content`／`remind_start_date`／`remind_end_date` |
-| `POST /api/app/todos` | 已實作（`create_todo()`） | FR-31 | 新增一筆待辦，`remind_end_date` 需 ≥ `remind_start_date` |
+| `GET /api/app/todos` | 已實作（`list_todos()`） | FR-31 | 查詢本人可見的待辦清單，欄位為 `content`／`remind_start_date`／`remind_end_date`／`remind_offsets`（2026-11-26 新增，提前提醒天數） |
+| `POST /api/app/todos` | 已實作（`create_todo()`） | FR-31／FR-32a | 新增一筆待辦，`remind_end_date` 需 ≥ `remind_start_date`；`remind_offsets` 可複選 `{0,3,7,14}`，預設 `[0]` |
 | `PATCH /api/app/todos/<id>` | 已實作（`update_todo()`） | FR-31 | 更新一筆待辦 |
 | `DELETE /api/app/todos/<id>` | 已實作（`delete_todo()`） | FR-31 | 刪除一筆待辦 |
 | `GET /api/app/calendar?year=&month=` | 已實作（`AppCalendarService`，包 `TaiwanCalendarService`） | FR-31c | 回傳該月每天的國定假日／補班標記（`is_holiday`／`name`／`holiday_category`／`description`），供 `TodoCalendarPicker.tsx`／`HomeCalendar.tsx` 顯示 |

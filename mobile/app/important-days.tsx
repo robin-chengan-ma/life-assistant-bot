@@ -165,8 +165,8 @@ function BirthdayModal({ familyUsers, initial, onClose, onSaved, request }: { fa
   return <Modal animationType="fade" transparent visible onRequestClose={onClose}><View style={styles.modalRoot}><Pressable onPress={onClose} style={styles.backdrop} /><View style={styles.modalCard}><Pressable onPress={onClose} style={styles.close}><MaterialCommunityIcons color={colors.textMuted} name="close" size={24} /></Pressable><ScrollView contentContainerStyle={styles.modalContent}>
     <Text style={styles.modalTitle}>{initial ? "編輯生日" : "新增生日"}</Text>
     <Field label="姓名" value={name} onChange={setName} placeholder="請輸入姓名" />
-    <View style={styles.row}><Field inputMode="numeric" label="月" value={month} onChange={(value) => setMonth(value.replace(/\D/g, ""))} placeholder="1-12" /><Field inputMode="numeric" label="日" value={day} onChange={(value) => setDay(value.replace(/\D/g, ""))} placeholder="1-31" /></View>
-    <View style={styles.field}>
+    <View style={styles.row}><Field inputMode="numeric" label="月" style={styles.field} value={month} onChange={(value) => setMonth(value.replace(/\D/g, ""))} placeholder="1-12" /><Field inputMode="numeric" label="日" style={styles.field} value={day} onChange={(value) => setDay(value.replace(/\D/g, ""))} placeholder="1-31" /></View>
+    <View style={styles.fieldBlock}>
       <Text style={styles.label}>提前提醒（可複選）</Text>
       <View style={styles.chipRow}>
         {REMIND_OFFSET_OPTIONS.map((option) => {
@@ -177,7 +177,7 @@ function BirthdayModal({ familyUsers, initial, onClose, onSaved, request }: { fa
         })}
       </View>
     </View>
-    <View style={styles.field}>
+    <View style={styles.fieldBlock}>
       <Text style={styles.label}>推播對象</Text>
       <View style={styles.chipRow}>
         {AUDIENCE_MODE_OPTIONS.map((option) => {
@@ -201,7 +201,7 @@ function BirthdayModal({ familyUsers, initial, onClose, onSaved, request }: { fa
   </ScrollView></View></View></Modal>;
 }
 
-function Field({ inputMode, label, onChange, placeholder, value }: { inputMode?: "numeric"; label: string; onChange: (value: string) => void; placeholder: string; value: string }) { const { colors, theme } = useAppPreferences(); const styles = createStyles(colors, theme); return <View style={styles.field}><Text style={styles.label}>{label}</Text><TextInput inputMode={inputMode} onChangeText={onChange} placeholder={placeholder} placeholderTextColor={colors.textMuted} style={[styles.input, styles.iosInputFontSize]} value={value} /></View>; }
+function Field({ inputMode, label, onChange, placeholder, style, value }: { inputMode?: "numeric"; label: string; onChange: (value: string) => void; placeholder: string; style?: object; value: string }) { const { colors, theme } = useAppPreferences(); const styles = createStyles(colors, theme); return <View style={style ?? styles.fieldBlock}><Text style={styles.label}>{label}</Text><TextInput inputMode={inputMode} onChangeText={onChange} placeholder={placeholder} placeholderTextColor={colors.textMuted} style={[styles.input, styles.iosInputFontSize]} value={value} /></View>; }
 
 const createStyles = (colors: ReturnType<typeof useAppPreferences>["colors"], theme: ReturnType<typeof useAppPreferences>["theme"]) => StyleSheet.create({
   flex: { flex: 1 }, intro: { alignItems: "flex-start", backgroundColor: colors.surface, borderColor: colors.border, borderRadius: 18, borderWidth: 1, flexDirection: "row", gap: 12, padding: 18 }, introTitle: { color: colors.text, fontSize: 20, fontWeight: "900" }, description: { color: colors.textMuted, fontSize: 12, lineHeight: 18, marginTop: 5 }, addButton: { alignItems: "center", alignSelf: "flex-start", backgroundColor: colors.primary, borderRadius: 11, flexDirection: "row", gap: 7, paddingHorizontal: 16, paddingVertical: 11 }, addText: { color: theme === "dark" ? colors.background : colors.white, fontWeight: "900" },
@@ -209,7 +209,7 @@ const createStyles = (colors: ReturnType<typeof useAppPreferences>["colors"], th
   actions: { flexDirection: "row", gap: 8, justifyContent: "flex-end" }, edit: { backgroundColor: colors.primarySoft, borderRadius: 9, paddingHorizontal: 14, paddingVertical: 8 }, editText: { color: colors.primaryDark, fontWeight: "800" }, delete: { backgroundColor: theme === "dark" ? "#432823" : "#FAD7D5", borderRadius: 9, paddingHorizontal: 14, paddingVertical: 8 }, deleteText: { color: colors.danger, fontWeight: "800" }, readOnly: { color: colors.textMuted, fontSize: 11 }, remindMeta: { color: colors.textMuted, fontSize: 12, fontWeight: "700" },
   chipRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 }, chip: { backgroundColor: theme === "dark" ? "#22332F" : colors.white, borderColor: colors.border, borderRadius: 999, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 8 }, chipSelected: { backgroundColor: colors.primary, borderColor: colors.primary }, chipText: { color: colors.text, fontWeight: "700" }, chipTextSelected: { color: theme === "dark" ? colors.background : colors.white },
   modalRoot: { alignItems: "center", flex: 1, justifyContent: "center", padding: 18 }, backdrop: { backgroundColor: "rgba(18,35,32,.5)", bottom: 0, left: 0, position: "absolute", right: 0, top: 0 }, modalCard: { backgroundColor: colors.surface, borderRadius: 20, maxHeight: "94%", maxWidth: 480, width: "100%" }, close: { padding: 12, position: "absolute", right: 4, top: 4, zIndex: 2 }, modalContent: { gap: 13, padding: 22, paddingTop: 45 }, modalTitle: { color: colors.text, fontSize: 22, fontWeight: "900" },
-  row: { flexDirection: "row", gap: 12 }, field: { flex: 1, gap: 7 }, label: { color: colors.text, fontSize: 14, fontWeight: "800" }, input: { backgroundColor: theme === "dark" ? "#22332F" : colors.white, borderColor: colors.border, borderRadius: 11, borderWidth: 1, color: colors.text, padding: 12 }, iosInputFontSize: { fontSize: 16 },
+  row: { flexDirection: "row", gap: 12 }, field: { flex: 1, gap: 7 }, fieldBlock: { gap: 7 }, label: { color: colors.text, fontSize: 14, fontWeight: "800" }, input: { backgroundColor: theme === "dark" ? "#22332F" : colors.white, borderColor: colors.border, borderRadius: 11, borderWidth: 1, color: colors.text, padding: 12 }, iosInputFontSize: { fontSize: 16 },
   cancel: { borderColor: colors.border, borderRadius: 10, borderWidth: 1, paddingHorizontal: 18, paddingVertical: 10 }, cancelText: { color: colors.textMuted, fontWeight: "800" }, save: { backgroundColor: colors.primary, borderRadius: 10, paddingHorizontal: 20, paddingVertical: 10 }, saveText: { color: theme === "dark" ? colors.background : colors.white, fontWeight: "900" },
   deleteBackdrop: { alignItems: "center", backgroundColor: "rgba(18,35,32,.5)", flex: 1, justifyContent: "center", padding: 20 }, deleteCard: { backgroundColor: colors.surface, borderRadius: 20, gap: 14, maxWidth: 420, padding: 24, width: "100%" }, deleteTitle: { color: colors.text, fontSize: 20, fontWeight: "900" }, deleteBody: { color: colors.text, fontSize: 13, lineHeight: 20 },
   undoBar: { alignItems: "center", alignSelf: "center", backgroundColor: colors.primaryDark, borderRadius: 20, bottom: 22, flexDirection: "row", gap: 14, paddingHorizontal: 18, paddingVertical: 10, position: "absolute", zIndex: 20 },

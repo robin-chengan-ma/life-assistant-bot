@@ -37,12 +37,15 @@ export type AuthRequest = <T>(path: string, options?: RequestInit) => Promise<T>
 
 // 待辦事項：純粹的一次性提醒，只有日期區間與文字內容，沒有狀態／完成概念。
 // 2026-11-26：remind_date（單一日期）改成 remind_start_date／remind_end_date（可為日期區間）。
+// 2026-11-26（同日再追加，見 docs/ADR/discuss/robinson.md）：新增 remind_offsets（提前提醒天數
+// 複選，邏輯跟生日設定一樣，但待辦一律僅推給自己，沒有推播對象選擇）。
 export type TodoItem = {
   id: number;
   owner_user_id: number;
   content: string;
   remind_start_date: string;
   remind_end_date: string;
+  remind_offsets: number[];
   can_edit: boolean;
 };
 
@@ -236,11 +239,11 @@ export function getTodos(request: AuthRequest): Promise<{ items: TodoItem[] }> {
   return request("/api/app/todos");
 }
 
-export function createTodo(request: AuthRequest, payload: { content: string; remind_start_date: string; remind_end_date: string }): Promise<{ id: number; message: string }> {
+export function createTodo(request: AuthRequest, payload: { content: string; remind_start_date: string; remind_end_date: string; remind_offsets: number[] }): Promise<{ id: number; message: string }> {
   return request("/api/app/todos", { method: "POST", body: JSON.stringify(payload) });
 }
 
-export function updateTodo(request: AuthRequest, id: number, payload: { content: string; remind_start_date: string; remind_end_date: string }): Promise<{ id: number; message: string }> {
+export function updateTodo(request: AuthRequest, id: number, payload: { content: string; remind_start_date: string; remind_end_date: string; remind_offsets: number[] }): Promise<{ id: number; message: string }> {
   return request(`/api/app/todos/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
 }
 

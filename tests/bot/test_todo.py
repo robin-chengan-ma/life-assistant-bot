@@ -1,12 +1,25 @@
-"""src/bot/todo.py 的單元測試（2026-11 大幅精簡＋2026-11-26 改日期區間，見模組 docstring）。"""
+"""src/bot/todo.py 的單元測試（2026-11 大幅精簡＋2026-11-26 改日期區間／提前提醒，見模組 docstring）。"""
 from datetime import UTC, date, datetime
 from unittest.mock import MagicMock
 
 from src.bot import todo
 
 
-def _row(user_id: int, content: str, start: date, end: date | None = None) -> dict:
-    return {"user_id": user_id, "content": content, "remind_start_date": start, "remind_end_date": end or start}
+def _row(
+    user_id: int,
+    content: str,
+    start: date,
+    end: date | None = None,
+    remind_offsets: list[int] | None = None,
+) -> dict:
+    return {
+        "user_id": user_id,
+        "content": content,
+        "remind_start_date": start,
+        "remind_end_date": end or start,
+        "remind_offsets": remind_offsets or [0],
+        "reminded_offsets_sent": [],
+    }
 
 
 def test_list_todos_sorted_by_remind_start_date(fake_db):
@@ -47,7 +60,31 @@ def test_check_and_push_reminders_sends_when_due(fake_db):
     assert telegram_client.send_text.call_args.kwargs["chat_id"] == 555
     assert "買菜" in telegram_client.send_text.call_args.kwargs["text"]
     row = fake_db.select("todos", where="id = %s", params=(todo_id,), fetch_one=True)
-    assert row["reminded_sent_at"] == now
+    assert row["reminded_offsets_sent"] == [0]
+
+
+def test_check_and_push_reminders_advance_notice_offset(fake_db):
+    fake_db.insert("users", {"telegram_user_id": 555, "role": "Robin", "is_owner": True})
+    todo_id = fake_db.insert("todos", _row(1, "買菜", date(2026, 8, 9), remind_offsets=[7, 0]))
+    telegram_client = MagicMock()
+    # 提前 7 天：2026/8/9 - 7 = 2026/8/2，台灣時間 08:35 落在推播視窗內。
+    now = datetime(2026, 8, 2, 0, 35, tzinfo=UTC)
+
+    todo.check_and_push_reminders(fake_db, telegram_client, now=now)
+
+    telegram_client.send_text.assert_called_once()
+    assert "7 天後" in telegram_client.send_text.call_args.kwargs["text"]
+    assert "買菜" in telegram_client.send_text.call_args.kwargs["text"]
+    row = fake_db.select("todos", where="id = %s", params=(todo_id,), fetch_one=True)
+    assert row["reminded_offsets_sent"] == [7]
+
+    # 隔天（當天 offset）應該再推播一次，兩個 offset 各自獨立去重。
+    todo.check_and_push_reminders(
+        fake_db, telegram_client, now=datetime(2026, 8, 9, 0, 35, tzinfo=UTC)
+    )
+    assert telegram_client.send_text.call_count == 2
+    row = fake_db.select("todos", where="id = %s", params=(todo_id,), fetch_one=True)
+    assert sorted(row["reminded_offsets_sent"]) == [0, 7]
 
 
 def test_check_and_push_reminders_skips_outside_window(fake_db):

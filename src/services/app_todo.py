@@ -7,6 +7,11 @@
 2026-11-26（待辦改日期區間＋行事曆，見 migration 0106、docs/ADR/discuss/robinson.md）：
 `remind_at`（單一時間點，固定 09:00）改成 `remind_start_date`／`remind_end_date` 兩個日期
 （單日待辦 = 兩者相同），推播固定改成第一天早上 08:30（見 `src/bot/todo.py`）。
+
+2026-11-26（待辦提前提醒，見 migration 0109）：新增 `remind_offsets`（可複選「14／7／3／當天」
+天前推播，只允許 `{0,3,7,14}` 的非空子集合），邏輯跟生日設定的 `remind_offsets` 完全一樣，但
+待辦不需要推播對象選擇，一律只推給建立者本人，所以不會有 `audience_mode`/`audience_user_ids`
+這類欄位。
 """
 
 from __future__ import annotations
@@ -61,6 +66,22 @@ def _parse_remind_date_range(payload: dict[str, Any]) -> tuple[date, date]:
     return start, end
 
 
+_ALLOWED_REMIND_OFFSETS = {0, 3, 7, 14}
+
+
+def _parse_remind_offsets(value: Any) -> list[int]:
+    if value is None:
+        return [0]
+    if not isinstance(value, list) or not value:
+        raise TodoValidationError("請至少選擇一個提前提醒天數")
+    offsets = set()
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, int) or item not in _ALLOWED_REMIND_OFFSETS:
+            raise TodoValidationError("提前提醒天數只能是 0、3、7 或 14 天")
+        offsets.add(item)
+    return sorted(offsets, reverse=True)
+
+
 class AppTodoService:
     def __init__(self, db: TodoDatabase):
         self._db = db
@@ -108,6 +129,10 @@ class AppTodoService:
             "content": _parse_content(payload.get("content")),
             "remind_start_date": start,
             "remind_end_date": end,
+            "remind_offsets": _parse_remind_offsets(payload.get("remind_offsets")),
+            # 日期異動後，舊的「哪些 offset 已經推播過」紀錄就不再適用，新增／編輯都重置，
+            # 讓新的日期重新走一輪完整的提前提醒。
+            "reminded_offsets_sent": [],
         }
 
     @staticmethod

@@ -1503,3 +1503,66 @@ HomeCalendar.tsx`、`src/bot/auth.py`、`src/bot/commands.py`、`src/services/ap
 FR-4／FR-4a／FR-31c 同步更新；`docs/reference/db_schema.md`／`api_schema.md` 同步。既有 4 筆使用者
 資料的 `full_name` 實際回填結果需要 Robin 在 migration 套用後自行到後台核對一次，確認比對邏輯真的
 對上正確的人。尚未 commit，待 Robin 確認。
+
+## 2026-11-26（第五次追加）生日設定「推播對象」清單版面擠壓修正
+
+**狀態**：accepted
+
+**背景**：Robin 回報新增生日時，選「自行選擇」推播對象展開家人清單後，版面太擠，底部「取消／確認」
+按鈕會跟家人姓名清單重疊在一起。
+
+**根因**：`mobile/app/important-days.tsx` 的 `styles.field`（`{ flex: 1, gap: 7 }`）原本是設計給
+「月」「日」兩個欄位在同一個水平 `row` 裡平均分配寬度用的，但「提前提醒」「推播對象」兩個區塊
+是直接包在垂直排列的 `ScrollView` 內容裡使用同一個 `styles.field`；`flex: 1` 的子元素在高度不受
+限制（`ScrollView` 內容高度是自動撐開的）的垂直容器裡會搶佔「剩餘空間」的計算方式失準，導致底下的
+確認／取消按鈕區塊疊到清單上面。
+
+**決策**：新增 `styles.fieldBlock`（`{ gap: 7 }`，沒有 `flex: 1`）專門給垂直排列、單獨佔一行的
+區塊（姓名欄位、提前提醒、推播對象）使用；`styles.field`（保留 `flex: 1`）只給「月」「日」這種
+在水平 `row` 裡要平分寬度的情境使用，`Field` 元件改為可傳入 `style` 覆寫，呼叫端依情境各自指定
+正確的樣式。
+
+**後果**：異動 `mobile/app/important-days.tsx`。純 UI 樣式修正，不涉及資料或邏輯；Mobile
+`tsc --noEmit` 零錯誤，全專案 `python3 -m pytest -q` 524 passed（本次無 Python 異動）。尚未
+commit，待 Robin 確認。
+
+## 2026-11-26（第六次追加）待辦事項提前提醒
+
+**狀態**：accepted
+
+**背景**：Robin 問「代辦事項目前是當天才會通知嗎？還是說其實有提前通知呢？」，確認待辦目前只有
+當天（`remind_start_date` 當天台灣時間 08:30）推播，沒有提前通知選項，不像生日設定已經有
+`remind_offsets` 可複選提前天數。Robin 接著明確要求：「待辦事項這邊的提前通知邏輯，跟生日設定的
+邏輯是一模一樣的，只是說它不需要有這個設定推播對象的功能，它一律就是僅限自己……國定年假一樣，就
+維持在當天才會通知。」
+
+**決策**：
+1. `todos` 新增 `remind_offsets INTEGER[] NOT NULL DEFAULT '{0}'`（migration `0109`），複選選項
+   與驗證規則（只允許 `{0,3,7,14}` 的非空子集合）完全比照 `important_days.remind_offsets`。
+2. 待辦是一次性（非每年重複）事件，不像生日有「年份」概念，不能沿用生日那套以
+   `important_notifications_log`（`notification_key` + `year`）去重的年度機制；改為新增
+   `reminded_offsets_sent INTEGER[] NOT NULL DEFAULT '{}'` 直接記錄「這筆待辦已經推播過的
+   offset」，取代舊的單一時間戳 `reminded_sent_at`（已確認該欄位純粹內部去重用途，沒有任何
+   API/Mobile 端讀取，可安全汰換）。新增／編輯待辦時重置這個欄位，讓新日期重新走一輪完整的
+   提前提醒。
+3. **明確不做**推播對象選擇：`check_and_push_reminders()` 推播對象固定是這筆待辦的 `user_id`
+   （建立者本人），不像生日的 `audience_mode`/`audience_user_ids`，Mobile `TodoModal` 也不新增
+   對應 UI。
+4. 國定假日推播（`src/bot/national_holidays.py`）維持完全不變，仍然只在當天推播，Robin 已明確
+   確認不需要調整。
+
+**後果**：異動 `src/migrations/0109_todo_remind_offsets.sql`（新）、`src/services/app_todo.py`
+（新增 `_parse_remind_offsets()`／`_validate()`／`_serialize()` 帶入 `remind_offsets`，編輯時重置
+`reminded_offsets_sent`）、`src/bot/todo.py`（`check_and_push_reminders()` 改成針對每筆待辦的每個
+`remind_offsets` 分別計算「`remind_start_date` - offset == 今天」，去重用
+`reminded_offsets_sent`）、`mobile/app/todo.tsx`（`TodoModal` 新增「提前提醒」chip 複選區塊，
+卡片列表新增提前提醒摘要文字，邏輯與元件風格直接比照 `important-days.tsx` 的
+`REMIND_OFFSET_OPTIONS`/`toggleOffset`）、`mobile/src/services/analyticsApi.ts`
+（`TodoItem`/`createTodo`/`updateTodo` 新增 `remind_offsets` 欄位）。
+
+測試新增/更新：`tests/bot/test_todo.py`（`_row()` helper 補 `remind_offsets`/`reminded_offsets_sent`
+欄位、既有測試改用 `reminded_offsets_sent` 斷言、新增提前提醒 offset 測試）、
+`tests/services/test_app_todo.py`（新增 `remind_offsets` 驗證測試：合法複選、非法 offset 報錯、
+空陣列報錯）。全專案 `python3 -m pytest -q` 528 passed，`ruff check .` 對本次異動的 Python 檔案
+全過，Mobile `tsc --noEmit` 零錯誤。`docs/specs/SPEC.md` FR-32／FR-32a、
+`docs/reference/db_schema.md`／`api_schema.md` 同步更新。尚未 commit，待 Robin 確認。
