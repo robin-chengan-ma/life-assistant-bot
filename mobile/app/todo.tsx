@@ -1,7 +1,7 @@
 import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import { Redirect } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Alert, Modal, ScrollView, StyleSheet, TextInput } from "react-native";
+import { ActivityIndicator, Modal, ScrollView, StyleSheet, TextInput } from "react-native";
 
 import { AppPressable as Pressable } from "@/components/AppPressable";
 import { AppText as Text } from "@/components/AppText";
@@ -34,6 +34,7 @@ export default function TodoScreen() {
   const [operationMessage, setOperationMessage] = useState<string | null>(null);
   const [editing, setEditing] = useState<TodoItem | null | undefined>(undefined);
   const [pendingDeletion, setPendingDeletion] = useState<TodoItem | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<TodoItem | null>(null);
   const deleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(async () => {
@@ -46,6 +47,7 @@ export default function TodoScreen() {
   useEffect(() => { void load(); }, [load]);
 
   const scheduleDelete = (item: TodoItem) => {
+    setDeleteTarget(null);
     if (pendingDeletion) return;
     setPendingDeletion(item); setOperationMessage("已排定刪除，5 秒內可復原");
     deleteTimer.current = setTimeout(() => {
@@ -78,9 +80,10 @@ export default function TodoScreen() {
     {!loading && !sorted.length ? <Text style={styles.empty}>目前沒有待辦事項</Text> : null}
     {sorted.map((item) => <View key={item.id} style={styles.card}>
       <View style={styles.cardHeading}><Text style={styles.cardTitle}>{item.content}</Text><Text style={styles.meta}>{formatDateRange(item.remind_start_date, item.remind_end_date)}</Text></View>
-      {item.can_edit ? <View style={styles.actions}><Pressable onPress={() => setEditing(item)} style={styles.edit}><Text style={styles.editText}>編輯</Text></Pressable><Pressable onPress={() => Alert.alert("確認刪除？", "確認後有 5 秒可以復原。", [{ text: "取消" }, { text: "刪除", style: "destructive", onPress: () => scheduleDelete(item) }])} style={styles.delete}><Text style={styles.deleteText}>刪除</Text></Pressable></View> : <Text style={styles.readOnly}>由其他家人建立，僅能查看。</Text>}
+      {item.can_edit ? <View style={styles.actions}><Pressable onPress={() => setEditing(item)} style={styles.edit}><Text style={styles.editText}>編輯</Text></Pressable><Pressable onPress={() => setDeleteTarget(item)} style={styles.delete}><Text style={styles.deleteText}>刪除</Text></Pressable></View> : <Text style={styles.readOnly}>由其他家人建立，僅能查看。</Text>}
     </View>)}
     {editing !== undefined ? <TodoModal initial={editing} onClose={() => setEditing(undefined)} onSaved={async () => { setEditing(undefined); setOperationMessage(editing ? "待辦已更新" : "待辦已儲存"); await load(); }} request={authorizedRequest} /> : null}
+    <Modal animationType="fade" onRequestClose={() => setDeleteTarget(null)} transparent visible={Boolean(deleteTarget)}><View style={styles.deleteBackdrop}><View style={styles.deleteCard}><Text style={styles.deleteTitle}>確認刪除？</Text><Text style={styles.deleteBody}>確認後有 5 秒可以復原。</Text><View style={styles.actions}><Pressable onPress={() => setDeleteTarget(null)} style={styles.edit}><Text style={styles.editText}>取消</Text></Pressable><Pressable onPress={() => deleteTarget && scheduleDelete(deleteTarget)} style={styles.delete}><Text style={styles.deleteText}>刪除</Text></Pressable></View></View></View></Modal>
     {pendingDeletion ? <View accessibilityLiveRegion="polite" style={styles.undoBar}><Text style={styles.undoMessage}>已排定刪除「{pendingDeletion.content}」</Text><Pressable onPress={undoDelete}><Text style={styles.undoAction}>復原</Text></Pressable></View> : null}
     {operationMessage && !pendingDeletion ? <View accessibilityLiveRegion="polite" style={styles.undoBar}><Text style={styles.undoMessage}>{operationMessage}</Text></View> : null}
   </AppShell>;
@@ -136,6 +139,7 @@ const createStyles = (colors: ReturnType<typeof useAppPreferences>["colors"], th
   modalRoot: { alignItems: "center", flex: 1, justifyContent: "center", padding: 18 }, backdrop: { backgroundColor: "rgba(18,35,32,.5)", bottom: 0, left: 0, position: "absolute", right: 0, top: 0 }, modalCard: { backgroundColor: colors.surface, borderRadius: 20, maxHeight: "94%", maxWidth: 480, width: "100%" }, close: { padding: 12, position: "absolute", right: 4, top: 4, zIndex: 2 }, modalContent: { gap: 13, padding: 22, paddingTop: 45 }, modalTitle: { color: colors.text, fontSize: 22, fontWeight: "900" },
   field: { gap: 7 }, label: { color: colors.text, fontSize: 14, fontWeight: "800" }, input: { backgroundColor: theme === "dark" ? "#22332F" : colors.white, borderColor: colors.border, borderRadius: 11, borderWidth: 1, color: colors.text, padding: 12 }, multiline: { minHeight: 90, textAlignVertical: "top" }, iosInputFontSize: { fontSize: 16 },
   cancel: { borderColor: colors.border, borderRadius: 10, borderWidth: 1, paddingHorizontal: 18, paddingVertical: 10 }, cancelText: { color: colors.textMuted, fontWeight: "800" }, save: { backgroundColor: colors.primary, borderRadius: 10, paddingHorizontal: 20, paddingVertical: 10 }, saveText: { color: theme === "dark" ? colors.background : colors.white, fontWeight: "900" },
+  deleteBackdrop: { alignItems: "center", backgroundColor: "rgba(18,35,32,.5)", flex: 1, justifyContent: "center", padding: 20 }, deleteCard: { backgroundColor: colors.surface, borderRadius: 20, gap: 14, maxWidth: 420, padding: 24, width: "100%" }, deleteTitle: { color: colors.text, fontSize: 20, fontWeight: "900" }, deleteBody: { color: colors.text, fontSize: 13, lineHeight: 20 },
   undoBar: { alignItems: "center", alignSelf: "center", backgroundColor: colors.primaryDark, borderRadius: 20, bottom: 22, flexDirection: "row", gap: 14, paddingHorizontal: 18, paddingVertical: 10, position: "absolute", zIndex: 20 },
   undoMessage: { color: colors.white, fontWeight: "800" },
   undoAction: { color: "#FFD18A", fontWeight: "900", textDecorationLine: "underline" },

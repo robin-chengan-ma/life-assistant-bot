@@ -1365,3 +1365,67 @@ bug第三次發生——既有的 `FakeDatabase` 只用 marker 字串比對回�
 **後果**：新增 `src/bot/national_holidays.py`、`tests/bot/test_national_holidays.py`（9 項測試，涵蓋日期計算、提前/當天推播、去重、農曆節日比對）；`main.py` 新增排程註冊。不需要新 migration（沿用既有 `important_notifications_log` 表，無 CHECK 約束限制 key 格式）。`python3 -m pytest -q` 510 passed；`ruff check` 乾淨。已 commit（詳見 PROGRESS.md）。
 
 **2026-11-26 再追加**：Robin 指出「行事曆如果有標注的節日，理論上都會推播吧」，發現上面的實作其實寫死只比對「中秋」「端午」兩個關鍵字，並沒有真的涵蓋政府行事曆上所有有名稱的國定假日（春節、清明、國慶日、228 等都不會推播）。確認 Robin 要「行事曆上標注有名稱的國定假日都推播」後，把 `check_and_push_lunar_holidays()` 改寫成 `check_and_push_calendar_holidays()`：不再寫死關鍵字清單，改成掃描當天行事曆資料，只要 `is_holiday=True`、`holiday_category` 不是單純的「星期六、星期日」（`taiwan_calendar.py` 為了行事曆顯示方便合成的週末資料，不是政府行事曆本身標注的假日）、且 `name` 有值，就當天推播一次；去重 key 改用 `holiday_calendar_{日期}`（日期本身已唯一，不需要額外帶節日名稱）。父親節／母親節仍維持固定日期＋提前 7 天的獨立邏輯不受影響。新增 2 項測試（任意命名國定假日都會推播、純週末不推播），`tests/bot/test_national_holidays.py` 共 11 項測試全過；`python3 -m pytest -q` 512 passed；`ruff check` 乾淨。
+
+## 2026-11-26（再次追加）首頁改行事曆、修復刪除按鈕失效、生日推播對象可選
+
+**狀態**：accepted
+
+**背景**：Robin 一次提出三件事：(1) 首頁「重要通知」卡片希望換成行事曆，比照很久以前的舊版樣式——
+週休二日／國定假日數字亮紅色、平日黑色，且月曆每個日期下方要能顯示當天的待辦事項／生日／國定假日
+名稱小字提示，並支援左右翻頁看上個月/下個月；(2) 發現 Mobile App 好幾個模組的「刪除」按鈕點了沒
+反應，只有「編輯」正常；(3) 生日設定要能選擇推播對象：僅限自己／自行選擇特定人／所有人都推播
+（Robin 確認「自行選擇」模式完全照勾選名單走，建立者沒勾自己就不會收到）。
+
+**排查**：
+1. 刪除按鈕根因：`mobile/app/todo.tsx`、`mobile/app/important-days.tsx` 的刪除確認用的是 React
+   Native 原生 `Alert.alert(標題, 內容, [按鈕陣列])`，這個多按鈕互動在 Expo Web（本專案實際部署的
+   Web 版）上不可靠，「確認後才真正刪除」這個 callback 常常不會被觸發；`mobile/app/analytics/
+   [module].tsx` 本來就沒用 `Alert.alert`，而是自訂 `Modal` 彈窗確認，在 Web 上沒有這個問題——這正
+   是 Robin 觀察到「記帳/體態分析頁沒事，待辦/生日設定有事」的差異來源。全專案搜尋確認只有這兩個
+   檔案用了 `Alert.alert` 做刪除確認。
+2. 首頁行事曆所需資料全部已存在，不需要新增聚合用的後端 API：`GET /api/app/calendar?year=&month=`
+   （國定假日／週末標記）、`GET /api/app/todos`（含 `remind_start_date`／`remind_end_date`）、
+   `GET /api/app/important-days`（含 `birth_month`／`birth_day`）。
+3. 生日推播對象原本固定只推給建立者本人（`row["user_id"]`），需要依設定分流到不同收件人清單。
+
+**決策**：
+1. `mobile/app/todo.tsx`、`mobile/app/important-days.tsx` 的刪除確認改成跟 `analytics/[module].tsx`
+   相同的自訂 `Modal` 確認彈窗（新增 `deleteTarget` state 取代原本直接呼叫 `Alert.alert`），刪除流程
+   本身（5 秒可復原、`pendingDeletion`/`undoDelete`）完全不動，只換掉觸發確認的 UI。
+2. 新增 `mobile/src/components/HomeCalendar.tsx`：用既有依賴 `react-native-calendars`（沿用
+   `TodoCalendarPicker.tsx` 的 `dayComponent` 自訂寫法），月曆上方用其內建的月份切換箭頭支援左右
+   翻頁；每個日期下方小字疊加顯示國定假日名稱、生日（依 `birth_month`/`birth_day` 比對，不比較
+   年份）、待辦事項內容（依 `remind_start_date`～`remind_end_date` 區間比對，多筆只顯示第一筆＋
+   「等 N 筆」）；待辦與生日清單資料量小，一次整包抓取後在前端依月份／日期篩選，不要求後端多做
+   按月篩選的參數。`mobile/app/home.tsx` 移除「重要通知」卡片，改放 `<HomeCalendar />`。後端
+   `src/services/app_analytics.py::dashboard()` 回傳的 `important_days` 欄位（`_important_day_
+   summaries()`）已無任何呼叫端，一併刪除；`notifications` 欄位（生日快樂訊息，`_notifications_
+   for_user()`）是不同的東西，保留不動。
+3. 新增 migration `0107_add_audience_to_important_days.sql`：`important_days` 新增
+   `audience_mode TEXT NOT NULL DEFAULT 'self' CHECK (audience_mode IN ('self','selected',
+   'everyone'))`、`audience_user_ids INTEGER[] NOT NULL DEFAULT '{}'`，預設值等同目前行為（只推給
+   建立者本人），不影響既有資料。`src/services/app_important_days.py` 新增 `_parse_audience()` 驗證
+   （`selected` 模式至少一筆、且每個 id 必須是真實存在的 `users.id`）。`src/bot/important_days.py::
+   check_and_push_birthdays()` 新增 `_resolve_recipient_telegram_ids()`，依 `audience_mode` 決定
+   收件人：`self` 維持只推給建立者；`everyone` 推給全體已綁定 Telegram 的使用者（比照
+   `national_holidays.py::_broadcast()` 的寫法）；`selected` 只推給 `audience_user_ids` 列出的
+   `users.id`（完全照勾選名單，不自動包含建立者本人）。`mobile/app/important-days.tsx` 的
+   `BirthdayModal` 新增三選一「推播對象」區塊，選「自行選擇」時展開 `family_users()` 清單
+   （`getBirthdays()` 原本就有回傳 `users` 欄位，只是前端之前沒讀取，這次一併補上型別與讀取）。
+
+**理由**：首頁改行事曆是 Robin 回想起舊版體驗明確要求的功能；刪除按鈕是跨模組一致的既有 bug，
+修法已有現成可行範例（`[module].tsx`），直接套用最省事也最一致；生日推播對象是 Robin 先前就提過
+但一直沒排進來的需求，這次一次處理。三者互不衝突、可以同一批次實作完成。
+
+**後果**：新增 `mobile/src/components/HomeCalendar.tsx`、`src/migrations/0107_add_audience_to_
+important_days.sql`；異動 `mobile/app/{home,todo,important-days}.tsx`、
+`mobile/src/services/analyticsApi.ts`、`src/services/app_analytics.py`、
+`src/services/app_important_days.py`、`src/bot/important_days.py`、`tests/bot/conftest.py`（補
+`FakeCloudSQLClient` 的 where 條件支援）。測試新增：`tests/bot/test_important_days.py` 3 項（三種
+推播對象模式）、`tests/services/test_app_important_days.py` 6 項（audience 驗證）；
+`tests/services/test_app_analytics.py` 移除 `important_days` 欄位相關斷言。全專案
+`python3 -m pytest -q` 521 passed；`ruff check .` 乾淨；Mobile `npx tsc --noEmit` 零錯誤。文件同步：
+`docs/specs/SPEC.md`（待辦事項／生日設定章節更新，新增「國定假日推播」章節補上先前漏記的
+`national_holidays.py` 規格）、`docs/reference/db_schema.md`（`important_days` 新增 `0107` 欄位）、
+`docs/reference/api_schema.md`（補上先前漏記的待辦與行事曆端點、更新 dashboard／important-days
+說明）、`docs/reference/mobile-app-ux.md`（首頁說明改為行事曆）。尚未 commit，待 Robin 確認。

@@ -130,3 +130,45 @@ def test_create_rejects_empty_remind_offsets(service):
 def test_create_rejects_disallowed_remind_offset_value(service):
     with pytest.raises(ImportantDayValidationError):
         service.create(1, {"name": "媽媽", "birth_month": 5, "birth_day": 20, "remind_offsets": [1]})
+
+
+def test_create_defaults_audience_mode_to_self(service):
+    service.create(1, {"name": "媽媽", "birth_month": 5, "birth_day": 20})
+    items = service.list_for_user(1)
+    assert items[0]["audience_mode"] == "self"
+    assert items[0]["audience_user_ids"] == []
+
+
+def test_create_accepts_everyone_audience_mode(service):
+    service.create(1, {"name": "媽媽", "birth_month": 5, "birth_day": 20, "audience_mode": "everyone"})
+    items = service.list_for_user(1)
+    assert items[0]["audience_mode"] == "everyone"
+    assert items[0]["audience_user_ids"] == []
+
+
+def test_create_accepts_selected_audience_mode_with_existing_user_ids(service):
+    service.create(
+        1,
+        {"name": "媽媽", "birth_month": 5, "birth_day": 20, "audience_mode": "selected", "audience_user_ids": [10, 1]},
+    )
+    items = service.list_for_user(1)
+    assert items[0]["audience_mode"] == "selected"
+    assert items[0]["audience_user_ids"] == [1, 10]
+
+
+def test_create_rejects_invalid_audience_mode(service):
+    with pytest.raises(ImportantDayValidationError):
+        service.create(1, {"name": "媽媽", "birth_month": 5, "birth_day": 20, "audience_mode": "nope"})
+
+
+def test_create_rejects_selected_audience_mode_without_user_ids(service):
+    with pytest.raises(ImportantDayValidationError):
+        service.create(1, {"name": "媽媽", "birth_month": 5, "birth_day": 20, "audience_mode": "selected"})
+
+
+def test_create_rejects_selected_audience_mode_with_nonexistent_user_id(service):
+    with pytest.raises(ImportantDayValidationError):
+        service.create(
+            1,
+            {"name": "媽媽", "birth_month": 5, "birth_day": 20, "audience_mode": "selected", "audience_user_ids": [999]},
+        )

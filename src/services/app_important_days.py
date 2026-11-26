@@ -6,6 +6,9 @@
 
 2026-11-26（生日多選提前提醒，見 migration 0105）：新增 `remind_offsets`（可複選「14／7／3／
 當天」天前推播），只允許 `{0,3,7,14}` 的非空子集合。
+
+2026-11-26（推播對象可選，見 migration 0107）：新增 `audience_mode`（self／selected／everyone）
+與 `audience_user_ids`（僅 selected 模式有意義，完全照勾選名單，不自動包含建立者本人）。
 """
 
 from __future__ import annotations
@@ -54,6 +57,7 @@ def _parse_day(value: Any) -> int:
 
 
 _ALLOWED_REMIND_OFFSETS = {0, 3, 7, 14}
+_ALLOWED_AUDIENCE_MODES = {"self", "selected", "everyone"}
 
 
 def _parse_remind_offsets(value: Any) -> list[int]:
@@ -67,6 +71,30 @@ def _parse_remind_offsets(value: Any) -> list[int]:
             raise ImportantDayValidationError("提前提醒天數只能是 0、3、7 或 14 天")
         offsets.add(item)
     return sorted(offsets, reverse=True)
+
+
+def _parse_audience(payload: dict[str, Any], db: ImportantDaysDatabase) -> tuple[str, list[int]]:
+    mode = payload.get("audience_mode", "self")
+    if mode is None:
+        mode = "self"
+    if mode not in _ALLOWED_AUDIENCE_MODES:
+        raise ImportantDayValidationError("推播對象設定不正確")
+    if mode != "selected":
+        return mode, []
+    raw_ids = payload.get("audience_user_ids")
+    if not isinstance(raw_ids, list) or not raw_ids:
+        raise ImportantDayValidationError("請至少選擇一位要推播的對象")
+    user_ids = []
+    for item in raw_ids:
+        if isinstance(item, bool) or not isinstance(item, int):
+            raise ImportantDayValidationError("推播對象設定不正確")
+        user_ids.append(item)
+    existing_rows = db.select("users", columns=("id",))
+    existing_ids = {row["id"] for row in existing_rows}
+    unique_ids = sorted(set(user_ids))
+    if not set(unique_ids).issubset(existing_ids):
+        raise ImportantDayValidationError("推播對象包含不存在的使用者")
+    return mode, unique_ids
 
 
 class AppImportantDayService:
@@ -122,11 +150,14 @@ class AppImportantDayService:
         return row
 
     def _validate(self, payload: dict[str, Any]) -> dict[str, Any]:
+        audience_mode, audience_user_ids = _parse_audience(payload, self._db)
         return {
             "name": _parse_name(payload.get("name")),
             "birth_month": _parse_month(payload.get("birth_month")),
             "birth_day": _parse_day(payload.get("birth_day")),
             "remind_offsets": _parse_remind_offsets(payload.get("remind_offsets")),
+            "audience_mode": audience_mode,
+            "audience_user_ids": audience_user_ids,
         }
 
     @staticmethod

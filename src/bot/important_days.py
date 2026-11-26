@@ -8,7 +8,8 @@ App 做，這個模組在 Telegram 端只剩下：
    避免兩邊各自重複一份幾乎一樣的 Telegram 推播程式碼。
 
 **資料表欄位假設（給遷移 agent 對照，刻意只假設下列欄位，不假設其餘任何欄位還在，例如
-`recurrence_type`／`audience_mode`／`trip_id`／`goal_id` 等舊欄位本模組完全不讀不寫）：**
+`recurrence_type`／`trip_id`／`goal_id` 等舊欄位本模組完全不讀不寫；`audience_mode`／
+`audience_user_ids` 見下方 2026-11-26 段落，本模組有讀）：**
     important_days(
         id          BIGSERIAL PRIMARY KEY,
         user_id     BIGINT NOT NULL,   -- 建立者（owner），對應 users.id
@@ -27,6 +28,13 @@ App 做，這個模組在 Telegram 端只剩下：
 表，`notification_key` 改成 `f"birthday_important_day_{important_day_id}_offset_{offset}"`
 （`UNIQUE (notification_key, year)`，`year` 取實際生日當年，確保每個 offset 每年各自只推播
 一次，彼此獨立去重，不會互相卡住）。
+
+2026-11-26（推播對象可選，見 migration 0107）：原本固定只推給建立者本人，現在依
+`audience_mode` 決定收件人：`self` 維持只推給建立者；`everyone` 推給全體已綁定 Telegram 的
+使用者（比照 `src/bot/national_holidays.py::_broadcast()` 的寫法）；`selected` 只推給
+`audience_user_ids` 列出的那些 `users.id`（完全照勾選名單，建立者沒勾自己就不會收到）。
+不論哪種模式，同一個 offset 同一年只會去重判斷一次（`notification_key` 不分對象），因為
+一次檢查就是對當時決定好的收件人名單一次推完。
 """
 
 from __future__ import annotations
@@ -76,6 +84,26 @@ def _format_reminder_text(name: str, offset: int) -> str:
     return f"🎂 {offset} 天後是「{name}」的生日，記得準備禮物！"
 
 
+def _resolve_recipient_telegram_ids(db: CloudSQLClient, row: dict) -> list[int]:
+    """依 `audience_mode` 決定這筆生日這次要推播給誰，回傳已綁定 Telegram 的 telegram_user_id 清單。"""
+    mode = row.get("audience_mode") or "self"
+    if mode == "everyone":
+        users = db.select("users", where="telegram_user_id IS NOT NULL")
+    elif mode == "selected":
+        user_ids = row.get("audience_user_ids") or []
+        if not user_ids:
+            return []
+        placeholders = ", ".join(["%s"] * len(user_ids))
+        users = db.select(
+            "users",
+            where=f"id IN ({placeholders}) AND telegram_user_id IS NOT NULL",
+            params=tuple(user_ids),
+        )
+    else:
+        users = db.select("users", where="id = %s AND telegram_user_id IS NOT NULL", params=(row["user_id"],))
+    return [user["telegram_user_id"] for user in users]
+
+
 def check_and_push_birthdays(db: CloudSQLClient, telegram_client, now: datetime | None = None) -> None:
     """每日排程：針對每一筆生日設定、針對它設定的每一個 `remind_offsets`，分別計算「今年（或
     跨年到明年）生日 - offset 天」是否等於今天，是的話推播給建立者本人（2026-11-26 生日多選
@@ -91,7 +119,6 @@ def check_and_push_birthdays(db: CloudSQLClient, telegram_client, now: datetime 
     rows = db.select("important_days")
     for row in rows:
         offsets = row.get("remind_offsets") or [0]
-        user = None
         for offset in offsets:
             if offset not in _ALLOWED_OFFSETS:
                 continue
@@ -112,12 +139,8 @@ def check_and_push_birthdays(db: CloudSQLClient, telegram_client, now: datetime 
                 if already_sent:
                     continue
 
-                if user is None:
-                    user = db.select("users", where="id = %s", params=(row["user_id"],), fetch_one=True) or {}
-                telegram_user_id = user.get("telegram_user_id")
-                if telegram_user_id is None:
-                    continue
-
                 text = _format_reminder_text(row["name"], offset)
-                todo.push_reminder(telegram_client, telegram_user_id, text)
+                recipients = _resolve_recipient_telegram_ids(db, row)
+                for telegram_user_id in recipients:
+                    todo.push_reminder(telegram_client, telegram_user_id, text)
                 db.insert("important_notifications_log", {"notification_key": notification_key, "year": year})

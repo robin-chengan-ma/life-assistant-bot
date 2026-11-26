@@ -340,7 +340,7 @@ CREATE INDEX idx_diet_logs_user_id ON diet_logs (user_id);
 
 | 資料表 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `important_days` | 已套用（`0103` 精簡、`0105` 多選提前提醒） | FR-53 | 生日設定；拿掉單次事件／浮動（農曆）日期／通知對象／備註／行程或目標連動等舊欄位 |
+| `important_days` | 已套用（`0103` 精簡、`0105` 多選提前提醒、`0107` 推播對象可選） | FR-53 | 生日設定；拿掉單次事件／浮動（農曆）日期／通知對象／備註／行程或目標連動等舊欄位 |
 
 <details>
 <summary>SQL 與設計理由</summary>
@@ -353,6 +353,9 @@ CREATE TABLE important_days (
     birth_month SMALLINT NOT NULL CHECK (birth_month BETWEEN 1 AND 12),
     birth_day SMALLINT NOT NULL CHECK (birth_day BETWEEN 1 AND 31),
     remind_offsets INTEGER[] NOT NULL DEFAULT '{0}',                 -- 0105 追加
+    audience_mode TEXT NOT NULL DEFAULT 'self'                       -- 0107 追加
+        CHECK (audience_mode IN ('self', 'selected', 'everyone')),
+    audience_user_ids INTEGER[] NOT NULL DEFAULT '{}',               -- 0107 追加
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ```
@@ -362,11 +365,16 @@ CREATE TABLE important_days (
 改名 `name`，新增 `birth_month`／`birth_day`，其餘舊欄位全部移除；`important_day_occurrences`／
 `important_day_recipients` 兩張輔助表一併移除）、
 `0105_add_remind_offsets_to_important_days.sql`（2026-11-26，可複選提前幾天提醒：0／3／7／14，
-預設僅「當天」；詳見 `docs/ADR/discuss/robinson.md`）
+預設僅「當天」；詳見 `docs/ADR/discuss/robinson.md`）、
+`0107_add_audience_to_important_days.sql`（2026-11-26，推播對象：`self`／`selected`／`everyone`，
+預設 `self` 等同舊行為，詳見 `docs/ADR/discuss/robinson.md`）
 
 - `remind_offsets` 可複選，僅允許 `{0, 3, 7, 14}` 的非空子集合；`check_and_push_birthdays()`
   逐一走訪選定天數，各自用 `notification_key = birthday_important_day_{id}_offset_{offset}`
   去重，彼此互不影響（同一天同時命中多個 offset 會各推一次）
+- `audience_mode='selected'` 時 `audience_user_ids` 必須至少一筆、且每個 id 必須是真實存在的
+  `users.id`；其餘模式 `audience_user_ids` 固定留空陣列；`selected` 模式完全依照勾選名單推播，
+  建立者未勾選自己時不會收到
 
 - 既有資料轉換規則：只有舊 `recurrence_type = 'fixed_annual'`（國曆固定每年重複）的既有資料視為
   生日予以保留、`birth_month`／`birth_day` 直接取自舊 `event_month`／`event_day`；`flexible_annual`

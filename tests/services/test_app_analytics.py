@@ -274,6 +274,8 @@ def test_dashboard_returns_summary_and_role_specific_sent_notifications():
     # `important_days`（透過 `check_and_push_birthdays()` 寫入的
     # `birthday_important_day_{id}_offset_{offset}` key），且只有 offset == 0（當天）才會出現
     # 在首頁，見 `_notifications_for_user()` docstring。
+    # 2026-11-26（首頁改行事曆）：`important_days` 回傳欄位已移除（首頁改用月曆呈現，見
+    # mobile/src/components/HomeCalendar.tsx），這裡只驗證 `notifications`（生日快樂訊息）。
     db = FakeDatabase(
         query_rows={"app_analytics:dashboard": [{"todo_count": 2, "expense_today": 300}]},
         select_rows={
@@ -291,7 +293,7 @@ def test_dashboard_returns_summary_and_role_specific_sent_notifications():
     assert result["summary"]["todo_count"] == 2
     assert result["date"] == "2026-08-08"
     assert any("生日快樂" in message for message in result["notifications"])
-    assert "今天：我" in result["important_days"]
+    assert "important_days" not in result
 
 
 def test_dashboard_sql_does_not_reference_dropped_todo_columns():
@@ -310,18 +312,3 @@ def test_dashboard_sql_does_not_reference_dropped_todo_columns():
     assert "remind_at" not in dashboard_query
     assert "remind_start_date" in dashboard_query
     assert "remind_end_date" in dashboard_query
-
-
-def test_dashboard_important_days_only_include_current_sunday_to_saturday():
-    db = FakeDatabase(
-        select_rows={
-            "important_days": [
-                {"id": 1, "user_id": 1, "name": "我", "birth_month": 8, "birth_day": 8},
-            ],
-        },
-    )
-
-    result = AppAnalyticsService(db).dashboard(user(is_owner=True), today=date(2026, 8, 5))
-
-    assert "3 天後：我" in result["important_days"]
-    assert all(message.startswith(("今天：", "3 天後：", "當周：")) for message in result["important_days"])

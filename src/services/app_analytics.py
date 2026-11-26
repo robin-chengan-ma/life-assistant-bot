@@ -4,13 +4,12 @@ from __future__ import annotations
 
 from calendar import monthrange
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
 from src.services.app_auth import AuthenticatedUser
-from src.services.app_important_days import AppImportantDayService
 
 _TAIWAN_TZ = ZoneInfo("Asia/Taipei")
 
@@ -200,52 +199,8 @@ class AppAnalyticsService:
             "date": target_date.isoformat(),
             "navigation": navigation,
             "notifications": self._notifications_for_user(user, target_date),
-            "important_days": self._important_day_summaries(user, target_date),
             "summary": summary,
         }
-
-    @staticmethod
-    def _next_occurrence(month: int, day: int, target_date: date) -> date:
-        try:
-            event_date = date(target_date.year, month, day)
-        except ValueError:
-            event_date = date(target_date.year, 2, 28)
-        if event_date < target_date:
-            try:
-                event_date = date(target_date.year + 1, month, day)
-            except ValueError:
-                event_date = date(target_date.year + 1, 2, 28)
-        return event_date
-
-    def _important_day_summaries(self, user: AuthenticatedUser, target_date: date) -> list[str]:
-        """回傳首頁使用的精簡重要日子列表（2026-11 精簡後只剩生日設定），不沿用 Telegram
-        推播長文案。
-
-        2026-11-26（ADR 再修正）：移除對已死欄位 `users.birthday`（migration 0028，FR-53 舊
-        設計，早已沒有任何寫入路徑）的額外查詢——原本這段查詢會把「所有人」的生日混進每個人的
-        首頁清單，造成隱私外洩；`AppImportantDayService(...).list_for_user()` 本身就已經正確
-        用 `user_id` 做權限隔離，只回傳自己建立的生日，因此只保留這一段即可。
-        """
-        dated: list[tuple[date, str]] = []
-        for item in AppImportantDayService(self._db).list_for_user(user.database_id):
-            event_date = self._next_occurrence(item["birth_month"], item["birth_day"], target_date)
-            dated.append((event_date, item["name"]))
-
-        messages: list[str] = []
-        seen: set[tuple[date | None, str]] = set()
-        week_start = target_date - timedelta(days=(target_date.weekday() + 1) % 7)
-        week_end = week_start + timedelta(days=6)
-        for event_date, title in sorted(dated, key=lambda item: (item[0], item[1])):
-            if not week_start <= event_date <= week_end:
-                continue
-            key = (event_date, title)
-            if key in seen:
-                continue
-            seen.add(key)
-            days = (event_date - target_date).days
-            prefix = "今天" if days == 0 else "3 天後" if days == 3 else "當周"
-            messages.append(f"{prefix}：{title}")
-        return messages
 
     def _notifications_for_user(self, user: AuthenticatedUser, target_date: date) -> list[str]:
         """2026-11-26（ADR 再修正）：不再查詢已死欄位 `users.birthday`，改用

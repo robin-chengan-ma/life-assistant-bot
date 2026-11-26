@@ -12,7 +12,6 @@ export type DashboardResponse = {
   date: string;
   navigation: NavigationMap;
   notifications: string[];
-  important_days: string[];
   summary: {
     todo_count?: number;
     expense_today?: number;
@@ -56,6 +55,9 @@ export type CalendarDay = {
 
 // 生日設定：僅支援每年循環的生日提醒（姓名＋月/日）。
 // 2026-11-26：remind_offsets 可複選「14／7／3／當天」天前推播。
+// 2026-11-26：audience_mode／audience_user_ids 決定推播對象（僅限自己／自行選擇／所有人）。
+export type BirthdayAudienceMode = "self" | "selected" | "everyone";
+
 export type Birthday = {
   id: number;
   owner_user_id: number;
@@ -63,7 +65,15 @@ export type Birthday = {
   birth_month: number;
   birth_day: number;
   remind_offsets: number[];
+  audience_mode: BirthdayAudienceMode;
+  audience_user_ids: number[];
   can_edit: boolean;
+};
+
+export type FamilyUser = {
+  id: number;
+  role: string;
+  user_id: string;
 };
 
 export type FinanceAnalytics = {
@@ -244,15 +254,24 @@ export function deleteTodo(request: AuthRequest, id: number): Promise<{ message:
 
 // 生日設定：僅支援每年循環的生日（姓名＋月/日）。沿用既有 important-days 端點，
 // 但 payload 已簡化為只有 name/birth_month/birth_day。
-export function getBirthdays(request: AuthRequest): Promise<{ items: Birthday[] }> {
+export function getBirthdays(request: AuthRequest): Promise<{ items: Birthday[]; users: FamilyUser[] }> {
   return request("/api/app/important-days");
 }
 
-export function createBirthday(request: AuthRequest, payload: { name: string; birth_month: number; birth_day: number; remind_offsets: number[] }): Promise<{ id: number; message: string }> {
+export type BirthdayPayload = {
+  name: string;
+  birth_month: number;
+  birth_day: number;
+  remind_offsets: number[];
+  audience_mode: BirthdayAudienceMode;
+  audience_user_ids: number[];
+};
+
+export function createBirthday(request: AuthRequest, payload: BirthdayPayload): Promise<{ id: number; message: string }> {
   return request("/api/app/important-days", { method: "POST", body: JSON.stringify(payload) });
 }
 
-export function updateBirthday(request: AuthRequest, id: number, payload: { name: string; birth_month: number; birth_day: number; remind_offsets: number[] }): Promise<{ id: number; message: string }> {
+export function updateBirthday(request: AuthRequest, id: number, payload: BirthdayPayload): Promise<{ id: number; message: string }> {
   return request(`/api/app/important-days/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
 }
 

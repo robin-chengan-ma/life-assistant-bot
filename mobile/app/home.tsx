@@ -8,6 +8,7 @@ import { AppText as Text } from "@/components/AppText";
 import { AppView as View } from "@/components/AppView";
 import { AppShell } from "@/components/AppShell";
 import { defaultDateRange } from "@/components/DateRangeFilter";
+import { HomeCalendar } from "@/components/HomeCalendar";
 import { RecordModal } from "@/components/RecordModal";
 import { SensitiveValue } from "@/components/SensitiveValue";
 import { useAppPreferences } from "@/context/AppPreferencesContext";
@@ -71,11 +72,7 @@ export default function HomeScreen() {
       {isLoading && !data ? <ActivityIndicator color={colors.primary} size="large" /> : null}
       {error ? <Pressable onPress={() => void reload()} style={styles.errorCard}><Text style={styles.errorText}>{error}</Text><Text style={styles.retry}>點此重新載入</Text></Pressable> : null}
 
-      <Pressable onPress={() => router.push("/important-days")} style={styles.notificationCard}>
-        <MaterialCommunityIcons color={colors.accent} name="bell-ring-outline" size={24} />
-        <View style={styles.flex}><Text style={styles.cardTitle}>重要通知</Text>{data?.important_days?.length ? data.important_days.map((message, index) => <Text key={`${message}-${index}`} style={styles.cardText}>{message}</Text>) : <Text style={styles.cardText}>目前沒有重要日子</Text>}</View>
-        <MaterialCommunityIcons color={colors.textMuted} name="chevron-right" size={22} />
-      </Pressable>
+      <HomeCalendar />
 
       <View style={styles.cardGrid}>
         <Pressable onPress={() => router.push("/todo")} style={styles.summaryCard}><MaterialCommunityIcons color="#3B82F6" name="calendar-check-outline" size={27} /><View style={styles.flex}><View style={styles.cardTitleRow}><Text style={styles.cardTitle}>待辦事項</Text><Pressable onPress={(event) => { event.stopPropagation(); router.push("/todo"); }} style={styles.measureButton}><MaterialCommunityIcons color={theme === "dark" ? colors.background : colors.white} name="calendar-plus" size={17} /><Text style={styles.measureButtonText}>新增待辦</Text></Pressable></View><Text style={styles.cardText}>今日有 {summary?.todo_count ?? 0} 件待辦事項</Text></View></Pressable>
@@ -91,7 +88,6 @@ export default function HomeScreen() {
 }
 
 const createStyles = (colors: ReturnType<typeof useAppPreferences>["colors"], theme: ReturnType<typeof useAppPreferences>["theme"]) => StyleSheet.create({
-  notificationCard: { alignItems: "flex-start", backgroundColor: theme === "dark" ? "#2B2922" : "#FFF8ED", borderColor: theme === "dark" ? "#765D3E" : "#F3D7B4", borderRadius: 18, borderWidth: 1, flexDirection: "row", gap: 14, padding: 18 },
   cardGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
   summaryCard: { alignItems: "flex-start", backgroundColor: colors.surface, borderColor: colors.border, borderRadius: 17, borderWidth: 1, flexDirection: "row", gap: 13, minWidth: 260, padding: 17, flexGrow: 1, flexBasis: "46%" },
   disabledCard: { backgroundColor: "#E8EBEA", opacity: 0.8 },

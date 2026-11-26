@@ -129,3 +129,60 @@ def test_check_and_push_birthdays_defaults_to_day_of_offset_when_unset(fake_db):
         fake_db, telegram_client, now=datetime(2026, 3, 20, 9, 0, tzinfo=_TAIWAN_TZ)
     )
     telegram_client.send_text.assert_called_once()
+
+
+def test_check_and_push_birthdays_self_mode_only_sends_to_owner(fake_db):
+    owner_id = fake_db.insert("users", {"telegram_user_id": 111, "role": "Robin", "is_owner": True})
+    fake_db.insert("users", {"telegram_user_id": 222, "role": "弟弟", "is_owner": False})
+    fake_db.insert(
+        "important_days",
+        {"user_id": owner_id, "name": "媽媽", "birth_month": 3, "birth_day": 20, "audience_mode": "self"},
+    )
+    telegram_client = Mock()
+
+    important_days.check_and_push_birthdays(fake_db, telegram_client, now=datetime(2026, 3, 20, 9, 0, tzinfo=_TAIWAN_TZ))
+
+    telegram_client.send_text.assert_called_once()
+    _, kwargs = telegram_client.send_text.call_args
+    assert kwargs["chat_id"] == 111
+
+
+def test_check_and_push_birthdays_everyone_mode_sends_to_all_bound_users(fake_db):
+    owner_id = fake_db.insert("users", {"telegram_user_id": 111, "role": "Robin", "is_owner": True})
+    fake_db.insert("users", {"telegram_user_id": 222, "role": "弟弟", "is_owner": False})
+    fake_db.insert("users", {"telegram_user_id": None, "role": "待綁定", "is_owner": False})
+    fake_db.insert(
+        "important_days",
+        {"user_id": owner_id, "name": "媽媽", "birth_month": 3, "birth_day": 20, "audience_mode": "everyone"},
+    )
+    telegram_client = Mock()
+
+    important_days.check_and_push_birthdays(fake_db, telegram_client, now=datetime(2026, 3, 20, 9, 0, tzinfo=_TAIWAN_TZ))
+
+    assert telegram_client.send_text.call_count == 2
+    chat_ids = {call.kwargs["chat_id"] for call in telegram_client.send_text.call_args_list}
+    assert chat_ids == {111, 222}
+
+
+def test_check_and_push_birthdays_selected_mode_sends_only_to_picked_users_not_owner(fake_db):
+    owner_id = fake_db.insert("users", {"telegram_user_id": 111, "role": "Robin", "is_owner": True})
+    picked_id = fake_db.insert("users", {"telegram_user_id": 222, "role": "弟弟", "is_owner": False})
+    fake_db.insert("users", {"telegram_user_id": 333, "role": "弟媳", "is_owner": False})
+    fake_db.insert(
+        "important_days",
+        {
+            "user_id": owner_id,
+            "name": "媽媽",
+            "birth_month": 3,
+            "birth_day": 20,
+            "audience_mode": "selected",
+            "audience_user_ids": [picked_id],
+        },
+    )
+    telegram_client = Mock()
+
+    important_days.check_and_push_birthdays(fake_db, telegram_client, now=datetime(2026, 3, 20, 9, 0, tzinfo=_TAIWAN_TZ))
+
+    telegram_client.send_text.assert_called_once()
+    _, kwargs = telegram_client.send_text.call_args
+    assert kwargs["chat_id"] == 222

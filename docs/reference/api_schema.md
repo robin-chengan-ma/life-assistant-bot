@@ -217,7 +217,7 @@ payload、帳號、密碼或 Token。
 
 | 項目 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `GET /api/app/dashboard` | 已實作（`dashboard()`） | FR-64 | 首頁摘要卡片資料，複用 `AppAnalyticsService.dashboard()` |
+| `GET /api/app/dashboard` | 已實作（`dashboard()`） | FR-64 | 首頁摘要卡片資料，複用 `AppAnalyticsService.dashboard()`；2026-11-26 移除回傳欄位 `important_days`（首頁改用行事曆呈現，不再需要文字清單），`notifications`（生日快樂訊息等當天通知）不受影響 |
 | `GET /api/app/analytics/<module_key>` | 已實作（`analytics()`） | FR-64／FR-64b～FR-64d | 唯讀分析頁面資料，`module_key` 對應 todos/body/finance/mood/jobs/exams/skills；todos 查詢 1～7 天且額外支援月曆月份，其餘一般分析查詢 1～30 天，skills 維持單日。一般生活模組不讀舊功能開關；Owner 專屬 skills/jobs/exams 關閉回 409，越權存取回 403。jobs 回傳應徵漏斗、契合度分布、含公司／地區／來源／網址的推薦職缺與應徵歷程；exams 回傳啟用證照名冊、題庫可用狀態、標準化目標進度、區間練習與正式成績 |
 | `PATCH /api/app/system-errors/<id>/resolution` | 已移除 | FR-19j | Mobile App 只作為事故來源；Owner 統一從 Telegram 系統錯誤管理結案 |
 | `POST /api/app/body/weight-logs` | 已實作（`create_weight_log()`） | FR-64a | App 端手動輸入體重（取代已移除的藍牙體重計整合方案），40～150 公斤範圍檢查，複用 `src/bot/body.py::create_weight_log()` |
@@ -302,6 +302,16 @@ payload、帳號、密碼或 Token。
 
 > FR-75 Nominatim 呼叫由後端代理，需設定 `NOMINATIM_USER_AGENT`；未設定時回 503，不會以匿名預設值呼叫公開服務。
 
+### 待辦事項（`src/api/app_todo.py`，url_prefix `/api/app/todos`）與行事曆（`src/api/app_calendar.py`）
+
+| 項目 | 狀態 | 對應 FR | 說明 |
+| --- | --- | --- | --- |
+| `GET /api/app/todos` | 已實作（`list_todos()`） | FR-31 | 查詢本人可見的待辦清單，欄位為 `content`／`remind_start_date`／`remind_end_date` |
+| `POST /api/app/todos` | 已實作（`create_todo()`） | FR-31 | 新增一筆待辦，`remind_end_date` 需 ≥ `remind_start_date` |
+| `PATCH /api/app/todos/<id>` | 已實作（`update_todo()`） | FR-31 | 更新一筆待辦 |
+| `DELETE /api/app/todos/<id>` | 已實作（`delete_todo()`） | FR-31 | 刪除一筆待辦 |
+| `GET /api/app/calendar?year=&month=` | 已實作（`AppCalendarService`，包 `TaiwanCalendarService`） | FR-31c | 回傳該月每天的國定假日／補班標記（`is_holiday`／`name`／`holiday_category`／`description`），供 `TodoCalendarPicker.tsx`／`HomeCalendar.tsx` 顯示 |
+
 ### 重要日子設定（`src/api/app_important_days.py`，url_prefix `/api/app/important-days`）
 
 > App 端管理介面與資料結構已完成；Telegram 提醒由統一重要日子發送器處理，
@@ -309,10 +319,10 @@ payload、帳號、密碼或 Token。
 
 | 項目 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `GET /api/app/important-days` | 已實作（`list_important_days()`） | FR-72a／FR-74b | 查詢個人設定的重要日子清單，並附家人使用者名單供選擇對象；名單的 `user_id` 不存於 `users` 表，而是依 FR-65 由 `users.id` 動態格式化為 `user01`、`user10` |
-| `POST /api/app/important-days` | 已實作（`create_important_day()`） | FR-72a／FR-74b | 新增一筆重要日子設定 |
-| `PATCH /api/app/important-days/<id>` | 已實作（`update_important_day()`） | FR-72a／FR-74b | 更新一筆重要日子設定 |
-| `DELETE /api/app/important-days/<id>` | 已實作（`delete_important_day()`） | FR-72a／FR-74b | 刪除一筆重要日子設定 |
+| `GET /api/app/important-days` | 已實作（`list_important_days()`） | FR-53／FR-53f | 查詢個人設定的生日清單，並附家人使用者名單（`users`）供「自行選擇」推播對象時勾選；名單的 `user_id` 不存於 `users` 表，而是依 FR-65 由 `users.id` 動態格式化為 `user01`、`user10` |
+| `POST /api/app/important-days` | 已實作（`create_important_day()`） | FR-53 | 新增一筆生日設定，含 `remind_offsets`（複選提前天數）與 `audience_mode`／`audience_user_ids`（推播對象） |
+| `PATCH /api/app/important-days/<id>` | 已實作（`update_important_day()`） | FR-53 | 更新一筆生日設定 |
+| `DELETE /api/app/important-days/<id>` | 已實作（`delete_important_day()`） | FR-53 | 刪除一筆生日設定 |
 
 ## 未分類
 

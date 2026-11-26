@@ -151,6 +151,10 @@ class FakeCloudSQLClient:
             return row.get("id") == params[0] and row.get("is_used") is False
         if where == "id = %s":
             return row.get("id") == params[0]
+        if where == "id = %s AND telegram_user_id IS NOT NULL":
+            return row.get("id") == params[0] and row.get("telegram_user_id") is not None
+        if where and where.startswith("id IN (") and where.endswith(") AND telegram_user_id IS NOT NULL"):
+            return row.get("id") in params and row.get("telegram_user_id") is not None
         if where == "id = %s AND user_id = %s AND status = %s":
             return row.get("id") == params[0] and row.get("user_id") == params[1] and row.get("status") == params[2]
         if where == "user_id = %s":

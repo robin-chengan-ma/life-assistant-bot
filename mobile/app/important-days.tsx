@@ -1,7 +1,7 @@
 import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import { Redirect } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Alert, Modal, ScrollView, StyleSheet, TextInput } from "react-native";
+import { ActivityIndicator, Modal, ScrollView, StyleSheet, TextInput } from "react-native";
 
 import { AppPressable as Pressable } from "@/components/AppPressable";
 import { AppText as Text } from "@/components/AppText";
@@ -15,6 +15,8 @@ import {
   getBirthdays,
   updateBirthday,
   type Birthday,
+  type BirthdayAudienceMode,
+  type FamilyUser,
 } from "@/services/analyticsApi";
 
 // 生日設定：僅支援每年循環的生日提醒（姓名＋月/日），不含旅遊／目標等其他事件概念。
@@ -23,23 +25,26 @@ export default function BirthdaysScreen() {
   const { colors, theme } = useAppPreferences();
   const styles = createStyles(colors, theme);
   const [items, setItems] = useState<Birthday[]>([]);
+  const [familyUsers, setFamilyUsers] = useState<FamilyUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
   const [operationMessage, setOperationMessage] = useState<string | null>(null);
   const [editing, setEditing] = useState<Birthday | null | undefined>(undefined);
   const [pendingDeletion, setPendingDeletion] = useState<Birthday | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Birthday | null>(null);
   const deleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(async () => {
     if (status !== "authenticated") return;
     setLoading(true); setMessage(null);
-    try { const result = await getBirthdays(authorizedRequest); setItems(result.items); }
+    try { const result = await getBirthdays(authorizedRequest); setItems(result.items); setFamilyUsers(result.users); }
     catch (error) { setMessage(error instanceof Error ? error.message : "目前無法連接資料服務，請稍後再試"); }
     finally { setLoading(false); }
   }, [authorizedRequest, status]);
   useEffect(() => { void load(); }, [load]);
 
   const scheduleDelete = (item: Birthday) => {
+    setDeleteTarget(null);
     if (pendingDeletion) return;
     setPendingDeletion(item); setOperationMessage("已排定刪除，5 秒內可復原");
     deleteTimer.current = setTimeout(() => {
@@ -73,9 +78,10 @@ export default function BirthdaysScreen() {
     {sorted.map((item) => <View key={item.id} style={styles.card}>
       <View style={styles.cardHeading}><Text style={styles.cardTitle}>{item.name}</Text><Text style={styles.meta}>{item.birth_month} 月 {item.birth_day} 日</Text></View>
       <Text style={styles.remindMeta}>{formatRemindOffsets(item.remind_offsets)}</Text>
-      {item.can_edit ? <View style={styles.actions}><Pressable onPress={() => setEditing(item)} style={styles.edit}><Text style={styles.editText}>編輯</Text></Pressable><Pressable onPress={() => Alert.alert("確認刪除？", "確認後有 5 秒可以復原。", [{ text: "取消" }, { text: "刪除", style: "destructive", onPress: () => scheduleDelete(item) }])} style={styles.delete}><Text style={styles.deleteText}>刪除</Text></Pressable></View> : <Text style={styles.readOnly}>由其他家人建立，僅能查看。</Text>}
+      {item.can_edit ? <View style={styles.actions}><Pressable onPress={() => setEditing(item)} style={styles.edit}><Text style={styles.editText}>編輯</Text></Pressable><Pressable onPress={() => setDeleteTarget(item)} style={styles.delete}><Text style={styles.deleteText}>刪除</Text></Pressable></View> : <Text style={styles.readOnly}>由其他家人建立，僅能查看。</Text>}
     </View>)}
-    {editing !== undefined ? <BirthdayModal initial={editing} onClose={() => setEditing(undefined)} onSaved={async () => { setEditing(undefined); setOperationMessage(editing ? "生日已更新" : "生日已儲存"); await load(); }} request={authorizedRequest} /> : null}
+    {editing !== undefined ? <BirthdayModal familyUsers={familyUsers} initial={editing} onClose={() => setEditing(undefined)} onSaved={async () => { setEditing(undefined); setOperationMessage(editing ? "生日已更新" : "生日已儲存"); await load(); }} request={authorizedRequest} /> : null}
+    <Modal animationType="fade" onRequestClose={() => setDeleteTarget(null)} transparent visible={Boolean(deleteTarget)}><View style={styles.deleteBackdrop}><View style={styles.deleteCard}><Text style={styles.deleteTitle}>確認刪除？</Text><Text style={styles.deleteBody}>確認後有 5 秒可以復原。</Text><View style={styles.actions}><Pressable onPress={() => setDeleteTarget(null)} style={styles.edit}><Text style={styles.editText}>取消</Text></Pressable><Pressable onPress={() => deleteTarget && scheduleDelete(deleteTarget)} style={styles.delete}><Text style={styles.deleteText}>刪除</Text></Pressable></View></View></View></Modal>
     {pendingDeletion ? <View accessibilityLiveRegion="polite" style={styles.undoBar}><Text style={styles.undoMessage}>已排定刪除「{pendingDeletion.name}」</Text><Pressable onPress={undoDelete}><Text style={styles.undoAction}>復原</Text></Pressable></View> : null}
     {operationMessage && !pendingDeletion ? <View accessibilityLiveRegion="polite" style={styles.undoBar}><Text style={styles.undoMessage}>{operationMessage}</Text></View> : null}
   </AppShell>;
@@ -89,18 +95,27 @@ const REMIND_OFFSET_OPTIONS: Array<{ label: string; value: number }> = [
   { label: "當天", value: 0 },
 ];
 
+// 推播對象可選項，新增時預設「僅限自己」。
+const AUDIENCE_MODE_OPTIONS: Array<{ label: string; value: BirthdayAudienceMode }> = [
+  { label: "僅限自己", value: "self" },
+  { label: "自行選擇", value: "selected" },
+  { label: "所有人", value: "everyone" },
+];
+
 function formatRemindOffsets(offsets: number[] | undefined): string {
   const values = offsets && offsets.length ? offsets : [0];
   const sorted = values.slice().sort((left, right) => right - left);
   return `提前提醒：${sorted.map((value) => (value === 0 ? "當天" : `${value} 天前`)).join("、")}`;
 }
 
-function BirthdayModal({ initial, onClose, onSaved, request }: { initial: Birthday | null; onClose: () => void; onSaved: () => Promise<void>; request: ReturnType<typeof useAuth>["authorizedRequest"] }) {
+function BirthdayModal({ familyUsers, initial, onClose, onSaved, request }: { familyUsers: FamilyUser[]; initial: Birthday | null; onClose: () => void; onSaved: () => Promise<void>; request: ReturnType<typeof useAuth>["authorizedRequest"] }) {
   const { colors, theme } = useAppPreferences(); const styles = createStyles(colors, theme);
   const [name, setName] = useState(initial?.name ?? "");
   const [month, setMonth] = useState(String(initial?.birth_month ?? ""));
   const [day, setDay] = useState(String(initial?.birth_day ?? ""));
   const [remindOffsets, setRemindOffsets] = useState<number[]>(initial?.remind_offsets?.length ? initial.remind_offsets : [0]);
+  const [audienceMode, setAudienceMode] = useState<BirthdayAudienceMode>(initial?.audience_mode ?? "self");
+  const [audienceUserIds, setAudienceUserIds] = useState<number[]>(initial?.audience_user_ids ?? []);
   const [saving, setSaving] = useState(false); const [error, setError] = useState<string | null>(null);
   const mutationInFlight = useRef(false);
 
@@ -114,12 +129,17 @@ function BirthdayModal({ initial, onClose, onSaved, request }: { initial: Birthd
     });
   };
 
+  const toggleAudienceUser = (id: number) => {
+    setAudienceUserIds((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
+  };
+
   const validate = (): string | null => {
     if (!name.trim()) return "請輸入姓名";
     const monthValue = Number(month); const dayValue = Number(day);
     if (!Number.isInteger(monthValue) || monthValue < 1 || monthValue > 12) return "月份請輸入 1 到 12";
     if (!Number.isInteger(dayValue) || dayValue < 1 || dayValue > 31) return "日期請輸入 1 到 31";
     if (!remindOffsets.length) return "請至少選擇一個提前提醒天數";
+    if (audienceMode === "selected" && !audienceUserIds.length) return "自行選擇時請至少勾選一位要推播的對象";
     return null;
   };
 
@@ -129,7 +149,7 @@ function BirthdayModal({ initial, onClose, onSaved, request }: { initial: Birthd
     if (mutationInFlight.current) return;
     mutationInFlight.current = true;
     setSaving(true); setError(null);
-    const payload = { name: name.trim(), birth_month: Number(month), birth_day: Number(day), remind_offsets: remindOffsets };
+    const payload = { name: name.trim(), birth_month: Number(month), birth_day: Number(day), remind_offsets: remindOffsets, audience_mode: audienceMode, audience_user_ids: audienceMode === "selected" ? audienceUserIds : [] };
     try {
       if (initial) await updateBirthday(request, initial.id, payload);
       else await createBirthday(request, payload);
@@ -157,6 +177,25 @@ function BirthdayModal({ initial, onClose, onSaved, request }: { initial: Birthd
         })}
       </View>
     </View>
+    <View style={styles.field}>
+      <Text style={styles.label}>推播對象</Text>
+      <View style={styles.chipRow}>
+        {AUDIENCE_MODE_OPTIONS.map((option) => {
+          const selected = audienceMode === option.value;
+          return <Pressable key={option.value} onPress={() => setAudienceMode(option.value)} style={[styles.chip, selected ? styles.chipSelected : null]}>
+            <Text style={[styles.chipText, selected ? styles.chipTextSelected : null]}>{option.label}</Text>
+          </Pressable>;
+        })}
+      </View>
+      {audienceMode === "selected" ? <View style={styles.chipRow}>
+        {familyUsers.map((user) => {
+          const selected = audienceUserIds.includes(user.id);
+          return <Pressable key={user.id} onPress={() => toggleAudienceUser(user.id)} style={[styles.chip, selected ? styles.chipSelected : null]}>
+            <Text style={[styles.chipText, selected ? styles.chipTextSelected : null]}>{user.user_id}</Text>
+          </Pressable>;
+        })}
+      </View> : null}
+    </View>
     {error ? <Text style={styles.message}>{error}</Text> : null}
     <View style={styles.actions}><Pressable onPress={onClose} style={styles.cancel}><Text style={styles.cancelText}>取消</Text></Pressable><Pressable disabled={saving} onPress={() => void save()} style={styles.save}><Text style={styles.saveText}>{saving ? "儲存中…" : "確認"}</Text></Pressable></View>
   </ScrollView></View></View></Modal>;
@@ -172,6 +211,7 @@ const createStyles = (colors: ReturnType<typeof useAppPreferences>["colors"], th
   modalRoot: { alignItems: "center", flex: 1, justifyContent: "center", padding: 18 }, backdrop: { backgroundColor: "rgba(18,35,32,.5)", bottom: 0, left: 0, position: "absolute", right: 0, top: 0 }, modalCard: { backgroundColor: colors.surface, borderRadius: 20, maxHeight: "94%", maxWidth: 480, width: "100%" }, close: { padding: 12, position: "absolute", right: 4, top: 4, zIndex: 2 }, modalContent: { gap: 13, padding: 22, paddingTop: 45 }, modalTitle: { color: colors.text, fontSize: 22, fontWeight: "900" },
   row: { flexDirection: "row", gap: 12 }, field: { flex: 1, gap: 7 }, label: { color: colors.text, fontSize: 14, fontWeight: "800" }, input: { backgroundColor: theme === "dark" ? "#22332F" : colors.white, borderColor: colors.border, borderRadius: 11, borderWidth: 1, color: colors.text, padding: 12 }, iosInputFontSize: { fontSize: 16 },
   cancel: { borderColor: colors.border, borderRadius: 10, borderWidth: 1, paddingHorizontal: 18, paddingVertical: 10 }, cancelText: { color: colors.textMuted, fontWeight: "800" }, save: { backgroundColor: colors.primary, borderRadius: 10, paddingHorizontal: 20, paddingVertical: 10 }, saveText: { color: theme === "dark" ? colors.background : colors.white, fontWeight: "900" },
+  deleteBackdrop: { alignItems: "center", backgroundColor: "rgba(18,35,32,.5)", flex: 1, justifyContent: "center", padding: 20 }, deleteCard: { backgroundColor: colors.surface, borderRadius: 20, gap: 14, maxWidth: 420, padding: 24, width: "100%" }, deleteTitle: { color: colors.text, fontSize: 20, fontWeight: "900" }, deleteBody: { color: colors.text, fontSize: 13, lineHeight: 20 },
   undoBar: { alignItems: "center", alignSelf: "center", backgroundColor: colors.primaryDark, borderRadius: 20, bottom: 22, flexDirection: "row", gap: 14, paddingHorizontal: 18, paddingVertical: 10, position: "absolute", zIndex: 20 },
   undoMessage: { color: colors.white, fontWeight: "800" },
   undoAction: { color: "#FFD18A", fontWeight: "900", textDecorationLine: "underline" },

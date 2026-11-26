@@ -183,18 +183,20 @@ Robinson 是一個雙前台架構的家庭生活小助手。2026-11-25（ADR-33�
 
 ### 待辦事項
 
-**狀態**：active（2026-11-25 大幅精簡，見 ADR-33）
-**討論紀錄**：無獨立 ADR，設計決策已於下方需求段落內註明；精簡決策見 `docs/ADR/discuss/robinson.md` 2026-11-25 ADR-33 條目
-**來源說明**：原記錄於 robinson 母 spec 的 FR-31／FR-31a／FR-31b／FR-32，已於 2026-08-13 併入本文件；2026-11-25 依 Robin 明確決策「待辦事項只是純粹去做通知而已，不需要確認動作，不想增加使用者負擔」全面改版，移除狀態管理、時間區間與 Google 行事曆同步。
+**狀態**：active（2026-11-25 大幅精簡，見 ADR-33；2026-11-26 支援日期區間＋行事曆）
+**討論紀錄**：無獨立 ADR，設計決策已於下方需求段落內註明；精簡決策見 `docs/ADR/discuss/robinson.md` 2026-11-25 ADR-33 條目；日期區間與行事曆決策見同檔 2026-11-26 條目
+**來源說明**：原記錄於 robinson 母 spec 的 FR-31／FR-31a／FR-31b／FR-32，已於 2026-08-13 併入本文件；2026-11-25 依 Robin 明確決策「待辦事項只是純粹去做通知而已，不需要確認動作，不想增加使用者負擔」全面改版，移除狀態管理、時間區間與 Google 行事曆同步；2026-11-26 因 Robin 反饋「連續多天的行程要建立好幾筆很麻煩」改支援日期區間，並補回行事曆 UI。
 
-**概要**：純一次性「日期＋文字」提醒，不分狀態、不提供確認或完成動作。新增、編輯、刪除全部在 Mobile App 完成；Telegram 不提供任何待辦相關選單或對話流程，只負責讀取並單向推播提醒。
+**概要**：純「日期（可為區間）＋文字」提醒，不分狀態、不提供確認或完成動作。新增、編輯、刪除全部在 Mobile App 完成；Telegram 不提供任何待辦相關選單或對話流程，只負責讀取並單向推播提醒。
 
 **功能性需求**
-- FR-31：Mobile App 新增／編輯／刪除待辦，每筆只有 `content`（文字）與 `remind_at`（提醒時間點）兩個必要欄位；不提供 `pending`／`completed`／`expired` 等狀態欄位，也不支援時間區間或 Google Calendar 同步
-- FR-32：Telegram 單向推播——提醒時間已到且尚未推播過時即時推播（借用 `/healthz` 既有排程頻率，去重記號 `reminded_sent_at` 落地於資料列本身以撐過服務重啟）；不再提供每日固定摘要、前置提醒視窗或 `/my_todos` 查詢，查詢改到 Mobile App 進行
+- FR-31：Mobile App 新增／編輯／刪除待辦，每筆只有 `content`（文字）與 `remind_start_date`／`remind_end_date`（提醒日期區間，單日時兩欄相同）兩組必要欄位；不提供 `pending`／`completed`／`expired` 等狀態欄位，也不支援 Google Calendar 同步；新增／編輯時透過 `TodoCalendarPicker`（`GET /api/app/calendar?year=&month=` 顯示國定假日／補班標記）選擇日期或區間
+- FR-32：Telegram 單向推播——固定在台灣時間每天 08:30（`/healthz` 排程觸發時判斷時間窗）對 `remind_start_date` 等於當天的待辦推播一次，訊息只顯示日期（區間則顯示「起～迄」），不帶時分；去重記號 `reminded_sent_at` 落地於資料列本身以撐過服務重啟；不再提供每日固定摘要、前置提醒視窗或 `/my_todos` 查詢，查詢改到 Mobile App 進行
+- FR-31c（2026-11-26 新增）：Mobile App 首頁以月曆取代原「重要通知」卡片（見 `mobile/src/components/HomeCalendar.tsx`），週末／國定假日數字顯示為紅色、平日黑色，數字下方小字顯示當天的待辦事項內容、生日與國定假日名稱，支援左右翻頁檢視上個月／下個月；純檢視用途，不支援在月曆上直接點選新增或編輯
 
 **實作階段**
 - Phase 1 Step 1.7：舊版「自然語言三輪反問＋狀態管理＋Google Calendar 同步」設計已完成並運作至 2026-11；2026-11-25（migration `0102`）：改版為純一次性提醒，既有資料已清空重來，詳見 `docs/reference/db_schema.md`「待辦事項」
+- 2026-11-26（migration `0106`）：`remind_at` 改為 `remind_start_date`／`remind_end_date` 日期區間，新增 `GET /api/app/calendar` 與 `TodoCalendarPicker.tsx`／`HomeCalendar.tsx`
 
 ### 記帳
 
@@ -249,19 +251,36 @@ Robinson 是一個雙前台架構的家庭生活小助手。2026-11-25（ADR-33�
 
 ### 生日設定
 
-**狀態**：active（2026-11-25 大幅精簡，原名「重要通知／重要日子」，見 ADR-33）
-**討論紀錄**：`docs/ADR/discuss/notifications.md`；精簡決策見 `docs/ADR/discuss/robinson.md` 2026-11-25 ADR-33 條目
-**來源說明**：原記錄於 robinson 母 spec 的 FR-53／FR-53f，已於 2026-08-13 併入本文件；2026-11-25 改版為純生日設定，移除固定節日（農曆）推播、單次事件、通知對象與行程／目標連動。
+**狀態**：active（2026-11-25 大幅精簡，原名「重要通知／重要日子」，見 ADR-33；2026-11-26 支援多選提前提醒＋推播對象）
+**討論紀錄**：`docs/ADR/discuss/notifications.md`；精簡決策見 `docs/ADR/discuss/robinson.md` 2026-11-25 ADR-33 條目；多選提醒與推播對象決策見同檔 2026-11-26 條目
+**來源說明**：原記錄於 robinson 母 spec 的 FR-53／FR-53f，已於 2026-08-13 併入本文件；2026-11-25 改版為純生日設定，移除固定節日（農曆）推播、單次事件、通知對象與行程／目標連動；2026-11-26 因 Robin 反饋「生日當天才提醒來不及買禮物」及需要「讓設定的人選可以推播給誰」，補回提前提醒天數（複選）與推播對象三選項。
 
-**概要**：使用者在 Mobile App 設定家人生日（每年固定國曆月/日重複一次），Telegram 於台灣時間 08:00 單向推播生日提醒，不再推播元旦／除夕／掃墓／中秋／端午／父親節／母親節等固定節日。
+**概要**：使用者在 Mobile App 設定家人生日（每年固定國曆月/日重複一次，可複選提前 14／7／3 天或當天推播，並選擇推播對象），Telegram 依設定單向推播生日提醒；固定節日（父親節／母親節／中秋／端午等政府行事曆上有名稱的國定假日）另由獨立的「國定假日推播」模組負責，不屬於本區塊。
 
 **功能性需求**
-- FR-53：Mobile App 新增／編輯／刪除生日設定，每筆只保留姓名與國曆月/日（`birth_month`／`birth_day`），不支援農曆、單次事件、通知對象或備註
-- FR-53f：Telegram 端（`src/bot/important_days.py`）只負責讀取清單並依排程單向推播生日提醒；年度推播去重沿用既有 `important_notifications_log`（`notification_key` 改用 `birthday_important_day_{id}`）
+- FR-53：Mobile App 新增／編輯／刪除生日設定，每筆保留姓名、國曆月/日（`birth_month`／`birth_day`）、提前提醒天數（`remind_offsets`，可複選 14／7／3／當天，至少一項）與推播對象（`audience_mode`：`self` 僅限自己／`selected` 自行選擇／`everyone` 所有人，`selected` 模式另存 `audience_user_ids`）；不支援農曆、單次事件或備註
+- FR-53f：Telegram 端（`src/bot/important_days.py`）只負責讀取清單並依排程單向推播生日提醒，依 `audience_mode` 決定收件人（`selected` 完全依照勾選名單，建立者未勾選自己則不會收到）；每個提前天數各自獨立去重，沿用既有 `important_notifications_log`（`notification_key` 改用 `birthday_important_day_{id}_offset_{offset}`）
 
 **實作階段**
 - Phase 2 Step 2.3：原版固定節日＋生日推播設計全數完成並運作至 2026-11
 - 2026-11-25（migration `0103`）：改版為純生日設定，既有單次事件／農曆浮動節日資料視為「不是生日」予以捨棄，詳見 `docs/reference/db_schema.md`「生日設定」
+- 2026-11-26（migration `0105`）：新增 `remind_offsets` 複選提前提醒
+- 2026-11-26（migration `0107`）：新增 `audience_mode`／`audience_user_ids` 推播對象可選
+
+### 國定假日推播
+
+**狀態**：active（2026-11-26 新增，見 ADR-33 修正後的 robinson.md 條目）
+**討論紀錄**：`docs/ADR/discuss/robinson.md` 2026-11-26 條目及「再追加」補述
+**來源說明**：ADR-33（2026-11-25）原先把所有固定節日推播整批砍除；2026-11-26 Robin 反饋父親節／母親節／中秋／端午等應該要通知，確認後補回，範圍再擴大為「政府行事曆上任何有名稱的國定假日」。
+
+**概要**：與「生日設定」是獨立模組（`src/bot/national_holidays.py`），不經 Mobile App 設定，使用者無法關閉或調整。父親節（8/8 固定）、母親節（5 月第二個星期日）提前 7 天＋當天各推播一次給所有已綁定 Telegram 的使用者；其餘政府行政機關辦公日曆表上「有名稱、真正放假」的國定假日（中秋、端午、春節、清明、國慶日等，排除純週休二日）只在當天推播一次，不提前。
+
+**功能性需求**
+- FR-56：父親節／母親節固定日期計算，提前 7 天與當天各自獨立去重推播給全體已綁定 Telegram 的使用者
+- FR-57：其餘國定假日改為掃描 `TaiwanCalendarService` 行事曆資料（沿用既有 `GET /api/app/calendar` 背後的同一份資料來源），只要當天 `is_holiday=True` 且非純週末、`name` 有值即視為國定假日，當天推播一次
+
+**實作階段**
+- 2026-11-26：新增 `src/bot/national_holidays.py`，由 `/healthz` 排程觸發，不需新 migration（沿用 `important_notifications_log`）
 
 ### 平台架構與治理（系統架構總覽／MVP 分期／Schema 治理）
 
