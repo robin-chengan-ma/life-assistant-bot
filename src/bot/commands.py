@@ -110,18 +110,30 @@ def handle_permission_step(
         if step == "awaiting_family_title":
             state_store.set(
                 telegram_user_id,
-                {"flow": "permission_create", "step": "awaiting_nickname", "family_title": text},
+                {"flow": "permission_create", "step": "awaiting_full_name", "family_title": text},
             )
-            return f"收到，請問「{text}」的暱稱是？（不需要的話輸入「略過」）"
+            return f"收到，請問「{text}」的全名是？（用於生日推播等需要分辨身份的地方，必填）"
+
+        if step == "awaiting_full_name":
+            full_name = text.strip()
+            if not full_name:
+                return "全名不能是空白，請重新輸入："
+            state_store.set(
+                telegram_user_id,
+                {**state, "step": "awaiting_nickname", "full_name": full_name},
+            )
+            return f"收到，請問「{state['family_title']}」的暱稱是？（不需要的話輸入「略過」）"
 
         if step == "awaiting_nickname":
             family_title = state["family_title"]
+            full_name = state["full_name"]
             nickname = None if text in {"略過", "skip"} else text
-            result = auth.create_user_and_invite(db, family_title=family_title, nickname=nickname)
+            result = auth.create_user_and_invite(db, family_title=family_title, full_name=full_name, nickname=nickname)
             state_store.clear(telegram_user_id)
             nickname_line = f"暱稱：{result['nickname']}\n" if result["nickname"] else ""
             return (
                 f"已建立「{family_title}」！\n"
+                f"全名：{full_name}\n"
                 f"{nickname_line}"
                 f"使用者 ID：{result['mobile_user_id']}\n"
                 f"通關密碼：{result['passcode']}\n"

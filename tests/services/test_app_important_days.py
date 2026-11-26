@@ -172,3 +172,22 @@ def test_create_rejects_selected_audience_mode_with_nonexistent_user_id(service)
             1,
             {"name": "媽媽", "birth_month": 5, "birth_day": 20, "audience_mode": "selected", "audience_user_ids": [999]},
         )
+
+
+def test_family_users_prefers_full_name_over_nickname_and_family_title():
+    db = FakeDatabase()
+    db.tables["users"] = [
+        {"id": 1, "role": "Robin", "full_name": "馬承安", "nickname": "Robin", "family_title": None},
+        {"id": 10, "role": "爸爸", "full_name": None, "nickname": "小馬", "family_title": "爸爸"},
+        {"id": 20, "role": "媽媽", "full_name": None, "nickname": None, "family_title": "媽媽"},
+        {"id": 30, "role": "弟弟", "full_name": None, "nickname": None, "family_title": None},
+    ]
+    service = AppImportantDayService(db)
+
+    users = service.family_users()
+
+    by_id = {user["id"]: user["display_name"] for user in users}
+    assert by_id[1] == "馬承安"
+    assert by_id[10] == "小馬"
+    assert by_id[20] == "媽媽"
+    assert by_id[30] == "弟弟"

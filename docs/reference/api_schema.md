@@ -319,7 +319,7 @@ payload、帳號、密碼或 Token。
 
 | 項目 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `GET /api/app/important-days` | 已實作（`list_important_days()`） | FR-53／FR-53f | 查詢個人設定的生日清單，並附家人使用者名單（`users`）供「自行選擇」推播對象時勾選；名單的 `user_id` 不存於 `users` 表，而是依 FR-65 由 `users.id` 動態格式化為 `user01`、`user10` |
+| `GET /api/app/important-days` | 已實作（`list_important_days()`） | FR-53／FR-53f | 查詢個人設定的生日清單，並附家人使用者名單（`users`）供「自行選擇」推播對象時勾選；清單顯示 `display_name`（優先全名，見 FR-4a），`user_id` 不存於 `users` 表，而是依 FR-65 由 `users.id` 動態格式化為 `user01`、`user10` |
 | `POST /api/app/important-days` | 已實作（`create_important_day()`） | FR-53 | 新增一筆生日設定，含 `remind_offsets`（複選提前天數）與 `audience_mode`／`audience_user_ids`（推播對象） |
 | `PATCH /api/app/important-days/<id>` | 已實作（`update_important_day()`） | FR-53 | 更新一筆生日設定 |
 | `DELETE /api/app/important-days/<id>` | 已實作（`delete_important_day()`） | FR-53 | 刪除一筆生日設定 |

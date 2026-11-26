@@ -1461,3 +1461,45 @@ TodoCalendarPicker.tsx`、`mobile/app/important-days.tsx`、`mobile/src/services
 `src/services/app_important_days.py`。不需要新 migration。全專案 `python3 -m pytest -q` 521
 passed，`ruff check .` 乾淨，Mobile `tsc --noEmit` 零錯誤。`docs/specs/SPEC.md` FR-31c 同步修正。
 尚未 commit，待 Robin 確認。
+
+## 2026-11-26（第四次追加）首頁行事曆標示今天、生日推播對象改顯示全名
+
+**狀態**：accepted
+
+**背景**：Robin 提出最後兩件事：①首頁行事曆希望比照待辦新增頁的行事曆，把「今天」用框起來的
+綠色圓形色塊標示出來；②生日設定「自行選擇」推播對象原本改顯示暱稱/家庭稱謂後，Robin 指出暱稱
+可能重複、無法分辨真實身份——例如弟媳（羽璇）的父母跟弟弟（阿佑）這邊的媽媽都被稱作「媽媽」，
+用暱稱／家庭稱謂完全無法分辨是哪一位；要求改用全名，並提供目前帳號對應表：
+
+- Robin → 馬承安
+- 羽璇 → 廖羽璇
+- 阿佑 → 范宗佑
+- 媽媽 → 范麗芳
+
+**決策**：
+1. `HomeCalendar.tsx` 的 `dayComponent` 新增 `isToday` 判斷（比對 `todayIsoDate()`），今天這格
+   套用圓形 `colors.primary`（偏綠）背景色塊，文字改白色以維持對比；週末／國定假日紅字規則在今天
+   以外的日期維持不變（若今天剛好是假日，優先套用今天的綠色色塊，不疊加紅字）。
+2. 新增 `users.full_name`（migration `0108`），`src/bot/auth.py::create_user_and_invite()` 新增
+   必填 `full_name` 參數；`src/bot/commands.py` 權限管理「建立使用者」流程在「家庭稱謂」與「暱稱」
+   之間新增一題「全名」（必填，不可跳過、不可空白），一併寫入 `users`。
+   `AppImportantDayService.family_users()` 回傳的 `display_name` 改優先取 `full_name`，只有既有
+   使用者尚未補齊全名時才依序退回 `nickname`／`family_title`／`role`／`user_id`。既有 4 筆資料
+   嘗試依 Robin 提供的對應表、用現有 `nickname`／`family_title`／`role` 比對自動回填；比對不到的
+   維持 `NULL`，之後由 Owner 透過 Telegram 權限管理（目前的流程只能在建立新使用者時問，既有使用者
+   要補登全名需另外處理，暫無編輯既有使用者資料的入口，留待之後有需要再補）。
+
+**理由**：今天的標示讓首頁行事曆更容易一眼看到目前日期在哪；全名改法是為了解決一個已經實際發生
+的身份混淆問題（同一稱謂對應不同人），直接要資料庫多存一個精確欄位最乾淨，不需要額外設計消歧義
+UI。
+
+**後果**：新增 migration `0108_add_full_name_to_users.sql`。異動 `mobile/src/components/
+HomeCalendar.tsx`、`src/bot/auth.py`、`src/bot/commands.py`、`src/services/app_important_days.py`；
+測試新增/更新 `tests/bot/test_auth.py`（3 項補 `full_name` 參數）、`tests/bot/test_commands.py`
+（新增 2 項：詢問全名、拒絕空白全名）、`tests/bot/test_router.py`（補全名步驟）、
+`tests/services/test_app_important_days.py`（1 項：`display_name` 優先序）。全專案
+`python3 -m pytest -q` 524 passed，`ruff check .` 對本次異動檔案全過（`src/bot/auth.py` 既有的
+6 項 `UP017` 屬本次未異動的既存程式碼），Mobile `tsc --noEmit` 零錯誤。`docs/specs/SPEC.md`
+FR-4／FR-4a／FR-31c 同步更新；`docs/reference/db_schema.md`／`api_schema.md` 同步。既有 4 筆使用者
+資料的 `full_name` 實際回填結果需要 Robin 在 migration 套用後自行到後台核對一次，確認比對邏輯真的
+對上正確的人。尚未 commit，待 Robin 確認。

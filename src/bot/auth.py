@@ -66,11 +66,15 @@ def generate_passcode() -> str:
     return f"{secrets.randbelow(1_000_000):06d}"
 
 
-def create_user_and_invite(db: CloudSQLClient, family_title: str, nickname: str | None = None) -> dict:
+def create_user_and_invite(db: CloudSQLClient, family_title: str, full_name: str, nickname: str | None = None) -> dict:
     """FR-4：Owner 專屬「權限管理」建立一般使用者。
 
     先建立 users 取得主鍵，再產生唯一的一次性通關密碼並寫入 invite_codes；
     回傳給呼叫端（未來的選單流程）用來組出「暱稱、使用者 ID、通關密碼」回覆內容。
+
+    2026-11-26（見 migration 0108）：新增必填 `full_name`（全名）——暱稱／家庭稱謂可能重複或
+    無法分辨真實身份（例如不同家人的父母都被稱作「媽媽」），生日推播「自行選擇」對象清單改顯示
+    全名，因此建立使用者時必須一併記錄。
     """
     user_id = db.insert(
         "users",
@@ -78,6 +82,7 @@ def create_user_and_invite(db: CloudSQLClient, family_title: str, nickname: str 
             "telegram_user_id": None,
             "role": family_title,  # 沿用舊欄位維持相容，family_title 才是正式來源
             "family_title": family_title,
+            "full_name": full_name,
             "nickname": nickname,
             "is_owner": False,
             "is_active": True,
@@ -107,6 +112,7 @@ def create_user_and_invite(db: CloudSQLClient, family_title: str, nickname: str 
         "mobile_user_id": _mobile_user_id(user_id),
         "nickname": nickname,
         "family_title": family_title,
+        "full_name": full_name,
         "passcode": code,
     }
 

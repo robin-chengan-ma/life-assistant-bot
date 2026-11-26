@@ -10,8 +10,9 @@ import { useAuth } from "@/context/AuthContext";
 import { getBirthdays, getCalendarMonth, getTodos, type Birthday, type CalendarDay, type TodoItem } from "@/services/analyticsApi";
 
 // 首頁行事曆（2026-11-26，取代舊的「重要通知」卡片，見 docs/ADR/discuss/robinson.md）：
-// 週休二日／國定假日數字亮紅色，平日黑色；支援左右翻頁看上個月/下個月（沿用
-// react-native-calendars 內建的月份切換箭頭）。
+// 週休二日／國定假日數字亮紅色，平日黑色；今天比照待辦事項新增頁的行事曆用圓形色塊（colors.
+// primary，偏綠）框起來；支援左右翻頁看上個月/下個月（沿用 react-native-calendars 內建的月份
+// 切換箭頭）。
 // 2026-11-26（同日修正）：Robin 反饋數字下方的小字注記太擠看不清楚，且月份切換時會先看到
 // 「黑色→等資料載入完才變紅色」的閃爍，不喜歡這種體感。改為：①數字下方完全不顯示任何小字，
 // 待辦／生日／國定假日的詳細內容改到行事曆下方獨立的「未來一週注意事項」區塊列出；②切換月份
@@ -126,11 +127,21 @@ export function HomeCalendar() {
             if (!date) return null;
             const calendarDay = calendarDays[date.dateString];
             const isWeekendOrHoliday = Boolean(calendarDay?.is_holiday);
+            const isToday = date.dateString === todayIsoDate();
             return (
               <View style={styles.day}>
-                <Text style={[styles.dayText, isWeekendOrHoliday && styles.holidayDayText, state === "disabled" && styles.disabledDayText]}>
-                  {date.day}
-                </Text>
+                <View style={[styles.dayCircle, isToday && styles.todayCircle]}>
+                  <Text
+                    style={[
+                      styles.dayText,
+                      isWeekendOrHoliday && !isToday && styles.holidayDayText,
+                      state === "disabled" && !isToday && styles.disabledDayText,
+                      isToday && styles.todayDayText,
+                    ]}
+                  >
+                    {date.day}
+                  </Text>
+                </View>
               </View>
             );
           }}
@@ -179,9 +190,12 @@ const createStyles = (colors: ReturnType<typeof useAppPreferences>["colors"], th
   wrapper: { backgroundColor: colors.surface, borderColor: colors.border, borderRadius: 18, borderWidth: 1, overflow: "hidden", padding: 6 },
   loadingBox: { alignItems: "center", height: 320, justifyContent: "center" },
   day: { alignItems: "center", height: 40, justifyContent: "flex-start", overflow: "hidden", paddingTop: 4, width: "100%" },
+  dayCircle: { alignItems: "center", borderRadius: 17, height: 34, justifyContent: "center", width: 34 },
+  todayCircle: { backgroundColor: colors.primary },
   dayText: { color: colors.text, fontSize: 15, fontWeight: "700" },
   holidayDayText: { color: colors.danger, fontWeight: "900" },
   disabledDayText: { color: theme === "dark" ? "#52645F" : "#C4CECB" },
+  todayDayText: { color: theme === "dark" ? colors.background : colors.white, fontWeight: "900" },
   noticeBlock: { borderColor: colors.border, borderTopWidth: 1, gap: 8, marginTop: 6, padding: 12 },
   noticeTitle: { color: colors.text, fontSize: 13, fontWeight: "900" },
   noticeRow: { flexDirection: "row", gap: 10 },

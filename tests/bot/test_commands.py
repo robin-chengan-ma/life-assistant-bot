@@ -56,16 +56,38 @@ def test_permission_create_full_flow_creates_user_and_invite(fake_db):
     store = ConversationStateStore()
     commands.handle_permission_callback(fake_db, store, telegram_user_id=1, action="create")
     commands.handle_permission_step(fake_db, store, telegram_user_id=1, text="爸爸")
+    commands.handle_permission_step(fake_db, store, telegram_user_id=1, text="王大明")
     reply = commands.handle_permission_step(fake_db, store, telegram_user_id=1, text="略過")
 
     users = fake_db.select("users", where="family_title = %s", params=("爸爸",))
     assert len(users) == 1
     assert users[0]["telegram_user_id"] is None
+    assert users[0]["full_name"] == "王大明"
     invite = fake_db.select("invite_codes", where="user_id = %s AND is_used = FALSE", params=(users[0]["id"],), fetch_one=True)
     assert invite is not None
     assert invite["expires_at"] is not None
     assert store.get(1) is None
     assert "已建立" in reply
+    assert "王大明" in reply
+
+
+def test_permission_create_full_flow_asks_for_full_name_before_nickname(fake_db):
+    store = ConversationStateStore()
+    commands.handle_permission_callback(fake_db, store, telegram_user_id=1, action="create")
+    reply = commands.handle_permission_step(fake_db, store, telegram_user_id=1, text="爸爸")
+
+    assert "全名" in reply
+    assert store.get(1) == {"flow": "permission_create", "step": "awaiting_full_name", "family_title": "爸爸"}
+
+
+def test_permission_create_full_flow_rejects_blank_full_name(fake_db):
+    store = ConversationStateStore()
+    commands.handle_permission_callback(fake_db, store, telegram_user_id=1, action="create")
+    commands.handle_permission_step(fake_db, store, telegram_user_id=1, text="爸爸")
+    reply = commands.handle_permission_step(fake_db, store, telegram_user_id=1, text="   ")
+
+    assert "空白" in reply
+    assert store.get(1)["step"] == "awaiting_full_name"
 
 
 def test_permission_create_flow_exit_phrase_clears_state(fake_db):

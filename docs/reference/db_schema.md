@@ -57,7 +57,8 @@ CREATE TABLE users (
     is_active BOOLEAN NOT NULL DEFAULT TRUE,                         -- FR-4d 帳號是否啟用（停用不刪除帳號與資料）
     -- 0098 追加：
     mobile_login_failed_attempts INT NOT NULL DEFAULT 0,             -- FR-65a 連續密碼錯誤次數，登入成功歸零
-    mobile_login_locked_at TIMESTAMPTZ                               -- FR-65a NULL＝未鎖定；有值＝鎖定時間，僅 Owner 手動解鎖
+    mobile_login_locked_at TIMESTAMPTZ,                              -- FR-65a NULL＝未鎖定；有值＝鎖定時間，僅 Owner 手動解鎖
+    full_name TEXT                                                   -- 0108 追加：全名，區分同稱謂但不同人的家人
 );
 ```
 `src/migrations/0001_create_users_table.sql`（後續多個 migration 陸續 `ALTER TABLE` 新增，見上方註解編號；完整清單見各 migration 檔案）
@@ -69,6 +70,7 @@ CREATE TABLE users (
 - **2026-11-26（`0104`，ADR 再修正，見 `docs/ADR/discuss/robinson.md`）**：確認「設定記帳預算」「設定體態目標」兩項功能從頭到尾沒有任何設定入口（純死碼，`finance.py`／`body.py` 對應函式與 `budget_overrides`／`body_goals` 資料表一併移除），拿掉 `monthly_budget`／`budget_alert_50_sent_month`／`budget_alert_80_sent_month`／`finance_monthly_report_sent_month` 共 4 個欄位；同一批修正也發現 `birthday` 欄位（0028 追加）早已沒有任何寫入路徑、且首頁查詢會把所有人的生日混進每個人的清單（隱私外洩），一併移除，改用 `important_days` 表（生日設定）取代
 - **2026-08-15（0083，Phase 6 第一批，FR-4a／FR-4d）**：`role` 欄位過去混用「Robin 標記」與「家人稱謂」兩種語意，新增 `nickname`／`family_title` 分開保存，`role` 保留不刪除（向前相容，尚未有 DROP 排程）；新增 `is_active` 供 Owner 停用／恢復使用者，預設 `TRUE`，停用時程式一併清空 `refresh_token_hash`／`refresh_token_expires_at`（沿用 0062 既有欄位）撤銷 Mobile 存取
 - **2026-08-23（0098，FR-65a，見 `docs/ADR/discuss/mobile-app.md` 條目）**：Mobile App 帳密登入新增連續錯誤鎖定，`mobile_login_failed_attempts` 每次密碼錯誤累加、登入成功歸零；累加達 2 次時寫入 `mobile_login_locked_at`（鎖定時間），之後 `AppAuthService.login()` 直接拋 `AccountLockedError` 擋下，不再比對密碼；解鎖只能由 Owner 在 Telegram「權限管理→🔓 解鎖 Mobile App 帳號」按鈕操作（`auth.unlock_mobile_login()`），清空兩欄，不會自動過期。與 `invite_codes` 通關密碼鎖定不同，這裡刻意落地 DB（理由：需要 Owner 手動解鎖、且必須撐過 Render 服務重啟）
+- **2026-11-26（0108，見 `docs/ADR/discuss/robinson.md`）**：Robin 反饋暱稱／家庭稱謂可能無法分辨真實身份（例如不同家人的父母都叫「媽媽」），新增 `full_name`（全名），`create_user_and_invite()` 建立使用者時改為必填；生日推播「自行選擇」對象清單（`AppImportantDayService.family_users()`）改優先顯示 `full_name`。既有 4 筆資料嘗試依 nickname／family_title／role 比對回填（Robin／馬承安、羽璇／廖羽璇、阿佑／范宗佑、媽媽／范麗芳），比對不到的維持 NULL，之後由 Owner 透過 Telegram 權限管理手動補齊
 
 ```sql
 CREATE TABLE invite_codes (

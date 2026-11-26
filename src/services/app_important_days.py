@@ -102,17 +102,29 @@ class AppImportantDayService:
         self._db = db
 
     def family_users(self) -> list[dict[str, Any]]:
-        """供「自行選擇」推播對象 UI 使用。2026-11-26（Robin 反饋）：原本只回傳
-        `user_id`（如 `user01`）給前端顯示，使用者完全看不出對應到誰；改成一併回傳
-        `display_name`，依序取 `nickname`（個人暱稱）／`family_title`（家庭稱謂，如「弟弟」）／
-        `role`（舊欄位相容）／`user_id` 第一個非空值，確保一定有可讀的顯示文字。"""
-        rows = self._db.select("users", columns=("id", "role", "nickname", "family_title"))
+        """供「自行選擇」推播對象 UI 使用。
+
+        2026-11-26（Robin 反饋第一版）：原本只回傳 `user_id`（如 `user01`）給前端顯示，使用者
+        完全看不出對應到誰；改成一併回傳 `display_name`。
+
+        2026-11-26（同日再修正，Robin 指出暱稱可能重複）：暱稱／家庭稱謂可能無法分辨真實身份
+        （例如弟媳的父母雙方都被稱作「媽媽」），改為優先顯示 `full_name`（全名，見 migration
+        0108），只有既有使用者尚未補齊全名時才退回 `nickname`／`family_title`／`role`／
+        `user_id` 其中第一個非空值，確保一定有可讀的顯示文字。
+        """
+        rows = self._db.select("users", columns=("id", "role", "nickname", "family_title", "full_name"))
         return [
             {
                 "id": row["id"],
                 "role": row["role"],
                 "user_id": f"user{row['id']:02d}",
-                "display_name": row.get("nickname") or row.get("family_title") or row.get("role") or f"user{row['id']:02d}",
+                "display_name": (
+                    row.get("full_name")
+                    or row.get("nickname")
+                    or row.get("family_title")
+                    or row.get("role")
+                    or f"user{row['id']:02d}"
+                ),
             }
             for row in rows
         ]
