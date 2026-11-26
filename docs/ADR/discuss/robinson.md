@@ -1325,6 +1325,31 @@ YouTube 主題訂閱設定子選單結構；`router.py` 移除 `/my_youtube_topi
 
 **後果**：`src/migrations/0104_drop_dead_budget_and_body_goal_features.sql`／`0105_add_remind_offsets_to_important_days.sql`／`0106_todo_remind_date_range.sql` 三份新 Migration。程式碼異動詳見本次 commit 的完整檔案清單（`src/bot/finance.py`／`body.py`／`important_days.py`／`todo.py`、`src/services/app_analytics.py`／`app_important_days.py`／`app_todo.py`、新增 `src/api/app_calendar.py`、`main.py`，以及 Mobile App 對應檔案）。測試同步更新：`tests/bot/test_finance.py`／`test_body.py` 移除死碼對應測試、`tests/bot/test_todo.py` 改寫為對應新 schema、`tests/bot/test_important_days.py` 新增多選提前提醒測試、`tests/services/test_app_analytics.py`／`test_app_todo.py`／`test_app_important_days.py` 同步調整、`tests/test_main.py` 移除死碼排程測試、新增 `tests/api/test_app_calendar.py`。`python3 -m pytest -q` 501 passed；`python3 -m ruff check .`（含 `src/`／`tests/`／`main.py`）本次異動的所有檔案全過（既有 `src/services/app_auth.py`／`tests/api/test_app_auth.py`／`tests/submodules/newsfeed/test_client.py` 的既有 `UP017` 提示屬本次修改範圍外的既存程式碼，未異動）；Mobile App `npm run typecheck`（`tsc --noEmit`）零錯誤。`docs/reference/db_schema.md`／`docs/specs/PROGRESS.md` 同步更新。尚未 commit，等協調端確認。
 
+## 2026-11-26（第三度修正）dashboard() 待辦子查詢再度殘留已改名欄位，補強回歸測試
+
+**狀態**：accepted
+
+**背景**：migration 0106 把 `todos.remind_at` 改名為 `remind_start_date`／`remind_end_date`，但
+`src/services/app_analytics.py::dashboard()` 裡算「今日待辦數」的子查詢沒有跟著改，部署後立刻
+production 噴 `psycopg2.errors.UndefinedColumn: column "remind_at" does not exist`，Mobile App 首頁
+再次無法載入——這是同一個檔案、同一個子查詢第二次因為欄位改名/刪除而出事（第一次是 2026-11-25
+`due_at`／`status`，這次是 `remind_at`）。
+
+**決策**：子查詢改成 `%s BETWEEN remind_start_date AND remind_end_date`（待辦現在支援日期區間，
+用 BETWEEN 而不是等號比對，也一併修正了語意——日期落在待辦區間內都該算進今日待辦數，不是只有
+`remind_start_date` 剛好等於今天）。同時在 `tests/services/test_app_analytics.py` 新增
+`test_dashboard_sql_does_not_reference_dropped_todo_columns()`，直接斷言 `dashboard()` 實際送出的
+SQL 字串不含 `due_at`／`status = 'pending'`／`remind_at` 這些已知被刪除或改名的欄位，防止同一種
+bug第三次發生——既有的 `FakeDatabase` 只用 marker 字串比對回傳假資料，不會驗證 SQL 本身的欄位
+名稱，這正是前兩次都沒被測試抓到的根本原因。
+
+**理由**：`dashboard()` 這個方法裡用原始 SQL 字串硬寫欄位名稱，每次改 `todos` schema 都容易漏改，
+且現有測試架構的盲點（fake row injection 不驗證 SQL 本身）讓這類 bug 很容易連續發生；加上一個
+檢查「不該出現的欄位名稱」的輕量回歸測試，成本很低但能直接防堵這個已經發生兩次的問題類型。
+
+**後果**：`src/services/app_analytics.py`、`tests/services/test_app_analytics.py` 異動。
+`python3 -m pytest -q` 513 passed；`ruff check` 乾淨。
+
 ## 2026-11-26（同日追加）補回父親節／母親節／中秋／端午推播
 
 **背景**：Robin 確認待辦事項推播已經不再帶時分（上述第 6 點已處理，舊訊息是 push 前的舊碼殘留，不需額外修正），並提問母親節/父親節/中秋/端午目前是否還有推播——查證後確認「農曆節日推播」整個隨 2026-11 大瘦身移除，目前完全沒有任何節日提醒。

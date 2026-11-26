@@ -294,6 +294,24 @@ def test_dashboard_returns_summary_and_role_specific_sent_notifications():
     assert "今天：我" in result["important_days"]
 
 
+def test_dashboard_sql_does_not_reference_dropped_todo_columns():
+    """2026-11 兩次 production 事故（dashboard() 裡的待辦子查詢分別殘留過舊版 `due_at`／
+    `status`、以及 migration 0106 改名前的 `remind_at`）都是同一種 bug：既有 FakeDatabase 只用
+    marker 字串比對回傳假資料，不會真的驗證 SQL 本身的欄位名稱是否還存在，所以兩次都沒被測試
+    抓到。這裡直接檢查實際送出的 SQL 字串，確保不會再度引用已經被 migration 刪除／改名的欄位。
+    """
+    db = FakeDatabase(query_rows={"app_analytics:dashboard": [{"todo_count": 0, "expense_today": 0}]})
+
+    AppAnalyticsService(db).dashboard(user(is_owner=True), today=date(2026, 8, 8))
+
+    dashboard_query = next(query for query in db.executed_queries if "app_analytics:dashboard" in query)
+    assert "due_at" not in dashboard_query
+    assert "status = 'pending'" not in dashboard_query
+    assert "remind_at" not in dashboard_query
+    assert "remind_start_date" in dashboard_query
+    assert "remind_end_date" in dashboard_query
+
+
 def test_dashboard_important_days_only_include_current_sunday_to_saturday():
     db = FakeDatabase(
         select_rows={

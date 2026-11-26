@@ -170,7 +170,7 @@ class AppAnalyticsService:
             /* app_analytics:dashboard */
             SELECT
               (SELECT COUNT(*) FROM todos WHERE user_id = %s
-                AND DATE(remind_at AT TIME ZONE 'Asia/Taipei') = %s) AS todo_count,
+                AND %s BETWEEN remind_start_date AND remind_end_date) AS todo_count,
               (SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE user_id = %s
                 AND type = 'expense' AND transaction_date = %s) AS expense_today,
               (SELECT COUNT(*) FROM transactions WHERE user_id = %s
