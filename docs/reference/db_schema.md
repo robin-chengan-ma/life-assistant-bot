@@ -1,6 +1,6 @@
 ---
 title: DB Schema
-updated: 2026-11-25
+updated: 2026-11-26
 ---
 
 # DB Schema
@@ -22,7 +22,7 @@ updated: 2026-11-25
 > 看 SQL 語法＋說明設計理由→取得同意」，才會存成 `src/migrations/` 底下的檔案，經 commit/push 由
 > Render 自動部署套用（實際套用時間以資料庫 `schema_migrations` 追蹤表為準）。
 >
-> 本文件已涵蓋至 migration `0103`。2026-11（Robin 明確決策）功能大幅精簡：Telegram 選單只保留
+> 本文件已涵蓋至 migration `0106`。2026-11（Robin 明確決策）功能大幅精簡：Telegram 選單只保留
 > 運動/飲食/體態、記帳、待辦事項（簡化為純一次性提醒）、生日設定（簡化為純週期性生日）、權限管理；
 > `0101`～`0103` 移除心情小記、收藏與旅遊、成果展示、跨模組目標追蹤、功能開關、YouTube 技術情報、
 > 求職模組、TOEIC／證照題庫、個人技能成長電子報、系統錯誤管理與告警等已刪除功能的資料表，並清空
@@ -48,13 +48,8 @@ CREATE TABLE users (
     role TEXT NOT NULL,
     is_owner BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    monthly_budget NUMERIC(12,2),                                    -- 0018 追加
-    budget_alert_50_sent_month DATE,                                 -- 0018 追加
-    budget_alert_80_sent_month DATE,                                 -- 0018 追加
     finance_reminder_sent_date DATE,                                 -- 0021 追加
-    finance_monthly_report_sent_month DATE,                          -- 0022 追加
     height_cm NUMERIC(5,1) CHECK (height_cm BETWEEN 140 AND 220),    -- 0023 追加
-    birthday DATE,                                                   -- 0028 追加
     waist_cm NUMERIC(5,1) CHECK (waist_cm BETWEEN 40 AND 200),       -- 0046 追加
     -- 0083 追加：
     nickname TEXT,                                                   -- FR-4a 暱稱，與家庭稱謂、授權身分分開保存
@@ -71,6 +66,7 @@ CREATE TABLE users (
 - `is_owner` 由程式依 `telegram_user_id` 是否等於 `ROBIN_TELEGRAM_TOKEN` 判斷寫入
 - 後續各模組陸續在此表新增個人化設定欄位，皆以「新增可選欄位、不動既有結構」為原則；記帳（monthly_budget／三個去重欄位）對應 FR-41～FR-44a，體態（height_cm／waist_cm）對應 FR-46，生日對應 FR-53；逐欄 `COMMENT ON` 與核准脈絡見對應 migration 檔案
 - **2026-11（`0101`，功能大幅精簡）**：TOEIC／證照、YouTube、求職模組隨對應功能整批移除，拿掉 `toeic_weekly_question_count`／`toeic_pipeline_last_run_on`／`certificate_answer_reminder_sent_on`／`youtube_last_run_on`／`job_resume`／`job_expectation`／`years_of_experience`／`expected_salary_min`／`expected_salary_max`／`job_search_last_run_on` 共 10 個欄位
+- **2026-11-26（`0104`，ADR 再修正，見 `docs/ADR/discuss/robinson.md`）**：確認「設定記帳預算」「設定體態目標」兩項功能從頭到尾沒有任何設定入口（純死碼，`finance.py`／`body.py` 對應函式與 `budget_overrides`／`body_goals` 資料表一併移除），拿掉 `monthly_budget`／`budget_alert_50_sent_month`／`budget_alert_80_sent_month`／`finance_monthly_report_sent_month` 共 4 個欄位；同一批修正也發現 `birthday` 欄位（0028 追加）早已沒有任何寫入路徑、且首頁查詢會把所有人的生日混進每個人的清單（隱私外洩），一併移除，改用 `important_days` 表（生日設定）取代
 - **2026-08-15（0083，Phase 6 第一批，FR-4a／FR-4d）**：`role` 欄位過去混用「Robin 標記」與「家人稱謂」兩種語意，新增 `nickname`／`family_title` 分開保存，`role` 保留不刪除（向前相容，尚未有 DROP 排程）；新增 `is_active` 供 Owner 停用／恢復使用者，預設 `TRUE`，停用時程式一併清空 `refresh_token_hash`／`refresh_token_expires_at`（沿用 0062 既有欄位）撤銷 Mobile 存取
 - **2026-08-23（0098，FR-65a，見 `docs/ADR/discuss/mobile-app.md` 條目）**：Mobile App 帳密登入新增連續錯誤鎖定，`mobile_login_failed_attempts` 每次密碼錯誤累加、登入成功歸零；累加達 2 次時寫入 `mobile_login_locked_at`（鎖定時間），之後 `AppAuthService.login()` 直接拋 `AccountLockedError` 擋下，不再比對密碼；解鎖只能由 Owner 在 Telegram「權限管理→🔓 解鎖 Mobile App 帳號」按鈕操作（`auth.unlock_mobile_login()`），清空兩欄，不會自動過期。與 `invite_codes` 通關密碼鎖定不同，這裡刻意落地 DB（理由：需要 Owner 手動解鎖、且必須撐過 Render 服務重啟）
 
@@ -156,7 +152,7 @@ CREATE INDEX idx_media_uploads_user_id ON media_uploads (user_id);
 
 | 資料表 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `todos` | 已套用（`0102` 精簡） | — | 2026-11 精簡：純一次性日期＋文字提醒推播，拿掉 status／30 分鐘前提醒／每日摘要／區間待辦；既有資料已清空重來 |
+| `todos` | 已套用（`0102` 精簡、`0106` 改日期區間） | — | 2026-11 精簡：純一次性日期（可為區間）＋文字提醒推播，拿掉 status／30 分鐘前提醒／每日摘要；既有資料已清空重來 |
 
 <details>
 <summary>SQL 與設計理由</summary>
@@ -166,16 +162,20 @@ CREATE TABLE todos (
     id BIGSERIAL PRIMARY KEY,
     user_id BIGINT NOT NULL REFERENCES users(id),
     content TEXT NOT NULL,
-    remind_at TIMESTAMPTZ NOT NULL,
+    remind_start_date DATE NOT NULL,
+    remind_end_date DATE NOT NULL,
     reminded_sent_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_todos_user_id ON todos (user_id);
-CREATE INDEX idx_todos_remind_at ON todos (remind_at);
+CREATE INDEX idx_todos_remind_start_date ON todos (remind_start_date);
 ```
 `src/migrations/0013_create_todos_table.sql`（原始建表）、`0102_wipe_and_simplify_todos_and_logs.sql`
 （2026-11，拿掉 `status`／`remind_before_30min`／`daily_pushed_on`／`start_at`，`due_at` 改名
-`remind_at`、`reminded_30min_sent_at` 改名 `reminded_sent_at`，既有資料清空）
+`remind_at`、`reminded_30min_sent_at` 改名 `reminded_sent_at`，既有資料清空）、
+`0106_todo_remind_date_range.sql`（2026-11-26，單一 `remind_at`（固定 09:00 時間點）改成
+`remind_start_date`／`remind_end_date` 兩個日期，單日待辦＝兩者相同；推播固定改成「第一天台灣
+時間 08:30」，恢復行事曆 UI 選取區間，見 `docs/ADR/discuss/robinson.md`）
 
 - Robin 明確決策：「待辦事項只是純粹去做通知而已，不需要確認動作，不想增加使用者負擔」，新增/編輯/
   刪除全部改到 Mobile App 做，Telegram 端（`src/bot/todo.py`）只負責讀取與推播
@@ -195,7 +195,10 @@ CREATE INDEX idx_todos_remind_at ON todos (remind_at);
 | 資料表 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
 | `transactions` | 已建立 | FR-42 | 支出/收入交易紀錄，`amount` 一律正數，方向由 `type` 決定 |
-| `budget_overrides` | 已建立 | FR-41a | 全局預設（存 `users.monthly_budget`）之外的特殊月份預算覆蓋值 |
+
+> **2026-11-26（`0104`）**：`budget_overrides`（原 FR-41a「特殊月份預算覆蓋」）經 Robin 確認
+> 「設定記帳預算」功能從頭到尾沒有任何 Telegram 或 Mobile App 設定入口（純死碼），已整張表移除，
+> 詳見 `docs/ADR/discuss/robinson.md`。
 
 <details>
 <summary>SQL 與設計理由</summary>
@@ -219,20 +222,8 @@ CREATE INDEX idx_transactions_user_id ON transactions (user_id);
 
 - FR-41「理財目標」定案為「每月支出預算上限」而非儲蓄目標比對，經 2026-08-04 AskUserQuestion 與 Robin 確認；交易表仍同時記支出/收入，保留未來結餘概念的彈性
 
-```sql
-CREATE TABLE budget_overrides (
-    id BIGSERIAL PRIMARY KEY,
-    user_id BIGINT NOT NULL REFERENCES users(id),
-    year INT NOT NULL,
-    month INT NOT NULL CHECK (month BETWEEN 1 AND 12),
-    amount NUMERIC(12,2) NOT NULL CHECK (amount > 0),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (user_id, year, month)
-);
-```
-`src/migrations/0020_create_budget_overrides_table.sql`
-
-- 「全局預設＋特殊月份覆蓋」設計（非逐月都存一筆），查詢時 fallback 用 `users.monthly_budget`；`UNIQUE (user_id, year, month)` 確保每人每月僅一筆覆蓋值
+`budget_overrides` 原建表於 `src/migrations/0020_create_budget_overrides_table.sql`，已由
+`src/migrations/0104_drop_dead_budget_and_body_goal_features.sql` 整張表 `DROP TABLE`。
 </details>
 
 ## 體態管理
@@ -243,7 +234,11 @@ CREATE TABLE budget_overrides (
 | `exercise_categories` | 已套用 | FR-47a | 全域共用運動類別表，新增自訂類別採正規化比對＋LLM 語意判斷兩段式同義詞合併 |
 | `exercise_logs` | 已套用 0084 新結構 | FR-47／FR-47a、FR-64 | 已移除 `input_mode`／`training_details` 並新增 `category_id`；使用新版單一表單結構 |
 | `diet_logs` | 已建立 | FR-48、FR-64 | 飲食與飲水共用一表，營養數值可由 AI 估算或人工輸入並保留來源 |
-| `body_goals` | 已套用（`0102` 已清空既有資料） | FR-45～FR-48／FR-64c／FR-72a | 體重/運動/飲食三子功能共用；`important_day_id` 連結期限事件；2026-11 精簡僅清空既有資料，表結構不變 |
+
+> **2026-11-26（`0104`）**：`body_goals`（原 FR-45～FR-48「體態目標」三子功能）經 Robin 確認
+> 「設定體態目標」從頭到尾沒有任何 Telegram 或 Mobile App 設定入口（純死碼，Mobile App 從未實作
+> 對應畫面），已整張表移除，連同 `src/services/goal_parser.py`（僅供 `diet` 目標解析用，零其他
+> 呼叫者）一併刪除，詳見 `docs/ADR/discuss/robinson.md`。
 
 <details>
 <summary>SQL 與設計理由</summary>
@@ -330,36 +325,12 @@ CREATE INDEX idx_diet_logs_user_id ON diet_logs (user_id);
 - `0078_add_mobile_record_input_sources.sql` 新增 `nutrition_source`（`ai`／`manual`）與營養數值範圍檢查；
   人工模式要求脂肪、碳水、蛋白質與熱量皆有值，飲水列固定標記為人工來源。
 
-```sql
-CREATE TABLE body_goals (
-    id BIGSERIAL PRIMARY KEY,
-    user_id BIGINT NOT NULL REFERENCES users(id),
-    goal_type TEXT NOT NULL CHECK (goal_type IN ('weight', 'exercise', 'diet')),
-    target_description TEXT NOT NULL,
-    target_value NUMERIC(6,2),
-    target_unit TEXT,
-    target_direction TEXT CHECK (target_direction IN ('min', 'max')),
-    baseline_value NUMERIC(6,2),
-    target_date DATE,
-    important_day_id BIGINT REFERENCES important_days(id) ON DELETE SET NULL,
-    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'achieved', 'cancelled')),
-    achieved_notified BOOLEAN NOT NULL DEFAULT FALSE,
-    deadline_reminder_sent BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX idx_body_goals_user_id ON body_goals (user_id);
-```
-`src/migrations/0027_create_body_goals_table.sql`、`0082_link_goals_to_important_days.sql`、
-`0087_add_target_unit_to_body_goals.sql`（2026-08-17，批次3，FR-48 方案A）、
-`0089_add_target_direction_to_body_goals.sql`（2026-08-17，批次3補做，FR-48 自動達成判斷）
-
-- 三子功能共用一表、`goal_type` 區分，語意隨類型不同由 App 層解讀；`weight` 用 `baseline_value` 判斷增/減方向；`exercise` 用累積分鐘數（各運動類型通用單位）；`diet` 支援方案A LLM 輔助解析出結構化 `target_value`／`target_unit`／`target_direction`（見 `src/services/goal_parser.py`），`target_direction`＝`min` 時累計值隨時可判斷達成（至少要達到），＝`max` 時只在有 `target_date` 且已到期時才判斷（不能超過，見 `body.check_and_push_diet_goal_achievements()`），抽不出結構化數值時仍為純文字目標，只能手動標記
-
-`body_goals` 表結構與 SQL 不變，`0102_wipe_and_simplify_todos_and_logs.sql` 僅 `TRUNCATE` 清空既有紀錄
-（2026-11 精簡，Robin 核准：無保留價值的少量資料）；`module_goals`／`goal_summaries`（跨模組目標追蹤，
-記帳／收藏清單通用目標與每日摘要快取）已隨對應功能一併移除，見
-`src/migrations/0101_drop_cancelled_feature_tables.sql`。
+`body_goals` 原建表於 `src/migrations/0027_create_body_goals_table.sql`（後續
+`0082_link_goals_to_important_days.sql`／`0087_add_target_unit_to_body_goals.sql`／
+`0089_add_target_direction_to_body_goals.sql` 陸續擴充欄位），已由
+`src/migrations/0104_drop_dead_budget_and_body_goal_features.sql` 整張表 `DROP TABLE`。
+`module_goals`／`goal_summaries`（跨模組目標追蹤，記帳／收藏清單通用目標與每日摘要快取）則已隨
+對應功能一併移除，見 `src/migrations/0101_drop_cancelled_feature_tables.sql`。
 </details>
 
 ## 生日設定
@@ -369,7 +340,7 @@ CREATE INDEX idx_body_goals_user_id ON body_goals (user_id);
 
 | 資料表 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `important_days` | 已套用（`0103` 精簡） | FR-53 | 生日設定；拿掉單次事件／浮動（農曆）日期／通知對象／備註／行程或目標連動等舊欄位 |
+| `important_days` | 已套用（`0103` 精簡、`0105` 多選提前提醒） | FR-53 | 生日設定；拿掉單次事件／浮動（農曆）日期／通知對象／備註／行程或目標連動等舊欄位 |
 
 <details>
 <summary>SQL 與設計理由</summary>
@@ -381,6 +352,7 @@ CREATE TABLE important_days (
     name TEXT NOT NULL,
     birth_month SMALLINT NOT NULL CHECK (birth_month BETWEEN 1 AND 12),
     birth_day SMALLINT NOT NULL CHECK (birth_day BETWEEN 1 AND 31),
+    remind_offsets INTEGER[] NOT NULL DEFAULT '{0}',                 -- 0105 追加
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ```
@@ -388,7 +360,13 @@ CREATE TABLE important_days (
 `recurrence_type`／`event_date`／`event_month`／`event_day` 等）、
 `0103_simplify_important_days_to_birthdays.sql`（2026-11，`owner_user_id` 改名 `user_id`、`title`
 改名 `name`，新增 `birth_month`／`birth_day`，其餘舊欄位全部移除；`important_day_occurrences`／
-`important_day_recipients` 兩張輔助表一併移除）
+`important_day_recipients` 兩張輔助表一併移除）、
+`0105_add_remind_offsets_to_important_days.sql`（2026-11-26，可複選提前幾天提醒：0／3／7／14，
+預設僅「當天」；詳見 `docs/ADR/discuss/robinson.md`）
+
+- `remind_offsets` 可複選，僅允許 `{0, 3, 7, 14}` 的非空子集合；`check_and_push_birthdays()`
+  逐一走訪選定天數，各自用 `notification_key = birthday_important_day_{id}_offset_{offset}`
+  去重，彼此互不影響（同一天同時命中多個 offset 會各推一次）
 
 - 既有資料轉換規則：只有舊 `recurrence_type = 'fixed_annual'`（國曆固定每年重複）的既有資料視為
   生日予以保留、`birth_month`／`birth_day` 直接取自舊 `event_month`／`event_day`；`flexible_annual`

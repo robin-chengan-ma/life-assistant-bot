@@ -31,7 +31,7 @@ type AuthStatus = "loading" | "guest" | "authenticated";
 type AuthContextValue = {
   status: AuthStatus;
   user: AppUser | null;
-  login: (userId: string, password: string, keepLoggedIn: boolean) => Promise<string>;
+  login: (userId: string, password: string) => Promise<string>;
   forgotPassword: (userId: string) => Promise<string>;
   identifyUser: (userId: string) => Promise<void>;
   changePassword: (currentPassword: string, newPassword: string) => Promise<string>;
@@ -150,11 +150,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
   }, [accessTokenExpiresAt, clearSession, hasRefreshToken, refreshSession, status]);
 
   const login = useCallback(
-    async (userId: string, password: string, keepLoggedIn: boolean) => {
-      const session = await requestLogin(userId, password, keepLoggedIn);
-      if (!keepLoggedIn) {
-        await clearRefreshToken();
-      }
+    async (userId: string, password: string) => {
+      const session = await requestLogin(userId, password);
       await applySession(
         session.access_token,
         session.access_token_expires_in,

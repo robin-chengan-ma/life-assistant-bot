@@ -3,6 +3,9 @@
 2026-11（功能大幅精簡，Robin 明確決策）：「重要日子」改名為「生日設定」，拿掉單次事件、浮動
 （農曆）日期、通知對象、備註、跟行程或目標連動等舊概念，只剩下「誰的生日、國曆幾月幾號」。
 欄位假設見 `src/bot/important_days.py` 檔頭與 migration 0103。
+
+2026-11-26（生日多選提前提醒，見 migration 0105）：新增 `remind_offsets`（可複選「14／7／3／
+當天」天前推播），只允許 `{0,3,7,14}` 的非空子集合。
 """
 
 from __future__ import annotations
@@ -48,6 +51,22 @@ def _parse_day(value: Any) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 31:
         raise ImportantDayValidationError("請選擇正確的日期")
     return value
+
+
+_ALLOWED_REMIND_OFFSETS = {0, 3, 7, 14}
+
+
+def _parse_remind_offsets(value: Any) -> list[int]:
+    if value is None:
+        return [0]
+    if not isinstance(value, list) or not value:
+        raise ImportantDayValidationError("請至少選擇一個提前提醒天數")
+    offsets = set()
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, int) or item not in _ALLOWED_REMIND_OFFSETS:
+            raise ImportantDayValidationError("提前提醒天數只能是 0、3、7 或 14 天")
+        offsets.add(item)
+    return sorted(offsets, reverse=True)
 
 
 class AppImportantDayService:
@@ -107,6 +126,7 @@ class AppImportantDayService:
             "name": _parse_name(payload.get("name")),
             "birth_month": _parse_month(payload.get("birth_month")),
             "birth_day": _parse_day(payload.get("birth_day")),
+            "remind_offsets": _parse_remind_offsets(payload.get("remind_offsets")),
         }
 
     @staticmethod

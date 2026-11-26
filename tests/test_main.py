@@ -5,8 +5,12 @@ main.py 其餘部分（Flask app 註冊、`_run_startup_migrations()`）沿用�
 本次實際新增的邏輯，避免範圍蔓延。
 
 2026-11（功能大幅精簡，見 ADR-33）：Neon 容量監控、固定節日／跨模組目標摘要／技術情報／
-TOEIC／證照題庫／求職模組等排程皆隨對應功能整個移除，`/healthz` 現在只剩待辦推播、記帳預警／
-月報、體態目標預警、生日推播五項，底下測試隨之整批改寫。
+TOEIC／證照題庫／求職模組等排程皆隨對應功能整個移除。
+
+2026-11-26（再次精簡，見 docs/ADR/discuss/robinson.md）：確認「設定記帳預算」「設定體態目標」
+從頭到尾沒有任何設定入口，`_check_finance_alerts()`／`_check_finance_monthly_report()`／
+`_check_body_goal_alerts()` 連同背後的 `finance.py`／`body.py` 函式與
+`budget_overrides`／`body_goals` 資料表一併移除；`/healthz` 現在只剩待辦推播、生日推播兩項。
 """
 from unittest.mock import MagicMock
 
@@ -45,107 +49,6 @@ def test_check_todo_pushes_swallows_exception(monkeypatch):
     main._check_todo_pushes(fake_db)  # 不應該往外拋
 
 
-def test_check_finance_alerts_skips_when_env_vars_missing(monkeypatch):
-    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
-
-    main._check_finance_alerts(db=None)  # 不應該拋例外，直接跳過
-
-
-def test_check_finance_alerts_calls_finance_module_when_env_vars_set(monkeypatch):
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
-
-    fake_db = MagicMock()
-    fake_telegram = MagicMock()
-    monkeypatch.setattr("submodules.telegram.client.TelegramClient", MagicMock(return_value=fake_telegram))
-
-    fake_check_alerts = MagicMock()
-    monkeypatch.setattr("src.bot.finance.check_and_push_budget_alerts", fake_check_alerts)
-
-    main._check_finance_alerts(fake_db)
-
-    fake_check_alerts.assert_called_once_with(fake_db, fake_telegram)
-
-
-def test_check_finance_alerts_swallows_exception(monkeypatch):
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
-
-    fake_db = MagicMock()
-    monkeypatch.setattr(
-        "submodules.telegram.client.TelegramClient", MagicMock(side_effect=RuntimeError("boom"))
-    )
-
-    main._check_finance_alerts(fake_db)  # 不應該往外拋
-
-
-def test_check_finance_monthly_report_skips_when_env_vars_missing(monkeypatch):
-    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
-
-    main._check_finance_monthly_report(db=None)  # 不應該拋例外，直接跳過
-
-
-def test_check_finance_monthly_report_calls_finance_module_when_env_vars_set(monkeypatch):
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
-
-    fake_db = MagicMock()
-    fake_telegram = MagicMock()
-    monkeypatch.setattr("submodules.telegram.client.TelegramClient", MagicMock(return_value=fake_telegram))
-
-    fake_check_report = MagicMock()
-    monkeypatch.setattr("src.bot.finance.check_and_push_monthly_report", fake_check_report)
-
-    main._check_finance_monthly_report(fake_db)
-
-    fake_check_report.assert_called_once_with(fake_db, fake_telegram)
-
-
-def test_check_finance_monthly_report_swallows_exception(monkeypatch):
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
-
-    fake_db = MagicMock()
-    monkeypatch.setattr(
-        "submodules.telegram.client.TelegramClient", MagicMock(side_effect=RuntimeError("boom"))
-    )
-
-    main._check_finance_monthly_report(fake_db)  # 不應該往外拋
-
-
-def test_check_body_goal_alerts_skips_when_env_vars_missing(monkeypatch):
-    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
-
-    main._check_body_goal_alerts(db=None)  # 不應該拋例外，直接跳過
-
-
-def test_check_body_goal_alerts_calls_body_module_when_env_vars_set(monkeypatch):
-    # 2026-11（功能大幅精簡）：Google Calendar 整合已整個移除，`body` 模組的排程函式不再接受
-    # `calendar_client` 參數。
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
-
-    fake_db = MagicMock()
-    fake_telegram = MagicMock()
-    monkeypatch.setattr("submodules.telegram.client.TelegramClient", MagicMock(return_value=fake_telegram))
-
-    fake_check_exercise = MagicMock()
-    fake_check_diet = MagicMock()
-    monkeypatch.setattr("src.bot.body.check_and_push_exercise_goal_achievements", fake_check_exercise)
-    monkeypatch.setattr("src.bot.body.check_and_push_diet_goal_achievements", fake_check_diet)
-
-    main._check_body_goal_alerts(fake_db)
-
-    fake_check_exercise.assert_called_once_with(fake_db, fake_telegram)
-    fake_check_diet.assert_called_once_with(fake_db, fake_telegram)
-
-
-def test_check_body_goal_alerts_swallows_exception(monkeypatch):
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
-
-    fake_db = MagicMock()
-    monkeypatch.setattr(
-        "submodules.telegram.client.TelegramClient", MagicMock(side_effect=RuntimeError("boom"))
-    )
-
-    main._check_body_goal_alerts(fake_db)  # 不應該往外拋
-
-
 def test_check_birthdays_skips_when_env_vars_missing(monkeypatch):
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
 
@@ -153,8 +56,6 @@ def test_check_birthdays_skips_when_env_vars_missing(monkeypatch):
 
 
 def test_check_birthdays_calls_important_days_module_when_env_vars_set(monkeypatch):
-    # 2026-11（功能大幅精簡，見 ADR-33）：固定節日推播（`src/bot/notifications.py`）整個移除，
-    # 取代成只剩生日的 `src/bot/important_days.py` 排程函式。
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
 
     fake_db = MagicMock()
@@ -182,9 +83,6 @@ def test_check_birthdays_swallows_exception(monkeypatch):
 
 _HEALTH_CHECK_NAMES = (
     "_check_todo_pushes",
-    "_check_finance_alerts",
-    "_check_finance_monthly_report",
-    "_check_body_goal_alerts",
     "_check_birthdays",
 )
 

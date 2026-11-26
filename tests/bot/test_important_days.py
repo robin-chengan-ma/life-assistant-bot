@@ -79,3 +79,53 @@ def test_check_and_push_birthdays_skips_unbound_user(fake_db):
     important_days.check_and_push_birthdays(fake_db, telegram_client, now=now)
 
     telegram_client.send_text.assert_not_called()
+
+
+def test_check_and_push_birthdays_sends_advance_offset_reminder(fake_db):
+    # 2026-11-26（多選提前提醒，見 migration 0105）：14/7/3 天前也要推播，文案與當天不同。
+    user_id = fake_db.insert("users", {"telegram_user_id": 111, "role": "Robin", "is_owner": True})
+    fake_db.insert(
+        "important_days",
+        {"user_id": user_id, "name": "媽媽", "birth_month": 3, "birth_day": 27, "remind_offsets": [0, 7]},
+    )
+    telegram_client = Mock()
+    now = datetime(2026, 3, 20, 9, 0, tzinfo=_TAIWAN_TZ)  # 提前 7 天
+
+    important_days.check_and_push_birthdays(fake_db, telegram_client, now=now)
+
+    telegram_client.send_text.assert_called_once()
+    _, kwargs = telegram_client.send_text.call_args
+    assert "媽媽" in kwargs["text"]
+    assert "7 天後" in kwargs["text"]
+
+
+def test_check_and_push_birthdays_sends_each_selected_offset_independently(fake_db):
+    user_id = fake_db.insert("users", {"telegram_user_id": 111, "role": "Robin", "is_owner": True})
+    fake_db.insert(
+        "important_days",
+        {"user_id": user_id, "name": "媽媽", "birth_month": 3, "birth_day": 20, "remind_offsets": [0, 3, 7, 14]},
+    )
+    telegram_client = Mock()
+
+    # 提前 14 天跟當天都要各推播一次，彼此不互相去重（notification_key 帶 offset）。
+    important_days.check_and_push_birthdays(fake_db, telegram_client, now=datetime(2026, 3, 6, 9, 0, tzinfo=_TAIWAN_TZ))
+    important_days.check_and_push_birthdays(fake_db, telegram_client, now=datetime(2026, 3, 20, 9, 0, tzinfo=_TAIWAN_TZ))
+
+    assert telegram_client.send_text.call_count == 2
+
+
+def test_check_and_push_birthdays_defaults_to_day_of_offset_when_unset(fake_db):
+    # 沒有 remind_offsets 欄位（理論上有 DB 預設值 '{0}'，這裡防禦性測試 Python 端的 fallback）。
+    user_id = fake_db.insert("users", {"telegram_user_id": 111, "role": "Robin", "is_owner": True})
+    fake_db.insert("important_days", {"user_id": user_id, "name": "媽媽", "birth_month": 3, "birth_day": 20})
+    telegram_client = Mock()
+
+    important_days.check_and_push_birthdays(
+        fake_db, telegram_client, now=datetime(2026, 3, 13, 9, 0, tzinfo=_TAIWAN_TZ)
+    )
+    telegram_client.send_text.assert_not_called()
+
+    important_days.check_and_push_birthdays(
+        fake_db, telegram_client, now=datetime(2026, 3, 20, 9, 0, tzinfo=_TAIWAN_TZ)
+    )
+    telegram_client.send_text.assert_called_once()

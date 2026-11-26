@@ -171,31 +171,6 @@ def test_finance_returns_latest_record_outside_selected_range():
     assert "goal_summary" not in result
 
 
-def test_goal_normalization_handles_improvement_milestone_and_expired_status():
-    service = AppAnalyticsService(FakeDatabase(), today=date(2026, 8, 11))
-
-    improvement = service._normalized_goal({
-        "id": 1, "goal_type": "weight", "target_description": "降到 60 公斤",
-        "baseline_value": 70, "target_value": 60, "current_value": 65,
-        "progress_mode": "improvement", "status": "active", "target_date": date(2026, 12, 1),
-    })
-    milestone = service._normalized_goal({
-        "id": 2, "goal_type": "exercise", "target_description": "完成三鐵",
-        "target_value": None, "current_value": None, "progress_mode": "milestone",
-        "status": "active", "target_date": None,
-    })
-    expired = service._normalized_goal({
-        "id": 3, "module_key": "finance", "target_description": "存錢",
-        "target_value": 1000, "current_value": 200, "status": "active",
-        "target_date": date(2026, 8, 10),
-    })
-
-    assert improvement["progress_percent"] == 50
-    assert milestone["progress_percent"] == 0
-    assert expired["status"] == "expired"
-    assert service._goal_summary([expired, improvement]) == improvement
-
-
 def test_body_keeps_missing_days_absent_so_line_chart_breaks_the_line():
     db = FakeDatabase(
         toggles=[{"feature_key": "body", "is_enabled": True}],
@@ -268,7 +243,9 @@ def test_body_splits_diet_and_exercise_totals_by_ai_and_manual_source():
     }
 
 
-def test_body_returns_latest_record_defaults_bmi_and_goal_description():
+def test_body_returns_latest_record_defaults_bmi_and_no_goal_fields():
+    # 2026-11-26（ADR 再修正）：`body_goals` 表與對應的「設定體態目標」功能已確認零入口並整批
+    # 移除，`body()` 不再回傳 `goals`／`goal_summary`。
     db = FakeDatabase(
         toggles=[{"feature_key": "body", "is_enabled": True}],
         users=[{"id": 1, "height_cm": 175}],
@@ -280,10 +257,6 @@ def test_body_returns_latest_record_defaults_bmi_and_goal_description():
                 "id": 9, "user_id": 1, "entry_date": date(2026, 8, 11),
                 "weight_kg": 70, "waist_cm": 82, "height_cm": 175,
             }],
-            "app_analytics:body_goals": [{
-                "goal_type": "weight", "target_description": "減重至 65 公斤",
-                "target_value": 65, "baseline_value": 70, "target_date": date(2026, 12, 31),
-            }],
         },
     )
 
@@ -292,20 +265,25 @@ def test_body_returns_latest_record_defaults_bmi_and_goal_description():
     assert result["latest_body_record"]["id"] == 9
     assert result["latest_body_record"]["bmi"] == 22.86
     assert result["body_defaults"] == {"height_cm": 175, "weight_kg": 70.0, "waist_cm": 82}
-    assert result["goals"][0]["target_description"] == "減重至 65 公斤"
+    assert "goals" not in result
+    assert "goal_summary" not in result
 
 
 def test_dashboard_returns_summary_and_role_specific_sent_notifications():
-    # 2026-11（功能大幅精簡，見 ADR-33）：固定節日推播（父親節等）隨 `src/bot/notifications.py`
-    # 整個移除，「重要通知」與「重要日子」現在只剩生日。
+    # 2026-11-26（ADR 再修正）：首頁通知不再查詢已死欄位 `users.birthday`，改用
+    # `important_days`（透過 `check_and_push_birthdays()` 寫入的
+    # `birthday_important_day_{id}_offset_{offset}` key），且只有 offset == 0（當天）才會出現
+    # 在首頁，見 `_notifications_for_user()` docstring。
     db = FakeDatabase(
         query_rows={"app_analytics:dashboard": [{"todo_count": 2, "expense_today": 300}]},
         select_rows={
             "important_notifications_log": [
-                {"notification_key": "birthday_1"},
-            ]
+                {"notification_key": "birthday_important_day_1_offset_0"},
+            ],
+            "important_days": [
+                {"id": 1, "user_id": 1, "name": "我", "birth_month": 8, "birth_day": 8},
+            ],
         },
-        users=[{"id": 1, "role": "Robin", "birthday": date(1990, 8, 8)}],
     )
 
     result = AppAnalyticsService(db).dashboard(user(is_owner=True), today=date(2026, 8, 8))
@@ -313,15 +291,19 @@ def test_dashboard_returns_summary_and_role_specific_sent_notifications():
     assert result["summary"]["todo_count"] == 2
     assert result["date"] == "2026-08-08"
     assert any("生日快樂" in message for message in result["notifications"])
-    assert "今天：我的生日" in result["important_days"]
+    assert "今天：我" in result["important_days"]
 
 
 def test_dashboard_important_days_only_include_current_sunday_to_saturday():
     db = FakeDatabase(
-        users=[{"id": 1, "role": "Robin", "birthday": date(1960, 8, 8)}],
+        select_rows={
+            "important_days": [
+                {"id": 1, "user_id": 1, "name": "我", "birth_month": 8, "birth_day": 8},
+            ],
+        },
     )
 
     result = AppAnalyticsService(db).dashboard(user(is_owner=True), today=date(2026, 8, 5))
 
-    assert "3 天後：我的生日" in result["important_days"]
+    assert "3 天後：我" in result["important_days"]
     assert all(message.startswith(("今天：", "3 天後：", "當周：")) for message in result["important_days"])

@@ -7,7 +7,6 @@ import { AppPressable as Pressable } from "@/components/AppPressable";
 import { AppText as Text } from "@/components/AppText";
 import { AppView as View } from "@/components/AppView";
 import { AppShell } from "@/components/AppShell";
-import { GoalSummaryCard } from "@/components/AnalyticsShared";
 import { ChartCard, LineChart } from "@/components/Charts";
 import { DateRangeFilter, defaultDateRange } from "@/components/DateRangeFilter";
 import { RecordModal } from "@/components/RecordModal";
@@ -85,7 +84,6 @@ export default function AnalyticsScreen() {
 
   return (
     <AppShell scrollViewRef={scrollViewRef} title={title}>
-      {!error && payload ? <TopGoalSummary bodyTab={bodyTab} module={module} payload={payload} /> : null}
       {!error && module === "body" && payload ? <BodyTabs selected={bodyTab} onSelect={setBodyTab} /> : null}
       {!initialLoading && payload ? (
         <DateRangeFilter
@@ -141,31 +139,6 @@ function renderModule(module: AnalyticsModule, payload: AnalyticsResponseMap[Ana
   }
 }
 
-function selectGoal(goals: BodyAnalytics["goals"], type: BodyTab) {
-  const active = goals.filter((goal) => goal.goal_type === type && goal.status === "active");
-  const dated = active.filter((goal) => goal.target_date);
-  return (dated.length ? dated : active).slice().sort((left, right) => {
-    if (dated.length) {
-      const byDate = String(left.target_date).localeCompare(String(right.target_date));
-      if (byDate) return byDate;
-    }
-    return String(right.updated_at ?? "").localeCompare(String(left.updated_at ?? ""));
-  })[0] ?? null;
-}
-
-function TopGoalSummary({ bodyTab, module, payload }: { bodyTab: BodyTab; module: AnalyticsModule; payload: AnalyticsResponseMap[AnalyticsModule] }) {
-  if (module === "body") {
-    const data = payload as BodyAnalytics;
-    const goals = data.goals.filter((goal) => goal.goal_type === bodyTab);
-    return <GoalSummaryCard goal={selectGoal(data.goals, bodyTab)} goals={goals} />;
-  }
-  if (module === "finance") {
-    const data = payload as FinanceAnalytics;
-    return <GoalSummaryCard goal={data.goal_summary} goals={data.goals} />;
-  }
-  return null;
-}
-
 function BodyTabs({ onSelect, selected }: { onSelect: (value: BodyTab) => void; selected: BodyTab }) {
   const tabs: Array<{ key: BodyTab; label: string }> = [{ key: "weight", label: "體態" }, { key: "diet", label: "飲食" }, { key: "exercise", label: "運動" }];
   return <View style={styles.tabs}>{tabs.map((tab) => <Pressable key={tab.key} onPress={() => onSelect(tab.key)} style={[styles.tab, selected === tab.key && styles.tabSelected]}><Text style={[styles.tabText, selected === tab.key && styles.tabTextSelected]}>{tab.label}</Text></Pressable>)}</View>;
@@ -176,12 +149,10 @@ function EmptyState({ hasAnyData }: { hasAnyData: boolean }) {
 }
 
 function BodyView({ data, selected }: { data: BodyAnalytics; selected: BodyTab }) {
-  const weightGoal = data.goals.find((goal) => goal.goal_type === "weight")?.target_value ?? null;
-  const exerciseGoal = data.goals.find((goal) => goal.goal_type === "exercise")?.target_value ?? null;
   const dietTooltip = (row: BodyAnalytics["diet"][number], nutrient: "fat_g" | "protein_g" | "carbs_g" | "calories", unit: string) => `${row.date}｜人工 ${row[`manual_${nutrient}`]} ${unit}｜AI ${row[`ai_${nutrient}`]} ${unit}｜合計 ${row[`total_${nutrient}`]} ${unit}`;
   const exerciseTooltip = (row: BodyAnalytics["exercise"][number]) => `${row.date}｜人工 ${row.manual_calories} 大卡｜AI ${row.ai_calories} 大卡｜合計 ${row.total_calories} 大卡`;
   if (selected === "weight") return <>
-    <ChartCard title="體重趨勢"><LineChart yAxisLabel="體重(公斤)" series={[{ label: "體重", color: "#2E9D74", marker: "solid", points: data.weight.map((row) => ({ label: row.date, value: row.weight })) }, { label: "目標", color: "#9AA8A4", marker: "hollow", points: data.weight.map((row) => ({ label: row.date, value: weightGoal })) }]} /></ChartCard>
+    <ChartCard title="體重趨勢"><LineChart yAxisLabel="體重(公斤)" series={[{ label: "體重", color: "#2E9D74", marker: "solid", points: data.weight.map((row) => ({ label: row.date, value: row.weight })) }]} /></ChartCard>
     <ChartCard title="腰圍趨勢"><LineChart yAxisLabel="腰圍(公分)" series={[{ label: "腰圍", color: "#D9544D", marker: "solid", points: data.weight.map((row) => ({ label: row.date, value: row.waist })) }]} /></ChartCard>
     <ChartCard title="BMI 趨勢"><LineChart yAxisLabel="BMI" series={[{ label: "BMI", color: "#3B82F6", marker: "solid", points: data.weight.map((row) => ({ label: row.date, value: row.bmi })) }]} /></ChartCard>
   </>;
@@ -196,7 +167,7 @@ function BodyView({ data, selected }: { data: BodyAnalytics; selected: BodyTab }
   </>;
   return <>
     <View style={styles.metricRow}><Metric label="運動時間" value={`${data.exercise.reduce((sum, row) => sum + row.minutes, 0).toLocaleString()} 分鐘`} /><Metric label="消耗熱量" value={`${data.exercise.reduce((sum, row) => sum + row.total_calories, 0).toLocaleString()} 大卡`} /></View>
-    <ChartCard title="運動時間趨勢"><LineChart yAxisLabel="時間(分鐘)" series={[{ label: "分鐘", color: "#2E9D74", marker: "solid", points: data.exercise.map((row) => ({ label: row.date, value: row.minutes })) }, { label: "目標分鐘", color: "#9AA8A4", marker: "hollow", points: data.exercise.map((row) => ({ label: row.date, value: exerciseGoal })) }]} zeroBased /></ChartCard>
+    <ChartCard title="運動時間趨勢"><LineChart yAxisLabel="時間(分鐘)" series={[{ label: "分鐘", color: "#2E9D74", marker: "solid", points: data.exercise.map((row) => ({ label: row.date, value: row.minutes })) }]} zeroBased /></ChartCard>
     <ChartCard title="運動消耗趨勢"><LineChart yAxisLabel="熱量(大卡)" series={[
       { label: "消耗大卡（人工）", color: "#EB9741", marker: "solid", points: data.exercise.map((row) => ({ label: row.date, tooltip: exerciseTooltip(row), value: row.manual_count ? row.manual_calories : null })) },
       { label: "消耗大卡（AI）", color: "#EB9741", marker: "hollow", points: data.exercise.map((row) => ({ label: row.date, tooltip: exerciseTooltip(row), value: row.ai_count ? row.ai_calories : null })) },

@@ -1,9 +1,13 @@
 """體態管理純邏輯（對應 docs/specs/SPEC.md FR-45／FR-45a／FR-46，Phase 6 第二批 2h）。
 
 負責：身高／腰圍設定、體重/運動/飲食三個子功能的紀錄 CRUD（含補記/更新/刪除，從一開始就內建，
-理由同記帳模組）、BMI 計算與分級、運動消耗卡路里與飲食三大營養素的 LLM 估算、體態目標（三個子
-功能共用一張表）的設定/查詢/編輯/刪除、FR-45 三種預警情境的判斷與推播。不處理任何 Telegram 對話
-流程，那是 src/bot/commands.py 的責任，保持這個模組是純粹的資料操作與計算，方便獨立測試。
+理由同記帳模組）、BMI 計算與分級、運動消耗卡路里與飲食三大營養素的 LLM 估算。不處理任何 Telegram
+對話流程，那是 src/bot/commands.py 的責任，保持這個模組是純粹的資料操作與計算，方便獨立測試。
+
+2026-11-26（ADR 再修正）：原本的「體態目標」（`body_goals`）設定/查詢/編輯/刪除與 FR-45 三種
+預警情境（目標達成通知等）查明後從頭到尾沒有任何設定入口（純死碼，Telegram 機器人已大幅精簡、
+Mobile App 從未實作對應畫面），經 Robin 確認後整段移除，連同 `body_goals` 資料表，詳見
+docs/ADR/discuss/robinson.md。
 
 2026-08-08 追加（FR-46 擴充）：新增腰圍（`waist_cm`）設定，設計比照身高——存在 `users` 表、
 「設定一次、變動才修正」，不像體重需要每天記錄的歷史表。腰圍刻意定位為「參考指標、非必要」：
@@ -39,16 +43,14 @@
 沒命中才新增一筆，LLM 失敗一律降級為新增（不擋下使用者的紀錄流程）。舊運動紀錄資料已於同批
 migration 直接清空，不做欄位相容回填。
 """
-import logging
 import re
 import unicodedata
-from datetime import UTC, date, datetime
+from datetime import date
 from zoneinfo import ZoneInfo
 
 from submodules.cloudsql.client import CloudSQLClient
 
 _TAIWAN_TZ = ZoneInfo("Asia/Taipei")
-_logger = logging.getLogger(__name__)
 
 # FR-46 合理範圍檢查（2026-08-17 定案數字，見模組 docstring）。
 _MIN_HEIGHT_CM = 140.0
@@ -69,12 +71,6 @@ _BMI_CATEGORIES: list[tuple[float, str]] = [
 ]
 _BMI_SEVERE_LABEL = "重度肥胖"
 
-# FR-46～FR-48 體態目標三種類型（決策④）。
-GOAL_TYPES: list[tuple[str, str]] = [("weight", "體重"), ("exercise", "運動"), ("diet", "飲食")]
-_GOAL_TYPE_LABEL_BY_CODE = dict(GOAL_TYPES)
-_GOAL_TYPE_CODE_BY_LABEL = {label: code for code, label in GOAL_TYPES}
-
-# FR-45 目標期限提醒：期限前幾天提醒一次（決策③）。
 
 
 # ---------------------------------------------------------------------------
@@ -537,267 +533,3 @@ def format_diet_macro_note(macros: dict, nutrition_source: str = "ai") -> str:
     if nutrition_source == "ai":
         return "、".join(parts) + "，這是估算值，可能會有誤差，僅供參考喔！"
     return "、".join(parts) + "（這是你自己填寫的數字）"
-
-
-# ---------------------------------------------------------------------------
-# 體態目標（三個子功能共用，決策④）
-# ---------------------------------------------------------------------------
-
-
-def format_goal_type_prompt() -> str:
-    """組出讓使用者選擇要設定哪一種體態目標的編號清單文字。"""
-    lines = ["請問你是要設定哪一種體態目標呢？", ""]
-    for index, (_, label) in enumerate(GOAL_TYPES, start=1):
-        lines.append(f"{index}. {label}")
-    return "\n".join(lines)
-
-
-def resolve_goal_type(text: str) -> str | None:
-    """把使用者輸入解析成目標類型代碼；接受編號或直接輸入「體重」「運動」「飲食」。"""
-    text = text.strip()
-    if text.isdigit():
-        index = int(text)
-        if 1 <= index <= len(GOAL_TYPES):
-            return GOAL_TYPES[index - 1][0]
-        return None
-    return _GOAL_TYPE_CODE_BY_LABEL.get(text)
-
-
-def goal_type_label(code: str) -> str:
-    """依代碼查回顯示用的中文標籤。"""
-    return _GOAL_TYPE_LABEL_BY_CODE[code]
-
-
-def create_goal(
-    db: CloudSQLClient,
-    user_id: int,
-    goal_type: str,
-    target_description: str,
-    target_value: float | None = None,
-    baseline_value: float | None = None,
-    target_date: date | None = None,
-    target_unit: str | None = None,
-    target_direction: str | None = None,
-    progress_type: str | None = None,
-) -> int:
-    """新增一筆體態目標（FR-46～FR-48），回傳新建列的 id。`baseline_value` 只有 `goal_type ==
-    "weight"` 時才需要傳（設定當下的體重，用來判斷要瘦還是要增，決策④）。
-
-    2026-11（功能大幅精簡）：Google Calendar 整合已整個移除，拿掉 `sync_to_calendar` 參數與
-    欄位，不再記錄「要不要同步到家庭行事曆」這個選項。
-    """
-    if progress_type is None:
-        progress_type = "milestone" if goal_type == "exercise" and target_value is None else ("numeric" if target_value is not None else "unquantified")
-    goal_id = db.insert(
-        "body_goals",
-        {
-            "user_id": user_id,
-            "goal_type": goal_type,
-            "target_description": target_description,
-            "target_value": target_value,
-            "target_unit": target_unit,
-            "target_direction": target_direction,
-            "progress_type": progress_type,
-            "baseline_value": baseline_value,
-            "target_date": target_date,
-            "status": "active",
-            "achieved_notified": False,
-            "deadline_reminder_sent": False,
-        },
-    )
-    return goal_id
-
-
-def update_goal(
-    db: CloudSQLClient,
-    goal_id: int,
-    target_description: str,
-    target_value: float | None = None,
-    baseline_value: float | None = None,
-    target_date: date | None = None,
-    target_unit: str | None = None,
-    target_direction: str | None = None,
-    progress_type: str | None = None,
-) -> None:
-    """FR-46（2026-08-17 新增）：目標「✏️ 編輯」重新走一次目標值/期限輸入後寫回，取代原本
-    「要調整就取消重設」的限制。編輯後期限可能改變，`deadline_reminder_sent` 重置為 False
-    讓 7 天前提醒重新計算一次；`achieved_notified` 不動（編輯中的目標理論上還是 active）。"""
-    if progress_type is None:
-        existing = get_goal(db, goal_id)
-        goal_type = existing.get("goal_type") if existing else None
-        progress_type = "milestone" if goal_type == "exercise" and target_value is None else ("numeric" if target_value is not None else "unquantified")
-    db.update(
-        "body_goals",
-        {
-            "target_description": target_description,
-            "target_value": target_value,
-            "target_unit": target_unit,
-            "target_direction": target_direction,
-            "progress_type": progress_type,
-            "baseline_value": baseline_value,
-            "target_date": target_date,
-            "deadline_reminder_sent": False,
-        },
-        where="id = %s",
-        params=(goal_id,),
-    )
-
-
-def get_goal(db: CloudSQLClient, goal_id: int) -> dict | None:
-    """依 id 查詢單筆體態目標，供編輯流程確認擁有者與帶出原始值使用。"""
-    return db.select("body_goals", where="id = %s", params=(goal_id,), fetch_one=True)
-
-
-def list_active_goals(db: CloudSQLClient, user_id: int) -> list[dict]:
-    """查詢某使用者所有進行中的體態目標。"""
-    rows = db.select("body_goals", where="user_id = %s AND status = %s", params=(user_id, "active"))
-    rows.sort(key=lambda row: row["id"], reverse=True)
-    return rows
-
-
-def format_goal_list(goals: list[dict]) -> str:
-    """把體態目標清單格式化成使用者看的編號清單文字。"""
-    if not goals:
-        return "目前還沒有設定中的體態目標喔！"
-    lines = ["這是你目前設定中的體態目標：", ""]
-    for index, item in enumerate(goals, start=1):
-        deadline_part = f"（期限：{item['target_date']:%Y/%m/%d}）" if item.get("target_date") else ""
-        lines.append(f"{index}. [{goal_type_label(item['goal_type'])}] {item['target_description']}{deadline_part}")
-    return "\n".join(lines)
-
-
-def cancel_goal(db: CloudSQLClient, goal_id: int) -> None:
-    """取消一筆體態目標（使用者明確確認後才會呼叫）。
-
-    2026-11（功能大幅精簡）：Google Calendar 整合已整個移除，不再處理
-    `calendar_client`／`google_calendar_event_id`。
-    """
-    db.update("body_goals", {"status": "cancelled"}, where="id = %s", params=(goal_id,))
-
-
-def _mark_goal_achieved(db: CloudSQLClient, goal_id: int) -> None:
-    db.update("body_goals", {"status": "achieved", "achieved_notified": True, "completed_at": datetime.now(UTC)}, where="id = %s", params=(goal_id,))
-
-
-def mark_goal_achieved(db: CloudSQLClient, goal_id: int, user_id: int) -> bool:
-    row = get_goal(db, goal_id)
-    if row is None or row["user_id"] != user_id or row.get("status") != "active":
-        return False
-    _mark_goal_achieved(db, goal_id)
-    return True
-
-
-def check_weight_goal_achieved(db: CloudSQLClient, user_id: int, latest_weight_kg: float) -> str | None:
-    """FR-45 目標達成通知：體重目標在每次記體重時即時檢查（決策③）。方向由 `baseline_value`
-    跟 `target_value` 的大小關係判斷：`target_value < baseline_value` 代表要瘦，達成條件是
-    `latest_weight_kg <= target_value`；反之代表要增重，達成條件是 `latest_weight_kg >=
-    target_value`。達成時立刻標記為 `achieved` 並回傳一句恭喜文字供呼叫端附加在回覆後面；
-    沒有達成中的體重目標，或條件未達成，回傳 None。
-    """
-    goals = db.select(
-        "body_goals", where="user_id = %s AND goal_type = %s AND status = %s", params=(user_id, "weight", "active")
-    )
-    for goal in goals:
-        target_value = goal.get("target_value")
-        baseline_value = goal.get("baseline_value")
-        if target_value is None or baseline_value is None:
-            continue
-        target_value, baseline_value = float(target_value), float(baseline_value)
-        losing_weight = target_value < baseline_value
-        achieved = latest_weight_kg <= target_value if losing_weight else latest_weight_kg >= target_value
-        if achieved:
-            _mark_goal_achieved(db, goal["id"])
-            return f"🎉 恭喜你達成體重目標「{goal['target_description']}」了！"
-    return None
-
-
-def check_and_push_exercise_goal_achievements(db: CloudSQLClient, telegram_client, now: datetime | None = None) -> None:
-    """FR-45 目標達成通知：運動目標是「累積分鐘數」（決策⑤），需要跨多筆紀錄加總，改成借用
-    `/healthz` 頻率的排程檢查（不像體重目標能在單次記錄當下就地判斷）：加總該目標建立之後的所有
-    `exercise_logs.duration_minutes`，達到或超過 `target_value` 就推播恭喜並標記 `achieved`。
-    """
-    now = now or datetime.now(UTC)
-    goals = db.select("body_goals", where="goal_type = %s AND status = %s", params=("exercise", "active"))
-    for goal in goals:
-        target_value = goal.get("target_value")
-        if target_value is None:
-            continue
-        user = db.select("users", where="id = %s", params=(goal["user_id"],), fetch_one=True)
-        if user is None or user.get("telegram_user_id") is None:
-            continue
-
-        created_at_local = goal["created_at"].astimezone(_TAIWAN_TZ).date()
-        logs = db.select(
-            "exercise_logs",
-            where="user_id = %s AND entry_date >= %s",
-            params=(goal["user_id"], created_at_local),
-        )
-        total_minutes = sum(row["duration_minutes"] for row in logs)
-        if total_minutes >= float(target_value):
-            _mark_goal_achieved(db, goal["id"])
-            telegram_client.send_text(
-                chat_id=user["telegram_user_id"],
-                text=f"🎉 恭喜你達成運動目標「{goal['target_description']}」了，累積運動了 {total_minutes} 分鐘！",
-            )
-
-
-def _diet_cumulative_value(db: CloudSQLClient, user_id: int, target_unit: str | None, since_date: date, until_date: date):
-    """依 `target_unit` 判斷要加總的飲食指標：單位含「大卡」「kcal」「卡」時加總
-    `estimated_calories`（熱量類目標），其餘一律當作次數目標，計算 `entry_type='food'` 的
-    紀錄筆數（見 `check_and_push_diet_goal_achievements()`）。"""
-    logs = [
-        row
-        for row in db.select("diet_logs", where="user_id = %s", params=(user_id,))
-        if row["entry_type"] == "food" and since_date <= row["entry_date"] <= until_date
-    ]
-    unit_text = target_unit or ""
-    if any(keyword in unit_text for keyword in ("大卡", "kcal", "卡")):
-        return sum(row.get("estimated_calories") or 0 for row in logs)
-    return len(logs)
-
-
-def check_and_push_diet_goal_achievements(db: CloudSQLClient, telegram_client, now: datetime | None = None) -> None:
-    """FR-48 方案A（2026-08-17 補做，見 docs/ADR/discuss/robinson.md）：飲食目標的自動達成判斷，
-    依 `target_direction` 分兩種方向處理：
-
-    - `min`（至少要達到，例如「每週吃蔬菜5次」）：累積值達到或超過 `target_value` 隨時可判定
-      達成，邏輯比照 `check_and_push_exercise_goal_achievements()`。
-    - `max`（不能超過，例如「熱量控制在14000大卡以內」）：這種「有沒有守住上限」只有在「一段
-      期間結束」時才有意義判斷，所以只在目標有 `target_date`（期限）且已經到期限當天或之後才
-      評估；沒有期限的 `max` 目標無法自動判斷「什麼時候算結束」，維持純手動（不是偷懶，是這種
-      目標的數學意義上就無法在沒有終點的情況下判定「守住了」）；累積值超過上限時本批不主動發送
-      「沒達成」通知，只是不會被標記 `achieved`，使用者可自行決定要不要刪除重設。
-
-    `target_value` 或 `target_direction` 為 `None`（LLM 解析不出結構化數值）的目標一律跳過，
-    維持純文字目標。"""
-    now = now or datetime.now(_TAIWAN_TZ)
-    today = now.astimezone(_TAIWAN_TZ).date()
-    goals = db.select("body_goals", where="goal_type = %s AND status = %s", params=("diet", "active"))
-    for goal in goals:
-        target_value = goal.get("target_value")
-        direction = goal.get("target_direction")
-        if target_value is None or direction is None:
-            continue
-        user = db.select("users", where="id = %s", params=(goal["user_id"],), fetch_one=True)
-        if user is None or user.get("telegram_user_id") is None:
-            continue
-
-        since_date = goal["created_at"].astimezone(_TAIWAN_TZ).date()
-
-        if direction == "min":
-            cumulative = _diet_cumulative_value(db, goal["user_id"], goal.get("target_unit"), since_date, today)
-            if cumulative < float(target_value):
-                continue
-        else:  # direction == "max"
-            target_date = goal.get("target_date")
-            if target_date is None or today < target_date:
-                continue
-            cumulative = _diet_cumulative_value(db, goal["user_id"], goal.get("target_unit"), since_date, target_date)
-            if cumulative > float(target_value):
-                continue
-
-        _mark_goal_achieved(db, goal["id"])
-        telegram_client.send_text(
-            chat_id=user["telegram_user_id"],
-            text=f"🎉 恭喜你達成飲食目標「{goal['target_description']}」了！",
-        )

@@ -1,85 +1,71 @@
-"""src/bot/todo.py 的單元測試。
-
-2026-11（功能大幅精簡）：待辦事項改為純粹的一次性日期＋文字提醒，沒有 status／完成/取消/逾期，
-這裡只測試清單查詢、格式化、以及推播去重邏輯。
-"""
-from datetime import UTC, datetime, timedelta
-from unittest.mock import Mock
+"""src/bot/todo.py 的單元測試（2026-11 大幅精簡＋2026-11-26 改日期區間，見模組 docstring）。"""
+from datetime import UTC, date, datetime
+from unittest.mock import MagicMock
 
 from src.bot import todo
 
 
-def _insert_todo(fake_db, user_id, content, remind_at, reminded_sent_at=None):
-    return fake_db.insert(
-        "todos",
-        {
-            "user_id": user_id,
-            "content": content,
-            "remind_at": remind_at,
-            "reminded_sent_at": reminded_sent_at,
-        },
-    )
+def _row(user_id: int, content: str, start: date, end: date | None = None) -> dict:
+    return {"user_id": user_id, "content": content, "remind_start_date": start, "remind_end_date": end or start}
 
 
-def test_list_todos_sorted_by_remind_at(fake_db):
-    _insert_todo(fake_db, 1, "晚一點的", datetime(2026, 8, 5, tzinfo=UTC))
-    _insert_todo(fake_db, 1, "早一點的", datetime(2026, 8, 1, tzinfo=UTC))
+def test_list_todos_sorted_by_remind_start_date(fake_db):
+    fake_db.insert("todos", _row(1, "晚一點", date(2026, 8, 5)))
+    fake_db.insert("todos", _row(1, "早一點", date(2026, 8, 2)))
+    fake_db.insert("todos", _row(2, "別人的", date(2026, 8, 1)))
 
-    rows = todo.list_todos(fake_db, 1)
+    result = todo.list_todos(fake_db, user_id=1)
 
-    assert [row["content"] for row in rows] == ["早一點的", "晚一點的"]
+    assert [item["content"] for item in result] == ["早一點", "晚一點"]
 
 
 def test_format_todo_list_empty():
-    assert "沒有待辦提醒" in todo.format_todo_list([])
+    assert todo.format_todo_list([]) == "目前沒有待辦提醒喔！"
 
 
-def test_format_todo_list_includes_content_and_time():
-    text = todo.format_todo_list([{"content": "買菜", "remind_at": datetime(2026, 8, 1, 15, 0, tzinfo=UTC)}])
-    assert "買菜" in text
+def test_format_todo_list_single_day():
+    todos = [_row(1, "買菜", date(2026, 8, 2))]
+    text = todo.format_todo_list(todos)
+    assert "1. 買菜（2026/08/02）" in text
+
+
+def test_format_todo_list_date_range():
+    todos = [_row(1, "出差", date(2026, 8, 2), date(2026, 8, 5))]
+    text = todo.format_todo_list(todos)
+    assert "1. 出差（2026/08/02～2026/08/05）" in text
 
 
 def test_check_and_push_reminders_sends_when_due(fake_db):
-    user_id = fake_db.insert("users", {"telegram_user_id": 111, "role": "測試家人", "is_owner": False})
-    now = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
-    _insert_todo(fake_db, user_id, "買菜", now + timedelta(minutes=10))
-    telegram_client = Mock()
+    fake_db.insert("users", {"telegram_user_id": 555, "role": "Robin", "is_owner": True})
+    todo_id = fake_db.insert("todos", _row(1, "買菜", date(2026, 8, 2)))
+    telegram_client = MagicMock()
+    now = datetime(2026, 8, 2, 0, 35, tzinfo=UTC)  # 台灣時間 08:35，落在 08:30 推播視窗內
 
     todo.check_and_push_reminders(fake_db, telegram_client, now=now)
 
     telegram_client.send_text.assert_called_once()
-    _, kwargs = telegram_client.send_text.call_args
-    assert kwargs["chat_id"] == 111
-    assert "買菜" in kwargs["text"]
+    assert telegram_client.send_text.call_args.kwargs["chat_id"] == 555
+    assert "買菜" in telegram_client.send_text.call_args.kwargs["text"]
+    row = fake_db.select("todos", where="id = %s", params=(todo_id,), fetch_one=True)
+    assert row["reminded_sent_at"] == now
 
 
-def test_check_and_push_reminders_skips_already_sent(fake_db):
-    user_id = fake_db.insert("users", {"telegram_user_id": 111, "role": "測試家人", "is_owner": False})
-    now = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
-    _insert_todo(fake_db, user_id, "買菜", now + timedelta(minutes=10), reminded_sent_at=now - timedelta(hours=1))
-    telegram_client = Mock()
-
-    todo.check_and_push_reminders(fake_db, telegram_client, now=now)
-
-    telegram_client.send_text.assert_not_called()
-
-
-def test_check_and_push_reminders_skips_not_due_yet(fake_db):
-    user_id = fake_db.insert("users", {"telegram_user_id": 111, "role": "測試家人", "is_owner": False})
-    now = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
-    _insert_todo(fake_db, user_id, "買菜", now + timedelta(hours=5))
-    telegram_client = Mock()
+def test_check_and_push_reminders_skips_outside_window(fake_db):
+    fake_db.insert("users", {"telegram_user_id": 555, "role": "Robin", "is_owner": True})
+    fake_db.insert("todos", _row(1, "買菜", date(2026, 8, 2)))
+    telegram_client = MagicMock()
+    now = datetime(2026, 8, 2, 5, 0, tzinfo=UTC)  # 台灣時間 13:00，不在推播視窗內
 
     todo.check_and_push_reminders(fake_db, telegram_client, now=now)
 
     telegram_client.send_text.assert_not_called()
 
 
-def test_check_and_push_reminders_skips_unbound_user(fake_db):
-    user_id = fake_db.insert("users", {"telegram_user_id": None, "role": "待綁定", "is_owner": False})
-    now = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
-    _insert_todo(fake_db, user_id, "買菜", now + timedelta(minutes=10))
-    telegram_client = Mock()
+def test_check_and_push_reminders_skips_different_date(fake_db):
+    fake_db.insert("users", {"telegram_user_id": 555, "role": "Robin", "is_owner": True})
+    fake_db.insert("todos", _row(1, "買菜", date(2026, 8, 3)))
+    telegram_client = MagicMock()
+    now = datetime(2026, 8, 2, 0, 35, tzinfo=UTC)
 
     todo.check_and_push_reminders(fake_db, telegram_client, now=now)
 
@@ -87,12 +73,23 @@ def test_check_and_push_reminders_skips_unbound_user(fake_db):
 
 
 def test_check_and_push_reminders_does_not_duplicate_after_sending(fake_db):
-    user_id = fake_db.insert("users", {"telegram_user_id": 111, "role": "測試家人", "is_owner": False})
-    now = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
-    _insert_todo(fake_db, user_id, "買菜", now + timedelta(minutes=10))
-    telegram_client = Mock()
+    fake_db.insert("users", {"telegram_user_id": 555, "role": "Robin", "is_owner": True})
+    fake_db.insert("todos", _row(1, "買菜", date(2026, 8, 2)))
+    telegram_client = MagicMock()
+    now = datetime(2026, 8, 2, 0, 35, tzinfo=UTC)
 
     todo.check_and_push_reminders(fake_db, telegram_client, now=now)
-    todo.check_and_push_reminders(fake_db, telegram_client, now=now)
+    todo.check_and_push_reminders(fake_db, telegram_client, now=datetime(2026, 8, 2, 0, 50, tzinfo=UTC))
 
     telegram_client.send_text.assert_called_once()
+
+
+def test_check_and_push_reminders_skips_user_without_telegram_id(fake_db):
+    fake_db.insert("users", {"telegram_user_id": None, "role": "家人", "is_owner": False})
+    fake_db.insert("todos", _row(1, "買菜", date(2026, 8, 2)))
+    telegram_client = MagicMock()
+    now = datetime(2026, 8, 2, 0, 35, tzinfo=UTC)
+
+    todo.check_and_push_reminders(fake_db, telegram_client, now=now)
+
+    telegram_client.send_text.assert_not_called()

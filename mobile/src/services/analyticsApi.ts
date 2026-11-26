@@ -36,22 +36,33 @@ export type DashboardResponse = {
 export type DateRange = { start: string; end: string };
 export type AuthRequest = <T>(path: string, options?: RequestInit) => Promise<T>;
 
-// 待辦事項：純粹的一次性提醒，只有日期與文字內容，沒有狀態／完成概念。
+// 待辦事項：純粹的一次性提醒，只有日期區間與文字內容，沒有狀態／完成概念。
+// 2026-11-26：remind_date（單一日期）改成 remind_start_date／remind_end_date（可為日期區間）。
 export type TodoItem = {
   id: number;
   owner_user_id: number;
   content: string;
-  remind_date: string;
+  remind_start_date: string;
+  remind_end_date: string;
   can_edit: boolean;
 };
 
+export type CalendarDay = {
+  name: string | null;
+  is_holiday: boolean;
+  holiday_category: string | null;
+  description: string | null;
+};
+
 // 生日設定：僅支援每年循環的生日提醒（姓名＋月/日）。
+// 2026-11-26：remind_offsets 可複選「14／7／3／當天」天前推播。
 export type Birthday = {
   id: number;
   owner_user_id: number;
   name: string;
   birth_month: number;
   birth_day: number;
+  remind_offsets: number[];
   can_edit: boolean;
 };
 
@@ -63,10 +74,11 @@ export type FinanceAnalytics = {
   income_total: number;
   records: Array<RecordItem>;
   latest_record: RecordItem | null;
-  goals: GoalItem[];
-  goal_summary: GoalItem | null;
 };
 
+// 2026-11-26：GoalItem／goals／goal_summary 已從 Finance／Body 分析頁移除（見
+// docs/ADR/discuss/robinson.md），但收藏清單（collectionApi.ts）回應仍含這個欄位，型別保留供其
+// 沿用。
 export type GoalItem = {
   id: number | null;
   goal_type: string;
@@ -123,8 +135,6 @@ export type BodyAnalytics = {
     total_calories: number;
     minutes: number;
   }>;
-  goals: GoalItem[];
-  goal_summary: GoalItem | null;
   body_defaults: { height_cm: number | null; weight_kg: number | null; waist_cm: number | null };
   latest_body_record: RecordItem | null;
   latest_records: { weight: RecordItem | null; diet: RecordItem | null; exercise: RecordItem | null };
@@ -215,12 +225,17 @@ export function getTodos(request: AuthRequest): Promise<{ items: TodoItem[] }> {
   return request("/api/app/todos");
 }
 
-export function createTodo(request: AuthRequest, payload: { content: string; remind_date: string }): Promise<{ id: number; message: string }> {
+export function createTodo(request: AuthRequest, payload: { content: string; remind_start_date: string; remind_end_date: string }): Promise<{ id: number; message: string }> {
   return request("/api/app/todos", { method: "POST", body: JSON.stringify(payload) });
 }
 
-export function updateTodo(request: AuthRequest, id: number, payload: { content: string; remind_date: string }): Promise<{ id: number; message: string }> {
+export function updateTodo(request: AuthRequest, id: number, payload: { content: string; remind_start_date: string; remind_end_date: string }): Promise<{ id: number; message: string }> {
   return request(`/api/app/todos/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
+}
+
+// 行事曆（中華民國政府行政機關辦公日曆），供待辦事項的行事曆 UI 標示國定假日/補班。
+export function getCalendarMonth(request: AuthRequest, year: number, month: number): Promise<{ year: number; month: number; days: Record<string, CalendarDay> }> {
+  return request(`/api/app/calendar?year=${year}&month=${month}`);
 }
 
 export function deleteTodo(request: AuthRequest, id: number): Promise<{ message: string }> {
@@ -233,11 +248,11 @@ export function getBirthdays(request: AuthRequest): Promise<{ items: Birthday[] 
   return request("/api/app/important-days");
 }
 
-export function createBirthday(request: AuthRequest, payload: { name: string; birth_month: number; birth_day: number }): Promise<{ id: number; message: string }> {
+export function createBirthday(request: AuthRequest, payload: { name: string; birth_month: number; birth_day: number; remind_offsets: number[] }): Promise<{ id: number; message: string }> {
   return request("/api/app/important-days", { method: "POST", body: JSON.stringify(payload) });
 }
 
-export function updateBirthday(request: AuthRequest, id: number, payload: { name: string; birth_month: number; birth_day: number }): Promise<{ id: number; message: string }> {
+export function updateBirthday(request: AuthRequest, id: number, payload: { name: string; birth_month: number; birth_day: number; remind_offsets: number[] }): Promise<{ id: number; message: string }> {
   return request(`/api/app/important-days/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
 }
 

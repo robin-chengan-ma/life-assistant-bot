@@ -1,5 +1,5 @@
 ---
-updated: 2026-11-25
+updated: 2026-11-26
 ---
 
 
@@ -334,6 +334,7 @@ updated: 2026-11-25
 
 | 日期 | 版本 / commit | 異動摘要 | 開發者 |
 | --- | --- | --- | --- |
+| 2026-11-26 | （待協調端補上 commit hash） | 確認記帳預算／體態目標從頭到尾零入口並整批移除（含 `budget_overrides`／`body_goals` 表與 `users` 對應欄位、`goal_parser.py`）；修正首頁生日隱私外洩（移除 `users.birthday` 查詢）；生日提醒改可複選提前 14/7/3 天或當天；待辦事項改日期區間＋新增行事曆（`/api/app/calendar`）；Mobile App 分析頁移除目標摘要卡片（修正記帳分析頁空白 bug）；登入頁移除「保持登入 30 天」勾選框（新增 migration `0104`／`0105`／`0106`，詳見 robinson.md 2026-11-26 條目） | Claude |
 | 2026-11-25 | `1ad3d21` | 移除 webhook 私訊 Robin 的簡化錯誤告警，改為純記 log（ADR-33 修正，詳見 robinson.md 2026-11-25 下午追加條目） | Claude |
 | 2026-11-25 | `c357337` | 修正 `app_analytics.dashboard()` 殘留舊版 `todos.status`／`due_at` 欄位導致 Mobile App 首頁無法載入的 production bug | Claude |
 | 2026-11-25 | `a6d0577` | 砍到陽春版：Telegram 只剩權限管理與待辦/生日推播，日常操作全移至 Mobile App（詳見 ADR-33） | Claude |

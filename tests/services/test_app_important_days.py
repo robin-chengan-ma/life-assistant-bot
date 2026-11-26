@@ -107,3 +107,26 @@ def test_delete_removes_row(service):
     created = service.create(1, {"name": "媽媽", "birth_month": 5, "birth_day": 20})
     service.delete(created["id"], 1)
     assert service.list_for_user(1) == []
+
+
+def test_create_defaults_remind_offsets_to_day_of(service):
+    result = service.create(1, {"name": "媽媽", "birth_month": 5, "birth_day": 20})
+    items = service.list_for_user(1)
+    assert items[0]["remind_offsets"] == [0]
+    assert result["id"] == 1
+
+
+def test_create_accepts_multiple_remind_offsets_sorted_descending(service):
+    service.create(1, {"name": "媽媽", "birth_month": 5, "birth_day": 20, "remind_offsets": [0, 14, 3]})
+    items = service.list_for_user(1)
+    assert items[0]["remind_offsets"] == [14, 3, 0]
+
+
+def test_create_rejects_empty_remind_offsets(service):
+    with pytest.raises(ImportantDayValidationError):
+        service.create(1, {"name": "媽媽", "birth_month": 5, "birth_day": 20, "remind_offsets": []})
+
+
+def test_create_rejects_disallowed_remind_offset_value(service):
+    with pytest.raises(ImportantDayValidationError):
+        service.create(1, {"name": "媽媽", "birth_month": 5, "birth_day": 20, "remind_offsets": [1]})

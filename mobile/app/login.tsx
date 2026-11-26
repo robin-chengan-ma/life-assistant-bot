@@ -24,7 +24,6 @@ export default function LoginScreen() {
   const { status, login, forgotPassword, identifyUser } = useAuth();
   const [userId, setUserId] = useState("");
   const [password, setPassword] = useState("");
-  const [keepLoggedIn, setKeepLoggedIn] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
   const [userIdError, setUserIdError] = useState<string | null>(null);
@@ -120,7 +119,7 @@ export default function LoginScreen() {
     if (missingPassword) return;
     setIsSubmitting(true);
     try {
-      await login(userId.trim().toLowerCase(), password, keepLoggedIn);
+      await login(userId.trim().toLowerCase(), password);
       router.replace("/home");
     } catch (error) {
       handleRequestError(error);
@@ -206,18 +205,6 @@ export default function LoginScreen() {
 
             <View style={styles.optionsRow}>
               <Pressable
-                accessibilityRole="checkbox"
-                accessibilityState={{ checked: keepLoggedIn }}
-                onPress={() => setKeepLoggedIn((current) => !current)}
-                style={styles.keepLoginButton}
-              >
-                <View style={[styles.checkbox, keepLoggedIn && styles.checkboxChecked]}>
-                  {keepLoggedIn ? <Text style={styles.checkmark}>✓</Text> : null}
-                </View>
-                <Text style={styles.optionText}>保持登入 30 天</Text>
-              </Pressable>
-
-              <Pressable
                 disabled={isResetting}
                 onPress={() => void handleForgotPassword()}
               >
@@ -302,34 +289,7 @@ const styles = StyleSheet.create({
   optionsRow: {
     alignItems: "center",
     flexDirection: "row",
-    justifyContent: "space-between",
-  },
-  keepLoginButton: {
-    alignItems: "center",
-    flexDirection: "row",
-    gap: 8,
-  },
-  checkbox: {
-    alignItems: "center",
-    borderColor: colors.border,
-    borderRadius: 5,
-    borderWidth: 1.5,
-    height: 20,
-    justifyContent: "center",
-    width: 20,
-  },
-  checkboxChecked: {
-    backgroundColor: colors.primary,
-    borderColor: colors.primary,
-  },
-  checkmark: {
-    color: colors.white,
-    fontSize: 14,
-    fontWeight: "800",
-  },
-  optionText: {
-    color: colors.text,
-    fontSize: 14,
+    justifyContent: "flex-end",
   },
   forgotText: {
     color: colors.primary,

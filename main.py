@@ -6,6 +6,7 @@ from flask import Flask, jsonify
 
 from src.api.app_analytics import app_analytics_bp
 from src.api.app_auth import app_bp
+from src.api.app_calendar import app_calendar_bp
 from src.api.app_important_days import app_important_days_bp
 from src.api.app_todo import app_todo_bp
 from src.bot.webhook import bot_bp
@@ -18,6 +19,7 @@ logger = logging.getLogger("robinson.main")
 app = Flask(__name__)
 app.register_blueprint(app_analytics_bp)
 app.register_blueprint(app_bp)
+app.register_blueprint(app_calendar_bp)
 app.register_blueprint(app_important_days_bp)
 app.register_blueprint(app_todo_bp)
 app.register_blueprint(bot_bp)
@@ -28,7 +30,7 @@ def _check_todo_pushes(db) -> None:
     robinson SPEC.md FR-31／FR-32）：待辦事項已簡化成純粹的一次性「日期＋文字」提醒，不再有
     pending/expired 狀態、30 分鐘前預告或每日摘要，詳見 src/bot/todo.py 模組 docstring。
 
-    跟 `_check_finance_alerts()` 一樣包一層 try/except，不能因為這裡出錯就讓 `/healthz` 回傳失敗；
+    跟其他檢查一樣包一層 try/except，不能因為這裡出錯就讓 `/healthz` 回傳失敗；
     沒設定 TELEGRAM_BOT_TOKEN 時直接跳過（本機測試環境常見）。這裡不像其他檢查需要
     `ROBIN_TELEGRAM_TOKEN`——待辦事項是推播給每一位有待辦的使用者自己（依 todos.user_id 查對應的
     users.telegram_user_id），不是固定通知 Robin。`db` 共用連線，見 `_run_background_checks()`。
@@ -46,74 +48,10 @@ def _check_todo_pushes(db) -> None:
         logger.exception("待辦事項推播檢查失敗，不影響健康檢查端點本身")
 
 
-def _check_finance_alerts(db) -> None:
-    """在 /healthz 被呼叫時順便檢查記帳預算門檻預警（Step 2.1，見 robinson SPEC.md FR-43）：
-    50% 門檻只在每月 15 日（含）以前檢查、80% 門檻整月都檢查，各自每月最多推播一次，
-    詳見 src/bot/finance.py 模組 docstring 的完整說明。
-
-    跟 `_check_todo_pushes()` 一樣包一層 try/except 且不需要 `ROBIN_TELEGRAM_TOKEN`
-    （推播對象是每一位有設定預算的使用者自己，不是固定通知 Robin）。`db` 共用連線，
-    見 `_run_background_checks()`。
-    """
-    if not os.environ.get("TELEGRAM_BOT_TOKEN"):
-        return
-
-    from src.bot import finance
-    from submodules.telegram.client import TelegramClient
-
-    try:
-        telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
-        finance.check_and_push_budget_alerts(db, telegram_client)
-    except Exception:
-        logger.exception("記帳預算門檻預警檢查失敗，不影響健康檢查端點本身")
-
-
-def _check_finance_monthly_report(db) -> None:
-    """在 /healthz 被呼叫時順便檢查月底自動月報推播（記帳模組擴充，見 robinson SPEC.md FR-44a）：
-    每月最後一天台灣時間 21:00，對「這個月有生效預算或有記帳」的使用者各推播一次月報，
-    詳見 src/bot/finance.py 模組 docstring 決策⑦。
-
-    跟 `_check_finance_alerts()` 一樣包一層 try/except 且不需要 `ROBIN_TELEGRAM_TOKEN`。
-    `db` 共用連線，見 `_run_background_checks()`。
-    """
-    if not os.environ.get("TELEGRAM_BOT_TOKEN"):
-        return
-
-    from src.bot import finance
-    from submodules.telegram.client import TelegramClient
-
-    try:
-        telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
-        finance.check_and_push_monthly_report(db, telegram_client)
-    except Exception:
-        logger.exception("月底記帳月報推播檢查失敗，不影響健康檢查端點本身")
-
-
-def _check_body_goal_alerts(db) -> None:
-    """在 /healthz 被呼叫時順便檢查體態目標的排程型預警（Step 2.2，見 robinson SPEC.md
-    FR-45；批次3補上飲食目標自動判斷，見 FR-48 方案A）：①運動目標累積分鐘數達成通知（體重
-    目標則是記錄體重當下即時檢查，不需要排程）②飲食目標達成判斷（依 `target_direction` 分
-    min/max 兩種方向，詳見 `body.check_and_push_diet_goal_achievements()`）③目標期限前 7 天
-    提醒，詳見 src/bot/body.py 模組 docstring 決策③。
-
-    2026-11（功能大幅精簡）：Google Calendar 整合已整個移除，不再建立/傳入 `calendar_client`。
-
-    跟 `_check_finance_alerts()` 一樣包一層 try/except 且不需要 `ROBIN_TELEGRAM_TOKEN`
-    （推播對象是每一位有設定體態目標的使用者自己，不是固定通知 Robin）。`db` 共用連線，
-    見 `_run_background_checks()`。
-    """
-    if not os.environ.get("TELEGRAM_BOT_TOKEN"):
-        return
-
-    from src.bot import body
-    from submodules.telegram.client import TelegramClient
-
-    try:
-        telegram_client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
-        body.check_and_push_exercise_goal_achievements(db, telegram_client)
-        body.check_and_push_diet_goal_achievements(db, telegram_client)
-    except Exception:
-        logger.exception("體態目標預警檢查失敗，不影響健康檢查端點本身")
+# 2026-11-26：`_check_finance_alerts()`／`_check_finance_monthly_report()`／
+# `_check_body_goal_alerts()` 已確認背後的「設定記帳預算」「設定體態目標」功能從頭到尾沒有任何
+# 設定入口（純死碼），連同 `finance.py`／`body.py` 的對應函式與 `budget_overrides`／`body_goals`
+# 資料表一併移除，見 docs/ADR/discuss/robinson.md。
 
 
 def _check_birthdays(db) -> None:
@@ -194,9 +132,6 @@ def _run_background_checks() -> None:
     db = CloudSQLClient()
     try:
         _check_todo_pushes(db)
-        _check_finance_alerts(db)
-        _check_finance_monthly_report(db)
-        _check_body_goal_alerts(db)
         _check_birthdays(db)
     finally:
         db.close()
@@ -209,7 +144,7 @@ def health_check():
     對應 FR-3 / docs/specs/robinson/SPEC.md，路由定義見 src/schema/api_schema.md。
 
     2026-08-02（Step 1.6，見 FR-21）起，陸續借用這個每 10 分鐘一次的呼叫頻率，順便觸發多項
-    排程檢查（待辦推播、記帳預警/月報、體態目標達成、生日推播），實際清單見
+    排程檢查（待辦推播、生日推播），實際清單見
     `_run_background_checks()`。
 
     **2026-08-08 追加（production 事故修復）**：這些檢查改成丟進背景執行緒（daemon thread）

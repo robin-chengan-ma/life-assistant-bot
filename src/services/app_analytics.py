@@ -140,58 +140,6 @@ class AppAnalyticsService:
         self._db = db
         self._today = today or datetime.now(_TAIWAN_TZ).date()
 
-    def _normalized_goal(self, row: dict[str, Any]) -> dict[str, Any]:
-        target = float(row["target_value"]) if row.get("target_value") is not None else None
-        current = float(row["current_value"]) if row.get("current_value") is not None else None
-        baseline = float(row["baseline_value"]) if row.get("baseline_value") is not None else None
-        progress = None
-        exceeded = False
-        mode = row.get("progress_mode", "cumulative")
-        if row.get("status") == "achieved":
-            progress = 100.0
-        elif mode == "improvement" and target is not None and current is not None and baseline != target:
-            raw_progress = (current - baseline) / (target - baseline) * 100 if baseline is not None else 0
-            exceeded = raw_progress > 100
-            progress = round(max(0, min(raw_progress, 100)), 1)
-        elif mode == "milestone":
-            progress = 0.0
-        elif mode == "cumulative" and target is not None and target > 0 and current is not None:
-            raw_progress = current / target * 100
-            exceeded = raw_progress > 100
-            progress = round(max(0, min(raw_progress, 100)), 1)
-        description = row.get("target_description") or row.get("exam_type") or "未命名目標"
-        target_date = _json_value(row.get("target_date"))
-        status = row.get("status", "active")
-        if status == "active" and target_date and date.fromisoformat(str(target_date)[:10]) < self._today:
-            status = "expired"
-        return {
-            "id": row.get("id"),
-            "goal_type": row.get("goal_type") or row.get("module_key") or row.get("exam_type"),
-            "description": description,
-            "target_description": description,
-            "status": status,
-            "target_date": target_date,
-            "target_value": target,
-            "current_value": current,
-            "unit": row.get("target_unit"),
-            "progress_percent": progress,
-            "progress_unavailable": progress is None,
-            "is_exceeded": exceeded,
-            "updated_at": _json_value(row.get("updated_at")),
-            "completed_at": _json_value(row.get("completed_at")),
-        }
-
-    @staticmethod
-    def _goal_summary(goals: list[dict[str, Any]]) -> dict[str, Any] | None:
-        active = [goal for goal in goals if goal["status"] == "active"]
-        if not active:
-            return None
-        dated = [goal for goal in active if goal["target_date"]]
-        candidates = sorted(dated or active, key=lambda goal: str(goal.get("updated_at") or ""), reverse=True)
-        if dated:
-            candidates.sort(key=lambda goal: goal["target_date"])
-        return candidates[0]
-
     def navigation(self, user: AuthenticatedUser) -> dict[str, dict[str, Any]]:
         return {
             module_key: {"label": config["label"], "color": config["color"], "is_enabled": True}
@@ -271,23 +219,17 @@ class AppAnalyticsService:
 
     def _important_day_summaries(self, user: AuthenticatedUser, target_date: date) -> list[str]:
         """回傳首頁使用的精簡重要日子列表（2026-11 精簡後只剩生日設定），不沿用 Telegram
-        推播長文案。"""
+        推播長文案。
+
+        2026-11-26（ADR 再修正）：移除對已死欄位 `users.birthday`（migration 0028，FR-53 舊
+        設計，早已沒有任何寫入路徑）的額外查詢——原本這段查詢會把「所有人」的生日混進每個人的
+        首頁清單，造成隱私外洩；`AppImportantDayService(...).list_for_user()` 本身就已經正確
+        用 `user_id` 做權限隔離，只回傳自己建立的生日，因此只保留這一段即可。
+        """
         dated: list[tuple[date, str]] = []
         for item in AppImportantDayService(self._db).list_for_user(user.database_id):
             event_date = self._next_occurrence(item["birth_month"], item["birth_day"], target_date)
             dated.append((event_date, item["name"]))
-
-        users = self._db.select(
-            "users",
-            columns=("id", "role", "birthday"),
-            where="birthday IS NOT NULL",
-        )
-        for row in users:
-            birthday = row.get("birthday")
-            if not isinstance(birthday, date):
-                continue
-            title = "我的生日" if row["id"] == user.database_id else f"{row['role']}生日"
-            dated.append((self._next_occurrence(birthday.month, birthday.day, target_date), title))
 
         messages: list[str] = []
         seen: set[tuple[date | None, str]] = set()
@@ -306,6 +248,11 @@ class AppAnalyticsService:
         return messages
 
     def _notifications_for_user(self, user: AuthenticatedUser, target_date: date) -> list[str]:
+        """2026-11-26（ADR 再修正）：不再查詢已死欄位 `users.birthday`，改用
+        `important_days`（透過 `check_and_push_birthdays()` 寫入的
+        `birthday_important_day_{id}_offset_{offset}` key，見 src/bot/important_days.py）；
+        首頁通知只取「當天」（`offset == 0`）這則，提前天數的提醒只送 Telegram 推播、不重複
+        出現在首頁。"""
         sent_rows = self._db.select(
             "important_notifications_log",
             columns=("notification_key",),
@@ -314,16 +261,20 @@ class AppAnalyticsService:
         )
         sent_keys = {row["notification_key"] for row in sent_rows}
         messages: list[str] = []
-        birthday_keys = [key for key in sent_keys if key.startswith("birthday_")]
-        if birthday_keys:
-            users = self._db.select("users", columns=("id", "role"), where="birthday IS NOT NULL")
-            roles = {f"birthday_{row['id']}": row["role"] for row in users}
-            for key in birthday_keys:
-                birthday_id = int(key.removeprefix("birthday_"))
-                if birthday_id == user.database_id:
-                    messages.append("🎂 生日快樂！今天是你的生日，祝你新的一歲順心如意！")
-                elif key in roles:
-                    messages.append(f"🎂 提醒你，今天是 {roles[key]} 的生日，記得跟他/她說聲生日快樂！")
+        prefix = "birthday_important_day_"
+        for key in sent_keys:
+            if not key.startswith(prefix):
+                continue
+            id_part, _, offset_part = key[len(prefix):].partition("_offset_")
+            if not id_part.isdigit() or not offset_part.isdigit() or int(offset_part) != 0:
+                continue
+            row = self._db.select("important_days", where="id = %s", params=(int(id_part),), fetch_one=True)
+            if row is None:
+                continue
+            if row["user_id"] == user.database_id:
+                messages.append("🎂 生日快樂！今天是你的生日，祝你新的一歲順心如意！")
+            else:
+                messages.append(f"🎂 提醒你，今天是「{row['name']}」的生日，記得跟他/她說聲生日快樂！")
         return messages
 
     def finance(self, user: AuthenticatedUser, start: date, end: date) -> dict[str, Any]:
@@ -464,31 +415,6 @@ class AppAnalyticsService:
         exercise_records = self._record_rows("exercise_logs", "exercise", user.database_id, start, end)
         latest_diet_records = self._diet_record_rows(user.database_id, date.min, date.max)
         latest_exercise_records = self._record_rows("exercise_logs", "exercise", user.database_id, date.min, date.max)
-        goal_rows = self._db.execute_query(
-            """/* app_analytics:body_goals */ SELECT g.id, g.goal_type, g.target_description,
-            g.target_value, g.target_unit, g.baseline_value, g.target_date, g.status,
-            g.progress_type, g.created_at, g.updated_at, g.completed_at,
-            CASE
-              WHEN g.goal_type = 'weight' THEN (SELECT w.weight_kg FROM body_weight_logs w
-                WHERE w.user_id = g.user_id ORDER BY w.entry_date DESC, w.created_at DESC, w.id DESC LIMIT 1)
-              WHEN g.goal_type = 'exercise' AND g.progress_type = 'numeric' THEN COALESCE((
-                SELECT SUM(e.duration_minutes) FROM exercise_logs e WHERE e.user_id = g.user_id
-                  AND e.entry_date >= DATE(g.created_at AT TIME ZONE 'Asia/Taipei')), 0)
-              WHEN g.goal_type = 'diet' AND g.target_direction = 'min' THEN COALESCE((
-                SELECT SUM(d.estimated_calories) FROM diet_logs d WHERE d.user_id = g.user_id
-                  AND d.entry_type = 'food' AND d.entry_date >= DATE(g.created_at AT TIME ZONE 'Asia/Taipei')), 0)
-              ELSE NULL
-            END AS current_value,
-            CASE
-              WHEN g.goal_type = 'weight' THEN 'improvement'
-              WHEN g.progress_type = 'milestone' THEN 'milestone'
-              WHEN g.target_value IS NOT NULL AND (g.goal_type != 'diet' OR g.target_direction = 'min') THEN 'cumulative'
-              ELSE 'unquantified'
-            END AS progress_mode
-            FROM body_goals g WHERE g.user_id = %s ORDER BY g.updated_at DESC, g.id DESC""",
-            (user.database_id,),
-        )
-        goals = [self._normalized_goal(row) for row in goal_rows]
         return {
             "has_any_data": any(
                 self._has_user_data(table, user.database_id)
@@ -497,8 +423,6 @@ class AppAnalyticsService:
             "weight": weight,
             "diet": diet,
             "exercise": exercise,
-            "goals": goals,
-            "goal_summary": self._goal_summary(goals),
             "body_defaults": {
                 "height_cm": _json_value(user_row.get("height_cm")),
                 "weight_kg": latest_body_record.get("weight_kg") if latest_body_record else None,

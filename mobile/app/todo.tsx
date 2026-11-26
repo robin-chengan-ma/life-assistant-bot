@@ -8,6 +8,7 @@ import { AppText as Text } from "@/components/AppText";
 import { AppView as View } from "@/components/AppView";
 import { AppShell } from "@/components/AppShell";
 import { todayIsoDate } from "@/components/DateRangeFilter";
+import { TodoCalendarPicker } from "@/components/TodoCalendarPicker";
 import { useAppPreferences } from "@/context/AppPreferencesContext";
 import { useAuth } from "@/context/AuthContext";
 import {
@@ -17,6 +18,10 @@ import {
   updateTodo,
   type TodoItem,
 } from "@/services/analyticsApi";
+
+function formatDateRange(start: string, end: string): string {
+  return start === end ? start : `${start} ～ ${end}`;
+}
 
 // 待辦事項：純粹的一次性提醒，只有日期與文字內容；沒有完成／逾期狀態，使用者不需要額外確認動作。
 export default function TodoScreen() {
@@ -61,7 +66,7 @@ export default function TodoScreen() {
     return () => clearTimeout(timer);
   }, [operationMessage, pendingDeletion]);
 
-  const sorted = items.slice().sort((left, right) => left.remind_date.localeCompare(right.remind_date));
+  const sorted = items.slice().sort((left, right) => left.remind_start_date.localeCompare(right.remind_start_date));
 
   if (status === "guest") return <Redirect href="/login" />;
   if (loading && !items.length && !message) return <AppShell title="待辦事項"><View style={{ alignItems: "center", gap: 12, justifyContent: "center", minHeight: 360 }}><ActivityIndicator color={colors.primary} size="large" /><Text style={{ color: colors.textMuted, fontWeight: "700" }}>資料載入中…</Text></View></AppShell>;
@@ -72,7 +77,7 @@ export default function TodoScreen() {
     {message ? <Text style={styles.message}>{message}</Text> : null}
     {!loading && !sorted.length ? <Text style={styles.empty}>目前沒有待辦事項</Text> : null}
     {sorted.map((item) => <View key={item.id} style={styles.card}>
-      <View style={styles.cardHeading}><Text style={styles.cardTitle}>{item.content}</Text><Text style={styles.meta}>{item.remind_date}</Text></View>
+      <View style={styles.cardHeading}><Text style={styles.cardTitle}>{item.content}</Text><Text style={styles.meta}>{formatDateRange(item.remind_start_date, item.remind_end_date)}</Text></View>
       {item.can_edit ? <View style={styles.actions}><Pressable onPress={() => setEditing(item)} style={styles.edit}><Text style={styles.editText}>編輯</Text></Pressable><Pressable onPress={() => Alert.alert("確認刪除？", "確認後有 5 秒可以復原。", [{ text: "取消" }, { text: "刪除", style: "destructive", onPress: () => scheduleDelete(item) }])} style={styles.delete}><Text style={styles.deleteText}>刪除</Text></Pressable></View> : <Text style={styles.readOnly}>由其他家人建立，僅能查看。</Text>}
     </View>)}
     {editing !== undefined ? <TodoModal initial={editing} onClose={() => setEditing(undefined)} onSaved={async () => { setEditing(undefined); setOperationMessage(editing ? "待辦已更新" : "待辦已儲存"); await load(); }} request={authorizedRequest} /> : null}
@@ -84,13 +89,15 @@ export default function TodoScreen() {
 function TodoModal({ initial, onClose, onSaved, request }: { initial: TodoItem | null; onClose: () => void; onSaved: () => Promise<void>; request: ReturnType<typeof useAuth>["authorizedRequest"] }) {
   const { colors, theme } = useAppPreferences(); const styles = createStyles(colors, theme);
   const [content, setContent] = useState(initial?.content ?? "");
-  const [remindDate, setRemindDate] = useState(initial?.remind_date ?? todayIsoDate());
+  const [remindStartDate, setRemindStartDate] = useState(initial?.remind_start_date ?? todayIsoDate());
+  const [remindEndDate, setRemindEndDate] = useState(initial?.remind_end_date ?? initial?.remind_start_date ?? todayIsoDate());
   const [saving, setSaving] = useState(false); const [error, setError] = useState<string | null>(null);
   const mutationInFlight = useRef(false);
 
   const validate = (): string | null => {
     if (!content.trim()) return "請輸入待辦內容";
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(remindDate)) return "請輸入正確的日期格式（YYYY-MM-DD）";
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(remindStartDate) || !/^\d{4}-\d{2}-\d{2}$/.test(remindEndDate)) return "請選擇提醒日期";
+    if (remindEndDate < remindStartDate) return "提醒結束日期不可早於開始日期";
     return null;
   };
 
@@ -100,7 +107,7 @@ function TodoModal({ initial, onClose, onSaved, request }: { initial: TodoItem |
     if (mutationInFlight.current) return;
     mutationInFlight.current = true;
     setSaving(true); setError(null);
-    const payload = { content: content.trim(), remind_date: remindDate };
+    const payload = { content: content.trim(), remind_start_date: remindStartDate, remind_end_date: remindEndDate };
     try {
       if (initial) await updateTodo(request, initial.id, payload);
       else await createTodo(request, payload);
@@ -115,7 +122,7 @@ function TodoModal({ initial, onClose, onSaved, request }: { initial: TodoItem |
 
   return <Modal animationType="fade" transparent visible onRequestClose={onClose}><View style={styles.modalRoot}><Pressable onPress={onClose} style={styles.backdrop} /><View style={styles.modalCard}><Pressable onPress={onClose} style={styles.close}><MaterialCommunityIcons color={colors.textMuted} name="close" size={24} /></Pressable><ScrollView contentContainerStyle={styles.modalContent}>
     <Text style={styles.modalTitle}>{initial ? "編輯待辦" : "新增待辦"}</Text>
-    <View style={styles.field}><Text style={styles.label}>日期</Text><TextInput onChangeText={setRemindDate} placeholder="YYYY-MM-DD" placeholderTextColor={colors.textMuted} style={[styles.input, styles.iosInputFontSize]} value={remindDate} /></View>
+    <TodoCalendarPicker endDate={remindEndDate} onChange={(range) => { setRemindStartDate(range.start); setRemindEndDate(range.end); }} startDate={remindStartDate} />
     <View style={styles.field}><Text style={styles.label}>內容</Text><TextInput multiline onChangeText={setContent} placeholder="請輸入待辦內容" placeholderTextColor={colors.textMuted} style={[styles.input, styles.multiline, styles.iosInputFontSize]} value={content} /></View>
     {error ? <Text style={styles.message}>{error}</Text> : null}
     <View style={styles.actions}><Pressable onPress={onClose} style={styles.cancel}><Text style={styles.cancelText}>取消</Text></Pressable><Pressable disabled={saving} onPress={() => void save()} style={styles.save}><Text style={styles.saveText}>{saving ? "儲存中…" : "確認"}</Text></Pressable></View>

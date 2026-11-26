@@ -76,17 +76,17 @@ export async function apiRequest<T>(
   return body as T;
 }
 
+// 2026-11-26：移除登入頁「保持登入 30 天」勾選框，一律視為已勾選（固定傳 true）。
 export function login(
   userId: string,
   password: string,
-  keepLoggedIn: boolean,
 ): Promise<AuthSessionResponse> {
   return apiRequest<AuthSessionResponse>("/api/app/auth/login", {
     method: "POST",
     body: JSON.stringify({
       user_id: userId,
       password,
-      keep_logged_in: keepLoggedIn,
+      keep_logged_in: true,
     }),
   });
 }

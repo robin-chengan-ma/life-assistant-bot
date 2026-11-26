@@ -3,15 +3,16 @@
 2026-11（功能大幅精簡）：待辦事項是純粹的「一次性日期＋文字提醒」，不含完成/取消/逾期狀態。
 新增/編輯/刪除全部在 Mobile App 做，Telegram 端只負責推播（見 `src/bot/todo.py`）。欄位假設
 見 migration 0102。
+
+2026-11-26（待辦改日期區間＋行事曆，見 migration 0106、docs/ADR/discuss/robinson.md）：
+`remind_at`（單一時間點，固定 09:00）改成 `remind_start_date`／`remind_end_date` 兩個日期
+（單日待辦 = 兩者相同），推播固定改成第一天早上 08:30（見 `src/bot/todo.py`）。
 """
 
 from __future__ import annotations
 
-from datetime import date, datetime, time
+from datetime import date
 from typing import Any, Protocol
-from zoneinfo import ZoneInfo
-
-_TAIWAN_TZ = ZoneInfo("Asia/Taipei")
 
 
 class TodoDatabase(Protocol):
@@ -42,14 +43,22 @@ def _parse_content(value: Any) -> str:
     return content
 
 
-def _parse_remind_date(value: Any) -> datetime:
+def _parse_date(value: Any, label: str) -> date:
     if not isinstance(value, str):
-        raise TodoValidationError("請選擇提醒日期")
+        raise TodoValidationError(f"請選擇{label}")
     try:
-        day = date.fromisoformat(value)
+        return date.fromisoformat(value)
     except ValueError as exc:
-        raise TodoValidationError("提醒日期格式不正確") from exc
-    return datetime.combine(day, time(9, 0), tzinfo=_TAIWAN_TZ)
+        raise TodoValidationError(f"{label}格式不正確") from exc
+
+
+def _parse_remind_date_range(payload: dict[str, Any]) -> tuple[date, date]:
+    start = _parse_date(payload.get("remind_start_date"), "提醒開始日期")
+    end_value = payload.get("remind_end_date", payload.get("remind_start_date"))
+    end = _parse_date(end_value, "提醒結束日期")
+    if end < start:
+        raise TodoValidationError("提醒結束日期不可早於開始日期")
+    return start, end
 
 
 class AppTodoService:
@@ -59,7 +68,7 @@ class AppTodoService:
     def list_for_user(self, user_id: int) -> list[dict[str, Any]]:
         rows = self._db.select("todos", where="user_id = %s", params=(user_id,))
         items = [self._serialize(row, user_id) for row in rows]
-        return sorted(items, key=lambda item: item["remind_date"])
+        return sorted(items, key=lambda item: item["remind_start_date"])
 
     def create(self, owner_user_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         data = self._validate(payload)
@@ -94,9 +103,11 @@ class AppTodoService:
         return row
 
     def _validate(self, payload: dict[str, Any]) -> dict[str, Any]:
+        start, end = _parse_remind_date_range(payload)
         return {
             "content": _parse_content(payload.get("content")),
-            "remind_at": _parse_remind_date(payload.get("remind_date")),
+            "remind_start_date": start,
+            "remind_end_date": end,
         }
 
     @staticmethod
@@ -104,6 +115,7 @@ class AppTodoService:
         result = dict(row)
         result["owner_user_id"] = row["user_id"]
         result["can_edit"] = row["user_id"] == user_id
-        remind_at = row["remind_at"]
-        result["remind_date"] = remind_at.astimezone(_TAIWAN_TZ).date().isoformat() if isinstance(remind_at, datetime) else remind_at
+        for field in ("remind_start_date", "remind_end_date"):
+            value = result.get(field)
+            result[field] = value.isoformat() if isinstance(value, date) else value
         return result

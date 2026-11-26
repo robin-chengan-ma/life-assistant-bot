@@ -47,53 +47,70 @@ def service():
 
 def test_create_requires_content(service):
     with pytest.raises(TodoValidationError):
-        service.create(1, {"remind_date": "2026-12-25"})
+        service.create(1, {"remind_start_date": "2026-12-25"})
 
 
 def test_create_requires_valid_date(service):
     with pytest.raises(TodoValidationError):
-        service.create(1, {"content": "買禮物", "remind_date": "not-a-date"})
+        service.create(1, {"content": "買禮物", "remind_start_date": "not-a-date"})
+
+
+def test_create_rejects_end_before_start(service):
+    with pytest.raises(TodoValidationError):
+        service.create(1, {"content": "買禮物", "remind_start_date": "2026-12-25", "remind_end_date": "2026-12-20"})
 
 
 def test_create_and_list_round_trip(service):
-    result = service.create(1, {"content": "買禮物", "remind_date": "2026-12-25"})
+    result = service.create(1, {"content": "買禮物", "remind_start_date": "2026-12-25"})
     assert result["id"] == 1
 
     items = service.list_for_user(1)
     assert len(items) == 1
     assert items[0]["content"] == "買禮物"
-    assert items[0]["remind_date"] == "2026-12-25"
+    assert items[0]["remind_start_date"] == "2026-12-25"
+    assert items[0]["remind_end_date"] == "2026-12-25"
     assert items[0]["owner_user_id"] == 1
     assert items[0]["can_edit"] is True
 
 
+def test_create_with_date_range(service):
+    result = service.create(
+        1, {"content": "出差", "remind_start_date": "2026-12-20", "remind_end_date": "2026-12-25"}
+    )
+    items = service.list_for_user(1)
+    assert items[0]["remind_start_date"] == "2026-12-20"
+    assert items[0]["remind_end_date"] == "2026-12-25"
+    assert result["id"] == 1
+
+
 def test_list_only_returns_own_todos(service):
-    service.create(1, {"content": "買禮物", "remind_date": "2026-12-25"})
-    service.create(2, {"content": "別人的事", "remind_date": "2026-12-01"})
+    service.create(1, {"content": "買禮物", "remind_start_date": "2026-12-25"})
+    service.create(2, {"content": "別人的事", "remind_start_date": "2026-12-01"})
 
     items = service.list_for_user(1)
     assert [item["content"] for item in items] == ["買禮物"]
 
 
 def test_update_changes_fields(service):
-    created = service.create(1, {"content": "買禮物", "remind_date": "2026-12-25"})
-    service.update(created["id"], 1, {"content": "買蛋糕", "remind_date": "2026-12-24"})
+    created = service.create(1, {"content": "買禮物", "remind_start_date": "2026-12-25"})
+    service.update(created["id"], 1, {"content": "買蛋糕", "remind_start_date": "2026-12-24"})
 
     items = service.list_for_user(1)
     assert items[0]["content"] == "買蛋糕"
-    assert items[0]["remind_date"] == "2026-12-24"
+    assert items[0]["remind_start_date"] == "2026-12-24"
+    assert items[0]["remind_end_date"] == "2026-12-24"
 
 
 def test_other_user_cannot_update_or_delete(service):
-    created = service.create(1, {"content": "買禮物", "remind_date": "2026-12-25"})
+    created = service.create(1, {"content": "買禮物", "remind_start_date": "2026-12-25"})
 
     with pytest.raises(TodoNotFoundError):
-        service.update(created["id"], 2, {"content": "x", "remind_date": "2026-12-25"})
+        service.update(created["id"], 2, {"content": "x", "remind_start_date": "2026-12-25"})
     with pytest.raises(TodoNotFoundError):
         service.delete(created["id"], 2)
 
 
 def test_delete_removes_row(service):
-    created = service.create(1, {"content": "買禮物", "remind_date": "2026-12-25"})
+    created = service.create(1, {"content": "買禮物", "remind_start_date": "2026-12-25"})
     service.delete(created["id"], 1)
     assert service.list_for_user(1) == []

@@ -397,9 +397,9 @@ class FakeCloudSQLClient:
                 and row.get("test_id") == params[1]
                 and row.get("question_number") == params[2]
             )
-        # 2026-11（功能大幅精簡）：待辦事項改為單純一次性提醒（見 src/bot/todo.py）。
-        if where == "reminded_sent_at IS NULL AND remind_at <= %s":
-            return row.get("reminded_sent_at") is None and row.get("remind_at") <= params[0]
+        # 2026-11-26（待辦改日期區間＋行事曆）：待辦事項改為單純一次性提醒（見 src/bot/todo.py）。
+        if where == "reminded_sent_at IS NULL AND remind_start_date = %s":
+            return row.get("reminded_sent_at") is None and row.get("remind_start_date") == params[0]
         # 2026-11（功能大幅精簡）：重要日子改為「生日設定」（見 src/bot/important_days.py）。
         if where == "birth_month = %s AND birth_day = %s":
             return row.get("birth_month") == params[0] and row.get("birth_day") == params[1]
