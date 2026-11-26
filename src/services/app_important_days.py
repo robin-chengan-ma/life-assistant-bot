@@ -102,12 +102,17 @@ class AppImportantDayService:
         self._db = db
 
     def family_users(self) -> list[dict[str, Any]]:
-        rows = self._db.select("users", columns=("id", "role"))
+        """供「自行選擇」推播對象 UI 使用。2026-11-26（Robin 反饋）：原本只回傳
+        `user_id`（如 `user01`）給前端顯示，使用者完全看不出對應到誰；改成一併回傳
+        `display_name`，依序取 `nickname`（個人暱稱）／`family_title`（家庭稱謂，如「弟弟」）／
+        `role`（舊欄位相容）／`user_id` 第一個非空值，確保一定有可讀的顯示文字。"""
+        rows = self._db.select("users", columns=("id", "role", "nickname", "family_title"))
         return [
             {
                 "id": row["id"],
                 "role": row["role"],
                 "user_id": f"user{row['id']:02d}",
+                "display_name": row.get("nickname") or row.get("family_title") or row.get("role") or f"user{row['id']:02d}",
             }
             for row in rows
         ]

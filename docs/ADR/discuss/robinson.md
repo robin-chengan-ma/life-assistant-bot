@@ -1429,3 +1429,35 @@ important_days.sql`；異動 `mobile/app/{home,todo,important-days}.tsx`、
 `national_holidays.py` 規格）、`docs/reference/db_schema.md`（`important_days` 新增 `0107` 欄位）、
 `docs/reference/api_schema.md`（補上先前漏記的待辦與行事曆端點、更新 dashboard／important-days
 說明）、`docs/reference/mobile-app-ux.md`（首頁說明改為行事曆）。尚未 commit，待 Robin 確認。
+
+## 2026-11-26（第三次追加）行事曆色彩閃爍修正、數字下方小字改成「未來一週注意事項」區塊、推播對象改顯示真實姓名
+
+**狀態**：accepted
+
+**背景**：Robin 實機使用上一批（首頁行事曆／生日推播對象）後回報三個體感問題：①行事曆（含首頁與
+待辦新增頁）打開當下會先看到數字全部黑色，過一下子國定假日資料載入完才變紅色，不喜歡這種分階段
+跳動；②首頁行事曆數字下方的小字注記（待辦/生日/假日名稱）太擠，待辦內容字數一多根本看不清楚；
+③生日設定「自行選擇」推播對象的清單只顯示 `user01`／`user02` 這種流水號，完全看不出對應到誰。
+
+**決策**：
+1. 色彩閃爍：根因是 `HomeCalendar.tsx`／`TodoCalendarPicker.tsx` 都是先渲染行事曆（此時國定假日
+   資料還沒拉回來，數字預設黑色），等 `GET /api/app/calendar` 回來才重新渲染變色。改成：顯示行事曆
+   前先確認該月份資料已經拉回來（用 `loadedMonths: Record<month, boolean>` 追蹤），沒拉到就先顯示
+   讀取中圈圈，資料到齊後才一次顯示整個月曆，不會有分階段變色的過程；月份切換（左右翻頁）時同理。
+2. 首頁行事曆數字下方完全移除小字，改成行事曆正下方新增一個「未來一週注意事項」區塊，只看未來 7
+   天（含今天），逐日列出當天的國定假日名稱、生日、待辦事項完整內容（不截斷），沒有任何項目的日子
+   不顯示；`TodoCalendarPicker.tsx`（新增待辦用的行事曆）比照拿掉數字下方的國定假日名稱小字，一樣
+   只靠數字顏色分辨。
+3. `AppImportantDayService.family_users()` 原本只回傳 `role`／`user_id`（流水號），新增
+   `display_name` 欄位，依序取 `nickname`（個人暱稱）／`family_title`（家庭稱謂）／`role`（舊欄位
+   相容）／`user_id` 第一個非空值；Mobile App「自行選擇」清單改顯示 `display_name`。
+
+**理由**：三項都是既有功能的體感微調，不涉及資料結構或商業邏輯變更（行事曆本身能不能用、生日推播
+邏輯本身都沒有改變），純粹是 UI 呈現方式修正，Robin 當場指出明確問題與想要的呈現方式，不需要額外
+討論方案。
+
+**後果**：異動 `mobile/src/components/HomeCalendar.tsx`、`mobile/src/components/
+TodoCalendarPicker.tsx`、`mobile/app/important-days.tsx`、`mobile/src/services/analyticsApi.ts`、
+`src/services/app_important_days.py`。不需要新 migration。全專案 `python3 -m pytest -q` 521
+passed，`ruff check .` 乾淨，Mobile `tsc --noEmit` 零錯誤。`docs/specs/SPEC.md` FR-31c 同步修正。
+尚未 commit，待 Robin 確認。

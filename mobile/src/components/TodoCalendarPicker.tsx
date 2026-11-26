@@ -1,7 +1,7 @@
 import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Calendar, type DateData } from "react-native-calendars";
-import { Modal, StyleSheet } from "react-native";
+import { ActivityIndicator, Modal, StyleSheet } from "react-native";
 
 import { AppPressable as Pressable } from "@/components/AppPressable";
 import { AppText as Text } from "@/components/AppText";
@@ -12,8 +12,11 @@ import { useAuth } from "@/context/AuthContext";
 import { getCalendarMonth, type CalendarDay } from "@/services/analyticsApi";
 
 // 待辦事項的行事曆選取元件（2026-11-26，見 docs/ADR/discuss/robinson.md）：點一天＝單日待辦
-// （start=end），點第二天形成區間；月份資料透過 /api/app/calendar 顯示國定假日/補班標記，沿用
-// DateRangeFilter.tsx 的 range-select 寫法，但刻意精簡（不做最小/最大天數限制）。
+// （start=end），點第二天形成區間；沿用 DateRangeFilter.tsx 的 range-select 寫法，但刻意精簡
+// （不做最小/最大天數限制）。
+// 2026-11-26（同日修正）：Robin 反饋數字下方的國定假日名稱小字會讓日期擠成一團，拿掉；且
+// 打開行事曆時會先看到「黑色→等資料載入完才變紅色」的閃爍，改成打開當下先讀取該月份國定假日
+// 資料、讀完才顯示行事曆，避免分階段跳動。
 type Props = {
   endDate: string;
   startDate: string;
@@ -27,16 +30,27 @@ export function TodoCalendarPicker({ endDate, startDate, onChange }: Props) {
   const [open, setOpen] = useState(false);
   const [selectionStarted, setSelectionStarted] = useState(false);
   const [calendarDays, setCalendarDays] = useState<Record<string, CalendarDay>>({});
+  const [loadedMonths, setLoadedMonths] = useState<Record<string, boolean>>({});
 
   const loadMonth = useCallback(
     (month: string) => {
       const [year, monthIndex] = month.split("-").map(Number);
       void getCalendarMonth(authorizedRequest, year, monthIndex)
-        .then((result) => setCalendarDays((current) => ({ ...current, ...result.days })))
-        .catch(() => undefined);
+        .then((result) => {
+          setCalendarDays((current) => ({ ...current, ...result.days }));
+          setLoadedMonths((current) => ({ ...current, [month]: true }));
+        })
+        .catch(() => setLoadedMonths((current) => ({ ...current, [month]: true })));
     },
     [authorizedRequest],
   );
+
+  useEffect(() => {
+    if (!open) return;
+    const month = (startDate || todayIsoDate()).slice(0, 7);
+    if (!loadedMonths[month]) loadMonth(month);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   const markedDates = useMemo(() => {
     const endpointTextColor = theme === "dark" ? colors.background : colors.white;
@@ -96,57 +110,58 @@ export function TodoCalendarPicker({ endDate, startDate, onChange }: Props) {
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>選擇提醒日期</Text>
             <Text style={styles.modalHint}>點一天＝單日待辦，再點第二天可形成日期區間</Text>
-            <Calendar
-              current={startDate || todayIsoDate()}
-              dayComponent={({ date, marking, state }) => {
-                if (!date) return null;
-                const isToday = date.dateString === todayIsoDate();
-                const calendarDay = calendarDays[date.dateString];
-                return (
-                  <Pressable
-                    onPress={() => selectDay(date)}
-                    style={[
-                      styles.rangeDay,
-                      marking?.color ? { backgroundColor: marking.color } : null,
-                      marking?.startingDay && styles.rangeStart,
-                      marking?.endingDay && styles.rangeEnd,
-                      isToday && !marking?.color && styles.todayDay,
-                    ]}
-                  >
-                    <Text
+            {loadedMonths[(startDate || todayIsoDate()).slice(0, 7)] ? (
+              <Calendar
+                current={startDate || todayIsoDate()}
+                dayComponent={({ date, marking, state }) => {
+                  if (!date) return null;
+                  const isToday = date.dateString === todayIsoDate();
+                  const calendarDay = calendarDays[date.dateString];
+                  return (
+                    <Pressable
+                      onPress={() => selectDay(date)}
                       style={[
-                        styles.rangeDayText,
-                        state === "disabled" && styles.disabledDayText,
-                        marking?.textColor ? { color: marking.textColor } : null,
-                        calendarDay?.is_holiday && !isToday && styles.holidayDayText,
-                        isToday && !marking?.color && styles.todayDayText,
+                        styles.rangeDay,
+                        marking?.color ? { backgroundColor: marking.color } : null,
+                        marking?.startingDay && styles.rangeStart,
+                        marking?.endingDay && styles.rangeEnd,
+                        isToday && !marking?.color && styles.todayDay,
                       ]}
                     >
-                      {date.day}
-                    </Text>
-                    {calendarDay?.name ? (
-                      <Text numberOfLines={1} style={[styles.calendarLabel, calendarDay.is_holiday && styles.holidayLabel]}>
-                        {calendarDay.name}
+                      <Text
+                        style={[
+                          styles.rangeDayText,
+                          state === "disabled" && styles.disabledDayText,
+                          marking?.textColor ? { color: marking.textColor } : null,
+                          calendarDay?.is_holiday && !isToday && styles.holidayDayText,
+                          isToday && !marking?.color && styles.todayDayText,
+                        ]}
+                      >
+                        {date.day}
                       </Text>
-                    ) : null}
-                  </Pressable>
-                );
-              }}
-              markedDates={markedDates}
-              markingType="period"
-              onDayPress={selectDay}
-              onMonthChange={(month) => loadMonth(month.dateString.slice(0, 7))}
-              theme={{
-                arrowColor: colors.primary,
-                calendarBackground: colors.surface,
-                dayTextColor: colors.text,
-                monthTextColor: colors.text,
-                textSectionTitleColor: colors.textMuted,
-                textDisabledColor: theme === "dark" ? "#52645F" : "#C4CECB",
-                textMonthFontWeight: "800" as const,
-                todayTextColor: colors.danger,
-              }}
-            />
+                    </Pressable>
+                  );
+                }}
+                markedDates={markedDates}
+                markingType="period"
+                onDayPress={selectDay}
+                onMonthChange={(month) => loadMonth(month.dateString.slice(0, 7))}
+                theme={{
+                  arrowColor: colors.primary,
+                  calendarBackground: colors.surface,
+                  dayTextColor: colors.text,
+                  monthTextColor: colors.text,
+                  textSectionTitleColor: colors.textMuted,
+                  textDisabledColor: theme === "dark" ? "#52645F" : "#C4CECB",
+                  textMonthFontWeight: "800" as const,
+                  todayTextColor: colors.danger,
+                }}
+              />
+            ) : (
+              <View style={styles.loadingBox}>
+                <ActivityIndicator color={colors.primary} />
+              </View>
+            )}
             <View style={styles.actions}>
               <Pressable onPress={() => setOpen(false)} style={styles.applyButton}>
                 <Text style={styles.applyText}>完成</Text>
@@ -173,6 +188,7 @@ const createStyles = (colors: ReturnType<typeof useAppPreferences>["colors"], th
   actions: { flexDirection: "row", gap: 10, justifyContent: "flex-end", marginTop: 8 },
   applyButton: { backgroundColor: colors.primary, borderRadius: 10, paddingHorizontal: 20, paddingVertical: 10 },
   applyText: { color: theme === "dark" ? colors.background : colors.white, fontWeight: "800" },
+  loadingBox: { alignItems: "center", height: 260, justifyContent: "center" },
   rangeDay: { alignItems: "center", height: 64, justifyContent: "center", overflow: "hidden", width: "100%" },
   rangeDayText: { color: colors.text, fontSize: 16 },
   rangeStart: { borderBottomLeftRadius: 19, borderTopLeftRadius: 19 },

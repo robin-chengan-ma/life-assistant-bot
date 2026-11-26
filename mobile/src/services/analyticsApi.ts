@@ -74,6 +74,7 @@ export type FamilyUser = {
   id: number;
   role: string;
   user_id: string;
+  display_name: string;
 };
 
 export type FinanceAnalytics = {

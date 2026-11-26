@@ -192,7 +192,7 @@ Robinson 是一個雙前台架構的家庭生活小助手。2026-11-25（ADR-33�
 **功能性需求**
 - FR-31：Mobile App 新增／編輯／刪除待辦，每筆只有 `content`（文字）與 `remind_start_date`／`remind_end_date`（提醒日期區間，單日時兩欄相同）兩組必要欄位；不提供 `pending`／`completed`／`expired` 等狀態欄位，也不支援 Google Calendar 同步；新增／編輯時透過 `TodoCalendarPicker`（`GET /api/app/calendar?year=&month=` 顯示國定假日／補班標記）選擇日期或區間
 - FR-32：Telegram 單向推播——固定在台灣時間每天 08:30（`/healthz` 排程觸發時判斷時間窗）對 `remind_start_date` 等於當天的待辦推播一次，訊息只顯示日期（區間則顯示「起～迄」），不帶時分；去重記號 `reminded_sent_at` 落地於資料列本身以撐過服務重啟；不再提供每日固定摘要、前置提醒視窗或 `/my_todos` 查詢，查詢改到 Mobile App 進行
-- FR-31c（2026-11-26 新增）：Mobile App 首頁以月曆取代原「重要通知」卡片（見 `mobile/src/components/HomeCalendar.tsx`），週末／國定假日數字顯示為紅色、平日黑色，數字下方小字顯示當天的待辦事項內容、生日與國定假日名稱，支援左右翻頁檢視上個月／下個月；純檢視用途，不支援在月曆上直接點選新增或編輯
+- FR-31c（2026-11-26 新增；同日修正）：Mobile App 首頁以月曆取代原「重要通知」卡片（見 `mobile/src/components/HomeCalendar.tsx`），週末／國定假日數字顯示為紅色、平日黑色，支援左右翻頁檢視上個月／下個月；切換月份時先讀取該月國定假日資料、讀完才顯示，避免「先黑後紅」的色彩跳動。數字下方不顯示任何小字（避免擠在一起看不清楚），待辦事項內容、生日與國定假日名稱改集中顯示在行事曆正下方的「未來一週注意事項」區塊（只列未來 7 天，逐日列出當天的待辦內容、生日、國定假日名稱，沒有任何項目的日子不顯示）；純檢視用途，不支援在月曆上直接點選新增或編輯
 
 **實作階段**
 - Phase 1 Step 1.7：舊版「自然語言三輪反問＋狀態管理＋Google Calendar 同步」設計已完成並運作至 2026-11；2026-11-25（migration `0102`）：改版為純一次性提醒，既有資料已清空重來，詳見 `docs/reference/db_schema.md`「待辦事項」

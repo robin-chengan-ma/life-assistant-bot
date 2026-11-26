@@ -191,7 +191,7 @@ function BirthdayModal({ familyUsers, initial, onClose, onSaved, request }: { fa
         {familyUsers.map((user) => {
           const selected = audienceUserIds.includes(user.id);
           return <Pressable key={user.id} onPress={() => toggleAudienceUser(user.id)} style={[styles.chip, selected ? styles.chipSelected : null]}>
-            <Text style={[styles.chipText, selected ? styles.chipTextSelected : null]}>{user.user_id}</Text>
+            <Text style={[styles.chipText, selected ? styles.chipTextSelected : null]}>{user.display_name}</Text>
           </Pressable>;
         })}
       </View> : null}
