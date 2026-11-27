@@ -1566,3 +1566,26 @@ commit，待 Robin 確認。
 空陣列報錯）。全專案 `python3 -m pytest -q` 528 passed，`ruff check .` 對本次異動的 Python 檔案
 全過，Mobile `tsc --noEmit` 零錯誤。`docs/specs/SPEC.md` FR-32／FR-32a、
 `docs/reference/db_schema.md`／`api_schema.md` 同步更新。尚未 commit，待 Robin 確認。
+
+## 2026-11-27 待辦事項新增入口改到首頁、列表頁改「已過期／進行中」頁籤
+
+**狀態**：accepted
+
+**背景**：Robin 回報首頁「待辦事項」卡片無論點卡片本體或點卡片上的「新增待辦」按鈕，都只是導向
+待辦事項列表頁，還要在列表頁再按一次「新增待辦」才會真的跳出新增表單，路徑繞了一圈；另外列表頁
+把所有填過日期的待辦（含已經過去的）全部塞在同一個清單裡，看起來很亂。
+
+**決策**：
+1. 首頁「待辦事項」卡片的「新增待辦」按鈕改成直接導向 `/todo?action=new`；`todo.tsx` 偵測到
+   `action=new` 查詢參數時，進頁當下自動打開新增表單彈窗（只觸發一次，避免返回頁面殘留參數又
+   重複彈出）。卡片本體（非按鈕區域）維持現狀，單純導向列表頁本身，不自動開表單。
+2. 列表頁本身移除「新增待辦」按鈕（新增動作只保留首頁這一個入口）。
+3. 列表頁改成「進行中」／「已過期」兩個頁籤：以 `remind_end_date`（日期區間的最後一天）跟今天
+   比較，`remind_end_date < 今天` 歸「已過期」，`remind_end_date >= 今天`（含今天與未來）歸
+   「進行中」，預設顯示「進行中」。日期區間待辦只要還沒整段結束就算進行中，不會因為起始日已過就
+   被誤判過期；純前端篩選既有清單，不另外呼叫 API。
+
+**後果**：異動 `mobile/app/home.tsx`（「新增待辦」按鈕導頁參數）、`mobile/app/todo.tsx`
+（`useLocalSearchParams` 偵測 `action=new` 自動開表單、移除新增按鈕、新增頁籤 UI 與篩選邏輯）。
+純前端變更，不涉及後端或資料庫。全專案 `python3 -m pytest -q` 528 passed（本次無 Python 異動），
+Mobile `tsc --noEmit` 零錯誤。`docs/specs/SPEC.md` FR-31d 同步新增。尚未 commit，待 Robin 確認。

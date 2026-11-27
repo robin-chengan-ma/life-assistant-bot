@@ -1,5 +1,5 @@
 import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
-import { Redirect } from "expo-router";
+import { Redirect, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Modal, ScrollView, StyleSheet, TextInput } from "react-native";
 
@@ -42,6 +42,7 @@ export default function TodoScreen() {
   const { authorizedRequest, status } = useAuth();
   const { colors, theme } = useAppPreferences();
   const styles = createStyles(colors, theme);
+  const { action } = useLocalSearchParams<{ action?: string }>();
   const [items, setItems] = useState<TodoItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
@@ -49,7 +50,20 @@ export default function TodoScreen() {
   const [editing, setEditing] = useState<TodoItem | null | undefined>(undefined);
   const [pendingDeletion, setPendingDeletion] = useState<TodoItem | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<TodoItem | null>(null);
+  // 已過期／進行中頁籤：以 remind_end_date（區間最後一天）跟今天比較，還沒整段結束都算進行中。
+  const [tab, setTab] = useState<"active" | "expired">("active");
   const deleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoOpenHandled = useRef(false);
+
+  // 2026-11-27（見 docs/ADR/discuss/robinson.md）：Robin 要求首頁「新增待辦」按鈕要直接跳出新增
+  // 表單彈窗，不要先進列表頁再按一次「新增待辦」。首頁改用 `/todo?action=new` 導頁，這裡偵測到
+  // 該參數時自動開啟新增表單（只在進頁當下觸發一次，避免返回頁面時殘留參數又重複彈出）。
+  useEffect(() => {
+    if (action === "new" && !autoOpenHandled.current) {
+      autoOpenHandled.current = true;
+      setEditing(null);
+    }
+  }, [action]);
 
   const load = useCallback(async () => {
     if (status !== "authenticated") return;
@@ -84,15 +98,23 @@ export default function TodoScreen() {
 
   const sorted = items.slice().sort((left, right) => left.remind_start_date.localeCompare(right.remind_start_date));
 
+  const todayIso = todayIsoDate();
+  const expired = sorted.filter((item) => item.remind_end_date < todayIso);
+  const active = sorted.filter((item) => item.remind_end_date >= todayIso);
+  const visible = tab === "active" ? active : expired;
+
   if (status === "guest") return <Redirect href="/login" />;
   if (loading && !items.length && !message) return <AppShell title="待辦事項"><View style={{ alignItems: "center", gap: 12, justifyContent: "center", minHeight: 360 }}><ActivityIndicator color={colors.primary} size="large" /><Text style={{ color: colors.textMuted, fontWeight: "700" }}>資料載入中…</Text></View></AppShell>;
   return <AppShell title="待辦事項">
-    <View style={styles.intro}><MaterialCommunityIcons color={colors.primary} name="calendar-check-outline" size={28} /><View style={styles.flex}><Text style={styles.introTitle}>待辦提醒</Text><Text style={styles.description}>到了日期會推播提醒，不需要標記完成。</Text></View></View>
-    <Pressable onPress={() => setEditing(null)} style={styles.addButton}><MaterialCommunityIcons color={theme === "dark" ? colors.background : colors.white} name="plus" size={20} /><Text style={styles.addText}>新增待辦</Text></Pressable>
+    <View style={styles.intro}><MaterialCommunityIcons color={colors.primary} name="calendar-check-outline" size={28} /><View style={styles.flex}><Text style={styles.introTitle}>待辦提醒</Text><Text style={styles.description}>到了日期會推播提醒，不需要標記完成。新增待辦請到首頁點「新增待辦」。</Text></View></View>
+    <View style={styles.tabRow}>
+      <Pressable onPress={() => setTab("active")} style={[styles.tab, tab === "active" ? styles.tabSelected : null]}><Text style={[styles.tabText, tab === "active" ? styles.tabTextSelected : null]}>進行中（{active.length}）</Text></Pressable>
+      <Pressable onPress={() => setTab("expired")} style={[styles.tab, tab === "expired" ? styles.tabSelected : null]}><Text style={[styles.tabText, tab === "expired" ? styles.tabTextSelected : null]}>已過期（{expired.length}）</Text></Pressable>
+    </View>
     {loading ? <ActivityIndicator color={colors.primary} /> : null}
     {message ? <Text style={styles.message}>{message}</Text> : null}
-    {!loading && !sorted.length ? <Text style={styles.empty}>目前沒有待辦事項</Text> : null}
-    {sorted.map((item) => <View key={item.id} style={styles.card}>
+    {!loading && !visible.length ? <Text style={styles.empty}>{tab === "active" ? "目前沒有進行中的待辦事項" : "目前沒有已過期的待辦事項"}</Text> : null}
+    {visible.map((item) => <View key={item.id} style={styles.card}>
       <View style={styles.cardHeading}><Text style={styles.cardTitle}>{item.content}</Text><Text style={styles.meta}>{formatDateRange(item.remind_start_date, item.remind_end_date)}</Text></View>
       <Text style={styles.remindMeta}>{formatRemindOffsets(item.remind_offsets)}</Text>
       {item.can_edit ? <View style={styles.actions}><Pressable onPress={() => setEditing(item)} style={styles.edit}><Text style={styles.editText}>編輯</Text></Pressable><Pressable onPress={() => setDeleteTarget(item)} style={styles.delete}><Text style={styles.deleteText}>刪除</Text></Pressable></View> : <Text style={styles.readOnly}>由其他家人建立，僅能查看。</Text>}
@@ -171,7 +193,8 @@ function TodoModal({ initial, onClose, onSaved, request }: { initial: TodoItem |
 }
 
 const createStyles = (colors: ReturnType<typeof useAppPreferences>["colors"], theme: ReturnType<typeof useAppPreferences>["theme"]) => StyleSheet.create({
-  flex: { flex: 1 }, intro: { alignItems: "flex-start", backgroundColor: colors.surface, borderColor: colors.border, borderRadius: 18, borderWidth: 1, flexDirection: "row", gap: 12, padding: 18 }, introTitle: { color: colors.text, fontSize: 20, fontWeight: "900" }, description: { color: colors.textMuted, fontSize: 12, lineHeight: 18, marginTop: 5 }, addButton: { alignItems: "center", alignSelf: "flex-start", backgroundColor: colors.primary, borderRadius: 11, flexDirection: "row", gap: 7, paddingHorizontal: 16, paddingVertical: 11 }, addText: { color: theme === "dark" ? colors.background : colors.white, fontWeight: "900" },
+  flex: { flex: 1 }, intro: { alignItems: "flex-start", backgroundColor: colors.surface, borderColor: colors.border, borderRadius: 18, borderWidth: 1, flexDirection: "row", gap: 12, padding: 18 }, introTitle: { color: colors.text, fontSize: 20, fontWeight: "900" }, description: { color: colors.textMuted, fontSize: 12, lineHeight: 18, marginTop: 5 },
+  tabRow: { flexDirection: "row", gap: 8 }, tab: { backgroundColor: theme === "dark" ? "#22332F" : colors.white, borderColor: colors.border, borderRadius: 11, borderWidth: 1, flex: 1, paddingVertical: 11 }, tabSelected: { backgroundColor: colors.primary, borderColor: colors.primary }, tabText: { color: colors.text, fontWeight: "800", textAlign: "center" }, tabTextSelected: { color: theme === "dark" ? colors.background : colors.white },
   message: { color: colors.danger, fontWeight: "700", textAlign: "center" }, empty: { color: colors.textMuted, padding: 24, textAlign: "center" }, card: { backgroundColor: colors.surface, borderColor: colors.border, borderRadius: 16, borderWidth: 1, gap: 8, padding: 17 }, cardHeading: { alignItems: "flex-start", flexDirection: "row", gap: 10, justifyContent: "space-between" }, cardTitle: { color: colors.text, flex: 1, fontSize: 16, fontWeight: "900" }, meta: { color: colors.textMuted, fontSize: 12, fontWeight: "700" },
   actions: { flexDirection: "row", gap: 8, justifyContent: "flex-end" }, edit: { backgroundColor: colors.primarySoft, borderRadius: 9, paddingHorizontal: 14, paddingVertical: 8 }, editText: { color: colors.primaryDark, fontWeight: "800" }, delete: { backgroundColor: theme === "dark" ? "#432823" : "#FAD7D5", borderRadius: 9, paddingHorizontal: 14, paddingVertical: 8 }, deleteText: { color: colors.danger, fontWeight: "800" }, readOnly: { color: colors.textMuted, fontSize: 11 }, remindMeta: { color: colors.textMuted, fontSize: 12, fontWeight: "700" },
   modalRoot: { alignItems: "center", flex: 1, justifyContent: "center", padding: 18 }, backdrop: { backgroundColor: "rgba(18,35,32,.5)", bottom: 0, left: 0, position: "absolute", right: 0, top: 0 }, modalCard: { backgroundColor: colors.surface, borderRadius: 20, maxHeight: "94%", maxWidth: 480, width: "100%" }, close: { padding: 12, position: "absolute", right: 4, top: 4, zIndex: 2 }, modalContent: { gap: 13, padding: 22, paddingTop: 45 }, modalTitle: { color: colors.text, fontSize: 22, fontWeight: "900" },
