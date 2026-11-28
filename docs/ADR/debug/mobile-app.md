@@ -311,3 +311,26 @@ AppShell.tsx` 依 `user?.gender === "female"` 顯示對應圖示）都還在；�
 **未驗證範圍**：本次只修正程式碼與新增補救功能，**尚未實際對 Robin 媽媽的正式資料庫帳號執行
 「🚻 設定性別」把既有 `NULL` 改成 `female`**——這需要 Robin 部署後自己在 Telegram 操作一次，
 這個雲端環境沒有正式資料庫的存取權限。
+
+
+## 2026-11-28 「🚻 設定性別」流程選完編號後掉回歡迎詞，沒有真的問男女
+**現象**：Robin 實機操作「🚻 設定性別」，點編號之後送出的下一句話（例如「3」）沒有被追問「男／女」，
+直接收到一般的「歡迎回來，Robin！」歡迎詞，連續兩次重現（含一次懷疑是部署時機巧合撞到 Render 重啟，
+但重新操作後仍重現，排除巧合）。
+**排查過程**：`src/bot/commands.py` 裡 `permission_gender` 的對話狀態機邏輯本身沒有問題（獨立呼叫
+`handle_permission_step()` 可以正常走完）；往上查 `src/bot/router.py::handle_message()`，發現要先
+通過 `_owner_active_flow(state.get("flow"))` 這道關卡才會真的呼叫 `handle_permission_step()`，否則
+會直接回覆固定的歡迎詞——而 `_owner_active_flow()` 的白名單只列了
+`("permission_create", "permission_disable", "permission_enable", "permission_resend")`，新增
+`permission_gender` 流程時漏改了這裡。
+**根因**：新增「🚻 設定性別」功能時，只在 `commands.py` 裡加上了 `permission_gender` 分支的實際處理
+邏輯，但沒有同步把它加進 `router.py::_owner_active_flow()` 的白名單，導致透過正常對話（先點按鈕，
+下一則訊息才送出答案）操作時，第二句話永遠進不了狀態機；先前的測試只直接呼叫
+`commands.handle_permission_step()`，沒有一個端對端測試是透過 `router.handle_message()` 走完整流程，
+才沒抓到這個缺口。
+**修復方式**：`_owner_active_flow()` 新增 `"permission_gender"`。新增
+`tests/bot/test_router.py::test_permission_callback_gender_then_step_full_flow`，刻意透過
+`router.handle_callback_query()`／`router.handle_message()`（而非直接呼叫 `commands.py`）走完整個
+「按鈕→編號→男女」三步驟，確保日後類似新增流程不會再漏掉這道關卡。
+**驗證方式**：全專案 `python3 -m pytest -q` 541 passed，`ruff check` 乾淨。
+**未驗證範圍**：Robin 需在正式環境重新操作一次「🚻 設定性別」確認修復生效。

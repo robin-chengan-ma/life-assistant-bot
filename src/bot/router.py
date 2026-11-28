@@ -35,7 +35,15 @@ _ALREADY_BOUND_REPLY = "你已經綁定完成囉！這個機器人只會主動�
 
 
 def _owner_active_flow(flow: str | None) -> bool:
-    return flow in ("permission_create", "permission_disable", "permission_enable", "permission_resend")
+    # 2026-11-28 修正：新增「🚻 設定性別」流程（`permission_gender`）時漏改這裡，導致選完性別後
+    # 回答編號／男女都會被當成一般訊息、掉回歡迎詞，而不是真的進到 `handle_permission_step()`。
+    return flow in (
+        "permission_create",
+        "permission_disable",
+        "permission_enable",
+        "permission_resend",
+        "permission_gender",
+    )
 
 
 def handle_message(

@@ -128,6 +128,30 @@ def test_permission_callback_create_then_step_full_flow(fake_db, monkeypatch):
     assert len(created) == 1
 
 
+def test_permission_callback_gender_then_step_full_flow(fake_db, monkeypatch):
+    # 2026-11-28 回歸測試：修正 `router._owner_active_flow()` 漏列 `permission_gender`，導致
+    # 透過 router（而非直接呼叫 commands.py）走完整流程時，選完編號後第二句話會被誤判成
+    # 「沒有進行中的流程」而回覆歡迎詞，不會真的進到 `handle_permission_step()`。
+    _set_owner(monkeypatch)
+    store = ConversationStateStore()
+    fake_db.insert(
+        "users",
+        {"family_title": "媽媽", "role": "family", "is_owner": False, "is_active": True, "gender": None},
+    )
+
+    reply, _keyboard = router.handle_callback_query(fake_db, store, OWNER_ID, "permission:gender")
+    assert "哪一位使用者設定性別" in reply
+
+    reply = router.handle_message(fake_db, store, OWNER_ID, "1")[0]
+    assert "請輸入「男」或「女」" in reply
+
+    reply = router.handle_message(fake_db, store, OWNER_ID, "女")[0]
+    assert "已更新" in reply
+
+    user = fake_db.select("users", where="family_title = %s", params=("媽媽",), fetch_one=True)
+    assert user["gender"] == "female"
+
+
 def test_unknown_callback_data_raises(fake_db, monkeypatch):
     _set_owner(monkeypatch)
     store = ConversationStateStore()
