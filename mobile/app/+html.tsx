@@ -29,6 +29,19 @@ export default function Root({ children }: PropsWithChildren) {
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
         <meta name="apple-mobile-web-app-title" content="羅賓森" />
         <ScrollViewStyleReset />
+        {/* 2026-11-28（見 docs/ADR/debug/mobile-app.md）：Robin 回報不管 iOS 或 Android，只要是從
+            登入頁「導頁」進到首頁（而不是直接重新整理/重開 App 直接落在首頁），畫面就可以被用力
+            左右滑動、版面會跟著位移；但直接重開 App 落在首頁時完全鎖死不會動。研判是 Stack
+            導頁切換時某個畫面短暫比螢幕寬（例如切換動畫），導致瀏覽器把文件的「可橫向捲動範圍」
+            撐大後沒有收回來，`expo-router/html` 內建的 `ScrollViewStyleReset` 只鎖住
+            `body{overflow:hidden}`，沒有同時限制寬度，不足以完全擋住這種情況。這裡額外明確鎖定
+            `html`／`body`／`#root` 的寬度上限與橫向捲動，當作最後一道防線，不管哪個元件日後不小心
+            撐寬都擋得住。 */}
+        <style
+          dangerouslySetInnerHTML={{
+            __html: "html,body,#root{overflow-x:hidden;max-width:100%;width:100%}",
+          }}
+        />
       </head>
       <body>{children}</body>
     </html>

@@ -373,3 +373,61 @@ AppShell.tsx` 依 `user?.gender === "female"` 顯示對應圖示）都還在；�
 媽媽的 Android 手機上重新測試，並確認 iPhone 沒有因為補上 `width: "100%"` 而跑版**。
 **未驗證範圍**：實機 Android Chrome／iOS Safari 渲染結果；是否還有其他未被回報、但同樣沒給
 `width: "100%"` 的角落元件。
+
+
+## 2026-11-28 push、重新部署後 Android 版面仍跑掉；發現 iOS 也有同樣「可滑動」問題，只是先前沒注意到
+**現象**：Robin push 前一次修正（補 `width: "100%"`）並重新部署後，媽媽的 Android 手機實測版面
+仍然可以被滑動跑掉，看起來完全沒有效果。Robin 進一步測試發現一個關鍵現象：**iPhone 其實也有同樣
+的問題**——在「登入頁」與「登入後剛導到首頁」這兩個畫面用力滑動都滑得動（沒鎖住）；但如果把 App
+滑掉（不登出）重新點開，直接落在首頁（略過登入頁），畫面就完全鎖死滑不動。也就是說問題不是
+「iOS 完全沒事、只有 Android 有事」，而是「透過登入頁 → 首頁這段導頁路徑進入時才會壞掉，直接
+重開 App 落在某一頁則是正常的」，兩個平台都一樣，只是 Android 上更明顯、Robin 之前沒有特別去
+測 iPhone 的這個路徑。
+**排查過程**：檢查 `mobile/app/+html.tsx` 使用的 `expo-router/html` 內建 `<ScrollViewStyleReset />`，
+追到套件原始碼（`expo-router/build/static/html.js`）只注入了
+`` #root,body,html{height:100%}body{overflow:hidden}#root{display:flex} ``——只鎖了 `body` 的
+`overflow`，完全沒有限制 `#root`／`html`／`body` 的**寬度**上限。推測：Expo Router 的 `<Stack>`
+在切換畫面（登入頁 → 首頁）時，舊畫面會用 `transform: translateX(...)` 滑出螢幕外，這段切換過程
+中舊畫面仍佔有版面空間，若因此讓文件的「可橫向捲動範圍」被撐大，單靠 `body{overflow:hidden}`
+不足以擋住——`overflow:hidden` 能擋住的是 body 自己的捲動容器，但 Android Chrome（以及這次發現
+iOS Safari 也會）在某些情況下仍會讓使用者用手勢把視覺可視區域（visual viewport）整個橫移過去。
+直接重開 App 落在某一頁（沒有經過切換動畫）就不會發生，印證問題出在切換動畫本身，而不是任何單一
+頁面元件的寬度沒設好（先前兩次修正 `ScrollView`／各種 `Modal` 容器補 `width: "100%"` 方向沒錯，
+但沒有處理到切換動畫這個更上層的觸發點，所以 Android 上修了也「沒屁用」）。
+**修復方式**：兩層防護：
+1. `mobile/app/_layout.tsx`：`<Stack>` 新增 `animation: WEB_SCREEN_ANIMATION`，Web／PWA 版本
+   （`Platform.OS === "web"`）明確設為 `"none"`，關閉切換動畫本身，原生 App（若未來真的上架）
+   不受影響維持原本動畫手感。
+2. `mobile/app/+html.tsx`：額外注入一段自訂 `<style>`，明確鎖定
+   `html,body,#root{overflow-x:hidden;max-width:100%;width:100%}`，作為最後一道防線——不管未來
+   哪個元件或哪次切換動畫不小心把文件撐寬，這裡都直接擋住橫向捲動，不依賴內建
+   `ScrollViewStyleReset` 只鎖 `overflow` 不鎖寬度的侷限。
+3. 順手補上 `mobile/app/_layout.tsx` 的 `LoginSuccessNotice`（登入成功提示彈窗）`noticeBackdrop`
+   同樣缺 `width: "100%"` 的問題（屬於同一批 `Modal` 容器遺漏，一併修正避免殘留）。
+**驗證方式**：Mobile `tsc --noEmit` 零錯誤；全專案 `python3 -m pytest -q` 541 passed（本次無 Python
+異動）。動畫關閉與 CSS 層級的修正無法在雲端環境實機驗證，**待 Robin 部署後重新測試「登入 → 首頁」
+整段路徑，並同時用 iPhone 確認原本就存在、只是沒注意到的滑動問題也一併解決**。
+**未驗證範圍**：實機 Android／iOS 渲染結果；若日後真的上架原生 App（非 Web／PWA），需確認
+`Platform.OS === "web"` 判斷沒有誤傷原生版本的切換動畫體驗。
+
+
+## 2026-11-28 進一步釐清：真正起點是「登入頁本身」就沒鎖住，不是切換動畫
+**現象**：Robin 糾正先前的理解——不是「切換動畫過程中」造成問題，而是**登入頁這一頁本身，打開
+當下就已經是沒鎖住、滑得動的狀態**；只要登入頁是沒鎖住的，從它導頁過去的首頁就會「繼承」這個
+沒鎖住的狀態。如果一開始直接落在首頁（完全沒有經過登入頁），就不會有這個問題。Android 比較特殊，
+不管有沒有經過登入頁，首頁都還是滑得動（比 iPhone 更嚴重）。
+**排查過程**：檢查 `mobile/app/login.tsx`，發現它的 `<ScrollView contentContainerStyle={styles.
+scrollContent} keyboardShouldPersistTaps="handled">` 同樣只給了 `contentContainerStyle`，沒有給
+`style`——這正是最早 `AppShell.tsx` 那次修正的同一個根因。巧的是，先前那次修正就已經檢查過
+`login.tsx` 有同樣的寫法，但因為當時「沒有被回報異常」而依『只修改本次需求直接涉及的範圍』原則
+暫緩處理；現在確認登入頁其實才是問題真正的起點——它沒鎖住，才會讓後面導頁過去的畫面一起沒鎖住。
+**根因**：`login.tsx` 的 `ScrollView` 缺少明確 `style`，是整條「滑動跑版」問題鏈最前端、最初始的
+觸發點；先前兩次修正（`AppShell.tsx`／各種 `Modal`／Stack 切換動畫／HTML 層級防線）都是修下游或
+加防線，沒有處理到這個真正的源頭。
+**修復方式**：`login.tsx` 的 `ScrollView` 補上明確 `style={styles.scrollView}`
+（`{flex:1, width:"100%"}`），跟 `pageContent` 一併補上 `width: "100%"`。
+**驗證方式**：Mobile `tsc --noEmit` 零錯誤；全專案 `python3 -m pytest -q` 541 passed（無 Python
+異動）。**待 Robin 部署後重新測試整條路徑：登入頁本身滑動、登入後首頁滑動、Android 不經過登入
+直接重開落在首頁滑動，三種情境都要確認鎖住**。
+**未驗證範圍**：實機渲染結果；Android 不經過登入也會滑動這件事，仍待確認這次（login.tsx 修正＋
+`+html.tsx` 的 CSS 最後防線）是否已完全覆蓋，或還有其他尚未發現的觸發點。

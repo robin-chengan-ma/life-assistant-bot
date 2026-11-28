@@ -1,7 +1,7 @@
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useState } from "react";
-import { Image, Modal, StyleSheet } from "react-native";
+import { Image, Modal, Platform, StyleSheet } from "react-native";
 
 import { AppText as Text } from "@/components/AppText";
 import { AppView as View } from "@/components/AppView";
@@ -9,6 +9,12 @@ import { AppView as View } from "@/components/AppView";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { AppPreferencesProvider, useAppPreferences } from "@/context/AppPreferencesContext";
 import { DashboardProvider } from "@/context/DashboardContext";
+
+// 2026-11-28（見 docs/ADR/debug/mobile-app.md）：Robin 回報從登入頁導頁到首頁的那一瞬間，畫面
+// 會可以被用力左右滑動、版面跟著位移，研判是 Stack 預設的橫向滑動切換動畫，切換過程中舊畫面被
+// `transform: translateX` 推到螢幕外時，瀏覽器仍把它算進文件的可橫向捲動範圍，切完後沒有收回來。
+// Web／PWA 版本直接關閉切換動畫（原生 App 不受影響，維持原本手感）。
+const WEB_SCREEN_ANIMATION = Platform.OS === "web" ? "none" : undefined;
 
 export default function RootLayout() {
   return (
@@ -24,7 +30,7 @@ export default function RootLayout() {
 
 function ThemedApp() {
   const { theme } = useAppPreferences();
-  return <><StatusBar style={theme === "dark" ? "light" : "dark"} /><Stack screenOptions={{ headerShown: false }} /><LoginSuccessNotice /></>;
+  return <><StatusBar style={theme === "dark" ? "light" : "dark"} /><Stack screenOptions={{ headerShown: false, animation: WEB_SCREEN_ANIMATION }} /><LoginSuccessNotice /></>;
 }
 
 function LoginSuccessNotice() {
@@ -60,6 +66,7 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: "center",
     padding: 24,
+    width: "100%",
   },
   noticeCard: {
     alignItems: "center",

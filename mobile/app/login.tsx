@@ -155,6 +155,7 @@ export default function LoginScreen() {
         <ScrollView
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
+          style={styles.scrollView}
         >
           <View style={styles.brandBlock}>
             <Image
@@ -244,7 +245,15 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   pageContent: {
     flex: 1,
+    width: "100%",
     zIndex: 1,
+  },
+  // 2026-11-28（見 docs/ADR/debug/mobile-app.md）：跟 AppShell.tsx 的 ScrollView 同一個根因，
+  // 這裡先前因為沒有被回報異常而暫緩處理，後來確認登入頁其實才是「滑動跑版」的起點——登入頁
+  // 一開始就沒鎖住，之後導頁到的畫面也會跟著繼承這個沒鎖住的狀態，這次一併補上。
+  scrollView: {
+    flex: 1,
+    width: "100%",
   },
   scrollContent: {
     alignItems: "center",
