@@ -130,7 +130,14 @@ class AppImportantDayService:
         ]
 
     def list_for_user(self, user_id: int) -> list[dict[str, Any]]:
-        rows = self._db.select("important_days", where="user_id = %s", params=(user_id,))
+        """2026-11-28（見 docs/ADR/discuss/robinson.md）：Robin 回報媽媽的帳號在生日設定頁完全
+        看不到任何人，排查發現這裡原本是 `WHERE user_id = 建立者` 只查自己建立的——但生日設定
+        本來就是全家共用的資料，不該因為是誰建立的而互相看不到。改成回傳全部使用者建立的生日，
+        不分建立者；`_serialize()` 的 `can_edit` 仍然只認建立者本人，非建立者看到的卡片維持
+        唯讀（Mobile `important-days.tsx` 既有的「由其他家人建立，僅能查看」文字因此才會真正
+        顯示出來）。
+        """
+        rows = self._db.select("important_days")
         items = [self._serialize(row, user_id) for row in rows]
         return sorted(items, key=lambda item: (item["birth_month"], item["birth_day"], item["name"]))
 

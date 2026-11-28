@@ -169,7 +169,10 @@ class AppAnalyticsService:
             /* app_analytics:dashboard */
             SELECT
               (SELECT COUNT(*) FROM todos WHERE user_id = %s
-                AND %s BETWEEN remind_start_date AND remind_end_date) AS todo_count,
+                AND (
+                  (recurrence_type = 'once' AND %s BETWEEN remind_start_date AND remind_end_date)
+                  OR (recurrence_type = 'monthly' AND recurrence_day = EXTRACT(DAY FROM %s::date)::int)
+                )) AS todo_count,
               (SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE user_id = %s
                 AND type = 'expense' AND transaction_date = %s) AS expense_today,
               (SELECT COUNT(*) FROM transactions WHERE user_id = %s
@@ -190,7 +193,8 @@ class AppAnalyticsService:
               (SELECT weight_kg FROM body_weight_logs WHERE user_id = %s ORDER BY entry_date DESC, created_at DESC LIMIT 1) AS latest_weight,
               (SELECT CASE WHEN EXISTS (SELECT 1 FROM body_weight_logs WHERE user_id = %s AND entry_date = %s) THEN 1 ELSE 0 END) AS weight_count
             """,
-            (user.database_id, target_date) * 14
+            (user.database_id, target_date, target_date)
+            + (user.database_id, target_date) * 13
             + (user.database_id,)
             + (user.database_id, target_date),
         )

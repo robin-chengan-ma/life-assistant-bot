@@ -144,3 +144,38 @@ def test_delete_removes_row(service):
     created = service.create(1, {"content": "買禮物", "remind_start_date": "2026-12-25"})
     service.delete(created["id"], 1)
     assert service.list_for_user(1) == []
+
+
+def test_create_monthly_recurring_todo(service):
+    result = service.create(
+        1,
+        {"content": "繳信用卡費", "recurrence_type": "monthly", "recurrence_day": 5, "remind_offsets": [0]},
+    )
+    items = service.list_for_user(1)
+    assert result["id"] == 1
+    assert items[0]["recurrence_type"] == "monthly"
+    assert items[0]["recurrence_day"] == 5
+    assert items[0]["remind_start_date"] is None
+    assert items[0]["remind_end_date"] is None
+
+
+def test_create_monthly_recurring_todo_rejects_invalid_day(service):
+    with pytest.raises(TodoValidationError):
+        service.create(1, {"content": "繳費", "recurrence_type": "monthly", "recurrence_day": 32})
+
+
+def test_create_monthly_recurring_todo_requires_day(service):
+    with pytest.raises(TodoValidationError):
+        service.create(1, {"content": "繳費", "recurrence_type": "monthly"})
+
+
+def test_create_rejects_invalid_recurrence_type(service):
+    with pytest.raises(TodoValidationError):
+        service.create(1, {"content": "繳費", "recurrence_type": "weekly"})
+
+
+def test_list_sorts_once_before_monthly(service):
+    service.create(1, {"content": "常態性", "recurrence_type": "monthly", "recurrence_day": 5})
+    service.create(1, {"content": "一次性", "remind_start_date": "2026-12-25"})
+    items = service.list_for_user(1)
+    assert [item["content"] for item in items] == ["一次性", "常態性"]

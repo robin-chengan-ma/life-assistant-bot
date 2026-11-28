@@ -108,7 +108,7 @@ export function AppShell({ children, scrollViewRef, title }: PropsWithChildren<{
         </View>
       ) : null}
 
-      <ScrollView contentContainerStyle={styles.content} ref={scrollViewRef}>{children}</ScrollView>
+      <ScrollView contentContainerStyle={styles.content} ref={scrollViewRef} style={styles.scrollView}>{children}</ScrollView>
 
       <Modal animationType="fade" onRequestClose={() => setDrawerOpen(false)} transparent visible={drawerOpen}>
         <View style={styles.modalRoot}>
@@ -158,6 +158,14 @@ const createStyles = (colors: ReturnType<typeof useAppPreferences>["colors"]) =>
   headerButton: { padding: 5 },
   headerTitle: { color: colors.text, flex: 1, fontSize: 18, fontWeight: "800", marginHorizontal: 12, textAlign: "left" },
   avatar: { backgroundColor: colors.primarySoft, borderColor: colors.primary, borderRadius: 21, borderWidth: 1, height: 42, width: 42 },
+  // 2026-11-28（見 docs/ADR/debug/mobile-app.md）：Robin 回報 Android（Chrome）版面會「跑掉」，
+  // 右側出現一大塊空白、只看得到背景裝飾圖案，iPhone（Safari）完全正常。排查發現 `ScrollView`
+  // 本體沒有另外給 `style`，只給了 `contentContainerStyle`；RN Web 在 iOS Safari／Android Chrome
+  // 兩種瀏覽器引擎對沒有明確寬度的巢狀 flex 容器（`AppBackground` → `SafeAreaView` → `ScrollView`）
+  // 的預設寬度計算方式不同，Android Chrome 可能沒有把 `ScrollView` 撐滿整個螢幕寬度，導致內容偏左、
+  // 右側露出原本該被內容蓋住的背景裝飾（圓圈、小點）。補上 `scrollView`（`flex:1, width:"100%"`）
+  // 明確要求撐滿，兩邊瀏覽器引擎都不該再依賴預設行為。
+  scrollView: { flex: 1, width: "100%" },
   content: { alignSelf: "center", gap: 16, maxWidth: 980, padding: 18, width: "100%" },
   profileLayer: { bottom: 0, left: 0, position: "absolute", right: 0, top: 0, zIndex: 5 },
   profileBackdrop: { bottom: 0, left: 0, position: "absolute", right: 0, top: 0 },

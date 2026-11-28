@@ -66,7 +66,9 @@ def generate_passcode() -> str:
     return f"{secrets.randbelow(1_000_000):06d}"
 
 
-def create_user_and_invite(db: CloudSQLClient, family_title: str, full_name: str, nickname: str | None = None) -> dict:
+def create_user_and_invite(
+    db: CloudSQLClient, family_title: str, full_name: str, gender: str, nickname: str | None = None
+) -> dict:
     """FR-4：Owner 專屬「權限管理」建立一般使用者。
 
     先建立 users 取得主鍵，再產生唯一的一次性通關密碼並寫入 invite_codes；
@@ -75,6 +77,12 @@ def create_user_and_invite(db: CloudSQLClient, family_title: str, full_name: str
     2026-11-26（見 migration 0108）：新增必填 `full_name`（全名）——暱稱／家庭稱謂可能重複或
     無法分辨真實身份（例如不同家人的父母都被稱作「媽媽」），生日推播「自行選擇」對象清單改顯示
     全名，因此建立使用者時必須一併記錄。
+
+    2026-11-28（見 docs/ADR/debug/mobile-app.md）：Robin 回報媽媽的 Mobile App 頭像顯示成男生，
+    排查發現 `users.gender`（migration 0064 就存在，Mobile App 頭像依此欄位顯示男/女圖示）在
+    2026-11 大幅精簡 Telegram 選單時，新版「建立使用者」流程遺漏了詢問這一步，導致之後新建立的
+    使用者 `gender` 一律是 NULL、頭像預設退回男生圖示；這裡補回必填 `gender`（`'male'`／
+    `'female'`）。
     """
     user_id = db.insert(
         "users",
@@ -83,6 +91,7 @@ def create_user_and_invite(db: CloudSQLClient, family_title: str, full_name: str
             "role": family_title,  # 沿用舊欄位維持相容，family_title 才是正式來源
             "family_title": family_title,
             "full_name": full_name,
+            "gender": gender,
             "nickname": nickname,
             "is_owner": False,
             "is_active": True,
@@ -113,8 +122,16 @@ def create_user_and_invite(db: CloudSQLClient, family_title: str, full_name: str
         "nickname": nickname,
         "family_title": family_title,
         "full_name": full_name,
+        "gender": gender,
         "passcode": code,
     }
+
+
+def set_user_gender(db: CloudSQLClient, user_id: int, gender: str) -> None:
+    """2026-11-28 新增：讓 Owner 事後補救／修正既有使用者的 `gender`（Mobile App 頭像依此顯示
+    男/女圖示），供「權限管理→🚻 設定性別」流程使用，彌補既有使用者在新版「建立使用者」流程補上
+    `gender` 問題之前就已建立、沒有機會設定的情況。"""
+    db.update("users", {"gender": gender}, where="id = %s", params=(user_id,))
 
 
 def resend_passcode(db: CloudSQLClient, user_id: int) -> str:

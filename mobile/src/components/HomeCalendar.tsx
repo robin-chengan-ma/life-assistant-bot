@@ -49,6 +49,14 @@ function formatMonthDay(iso: string): string {
   return `${Number(month)}/${Number(day)}`;
 }
 
+// 2026-11-28 新增：常態性（monthly）待辦每個月都重複，`remind_start_date`／`remind_end_date`
+// 是 null，不能沿用 `daysInRange()` 那套算法，改成針對未來 7 天逐日比對「這天是不是該月的
+// recurrence_day 那天」；該月天數不足時（例如 31 號遇到只有 30 天的月份）退回當月最後一天，
+// 跟推播邏輯（`src/bot/todo.py`）一致。
+function daysInMonth(year: number, month: number): number {
+  return new Date(year, month, 0).getDate();
+}
+
 export function HomeCalendar() {
   const { colors, theme } = useAppPreferences();
   const { authorizedRequest } = useAuth();
@@ -82,12 +90,26 @@ export function HomeCalendar() {
   const todosByDate = useMemo(() => {
     const map: Record<string, string[]> = {};
     for (const item of todos) {
+      if (item.recurrence_type === "monthly" || !item.remind_start_date || !item.remind_end_date) continue;
       for (const iso of daysInRange(item.remind_start_date, item.remind_end_date)) {
         (map[iso] ??= []).push(item.content);
       }
     }
     return map;
   }, [todos]);
+
+  const monthlyTodos = useMemo(() => todos.filter((item) => item.recurrence_type === "monthly"), [todos]);
+
+  const monthlyTodosOn = useCallback(
+    (iso: string): string[] => {
+      const [year, month, day] = iso.split("-").map(Number);
+      const dayCount = daysInMonth(year, month);
+      return monthlyTodos
+        .filter((item) => Math.min(item.recurrence_day ?? 1, dayCount) === day)
+        .map((item) => item.content);
+    },
+    [monthlyTodos],
+  );
 
   const birthdaysByMonthDay = useMemo(() => {
     const map: Record<string, string[]> = {};
@@ -110,11 +132,12 @@ export function HomeCalendar() {
       const birthdayNames = birthdaysByMonthDay[`${month}-${day}`] ?? [];
       if (birthdayNames.length) lines.push(`🎂 ${birthdayNames.join("、")}生日`);
       for (const content of todosByDate[iso] ?? []) lines.push(`📌 ${content}`);
+      for (const content of monthlyTodosOn(iso)) lines.push(`📌 ${content}`);
       if (!lines.length) continue;
       notices.push({ date: iso, label: offset === 0 ? `${formatMonthDay(iso)}（今天）` : formatMonthDay(iso), lines });
     }
     return notices;
-  }, [calendarDays, birthdaysByMonthDay, todosByDate]);
+  }, [calendarDays, birthdaysByMonthDay, todosByDate, monthlyTodosOn]);
 
   const monthReady = Boolean(loadedMonths[visibleMonth]);
 

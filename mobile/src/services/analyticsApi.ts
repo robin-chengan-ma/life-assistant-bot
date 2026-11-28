@@ -39,12 +39,19 @@ export type AuthRequest = <T>(path: string, options?: RequestInit) => Promise<T>
 // 2026-11-26：remind_date（單一日期）改成 remind_start_date／remind_end_date（可為日期區間）。
 // 2026-11-26（同日再追加，見 docs/ADR/discuss/robinson.md）：新增 remind_offsets（提前提醒天數
 // 複選，邏輯跟生日設定一樣，但待辦一律僅推給自己，沒有推播對象選擇）。
+// 2026-11-28（同日再追加）：新增 recurrence_type（once／monthly）與 recurrence_day（1~31，只有
+// monthly 有意義），支援「每月固定一天」常態性待辦；monthly 類型時 remind_start_date／
+// remind_end_date 一律是 null。
+export type TodoRecurrenceType = "once" | "monthly";
+
 export type TodoItem = {
   id: number;
   owner_user_id: number;
   content: string;
-  remind_start_date: string;
-  remind_end_date: string;
+  recurrence_type: TodoRecurrenceType;
+  recurrence_day: number | null;
+  remind_start_date: string | null;
+  remind_end_date: string | null;
   remind_offsets: number[];
   can_edit: boolean;
 };
@@ -239,11 +246,20 @@ export function getTodos(request: AuthRequest): Promise<{ items: TodoItem[] }> {
   return request("/api/app/todos");
 }
 
-export function createTodo(request: AuthRequest, payload: { content: string; remind_start_date: string; remind_end_date: string; remind_offsets: number[] }): Promise<{ id: number; message: string }> {
+export type TodoWritePayload = {
+  content: string;
+  remind_offsets: number[];
+  recurrence_type?: TodoRecurrenceType;
+  recurrence_day?: number;
+  remind_start_date?: string;
+  remind_end_date?: string;
+};
+
+export function createTodo(request: AuthRequest, payload: TodoWritePayload): Promise<{ id: number; message: string }> {
   return request("/api/app/todos", { method: "POST", body: JSON.stringify(payload) });
 }
 
-export function updateTodo(request: AuthRequest, id: number, payload: { content: string; remind_start_date: string; remind_end_date: string; remind_offsets: number[] }): Promise<{ id: number; message: string }> {
+export function updateTodo(request: AuthRequest, id: number, payload: TodoWritePayload): Promise<{ id: number; message: string }> {
   return request(`/api/app/todos/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
 }
 

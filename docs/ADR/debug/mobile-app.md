@@ -272,3 +272,42 @@
 **修復方式**：四頁在首份 payload 尚未取得時，只呈現置中轉圈與「資料載入中…」；取得資料後再呈現功能內容。
 **驗證方式**：Mobile TypeScript typecheck 與 Web export 通過。
 **未驗證範圍**：iOS／Android 慢速網路實機畫面待 Robin 驗收。
+
+
+## 2026-11-28 Android（Chrome）版面跑掉，右側出現空白
+**現象**：Robin 在媽媽的 Android 手機上安裝 PWA 並加入主畫面後，發現畫面版面會「跑掉」：內容偏左、
+右側出現一大塊空白只看得到背景裝飾圖案（圓圈、小點）；同樣的畫面在 Robin 自己的 iPhone（Safari）
+上完全正常。
+**排查過程**：比對 Robin 提供的 Android 截圖（首頁、登入頁），內容區域只佔截圖寬度約 650px（截圖
+本身約 869px 寬），右側露出的空白正是 `AppBackground.tsx` 的背景裝飾。追查 `mobile/src/components/
+AppShell.tsx`，發現 `<ScrollView contentContainerStyle={styles.content} ref={scrollViewRef}>` 只給了
+`contentContainerStyle`，`ScrollView` 本體沒有另外給 `style`。
+**根因**：RN Web 在 iOS Safari／Android Chrome 兩種瀏覽器引擎，對沒有明確寬度的巢狀 flex 容器
+（`AppBackground` → `SafeAreaView` → `ScrollView`）的預設寬度計算方式不同；iOS Safari 剛好把
+`ScrollView` 撐滿整個螢幕寬度，Android Chrome 則沒有撐滿，導致內容偏左、右側露出背景裝飾。
+**修復方式**：`AppShell.tsx` 的 `ScrollView` 補上明確的 `style={styles.scrollView}`
+（`{ flex: 1, width: "100%" }`），不再依賴瀏覽器引擎的預設行為。`mobile/app/login.tsx` 有結構類似、
+同樣沒給 `style` 的 `ScrollView`，但因為沒有被回報異常（截圖顯示正常），依「只修改本次需求直接涉及
+的範圍」原則暫不處理。
+**驗證方式**：Mobile `tsc --noEmit` 零錯誤；修正本質是 CSS 版面調整，無法在這個雲端環境實機驗證
+Android 渲染結果，**待 Robin 部署後在媽媽的 Android 手機上重新測試確認**。
+**未驗證範圍**：實機 Android Chrome 渲染結果；其他可能有同樣問題但未被回報的頁面。
+
+## 2026-11-28 男女大頭貼圖示失效（Telegram 建立使用者流程遺漏性別欄位）
+**現象**：Robin 反映幫媽媽建立的帳號，Mobile App 頭像顯示的是男生圖示，而不是預期的女生圖示；
+懷疑先前「兩個大頭貼圖示依性別顯示」的邏輯被拔掉了。
+**排查過程**：確認 `users.gender` 欄位（migration `0064`）與讀取邏輯（`mobile/src/components/
+AppShell.tsx` 依 `user?.gender === "female"` 顯示對應圖示）都還在；回頭檢查 2026-11-25 ADR-33
+「Telegram 選單大簡化」改版後的 `src/bot/auth.py::create_user_and_invite()`，確認該函式的
+`users` 新增流程完全沒有寫入 `gender` 欄位——在大簡化時被無意間漏掉了，而非特意移除的設計決策。
+**根因**：ADR-33 簡化「建立使用者」流程時，`gender` 欄位的詢問步驟被遺漏，導致之後透過 Telegram
+新建立的帳號 `gender` 一律是 `NULL`，頭像邏輯因此永遠落入預設的男生圖示分支。
+**修復方式**：`create_user_and_invite()` 改為必填 `gender` 參數；`handle_permission_step()` 的
+「建立使用者」流程在詢問全名之後、暱稱之前，新增一題必答的「請輸入『男』或『女』」。同時新增
+「🚻 設定性別」Owner 選單動作（沿用既有 disable／enable／resend 的「輸入編號選擇使用者」模式），
+讓 Robin 可以事後補救／修正既有帳號（例如媽媽已建立但 `gender` 為 `NULL` 的帳號）。
+**驗證方式**：`tests/bot/test_auth.py`／`test_commands.py`／`test_router.py` 新增與更新相關測試，
+全專案 `python3 -m pytest -q` 540 passed，`ruff check` 乾淨。
+**未驗證範圍**：本次只修正程式碼與新增補救功能，**尚未實際對 Robin 媽媽的正式資料庫帳號執行
+「🚻 設定性別」把既有 `NULL` 改成 `female`**——這需要 Robin 部署後自己在 Telegram 操作一次，
+這個雲端環境沒有正式資料庫的存取權限。

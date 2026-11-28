@@ -74,7 +74,7 @@ def test_generate_passcode_is_six_digits():
 # --- create_user_and_invite（FR-4）---
 
 def test_create_user_and_invite_creates_user_and_pending_invite(fake_db):
-    result = auth.create_user_and_invite(fake_db, family_title="爸爸", full_name="王大明", nickname="小馬")
+    result = auth.create_user_and_invite(fake_db, family_title="爸爸", full_name="王大明", gender="male", nickname="小馬")
 
     user = fake_db.select("users", where="id = %s", params=(result["user_id"],), fetch_one=True)
     assert user["telegram_user_id"] is None
@@ -92,7 +92,7 @@ def test_create_user_and_invite_creates_user_and_pending_invite(fake_db):
 
 
 def test_create_user_and_invite_returns_mobile_user_id_from_users_id(fake_db):
-    result = auth.create_user_and_invite(fake_db, family_title="媽媽", full_name="陳美麗")
+    result = auth.create_user_and_invite(fake_db, family_title="媽媽", full_name="陳美麗", gender="female")
     user = fake_db.select("users", where="id = %s", params=(result["user_id"],), fetch_one=True)
     assert result["mobile_user_id"] == f"user{user['id']:02d}"
 
@@ -100,7 +100,7 @@ def test_create_user_and_invite_returns_mobile_user_id_from_users_id(fake_db):
 # --- resend_passcode（FR-4c）---
 
 def test_resend_passcode_invalidates_old_code_and_issues_new_one(fake_db):
-    created = auth.create_user_and_invite(fake_db, family_title="爸爸", full_name="王大明")
+    created = auth.create_user_and_invite(fake_db, family_title="爸爸", full_name="王大明", gender="male")
     old_code = created["passcode"]
 
     new_code = auth.resend_passcode(fake_db, created["user_id"])

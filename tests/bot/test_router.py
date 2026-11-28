@@ -120,6 +120,7 @@ def test_permission_callback_create_then_step_full_flow(fake_db, monkeypatch):
 
     router.handle_message(fake_db, store, OWNER_ID, "媽媽")
     router.handle_message(fake_db, store, OWNER_ID, "陳美麗")
+    router.handle_message(fake_db, store, OWNER_ID, "女")
     reply, _keyboard = router.handle_message(fake_db, store, OWNER_ID, "略過")
 
     assert "已建立" in reply

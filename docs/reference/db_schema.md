@@ -154,7 +154,7 @@ CREATE INDEX idx_media_uploads_user_id ON media_uploads (user_id);
 
 | 資料表 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `todos` | 已套用（`0102` 精簡、`0106` 改日期區間、`0109` 提前提醒） | — | 2026-11 精簡：純一次性日期（可為區間）＋文字提醒推播，拿掉 status／30 分鐘前提醒／每日摘要；既有資料已清空重來；2026-11-26 再追加可複選提前提醒天數 |
+| `todos` | 已套用（`0102` 精簡、`0106` 改日期區間、`0109` 提前提醒、`0110` 常態性待辦） | — | 2026-11 精簡：純一次性日期（可為區間）＋文字提醒推播，拿掉 status／30 分鐘前提醒／每日摘要；既有資料已清空重來；2026-11-26 再追加可複選提前提醒天數；2026-11-28 再追加「常態性（每月固定一天）」類型 |
 
 <details>
 <summary>SQL 與設計理由</summary>
@@ -164,8 +164,10 @@ CREATE TABLE todos (
     id BIGSERIAL PRIMARY KEY,
     user_id BIGINT NOT NULL REFERENCES users(id),
     content TEXT NOT NULL,
-    remind_start_date DATE NOT NULL,
-    remind_end_date DATE NOT NULL,
+    remind_start_date DATE,
+    remind_end_date DATE,
+    recurrence_type TEXT NOT NULL DEFAULT 'once',
+    recurrence_day INTEGER,
     remind_offsets INTEGER[] NOT NULL DEFAULT '{0}',
     reminded_offsets_sent INTEGER[] NOT NULL DEFAULT '{}',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -183,13 +185,19 @@ CREATE INDEX idx_todos_remind_start_date ON todos (remind_start_date);
 新增 `remind_offsets INTEGER[]`（可複選 `{0,3,7,14}` 天前推播）；待辦是一次性事件、不像生日
 每年重複，不能沿用生日那套以年份區分的 `important_notifications_log` 去重機制，改新增
 `reminded_offsets_sent INTEGER[]` 記錄「這筆待辦已推播過的 offset」，並移除舊的單一時間戳
-`reminded_sent_at`）
+`reminded_sent_at`）、`0110_todo_recurrence.sql`（2026-11-28，Robin 要求信用卡／車貸這類每月
+固定某一天要繳費的待辦，不想每次都手動新增一筆：新增 `recurrence_type`（`once`／`monthly`）與
+`recurrence_day`（1~31，只有 `monthly` 有意義，該月天數不足時退回當月最後一天）；`monthly`
+類型沒有日期區間概念，`remind_start_date`／`remind_end_date` 改放寬為可為 `NULL`）
 
 - Robin 明確決策：「待辦事項只是純粹去做通知而已，不需要確認動作，不想增加使用者負擔」，新增/編輯/
   刪除全部改到 Mobile App 做，Telegram 端（`src/bot/todo.py`）只負責讀取與推播
-- `reminded_offsets_sent` 是去重記號，存在 DB（非記憶體）以撐過 Render 重啟；推播機制借用
-  `/healthz` 既有固定頻率 cron，由 `check_and_push_reminders()` 針對每個 offset 判斷「提醒時間
-  已到、該 offset 還沒推播過」；待辦推播一律只送給建立者本人，不提供生日設定的推播對象選擇
+- `reminded_offsets_sent` 是 `once` 類型的去重記號，存在 DB（非記憶體）以撐過 Render 重啟；
+  `monthly` 類型不用這個欄位去重（整筆待辦只會記一次、不符合每月重複推播的需求），改沿用生日
+  設定那套 `important_notifications_log`（`year` 欄位借用存「年份*100+月份」當去重鍵，讓同一個
+  offset 每個月都能重新推播一次）；推播機制借用 `/healthz` 既有固定頻率 cron，由
+  `check_and_push_reminders()` 判斷「提醒時間已到、該 offset 還沒推播過」；待辦推播一律只送給
+  建立者本人，不提供生日設定的推播對象選擇
 </details>
 
 ## 已取消功能資料表清理

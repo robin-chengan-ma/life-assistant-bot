@@ -16,7 +16,20 @@ _PERMISSION_ACTION_PROMPTS = {
     "disable": "請問要停用哪一位使用者？請輸入編號：",
     "enable": "請問要恢復哪一位使用者？請輸入編號：",
     "resend": "請問要重發通關密碼給哪一位使用者？請輸入編號：",
+    "gender": "請問要幫哪一位使用者設定性別？請輸入編號：",
 }
+
+_GENDER_LABELS = {"male": "男", "female": "女"}
+
+
+def _parse_gender(text: str) -> str | None:
+    """接受「男」／「女」或 male／female（不分大小寫），其餘一律視為無效輸入。"""
+    value = text.strip().lower()
+    if value in {"男", "male", "m"}:
+        return "male"
+    if value in {"女", "female", "f"}:
+        return "female"
+    return None
 
 
 def start_permission_menu() -> tuple[str, dict]:
@@ -27,6 +40,7 @@ def start_permission_menu() -> tuple[str, dict]:
             [{"text": "⛔ 停用使用者", "callback_data": "permission:disable"}],
             [{"text": "✅ 恢復使用者", "callback_data": "permission:enable"}],
             [{"text": "🔁 重發通關密碼", "callback_data": "permission:resend"}],
+            [{"text": "🚻 設定性別", "callback_data": "permission:gender"}],
             [{"text": "🔓 解鎖 Mobile App 帳號", "callback_data": "permission:unlock_mobile"}],
         ]
     }
@@ -72,7 +86,7 @@ def handle_permission_callback(
             "inline_keyboard": [[{"text": "🔙 返回", "callback_data": "permission:menu"}]]
         }
 
-    if action in ("disable", "enable", "resend"):
+    if action in ("disable", "enable", "resend", "gender"):
         candidates = [u for u in db.select("users") if not u["is_owner"]]
         if not candidates:
             return "目前還沒有任何一般使用者，沒有可以操作的對象喔！", None
@@ -120,27 +134,41 @@ def handle_permission_step(
                 return "全名不能是空白，請重新輸入："
             state_store.set(
                 telegram_user_id,
-                {**state, "step": "awaiting_nickname", "full_name": full_name},
+                {**state, "step": "awaiting_gender", "full_name": full_name},
+            )
+            return f"收到，請問「{full_name}」的性別？請輸入「男」或「女」（用於 Mobile App 頭像顯示）："
+
+        if step == "awaiting_gender":
+            gender = _parse_gender(text)
+            if gender is None:
+                return "請輸入「男」或「女」："
+            state_store.set(
+                telegram_user_id,
+                {**state, "step": "awaiting_nickname", "gender": gender},
             )
             return f"收到，請問「{state['family_title']}」的暱稱是？（不需要的話輸入「略過」）"
 
         if step == "awaiting_nickname":
             family_title = state["family_title"]
             full_name = state["full_name"]
+            gender = state["gender"]
             nickname = None if text in {"略過", "skip"} else text
-            result = auth.create_user_and_invite(db, family_title=family_title, full_name=full_name, nickname=nickname)
+            result = auth.create_user_and_invite(
+                db, family_title=family_title, full_name=full_name, gender=gender, nickname=nickname
+            )
             state_store.clear(telegram_user_id)
             nickname_line = f"暱稱：{result['nickname']}\n" if result["nickname"] else ""
             return (
                 f"已建立「{family_title}」！\n"
                 f"全名：{full_name}\n"
+                f"性別：{_GENDER_LABELS[gender]}\n"
                 f"{nickname_line}"
                 f"使用者 ID：{result['mobile_user_id']}\n"
                 f"通關密碼：{result['passcode']}\n"
                 "（此密碼僅能使用一次，24 小時內有效，請盡快提供給本人）"
             )
 
-    if flow in ("permission_disable", "permission_enable", "permission_resend"):
+    if flow in ("permission_disable", "permission_enable", "permission_resend", "permission_gender") and step == "awaiting_target":
         if text in _EXIT_PHRASES:
             state_store.clear(telegram_user_id)
             return "好的，已結束權限管理模式！"
@@ -150,6 +178,14 @@ def handle_permission_step(
             return f"請輸入 1～{len(candidates)} 之間的編號喔！"
 
         target_user_id = candidates[int(text) - 1]
+
+        if flow == "permission_gender":
+            state_store.set(
+                telegram_user_id,
+                {"flow": "permission_gender", "step": "awaiting_gender_value", "target_user_id": target_user_id},
+            )
+            return "請輸入「男」或「女」："
+
         state_store.clear(telegram_user_id)
 
         if flow == "permission_disable":
@@ -160,5 +196,16 @@ def handle_permission_step(
             return "已恢復該使用者，對方需要重新登入或重新綁定。"
         new_code = auth.resend_passcode(db, target_user_id)
         return f"已重發通關密碼：{new_code}\n（舊密碼已立即失效，此密碼僅能使用一次，24 小時內有效）"
+
+    if flow == "permission_gender" and step == "awaiting_gender_value":
+        if text in _EXIT_PHRASES:
+            state_store.clear(telegram_user_id)
+            return "好的，已結束權限管理模式！"
+        gender = _parse_gender(text)
+        if gender is None:
+            return "請輸入「男」或「女」："
+        auth.set_user_gender(db, state["target_user_id"], gender)
+        state_store.clear(telegram_user_id)
+        return "已更新該使用者的性別設定，Mobile App 頭像會跟著改變。"
 
     raise ValueError(f"未知的對話狀態：{state}")

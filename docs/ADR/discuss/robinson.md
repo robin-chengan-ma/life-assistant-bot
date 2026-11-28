@@ -1589,3 +1589,33 @@ commit，待 Robin 確認。
 （`useLocalSearchParams` 偵測 `action=new` 自動開表單、移除新增按鈕、新增頁籤 UI 與篩選邏輯）。
 純前端變更，不涉及後端或資料庫。全專案 `python3 -m pytest -q` 528 passed（本次無 Python 異動），
 Mobile `tsc --noEmit` 零錯誤。`docs/specs/SPEC.md` FR-31d 同步新增。尚未 commit，待 Robin 確認。
+
+
+## 2026-11-28 生日設定改為全家共用清單；待辦事項新增「常態性（每月固定一天）」類型
+
+**狀態**：accepted
+
+**背景**：Robin 幫媽媽安裝設定好 Mobile App 後實機測試，發現兩個問題：(1) 生日設定頁在媽媽的帳號下
+完全看不到任何人，但 Robin 自己已經設定好全家人的生日；(2) 代辦事項只有「某個日期（或區間）」的
+一次性提醒，但信用卡、車貸這類每個月固定某一天要繳費的待辦，不想每次都手動新增一筆。
+
+**決策（生日設定共用）**：生日設定本來就是「幫全家人記住生日、彼此都該看得到」的功能，不應該因為
+是誰建立的就互相看不到；改成回傳全部使用者建立的生日，不分建立者，`can_edit` 仍只給建立者本人
+（非建立者看到的卡片維持唯讀，Mobile `important-days.tsx` 既有的「由其他家人建立，僅能查看」文字
+因此第一次真正顯示出來）。
+
+**決策（待辦常態性類型）**：採用 Robin 認可的最簡設計——新增 `recurrence_type`（`once`／`monthly`）
+欄位，`monthly` 類型只需指定 `recurrence_day`（每月固定第幾天，1～31），不提供日期區間、不提供
+結束日期概念（永遠重複，刪除才會停止），該月天數不足時退回當月最後一天（比照生日 2/29 的既有慣例）；
+提前提醒（`remind_offsets`）邏輯跟一次性待辦完全共用。`monthly` 待辦因為每個月都要重複推播，無法
+沿用一次性待辦的 `reminded_offsets_sent`（只能記一次），改沿用生日設定那套
+`important_notifications_log`，把 `year` 欄位借用存「年份*100+月份」當去重鍵。Mobile 列表頁的
+「已過期／進行中」頁籤只套用在 `once` 類型，`monthly` 一律歸在「進行中」（因為它不會過期）。
+首頁「今日待辦」計數與「未來一週注意事項」週提醒區塊一併更新以支援 `monthly` 類型，確保既有 UI
+介面對新類型的呈現一致。
+
+**後果**：新增 migration `0110_todo_recurrence.sql`；`src/services/app_important_days.py::list_for_user()`
+移除建立者過濾；`src/services/app_todo.py`／`src/bot/todo.py`／`src/services/app_analytics.py`／
+Mobile `todo.tsx`／`HomeCalendar.tsx`／`analyticsApi.ts` 均配合調整。全專案
+`python3 -m pytest -q` 540 passed，`ruff check` 乾淨，Mobile `tsc --noEmit` 零錯誤。
+`docs/specs/SPEC.md` FR-4e（性別，見 debug ADR）、FR-53g、FR-31e 同步新增。尚未 commit，待 Robin 確認。

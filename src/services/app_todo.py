@@ -12,6 +12,13 @@
 天前推播，只允許 `{0,3,7,14}` 的非空子集合），邏輯跟生日設定的 `remind_offsets` 完全一樣，但
 待辦不需要推播對象選擇，一律只推給建立者本人，所以不會有 `audience_mode`/`audience_user_ids`
 這類欄位。
+
+2026-11-28（待辦支援「常態性（每月固定一天）」，見 migration 0110、docs/ADR/discuss/robinson.md）：
+Robin 反饋信用卡／車貸這類每月固定某一天要繳費的待辦，不想每次都手動新增一筆；新增
+`recurrence_type`（`once`／`monthly`）與 `recurrence_day`（1~31，只有 `monthly` 有意義）。
+`monthly` 類型沒有「一次性」的日期區間概念，`remind_start_date`／`remind_end_date` 改存 `None`；
+`remind_offsets` 的複選邏輯跟一次性待辦完全共用。`monthly` 待辦永遠不會「過期」（每個月都重複），
+Mobile 列表頁的「已過期／進行中」頁籤只套用在 `once` 類型（見 `mobile/app/todo.tsx`）。
 """
 
 from __future__ import annotations
@@ -37,6 +44,9 @@ class TodoValidationError(TodoError):
 
 class TodoNotFoundError(TodoError):
     """待辦事項不存在或不屬於目前使用者。"""
+
+
+_ALLOWED_RECURRENCE_TYPES = {"once", "monthly"}
 
 
 def _parse_content(value: Any) -> str:
@@ -66,6 +76,19 @@ def _parse_remind_date_range(payload: dict[str, Any]) -> tuple[date, date]:
     return start, end
 
 
+def _parse_recurrence_type(value: Any) -> str:
+    recurrence_type = value or "once"
+    if recurrence_type not in _ALLOWED_RECURRENCE_TYPES:
+        raise TodoValidationError("待辦類型不正確")
+    return recurrence_type
+
+
+def _parse_recurrence_day(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not (1 <= value <= 31):
+        raise TodoValidationError("請輸入 1～31 之間的每月固定日期")
+    return value
+
+
 _ALLOWED_REMIND_OFFSETS = {0, 3, 7, 14}
 
 
@@ -89,7 +112,13 @@ class AppTodoService:
     def list_for_user(self, user_id: int) -> list[dict[str, Any]]:
         rows = self._db.select("todos", where="user_id = %s", params=(user_id,))
         items = [self._serialize(row, user_id) for row in rows]
-        return sorted(items, key=lambda item: item["remind_start_date"])
+        return sorted(items, key=self._sort_key)
+
+    @staticmethod
+    def _sort_key(item: dict[str, Any]) -> tuple:
+        if item["recurrence_type"] == "monthly":
+            return (1, item["recurrence_day"], item["content"])
+        return (0, item["remind_start_date"], item["content"])
 
     def create(self, owner_user_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         data = self._validate(payload)
@@ -124,12 +153,31 @@ class AppTodoService:
         return row
 
     def _validate(self, payload: dict[str, Any]) -> dict[str, Any]:
+        recurrence_type = _parse_recurrence_type(payload.get("recurrence_type"))
+        remind_offsets = _parse_remind_offsets(payload.get("remind_offsets"))
+        content = _parse_content(payload.get("content"))
+
+        if recurrence_type == "monthly":
+            return {
+                "content": content,
+                "remind_start_date": None,
+                "remind_end_date": None,
+                "recurrence_type": "monthly",
+                "recurrence_day": _parse_recurrence_day(payload.get("recurrence_day")),
+                "remind_offsets": remind_offsets,
+                # 常態性待辦不使用這個欄位去重（改用 important_notifications_log 以月份去重，
+                # 見 src/bot/todo.py），固定存空陣列即可。
+                "reminded_offsets_sent": [],
+            }
+
         start, end = _parse_remind_date_range(payload)
         return {
-            "content": _parse_content(payload.get("content")),
+            "content": content,
             "remind_start_date": start,
             "remind_end_date": end,
-            "remind_offsets": _parse_remind_offsets(payload.get("remind_offsets")),
+            "recurrence_type": "once",
+            "recurrence_day": None,
+            "remind_offsets": remind_offsets,
             # 日期異動後，舊的「哪些 offset 已經推播過」紀錄就不再適用，新增／編輯都重置，
             # 讓新的日期重新走一輪完整的提前提醒。
             "reminded_offsets_sent": [],
@@ -140,6 +188,7 @@ class AppTodoService:
         result = dict(row)
         result["owner_user_id"] = row["user_id"]
         result["can_edit"] = row["user_id"] == user_id
+        result.setdefault("recurrence_type", "once")
         for field in ("remind_start_date", "remind_end_date"):
             value = result.get(field)
             result[field] = value.isoformat() if isinstance(value, date) else value

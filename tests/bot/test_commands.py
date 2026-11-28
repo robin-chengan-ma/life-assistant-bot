@@ -57,12 +57,14 @@ def test_permission_create_full_flow_creates_user_and_invite(fake_db):
     commands.handle_permission_callback(fake_db, store, telegram_user_id=1, action="create")
     commands.handle_permission_step(fake_db, store, telegram_user_id=1, text="爸爸")
     commands.handle_permission_step(fake_db, store, telegram_user_id=1, text="王大明")
+    commands.handle_permission_step(fake_db, store, telegram_user_id=1, text="男")
     reply = commands.handle_permission_step(fake_db, store, telegram_user_id=1, text="略過")
 
     users = fake_db.select("users", where="family_title = %s", params=("爸爸",))
     assert len(users) == 1
     assert users[0]["telegram_user_id"] is None
     assert users[0]["full_name"] == "王大明"
+    assert users[0]["gender"] == "male"
     invite = fake_db.select("invite_codes", where="user_id = %s AND is_used = FALSE", params=(users[0]["id"],), fetch_one=True)
     assert invite is not None
     assert invite["expires_at"] is not None
@@ -88,6 +90,47 @@ def test_permission_create_full_flow_rejects_blank_full_name(fake_db):
 
     assert "空白" in reply
     assert store.get(1)["step"] == "awaiting_full_name"
+
+
+def test_permission_create_full_flow_asks_for_gender_before_nickname(fake_db):
+    store = ConversationStateStore()
+    commands.handle_permission_callback(fake_db, store, telegram_user_id=1, action="create")
+    commands.handle_permission_step(fake_db, store, telegram_user_id=1, text="爸爸")
+    reply = commands.handle_permission_step(fake_db, store, telegram_user_id=1, text="王大明")
+
+    assert "性別" in reply
+    assert store.get(1) == {
+        "flow": "permission_create",
+        "step": "awaiting_gender",
+        "family_title": "爸爸",
+        "full_name": "王大明",
+    }
+
+
+def test_permission_create_full_flow_rejects_invalid_gender(fake_db):
+    store = ConversationStateStore()
+    commands.handle_permission_callback(fake_db, store, telegram_user_id=1, action="create")
+    commands.handle_permission_step(fake_db, store, telegram_user_id=1, text="爸爸")
+    commands.handle_permission_step(fake_db, store, telegram_user_id=1, text="王大明")
+    reply = commands.handle_permission_step(fake_db, store, telegram_user_id=1, text="不知道")
+
+    assert "男" in reply and "女" in reply
+    assert store.get(1)["step"] == "awaiting_gender"
+
+
+def test_permission_gender_flow_updates_existing_user(fake_db):
+    user_id = fake_db.insert(
+        "users", {"telegram_user_id": 999, "role": "媽媽", "family_title": "媽媽", "gender": None, "is_owner": False, "is_active": True}
+    )
+    store = ConversationStateStore()
+    commands.handle_permission_callback(fake_db, store, telegram_user_id=1, action="gender")
+    commands.handle_permission_step(fake_db, store, telegram_user_id=1, text="1")
+    reply = commands.handle_permission_step(fake_db, store, telegram_user_id=1, text="女")
+
+    user = fake_db.select("users", where="id = %s", params=(user_id,), fetch_one=True)
+    assert user["gender"] == "female"
+    assert store.get(1) is None
+    assert "已更新" in reply
 
 
 def test_permission_create_flow_exit_phrase_clears_state(fake_db):

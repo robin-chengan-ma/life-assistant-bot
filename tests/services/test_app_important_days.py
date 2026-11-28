@@ -76,12 +76,16 @@ def test_create_and_list_round_trip(service):
     assert items[0]["can_edit"] is True
 
 
-def test_list_only_returns_own_birthdays(service):
+def test_list_includes_all_family_birthdays_not_only_own(service):
+    # 2026-11-28：生日設定是全家共用清單，不分建立者；非建立者看到的項目 can_edit 應為 False。
     service.create(1, {"name": "媽媽", "birth_month": 5, "birth_day": 20})
     service.create(10, {"name": "爸爸的朋友", "birth_month": 1, "birth_day": 1})
 
     items = service.list_for_user(1)
-    assert [item["name"] for item in items] == ["媽媽"]
+    by_name = {item["name"]: item for item in items}
+    assert set(by_name) == {"媽媽", "爸爸的朋友"}
+    assert by_name["媽媽"]["can_edit"] is True
+    assert by_name["爸爸的朋友"]["can_edit"] is False
 
 
 def test_update_changes_fields(service):

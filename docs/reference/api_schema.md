@@ -306,8 +306,8 @@ payload、帳號、密碼或 Token。
 
 | 項目 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `GET /api/app/todos` | 已實作（`list_todos()`） | FR-31 | 查詢本人可見的待辦清單，欄位為 `content`／`remind_start_date`／`remind_end_date`／`remind_offsets`（2026-11-26 新增，提前提醒天數） |
-| `POST /api/app/todos` | 已實作（`create_todo()`） | FR-31／FR-32a | 新增一筆待辦，`remind_end_date` 需 ≥ `remind_start_date`；`remind_offsets` 可複選 `{0,3,7,14}`，預設 `[0]` |
+| `GET /api/app/todos` | 已實作（`list_todos()`） | FR-31／FR-31e | 查詢本人可見的待辦清單，欄位為 `content`／`recurrence_type`（`once`／`monthly`，2026-11-28 新增）／`recurrence_day`（`monthly` 才有值）／`remind_start_date`／`remind_end_date`（`monthly` 為 `null`）／`remind_offsets`（2026-11-26 新增，提前提醒天數） |
+| `POST /api/app/todos` | 已實作（`create_todo()`） | FR-31／FR-32a／FR-31e | 新增一筆待辦；`recurrence_type=once`（預設）時 `remind_end_date` 需 ≥ `remind_start_date`，`recurrence_type=monthly` 時改帶 `recurrence_day`（1～31）、不帶日期區間；`remind_offsets` 可複選 `{0,3,7,14}`，預設 `[0]` |
 | `PATCH /api/app/todos/<id>` | 已實作（`update_todo()`） | FR-31 | 更新一筆待辦 |
 | `DELETE /api/app/todos/<id>` | 已實作（`delete_todo()`） | FR-31 | 刪除一筆待辦 |
 | `GET /api/app/calendar?year=&month=` | 已實作（`AppCalendarService`，包 `TaiwanCalendarService`） | FR-31c | 回傳該月每天的國定假日／補班標記（`is_holiday`／`name`／`holiday_category`／`description`），供 `TodoCalendarPicker.tsx`／`HomeCalendar.tsx` 顯示 |
@@ -319,7 +319,7 @@ payload、帳號、密碼或 Token。
 
 | 項目 | 狀態 | 對應 FR | 說明 |
 | --- | --- | --- | --- |
-| `GET /api/app/important-days` | 已實作（`list_important_days()`） | FR-53／FR-53f | 查詢個人設定的生日清單，並附家人使用者名單（`users`）供「自行選擇」推播對象時勾選；清單顯示 `display_name`（優先全名，見 FR-4a），`user_id` 不存於 `users` 表，而是依 FR-65 由 `users.id` 動態格式化為 `user01`、`user10` |
+| `GET /api/app/important-days` | 已實作（`list_important_days()`） | FR-53／FR-53f／FR-53g | 查詢全家共用的生日清單（2026-11-28 改為不分建立者，見 FR-53g），並附家人使用者名單（`users`）供「自行選擇」推播對象時勾選；清單顯示 `display_name`（優先全名，見 FR-4a），`user_id` 不存於 `users` 表，而是依 FR-65 由 `users.id` 動態格式化為 `user01`、`user10`；非建立者看到的項目 `can_edit` 為 `false` |
 | `POST /api/app/important-days` | 已實作（`create_important_day()`） | FR-53 | 新增一筆生日設定，含 `remind_offsets`（複選提前天數）與 `audience_mode`／`audience_user_ids`（推播對象） |
 | `PATCH /api/app/important-days/<id>` | 已實作（`update_important_day()`） | FR-53 | 更新一筆生日設定 |
 | `DELETE /api/app/important-days/<id>` | 已實作（`delete_important_day()`） | FR-53 | 刪除一筆生日設定 |

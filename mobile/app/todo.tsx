@@ -17,10 +17,23 @@ import {
   getTodos,
   updateTodo,
   type TodoItem,
+  type TodoRecurrenceType,
 } from "@/services/analyticsApi";
 
 function formatDateRange(start: string, end: string): string {
   return start === end ? start : `${start} ～ ${end}`;
+}
+
+// 待辦類型：一次性（既有的日期區間邏輯）／常態性（每月固定一天重複提醒，2026-11-28 新增，
+// 見 docs/ADR/discuss/robinson.md——Robin 不想每個月手動新增信用卡/車貸繳費這種固定提醒）。
+const RECURRENCE_TYPE_OPTIONS: Array<{ label: string; value: TodoRecurrenceType }> = [
+  { label: "一次性", value: "once" },
+  { label: "常態性（每月固定一天）", value: "monthly" },
+];
+
+function formatTodoDate(item: Pick<TodoItem, "recurrence_type" | "recurrence_day" | "remind_start_date" | "remind_end_date">): string {
+  if (item.recurrence_type === "monthly") return `每月 ${item.recurrence_day} 號`;
+  return formatDateRange(item.remind_start_date ?? "", item.remind_end_date ?? "");
 }
 
 // 提前提醒天數可選項，跟生日設定完全一樣，新增時預設只勾「當天」（0）。
@@ -96,11 +109,19 @@ export default function TodoScreen() {
     return () => clearTimeout(timer);
   }, [operationMessage, pendingDeletion]);
 
-  const sorted = items.slice().sort((left, right) => left.remind_start_date.localeCompare(right.remind_start_date));
+  // 常態性（monthly）待辦沒有「結束日期」，每個月都會重複，永遠排在「進行中」，不會被歸類成已過期。
+  const sorted = items.slice().sort((left, right) => {
+    if (left.recurrence_type === "monthly" && right.recurrence_type !== "monthly") return 1;
+    if (right.recurrence_type === "monthly" && left.recurrence_type !== "monthly") return -1;
+    if (left.recurrence_type === "monthly" && right.recurrence_type === "monthly") {
+      return (left.recurrence_day ?? 0) - (right.recurrence_day ?? 0);
+    }
+    return (left.remind_start_date ?? "").localeCompare(right.remind_start_date ?? "");
+  });
 
   const todayIso = todayIsoDate();
-  const expired = sorted.filter((item) => item.remind_end_date < todayIso);
-  const active = sorted.filter((item) => item.remind_end_date >= todayIso);
+  const expired = sorted.filter((item) => item.recurrence_type !== "monthly" && (item.remind_end_date ?? "") < todayIso);
+  const active = sorted.filter((item) => item.recurrence_type === "monthly" || (item.remind_end_date ?? "") >= todayIso);
   const visible = tab === "active" ? active : expired;
 
   if (status === "guest") return <Redirect href="/login" />;
@@ -115,7 +136,7 @@ export default function TodoScreen() {
     {message ? <Text style={styles.message}>{message}</Text> : null}
     {!loading && !visible.length ? <Text style={styles.empty}>{tab === "active" ? "目前沒有進行中的待辦事項" : "目前沒有已過期的待辦事項"}</Text> : null}
     {visible.map((item) => <View key={item.id} style={styles.card}>
-      <View style={styles.cardHeading}><Text style={styles.cardTitle}>{item.content}</Text><Text style={styles.meta}>{formatDateRange(item.remind_start_date, item.remind_end_date)}</Text></View>
+      <View style={styles.cardHeading}><Text style={styles.cardTitle}>{item.content}</Text><Text style={styles.meta}>{formatTodoDate(item)}</Text></View>
       <Text style={styles.remindMeta}>{formatRemindOffsets(item.remind_offsets)}</Text>
       {item.can_edit ? <View style={styles.actions}><Pressable onPress={() => setEditing(item)} style={styles.edit}><Text style={styles.editText}>編輯</Text></Pressable><Pressable onPress={() => setDeleteTarget(item)} style={styles.delete}><Text style={styles.deleteText}>刪除</Text></Pressable></View> : <Text style={styles.readOnly}>由其他家人建立，僅能查看。</Text>}
     </View>)}
@@ -129,6 +150,8 @@ export default function TodoScreen() {
 function TodoModal({ initial, onClose, onSaved, request }: { initial: TodoItem | null; onClose: () => void; onSaved: () => Promise<void>; request: ReturnType<typeof useAuth>["authorizedRequest"] }) {
   const { colors, theme } = useAppPreferences(); const styles = createStyles(colors, theme);
   const [content, setContent] = useState(initial?.content ?? "");
+  const [recurrenceType, setRecurrenceType] = useState<TodoRecurrenceType>(initial?.recurrence_type ?? "once");
+  const [recurrenceDay, setRecurrenceDay] = useState(initial?.recurrence_day ? String(initial.recurrence_day) : "");
   const [remindStartDate, setRemindStartDate] = useState(initial?.remind_start_date ?? todayIsoDate());
   const [remindEndDate, setRemindEndDate] = useState(initial?.remind_end_date ?? initial?.remind_start_date ?? todayIsoDate());
   const [remindOffsets, setRemindOffsets] = useState<number[]>(initial?.remind_offsets?.length ? initial.remind_offsets : [0]);
@@ -147,8 +170,13 @@ function TodoModal({ initial, onClose, onSaved, request }: { initial: TodoItem |
 
   const validate = (): string | null => {
     if (!content.trim()) return "請輸入待辦內容";
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(remindStartDate) || !/^\d{4}-\d{2}-\d{2}$/.test(remindEndDate)) return "請選擇提醒日期";
-    if (remindEndDate < remindStartDate) return "提醒結束日期不可早於開始日期";
+    if (recurrenceType === "monthly") {
+      const dayValue = Number(recurrenceDay);
+      if (!Number.isInteger(dayValue) || dayValue < 1 || dayValue > 31) return "請輸入 1 到 31 之間的每月固定日期";
+    } else {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(remindStartDate) || !/^\d{4}-\d{2}-\d{2}$/.test(remindEndDate)) return "請選擇提醒日期";
+      if (remindEndDate < remindStartDate) return "提醒結束日期不可早於開始日期";
+    }
     if (!remindOffsets.length) return "請至少選擇一個提前提醒天數";
     return null;
   };
@@ -159,7 +187,9 @@ function TodoModal({ initial, onClose, onSaved, request }: { initial: TodoItem |
     if (mutationInFlight.current) return;
     mutationInFlight.current = true;
     setSaving(true); setError(null);
-    const payload = { content: content.trim(), remind_start_date: remindStartDate, remind_end_date: remindEndDate, remind_offsets: remindOffsets };
+    const payload = recurrenceType === "monthly"
+      ? { content: content.trim(), remind_offsets: remindOffsets, recurrence_type: "monthly" as const, recurrence_day: Number(recurrenceDay) }
+      : { content: content.trim(), remind_offsets: remindOffsets, recurrence_type: "once" as const, remind_start_date: remindStartDate, remind_end_date: remindEndDate };
     try {
       if (initial) await updateTodo(request, initial.id, payload);
       else await createTodo(request, payload);
@@ -174,7 +204,20 @@ function TodoModal({ initial, onClose, onSaved, request }: { initial: TodoItem |
 
   return <Modal animationType="fade" transparent visible onRequestClose={onClose}><View style={styles.modalRoot}><Pressable onPress={onClose} style={styles.backdrop} /><View style={styles.modalCard}><Pressable onPress={onClose} style={styles.close}><MaterialCommunityIcons color={colors.textMuted} name="close" size={24} /></Pressable><ScrollView contentContainerStyle={styles.modalContent}>
     <Text style={styles.modalTitle}>{initial ? "編輯待辦" : "新增待辦"}</Text>
-    <TodoCalendarPicker endDate={remindEndDate} onChange={(range) => { setRemindStartDate(range.start); setRemindEndDate(range.end); }} startDate={remindStartDate} />
+    <View style={styles.field}>
+      <Text style={styles.label}>待辦類型</Text>
+      <View style={styles.chipRow}>
+        {RECURRENCE_TYPE_OPTIONS.map((option) => {
+          const selected = recurrenceType === option.value;
+          return <Pressable key={option.value} onPress={() => setRecurrenceType(option.value)} style={[styles.chip, selected ? styles.chipSelected : null]}>
+            <Text style={[styles.chipText, selected ? styles.chipTextSelected : null]}>{option.label}</Text>
+          </Pressable>;
+        })}
+      </View>
+    </View>
+    {recurrenceType === "monthly"
+      ? <View style={styles.field}><Text style={styles.label}>每月固定日期</Text><TextInput inputMode="numeric" onChangeText={(value) => setRecurrenceDay(value.replace(/\D/g, ""))} placeholder="1-31" placeholderTextColor={colors.textMuted} style={[styles.input, styles.iosInputFontSize]} value={recurrenceDay} /></View>
+      : <TodoCalendarPicker endDate={remindEndDate} onChange={(range) => { setRemindStartDate(range.start); setRemindEndDate(range.end); }} startDate={remindStartDate} />}
     <View style={styles.field}><Text style={styles.label}>內容</Text><TextInput multiline onChangeText={setContent} placeholder="請輸入待辦內容" placeholderTextColor={colors.textMuted} style={[styles.input, styles.multiline, styles.iosInputFontSize]} value={content} /></View>
     <View style={styles.field}>
       <Text style={styles.label}>提前提醒（可複選）</Text>
