@@ -47,7 +47,7 @@ export function SecretField({ error, isSecret = true, label, style, ...inputProp
           >
             <MaterialCommunityIcons
               color={colors.textMuted}
-              name={isVisible ? "eye-outline" : "eye-closed"}
+              name={isVisible ? "eye" : "eye-off"}
               size={25}
             />
           </Pressable>

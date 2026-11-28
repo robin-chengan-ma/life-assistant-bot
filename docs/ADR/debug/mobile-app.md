@@ -334,3 +334,42 @@ AppShell.tsx` 依 `user?.gender === "female"` 顯示對應圖示）都還在；�
 「按鈕→編號→男女」三步驟，確保日後類似新增流程不會再漏掉這道關卡。
 **驗證方式**：全專案 `python3 -m pytest -q` 541 passed，`ruff check` 乾淨。
 **未驗證範圍**：Robin 需在正式環境重新操作一次「🚻 設定性別」確認修復生效。
+
+
+## 2026-11-28 Android 錄影覆核：登入頁眼睛圖示跑出框外、滑動版面跑掉、彈窗按鈕被切到螢幕外
+**現象**：Robin 傳來媽媽 Android 手機的實機錄影，顯示三個問題仍然存在：①登入頁密碼欄位右側的
+「顯示/隱藏密碼」眼睛圖示，形狀跑掉且超出輸入框邊界（不是正常的眼睛圖示，比較像半個括號）；
+②首頁／待辦事項頁用力左右滑動時版面會跟著位移，不像 iPhone 完全鎖死不會動；③點「新增待辦」、
+「編輯」、登出確認等各種彈出視窗（`Modal`）時，確認/刪除/登出等按鈕被切到螢幕外，只看到「取消」，
+需要縮小瀏覽器視窗才能看到完整按鈕。
+**排查過程**：逐格拆解錄影畫面確認：
+1. 登入頁眼睛圖示用的是 `MaterialCommunityIcons` 的 `"eye-outline"`／`"eye-closed"`，這兩個名稱在
+   `@expo/vector-icons` 的 glyph map JSON 裡查得到，但推測是當前綁定的 Android Chrome 字體子集或
+   WebFont 載入時機問題，導致實際渲染出不正確的字形（而非真正的眼睛圖案），這跟先前 `ScrollView`
+   那次的「兩種瀏覽器引擎預設行為不同」是不同性質的問題，是圖示字型渲染層級的落差。
+2. 「滑動版面跑掉」：`AppBackground.tsx`（包住整個 App 畫面最外層的背景漸層元件）的 `page`／
+   `content` 兩個 style 都只有 `flex: 1`，沒有明確 `width: "100%"`——跟 2026-11-28 稍早那次
+   `ScrollView` 的根因屬於同一個模式（RN Web 巢狀 flex 容器在 Android Chrome 上不會自動撐滿寬度），
+   只是這次發生在整個 App 的最外層容器，影響範圍是全站而不只是單一頁面。
+3. 「彈窗按鈕被切到螢幕外」：全專案搜尋後發現 `AppShell.tsx`（登出確認、側邊選單）、`todo.tsx`
+   （新增待辦彈窗、刪除確認）、`important-days.tsx`（生日彈窗、刪除確認）、
+   `analytics/[module].tsx`（刪除確認）、`RecordModal.tsx`、`DateRangeFilter.tsx`、
+   `TodoCalendarPicker.tsx` 全部的 `Modal` 根容器 style 都是同一個模式：
+   `{ alignItems: "center", flex: 1, justifyContent: "center", ... }`，同樣沒有明確 `width: "100%"`。
+   這是最初建立這批 `Modal` 元件時就沿用的共同寫法，不是單一頁面的個案。
+**根因**：同一類「RN Web 巢狀 flex 容器在 Android Chrome 沒有明確寬度時不會自動撐滿螢幕」的問題，
+擴散到了 App 最外層容器與全部 `Modal` 彈窗根容器，範圍比最初（僅 `AppShell.tsx` 的 `ScrollView`）
+以為的更大；眼睛圖示則是另一個獨立的圖示字型渲染問題。
+**修復方式**：
+- `AppBackground.tsx` 的 `page`／`content` 補上 `width: "100%"`。
+- 以下檔案的 `Modal` 根容器 style 全部補上 `width: "100%"`：`AppShell.tsx`（`modalRoot`、
+  `confirmRoot`）、`todo.tsx`（`modalRoot`、`deleteBackdrop`）、`important-days.tsx`（`modalRoot`、
+  `deleteBackdrop`）、`analytics/[module].tsx`（`deleteBackdrop`）、`RecordModal.tsx`（`backdrop`）、
+  `DateRangeFilter.tsx`（`modalRoot`）、`TodoCalendarPicker.tsx`（`modalRoot`）。
+- `SecretField.tsx` 的眼睛圖示改用更基本、各版本字型都一定支援的 `"eye"`／`"eye-off"`，取代較新、
+  相容性較難確認的 `"eye-outline"`／`"eye-closed"`。
+**驗證方式**：Mobile `tsc --noEmit` 零錯誤；全專案 `python3 -m pytest -q` 541 passed（本次無 Python
+異動）。CSS 版面調整與圖示字型無法在這個雲端環境實機驗證 Android 渲染結果，**待 Robin 部署後在
+媽媽的 Android 手機上重新測試，並確認 iPhone 沒有因為補上 `width: "100%"` 而跑版**。
+**未驗證範圍**：實機 Android Chrome／iOS Safari 渲染結果；是否還有其他未被回報、但同樣沒給
+`width: "100%"` 的角落元件。

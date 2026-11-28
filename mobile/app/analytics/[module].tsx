@@ -194,5 +194,5 @@ const styles = StyleSheet.create({
   bodyRecordValues: { gap: 6 }, bodyRecordValue: { color: colors.text, fontSize: 15, fontWeight: "700" }, inlineSensitive: { alignItems: "baseline", flexDirection: "row", flexWrap: "wrap" },
   tabs: { backgroundColor: colors.border, borderRadius: 12, flexDirection: "row", overflow: "hidden" }, tab: { alignItems: "center", flex: 1, paddingVertical: 11 }, tabSelected: { backgroundColor: colors.primarySoft }, tabText: { color: colors.textMuted, fontSize: 15, fontWeight: "800" }, tabTextSelected: { color: colors.primaryDark },
   rangeRecordContent: { gap: 10 }, recordGroup: { gap: 14 }, todoEmptyText: { color: colors.textMuted, fontSize: 12 },
-  deleteBackdrop: { alignItems: "center", backgroundColor: "rgba(16,38,34,.45)", flex: 1, justifyContent: "center", padding: 20 }, deleteCard: { backgroundColor: colors.surface, borderRadius: 20, gap: 16, maxWidth: 420, padding: 24, width: "100%" }, deleteTitle: { color: colors.text, fontSize: 21, fontWeight: "900" },
+  deleteBackdrop: { alignItems: "center", backgroundColor: "rgba(16,38,34,.45)", flex: 1, justifyContent: "center", padding: 20, width: "100%" }, deleteCard: { backgroundColor: colors.surface, borderRadius: 20, gap: 16, maxWidth: 420, padding: 24, width: "100%" }, deleteTitle: { color: colors.text, fontSize: 21, fontWeight: "900" },
 });

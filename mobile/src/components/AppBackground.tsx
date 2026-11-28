@@ -30,8 +30,8 @@ export function AppBackground({ children }: PropsWithChildren) {
 }
 
 const createStyles = (colors: ReturnType<typeof useAppPreferences>["colors"]) => StyleSheet.create({
-  page: { flex: 1 },
-  content: { flex: 1, zIndex: 1 },
+  page: { flex: 1, width: "100%" },
+  content: { flex: 1, width: "100%", zIndex: 1 },
   backgroundPattern: {
     alignContent: "space-around",
     bottom: 0,

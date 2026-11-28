@@ -180,7 +180,7 @@ const createStyles = (colors: ReturnType<typeof useAppPreferences>["colors"], th
   selectorText: { flex: 1, gap: 3 },
   label: { color: colors.textMuted, fontSize: 11, fontWeight: "700" },
   value: { color: colors.text, fontSize: 14, fontWeight: "800" },
-  modalRoot: { alignItems: "center", flex: 1, justifyContent: "center", padding: 18 },
+  modalRoot: { alignItems: "center", flex: 1, justifyContent: "center", padding: 18, width: "100%" },
   backdrop: { backgroundColor: "rgba(18, 35, 32, 0.48)", bottom: 0, left: 0, position: "absolute", right: 0, top: 0 },
   modalCard: { backgroundColor: colors.surface, borderRadius: 20, elevation: 10, gap: 8, maxWidth: 430, padding: 18, width: "100%" },
   modalTitle: { color: colors.text, fontSize: 19, fontWeight: "900" },
